@@ -1,0 +1,3107 @@
+/*
+ * Copyright (c) 2006-, IPD Boehm, Universitaet Karlsruhe (TH) / KIT, by Guido Sautter
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *     * Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *       names of its contributors may be used to endorse or promote products
+ *       derived from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
+ * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+package de.uka.ipd.idaho.im.util;
+
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Component;
+import java.awt.Dialog;
+import java.awt.Dimension;
+import java.awt.FlowLayout;
+import java.awt.Font;
+import java.awt.Frame;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
+import java.awt.Point;
+import java.awt.Window;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.awt.event.ItemEvent;
+import java.awt.event.ItemListener;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
+import java.awt.font.LineMetrics;
+import java.awt.font.TextLayout;
+import java.awt.geom.AffineTransform;
+import java.awt.image.BufferedImage;
+import java.io.File;
+import java.io.FileInputStream;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.TreeMap;
+import java.util.TreeSet;
+
+import javax.swing.BorderFactory;
+import javax.swing.JButton;
+import javax.swing.JCheckBox;
+import javax.swing.JColorChooser;
+import javax.swing.JDialog;
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JMenuItem;
+import javax.swing.JOptionPane;
+import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
+import javax.swing.JScrollPane;
+import javax.swing.JViewport;
+import javax.swing.UIManager;
+import javax.swing.event.PopupMenuEvent;
+import javax.swing.event.PopupMenuListener;
+
+import de.uka.ipd.idaho.gamta.Attributed;
+import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
+import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
+import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
+import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
+import de.uka.ipd.idaho.gamta.util.swing.AttributeEditor;
+import de.uka.ipd.idaho.gamta.util.swing.DialogFactory;
+import de.uka.ipd.idaho.im.ImAnnotation;
+import de.uka.ipd.idaho.im.ImDocument;
+import de.uka.ipd.idaho.im.ImDocument.ImDocumentListener;
+import de.uka.ipd.idaho.im.ImLayoutObject;
+import de.uka.ipd.idaho.im.ImObject;
+import de.uka.ipd.idaho.im.ImPage;
+import de.uka.ipd.idaho.im.ImRegion;
+import de.uka.ipd.idaho.im.ImWord;
+import de.uka.ipd.idaho.im.util.ImDocumentMarkupPanel.ImDocumentViewControl.AnnotControl;
+import de.uka.ipd.idaho.im.util.ImDocumentMarkupPanel.ImDocumentViewControl.RegionControl;
+import de.uka.ipd.idaho.im.util.ImImageEditorPanel.ImImageEditTool;
+import de.uka.ipd.idaho.stringUtils.StringIterator;
+
+/**
+ * Display widget for image markup documents. Instances of this class are best
+ * embedded in a scroll pane.
+ * 
+ * @author sautter
+ */
+public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
+	
+	//	TODO also preserve original page image on loading, make it accessible, and add options to show it in editor
+	
+	//	TODO make markup and page image editors accessible to plugins through interfaces
+	//	==> GUI can be replaced (theoretically)
+	
+	private static Color textStringBackgroundWhite = new Color(Color.white.getRed(), Color.white.getGreen(), Color.white.getBlue(), 192);
+	
+	/** the default DPI for rendering images, namely 96 */
+	public static int DEFAULT_RENDERING_DPI = 96; // TODO_ne figure out how to compute this for current display device ==> Toolkit.getDefaultToolkit().getScreenResolution() returns the resolution, in DPI, and it's usually 96
+	
+	/** the image markup document displayed in this viewer panel */
+	public final ImDocument document;
+	
+	/** indicates if the image markup document displayed in this viewer panel is born digital */
+	public final boolean documentBornDigital;
+	
+	private ImPageMarkupPanel[] ipmps;
+	private boolean[] ipmpVisible;
+	private LinkedList hiddenPageBanners = new LinkedList();
+	
+	private long viewModCount = 0; // highlights switched on or off, color changed, or zoom changed
+	/* TODO make this more accurate to save even more re-rendering:
+	 * - have each page know which types of annotations, regions, and text streams it contains
+	 * - use counting sets to keep track in case of additions and removals
+	 * - use notification methods instead of mod counter for view mods
+	 * 
+	 */
+	
+	private int maxPageWidth = 0;
+	private int maxPageHeight = 0;
+	private int fixPageMargin = 16;
+	
+	private int sideBySidePages = 1;
+	
+	private int hiddenPageReductionFactor = 16;
+	
+	private int maxPageImageDpi = -1;
+	private int renderingDpi = DEFAULT_RENDERING_DPI;
+	
+	private boolean textStreamsPainted = false;
+	private TreeMap textStreamTypeColors = new TreeMap();
+	
+	private boolean textStringsPainted = false;
+	
+	private HashSet paintedLayoutObjectTypes = new HashSet();
+	private TreeMap layoutObjectColors = new TreeMap();
+	
+	private HashSet paintedAnnotationTypes = new HashSet();
+	private TreeMap annotationColors = new TreeMap();
+	private int annotationHighlightMargin = 2;
+	
+	private Color selectionHighlightColor = Color.GREEN;
+	private Color selectionBoxColor = Color.RED;
+	private int selectionBoxThickness = 3;
+	
+	private ImWord selectionStartWord = null;
+	private ImWord selectionEndWord = null;
+	private boolean selectionWordClicked = true;
+	
+	private Point selectionStartPoint = null;
+	private Point selectionEndPoint = null;
+	private ImPageMarkupPanel pointSelectionPage = null;
+	
+	private EditWordDialog editWordDialog = null;
+	private ImPageMarkupPanel editWordPage = null;
+	
+	private TwoClickSelectionAction pendingTwoClickAction = null;
+	private TwoClickActionMessenger twoClickActionMessenger = null;
+	
+	/**
+	 * Constructor displaying all pages (use with care, high memory
+	 * consumption for large documents)
+	 * @param document the document to display
+	 */
+	public ImDocumentMarkupPanel(ImDocument document) {
+		this(document, 0, document.getPageCount());
+	}
+	
+	/**
+	 * Constructor displaying a custom range of pages.
+	 * @param document the document to display
+	 * @param fvp the ID of the first visible page
+	 * @param vpc the number of pages to show from page <code>fvp</code> onward
+	 */
+	public ImDocumentMarkupPanel(ImDocument document, int fvp, int vpc) {
+		super(new GridBagLayout(), true);
+		this.setOpaque(false);
+		this.document = document;
+		
+		//	TODO_not move this to config file ==> good to have defaults
+		this.setTextStreamTypeColor(ImWord.TEXT_STREAM_TYPE_ARTIFACT, Color.DARK_GRAY);
+		this.setTextStreamTypeColor(ImWord.TEXT_STREAM_TYPE_CAPTION, Color.MAGENTA);
+		this.setTextStreamTypeColor(ImWord.TEXT_STREAM_TYPE_DELETED, Color.BLACK);
+		this.setTextStreamTypeColor(ImWord.TEXT_STREAM_TYPE_FOOTNOTE, Color.ORANGE);
+		this.setTextStreamTypeColor(ImWord.TEXT_STREAM_TYPE_MAIN_TEXT, Color.LIGHT_GRAY);
+		this.setTextStreamTypeColor(ImWord.TEXT_STREAM_TYPE_PAGE_TITLE, Color.BLUE);
+		this.setTextStreamTypeColor(ImWord.TEXT_STREAM_TYPE_TABLE, Color.PINK);
+		
+		ImPage[] pages = this.document.getPages();
+		this.ipmps = new ImPageMarkupPanel[pages.length];
+		Arrays.fill(this.ipmps, null);
+		this.ipmpVisible = new boolean[pages.length];
+		Arrays.fill(this.ipmpVisible, false);
+		
+		int minPageWidth = Integer.MAX_VALUE;
+		int minPageHeight = Integer.MAX_VALUE;
+		for (int p = 0; p < pages.length; p++) {
+			minPageWidth = Math.min(minPageWidth, (pages[p].bounds.right - pages[p].bounds.left));
+			this.maxPageWidth = Math.max(this.maxPageWidth, (pages[p].bounds.right - pages[p].bounds.left));
+			minPageHeight = Math.min(minPageHeight, (pages[p].bounds.bottom - pages[p].bounds.top));
+			this.maxPageHeight = Math.max(this.maxPageHeight, (pages[p].bounds.bottom - pages[p].bounds.top));
+			this.maxPageImageDpi = Math.max(this.maxPageImageDpi, pages[p].getPageImage().currentDpi);
+		}
+		this.documentBornDigital = ((minPageWidth == this.maxPageWidth) && (minPageHeight == this.maxPageHeight));
+		
+		for (int p = Math.max(0, fvp); p < Math.min(pages.length, (fvp + vpc)); p++) {
+			this.ipmps[p] = new ImPageMarkupPanel(pages[p], this.maxPageWidth, this.maxPageHeight);
+			this.ipmpVisible[p] = true;
+		}
+		
+		this.layoutPages();
+		
+		MouseAdapter ma = new MouseAdapter() {
+			public void mousePressed(MouseEvent me) {
+				ImPageMarkupPanel ipmp = this.getPageFor(me);
+				if (ipmp == null)
+					return;
+				if (ipmp.pageImageDpi == -1)
+					return;
+				if (editWordDialog != null)
+					editWordDialog.dispose();
+				Point ipmpLocation = ipmp.getLocation();
+				float zoom = (((float) ipmp.pageImageDpi) / renderingDpi);
+				int x = (Math.round(zoom * (me.getX() - fixPageMargin - ipmpLocation.x)) - ipmp.pageMarginLeft);
+				int y = (Math.round(zoom * (me.getY() - fixPageMargin - ipmpLocation.y)) - ipmp.pageMarginTop);
+				ImWord imw = ipmp.page.getWordAt(x, y);
+				if (imw == null) {
+					selectionStartPoint = new Point(x, y);
+					pointSelectionPage = ipmp;
+				}
+				else {
+					selectionStartWord = imw;
+					selectionEndWord = imw;
+					selectionWordClicked = true;
+				}
+				repaint();
+			}
+			public void mouseReleased(MouseEvent me) {
+				ImPageMarkupPanel ipmp = this.getPageFor(me);
+				if (ipmp == null)
+					return;
+				if (selectionEndWord == null)
+					selectionEndWord = selectionStartWord;
+				if (selectionEndPoint == null)
+					selectionEndPoint = selectionStartPoint;
+				SelectionAction[] actions;
+				if (selectionStartWord != null) {
+					if (selectionWordClicked) {
+						if (pendingTwoClickAction != null) {
+							beginAtomicAction(pendingTwoClickAction.label);
+							boolean changed = pendingTwoClickAction.performAction(selectionStartWord);
+							if (changed)
+								endAtomicAction();
+							cleanupSelection();
+							repaint();
+							return;
+						}
+						else if (areTextStringsPainted()) {
+							editWord(selectionStartWord, ipmp);
+							return;
+						}
+					}
+					if (selectionStartWord.getTextStreamId().equals(selectionEndWord.getTextStreamId()) && ((selectionEndWord.pageId < selectionStartWord.pageId) || ((selectionEndWord.pageId == selectionStartWord.pageId) && (selectionEndWord.getTextStreamPos() < selectionStartWord.getTextStreamPos())))) {
+						ImWord imw = selectionStartWord;
+						selectionStartWord = selectionEndWord;
+						selectionEndWord = imw;
+//						System.out.println("MouseRelease: start and end word swapped");
+					}
+					actions = getActions(selectionStartWord, selectionEndWord);
+				}
+				else if (selectionStartPoint != null)
+					actions = getActions(ipmp.page, selectionStartPoint, selectionEndPoint);
+				else actions = null;
+				if ((actions == null) || (actions.length == 0)) {
+					cleanupSelection();
+					repaint();
+					return;
+				}
+				JPopupMenu pm = new JPopupMenu();
+				for (int a = 0; a < actions.length; a++) {
+					if (actions[a] == SelectionAction.SEPARATOR)
+						pm.addSeparator();
+					else pm.add(actions[a].getMenuItem(ImDocumentMarkupPanel.this));
+				}
+				pm.addPopupMenuListener(new PopupMenuListener() {
+					public void popupMenuWillBecomeVisible(PopupMenuEvent pme) {}
+					public void popupMenuWillBecomeInvisible(PopupMenuEvent pme) {
+						cleanupSelection();
+					}
+					public void popupMenuCanceled(PopupMenuEvent pme) {
+						cleanupSelection();
+					}
+				});
+				pm.show(ImDocumentMarkupPanel.this, me.getX(), me.getY());
+			}
+			public void mouseDragged(MouseEvent me) {
+				ImPageMarkupPanel ipmp = this.getPageFor(me);
+				if ((ipmp == null) || ((pointSelectionPage != null) && (ipmp != pointSelectionPage))) {
+					selectionStartPoint = null;
+					selectionEndPoint = null;
+					if (pointSelectionPage != null)
+						pointSelectionPage.repaint();
+					pointSelectionPage = null;
+					return;
+				}
+				selectionWordClicked = false;
+				pendingTwoClickAction = null;
+				if (twoClickActionMessenger != null)
+					twoClickActionMessenger.twoClickActionChanged(null);
+				if (ipmp.pageImageDpi == -1)
+					return;
+				if ((selectionStartWord == null) && (selectionStartPoint == null))
+					return;
+				Point ipmpLocation = ipmp.getLocation();
+				float zoom = (((float) ipmp.pageImageDpi) / renderingDpi);
+				int x = (Math.round(zoom * (me.getX() - fixPageMargin - ipmpLocation.x)) - ipmp.pageMarginLeft);
+				int y = (Math.round(zoom * (me.getY() - fixPageMargin - ipmpLocation.y)) - ipmp.pageMarginTop);
+				ImWord imw = ipmp.page.getWordAt(x, y);
+				if ((selectionStartWord != null) && (imw != null)) {
+					selectionEndWord = imw;
+					repaint();
+				}
+				else if (selectionStartPoint != null) {
+					selectionEndPoint = new Point(x, y);
+					repaint();
+				}
+			}
+			private ImPageMarkupPanel getPageFor(MouseEvent me) {
+				Component pvp = getComponentAt(me.getX(), me.getY());
+				return ((pvp instanceof ImPageMarkupPanel) ? ((ImPageMarkupPanel) pvp) : null);
+			}
+		};
+		this.addMouseListener(ma);
+		this.addMouseMotionListener(ma);
+		
+		this.document.addDocumentListener(new ImDocumentListener() {
+			public void typeChanged(ImObject object, String oldType) {
+				if ((idvc != null) && immediatelyUpdateIdvc)
+					idvc.updateControls();
+				if (object instanceof ImLayoutObject) {
+					if (ipmps[((ImLayoutObject) object).pageId] != null)
+						ipmps[((ImLayoutObject) object).pageId].docModCount++;
+				}
+				else if (object instanceof ImAnnotation)
+					for (int p = ((ImAnnotation) object).getFirstWord().pageId; p <= ((ImAnnotation) object).getLastWord().pageId; p++) {
+						if (ipmps[p] != null)
+							ipmps[p].docModCount++;
+					}
+			}
+			public void attributeChanged(ImObject object, String attributeName, Object oldValue) {
+				if ((object instanceof ImWord) && (ipmps[((ImWord) object).pageId] != null)) {
+					if (ImWord.NEXT_RELATION_ATTRIBUTE.equals(attributeName)) {
+						ipmps[((ImWord) object).pageId].docModCount++;
+						if ((((ImWord) object).getNextWord() != null) && (((ImWord) object).pageId != ((ImWord) object).getNextWord().pageId) && (ipmps[((ImWord) object).getNextWord().pageId] != null))
+							ipmps[((ImWord) object).getNextWord().pageId].docModCount++;
+					}
+					else if (ImWord.NEXT_WORD_ATTRIBUTE.equals(attributeName))
+						ipmps[((ImWord) object).pageId].docModCount++;
+					else if (ImWord.PREVIOUS_WORD_ATTRIBUTE.equals(attributeName))
+						ipmps[((ImWord) object).pageId].docModCount++;
+					else if (ImWord.TEXT_STREAM_TYPE_ATTRIBUTE.equals(attributeName))
+						ipmps[((ImWord) object).pageId].docModCount++;
+				}
+				else if ((object instanceof ImAnnotation) && ImAnnotation.FIRST_WORD_ATTRIBUTE.equals(attributeName)) {
+					ImWord fw = ((ImUtils.textStreamOrder.compare(((ImAnnotation) object).getFirstWord(), ((ImWord) oldValue)) < 0) ? ((ImAnnotation) object).getFirstWord() : ((ImWord) oldValue));
+					ImWord lw = ((ImAnnotation) object).getLastWord();
+					for (int p = fw.pageId; p <= lw.pageId; p++) {
+						if (ipmps[p] != null)
+							ipmps[p].docModCount++;
+					}
+				}
+				else if ((object instanceof ImAnnotation) && ImAnnotation.LAST_WORD_ATTRIBUTE.equals(attributeName)) {
+					ImWord fw = ((ImAnnotation) object).getFirstWord();
+					ImWord lw = ((ImUtils.textStreamOrder.compare(((ImAnnotation) object).getLastWord(), ((ImWord) oldValue)) < 0) ? ((ImWord) oldValue) : ((ImAnnotation) object).getLastWord());
+					for (int p = fw.pageId; p <= lw.pageId; p++) {
+						if (ipmps[p] != null)
+							ipmps[p].docModCount++;
+					}
+				}
+			}
+			public void regionAdded(ImRegion region) {
+				if ((idvc != null) && immediatelyUpdateIdvc)
+					idvc.updateControls();
+				if (ipmps[region.pageId] != null)
+					ipmps[region.pageId].docModCount++;
+			}
+			public void regionRemoved(ImRegion region) {
+				if ((idvc != null) && immediatelyUpdateIdvc)
+					idvc.updateControls();
+				if (ipmps[region.pageId] != null)
+					ipmps[region.pageId].docModCount++;
+			}
+			public void annotationAdded(ImAnnotation annotation) {
+				if ((idvc != null) && immediatelyUpdateIdvc)
+					idvc.updateControls();
+				for (int p = annotation.getFirstWord().pageId; p <= annotation.getLastWord().pageId; p++) {
+					if (ipmps[p] != null)
+						ipmps[p].docModCount++;
+				}
+			}
+			public void annotationRemoved(ImAnnotation annotation) {
+				if ((idvc != null) && immediatelyUpdateIdvc)
+					idvc.updateControls();
+				for (int p = annotation.getFirstWord().pageId; p <= annotation.getLastWord().pageId; p++) {
+					if (ipmps[p] != null)
+						ipmps[p].docModCount++;
+				}
+			}
+		});
+	}
+	
+	private void layoutPages() {
+		this.removeAll();
+		this.hiddenPageBanners.clear();
+		
+		GridBagConstraints gbc = new GridBagConstraints();
+		gbc.insets.left = 10;
+		gbc.insets.right = 10;
+		gbc.insets.top = 10;
+		gbc.insets.bottom = 10;
+		gbc.gridwidth = 1;
+		gbc.gridheight = 1;
+		gbc.weightx = 1;
+		gbc.weighty = 1;
+		gbc.gridx = 0;
+		gbc.gridy = 0;
+		
+		HiddenPageBanner hpb = null;
+		
+		for (int p = 0; p < this.ipmps.length; p++) {
+			if (!this.ipmpVisible[p]) {
+				if (this.sideBySidePages < 2) {
+					if (hpb == null)
+						hpb = new HiddenPageBanner();
+					hpb.addPage(this.document.getPage(p));
+				}
+				continue;
+			}
+			if (hpb != null) {
+				this.add(hpb, gbc.clone());
+				this.hiddenPageBanners.add(hpb);
+				hpb = null;
+				gbc.gridx++;
+				if ((0 < this.sideBySidePages) && (this.sideBySidePages <= gbc.gridx)) {
+					gbc.gridx = 0;
+					gbc.gridy++;
+				}
+			}
+			this.add(this.ipmps[p], gbc.clone());
+			gbc.gridx++;
+			if ((0 < this.sideBySidePages) && (this.sideBySidePages <= gbc.gridx)) {
+				gbc.gridx = 0;
+				gbc.gridy++;
+			}
+		}
+		
+		if (hpb != null) {
+			this.add(hpb, gbc.clone());
+			this.hiddenPageBanners.add(hpb);
+			hpb = null;
+			gbc.gridx++;
+			if ((0 < this.sideBySidePages) && (this.sideBySidePages <= gbc.gridx)) {
+				gbc.gridx = 0;
+				gbc.gridy++;
+			}
+		}
+		
+		this.getLayout().layoutContainer(this);
+		this.validate();
+		this.repaint();
+	}
+	
+	private class HiddenPageBanner extends JPanel {
+		private int minPageId = document.getPageCount();
+		private int maxPageId = 0;
+		private int maxPageTileHeight;
+		private int maxPageTileWidth;
+		private int estimatedPidFontSize = -1;
+		private LinkedList pageTiles = new LinkedList();
+		private JPanel pageTilePanel = new JPanel(new GridBagLayout(), true);
+		private GridBagConstraints gbc = new GridBagConstraints();
+		private JPanel fillerPanel = new JPanel();
+		HiddenPageBanner() {
+			super(new BorderLayout(), true);
+			this.gbc.insets.left = 2;
+			this.gbc.insets.right = 2;
+			this.gbc.insets.top = 2;
+			this.gbc.insets.bottom = 2;
+			this.gbc.gridwidth = 1;
+			this.gbc.gridheight = 1;
+			this.gbc.weightx = 0;
+			this.gbc.weighty = 0;
+			this.gbc.gridx = 0;
+			this.gbc.gridy = 0;
+			this.gbc.fill = ((sideBySidePages == 1) ? GridBagConstraints.VERTICAL : GridBagConstraints.HORIZONTAL);
+			
+			this.pageTilePanel.setBackground(Color.WHITE);
+			this.fillerPanel.setBackground(Color.WHITE);
+			
+			JScrollPane pageTilePanelBox = new JScrollPane(this.pageTilePanel);
+			pageTilePanelBox.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+			pageTilePanelBox.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+			this.add(pageTilePanelBox, BorderLayout.CENTER);
+		}
+		public Dimension getPreferredSize() {
+			if ((this.preferredSize == null) || (this.preferredSizeDpi != renderingDpi)) {
+				this.maxPageTileWidth = 0;
+				this.maxPageTileHeight = 0;
+				for (Iterator hptit = this.pageTiles.iterator(); hptit.hasNext();)
+					((HiddenPageTile) hptit.next()).getPreferredSize();
+				if (sideBySidePages < 1)
+					this.preferredSize = new Dimension((this.maxPageTileWidth + 10), (Math.round(((float) (maxPageHeight * renderingDpi)) / maxPageImageDpi) + (fixPageMargin * 2))); // pages side-by-side, use vertical layout
+				else if (sideBySidePages == 1)
+					this.preferredSize = new Dimension((Math.round(((float) (maxPageWidth * renderingDpi)) / maxPageImageDpi) + (fixPageMargin * 2)), (this.maxPageTileHeight + 10)); // pages on top of one another, use horizontal layout
+				this.preferredSizeDpi = renderingDpi;
+			}
+			return this.preferredSize;
+		}
+		private Dimension preferredSize = null;
+		private int preferredSizeDpi = 0;
+		void addPage(ImPage page) {
+			this.minPageId = Math.min(this.minPageId, page.pageId);
+			this.maxPageId = Math.max(this.maxPageId, page.pageId);
+			this.pageTilePanel.remove(this.fillerPanel);
+			HiddenPageTile hpt = new HiddenPageTile(page);
+			this.pageTiles.add(hpt);
+			this.gbc.weightx = 0;
+			this.gbc.weighty = 0;
+			this.pageTilePanel.add(hpt, this.gbc.clone());
+			if (sideBySidePages < 1)
+				this.gbc.gridy++;
+			else if (sideBySidePages == 1)
+				this.gbc.gridx++;
+			this.gbc.weightx = 1;
+			this.gbc.weighty = 1;
+			this.pageTilePanel.add(this.fillerPanel, this.gbc.clone());
+			this.validate();
+			this.repaint();
+		}
+		private class HiddenPageTile extends JPanel {
+			private ImPage page;
+			private BufferedImage pageImageThumbnail;
+			private int pageImageDpi;
+			HiddenPageTile(ImPage page) {
+				super(new BorderLayout(), true);
+				this.page = page;
+				this.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY, 1));
+				this.setBackground(Color.WHITE);
+				this.addMouseListener(new MouseAdapter() {
+					public void mouseClicked(MouseEvent me) {
+						JPopupMenu pm = new JPopupMenu();
+						JMenuItem mi;
+						mi = new JMenuItem("Show Page " + HiddenPageTile.this.page.pageId);
+						mi.addActionListener(new ActionListener() {
+							public void actionPerformed(ActionEvent ae) {
+								setPageVisible(HiddenPageTile.this.page.pageId, true);
+							}
+						});
+						pm.add(mi);
+						if (minPageId < HiddenPageTile.this.page.pageId) {
+							mi = new JMenuItem("Show Pages " + minPageId + "-" + HiddenPageTile.this.page.pageId);
+							mi.addActionListener(new ActionListener() {
+								public void actionPerformed(ActionEvent ae) {
+									setPagesVisible(minPageId, HiddenPageTile.this.page.pageId, true);
+								}
+							});
+							pm.add(mi);
+						}
+						if (HiddenPageTile.this.page.pageId < maxPageId) {
+							mi = new JMenuItem("Show Pages " + HiddenPageTile.this.page.pageId + "-" + maxPageId);
+							mi.addActionListener(new ActionListener() {
+								public void actionPerformed(ActionEvent ae) {
+									setPagesVisible(HiddenPageTile.this.page.pageId, maxPageId, true);
+								}
+							});
+							pm.add(mi);
+						}
+						pm.show(HiddenPageTile.this, me.getX(), me.getY());
+					}
+				});
+				
+				//	get page image and store its resolution for zooming
+				PageImage pageImage = this.page.getImage();
+				this.pageImageDpi = pageImage.currentDpi;
+				
+				//	initialize size
+				this.getPreferredSize();
+				
+				//	render page image thumbnail, reduced by factor, but not zoomed to rendering resolution
+				this.pageImageThumbnail = new BufferedImage(((maxPageWidth * pageImage.currentDpi) / (pageImage.originalDpi * hiddenPageReductionFactor)), ((maxPageHeight * pageImage.currentDpi) / (pageImage.originalDpi * hiddenPageReductionFactor)), BufferedImage.TYPE_BYTE_GRAY);
+				Graphics2D pitGraphics = this.pageImageThumbnail.createGraphics();
+				pitGraphics.setColor(Color.WHITE);
+				pitGraphics.fillRect(0, 0, this.pageImageThumbnail.getWidth(), this.pageImageThumbnail.getHeight());
+				pitGraphics.drawImage(pageImage.image,
+						((((maxPageWidth - (page.bounds.right - page.bounds.left)) / 2) * pageImage.currentDpi) / (pageImage.originalDpi * hiddenPageReductionFactor)),
+						((((maxPageHeight - (page.bounds.bottom - page.bounds.top)) / 2) * pageImage.currentDpi) / (pageImage.originalDpi * hiddenPageReductionFactor)),
+						(((page.bounds.right - page.bounds.left) * pageImage.currentDpi) / (pageImage.originalDpi * hiddenPageReductionFactor)),
+						(((page.bounds.bottom - page.bounds.top) * pageImage.currentDpi) / (pageImage.originalDpi * hiddenPageReductionFactor)),
+						this);
+				
+				//	paint gray page ID over page
+				pitGraphics.setColor(Color.GRAY);
+				String pidString = ("" + this.page.pageId);
+				this.setToolTipText("Page " + this.page.pageId + (this.page.hasAttribute(PAGE_NUMBER_ATTRIBUTE) ? (" (page number " + ((String) this.page.getAttribute(PAGE_NUMBER_ATTRIBUTE)) + ")") : ""));
+				int fontSize = ((estimatedPidFontSize == -1) ? (pageImage.currentDpi / 4) : estimatedPidFontSize);
+				Font pidFont = new Font("Sans", Font.BOLD, fontSize);
+				TextLayout pidTl = new TextLayout(pidString, pidFont, pitGraphics.getFontRenderContext());
+				while (pidTl.getBounds().getHeight() < (this.pageImageThumbnail.getHeight() / 3)) {
+					fontSize++;
+					pidFont = new Font("Sans", Font.BOLD, fontSize);
+					pidTl = new TextLayout(pidString, pidFont, pitGraphics.getFontRenderContext());
+				}
+				while (((this.pageImageThumbnail.getHeight() / 3) < pidTl.getBounds().getHeight()) || ((this.pageImageThumbnail.getWidth() * 4) < (pidTl.getBounds().getWidth() * 5))) {
+					fontSize--;
+					pidFont = new Font("Sans", Font.BOLD, fontSize);
+					pidTl = new TextLayout(pidString, pidFont, pitGraphics.getFontRenderContext());
+				}
+				estimatedPidFontSize = fontSize;
+				pitGraphics.setFont(pidFont);
+				pidTl = new TextLayout(pidString, pidFont, pitGraphics.getFontRenderContext());
+				pitGraphics.drawString(pidString, ((int) Math.round((this.pageImageThumbnail.getWidth() - pidTl.getBounds().getWidth()) / 2)), ((int) Math.round(((this.pageImageThumbnail.getHeight() + pidTl.getBounds().getHeight()) / 2)/* - Math.round(wlm.getDescent())*/)));
+			}
+			public Dimension getPreferredSize() {
+				if ((this.preferredSize == null) || (this.preferredSizeDpi != renderingDpi)) {
+					this.preferredSize = new Dimension((Math.round(((float) (maxPageWidth * renderingDpi)) / (this.pageImageDpi * hiddenPageReductionFactor)) + 2), (Math.round(((float) (maxPageHeight * renderingDpi)) / (this.pageImageDpi * hiddenPageReductionFactor)) + 2));
+					this.preferredSizeDpi = renderingDpi;
+				}
+				maxPageTileWidth = Math.max(maxPageTileWidth, this.preferredSize.width);
+				maxPageTileHeight = Math.max(maxPageTileHeight, this.preferredSize.height);
+				return this.preferredSize;
+			}
+			private Dimension preferredSize = null;
+			private int preferredSizeDpi = 0;
+			public void paint(Graphics graphics) {
+				super.paint(graphics);
+				//	paint page image (zoomed to to rendering resolution now)
+				graphics.drawImage(this.pageImageThumbnail, 1, 1, (this.getWidth()-2), (this.getHeight()-2), this);
+			}
+		}
+	}
+	
+	/**
+	 * A point describing an coordinate on the document markup panel, and on a
+	 * page therein. The coordinates of the point are relative to the page in
+	 * its original resolution.
+	 * 
+	 * @author sautter
+	 */
+	public class PagePoint extends Point {
+		public final ImPage page;
+		PagePoint(ImPage page, int x, int y) {
+			super(x, y);
+			this.page = page;
+		}
+	}
+	
+	/**
+	 * Resolve a pair of coordinates relative to the image markup panel in its
+	 * current resolution to un-scaled coordinates on a document page. If the
+	 * point identified by the argument coordinates does not lie inside any
+	 * page, this method returns null. The main purpose of this method is to
+	 * simplify event handling.
+	 * @param x the x coordinate relative to the document markup panel
+	 * @param y the y coordinate relative to the document markup panel
+	 * @return the page point corresponding to the argument coordinates
+	 */
+	public PagePoint pagePointAt(int x, int y) {
+		Component pvp = getComponentAt(x, y);
+		if ((pvp == null) || !(pvp instanceof ImPageMarkupPanel))
+			return null;
+		ImPageMarkupPanel ipmp = ((ImPageMarkupPanel) pvp);
+		if (ipmp.pageImageDpi == -1)
+			return null;
+		Point ipmpLocation = ipmp.getLocation();
+		float zoom = (((float) ipmp.pageImageDpi) / renderingDpi);
+		int px = (Math.round(zoom * (x - this.fixPageMargin - ipmpLocation.x)) - ipmp.pageMarginLeft);
+		int py = (Math.round(zoom * (y - this.fixPageMargin - ipmpLocation.y)) - ipmp.pageMarginTop);
+		return new PagePoint(ipmp.page, px, py);
+	}
+	
+	/**
+	 * Check if some page is visible.
+	 * @param pageId the ID of the page to check
+	 * @return true if the page is visible, false otherwise
+	 */
+	public boolean isPageVisible(int pageId) {
+		return this.ipmpVisible[pageId];
+	}
+	
+	/**
+	 * Show or hide a page.
+	 * @param pageId the ID of the page to show or hide
+	 * @param pv show or hide the page?
+	 */
+	public void setPageVisible(int pageId, boolean pv) {
+		this.setPagesVisible(pageId, pageId, pv);
+	}
+	
+	/**
+	 * Show or hide a range of pages.
+	 * @param fromPageId the ID of the first page to show or hide
+	 * @param toPageId the ID of the last page to show or hide
+	 * @param pv show or hide the pages?
+	 */
+	public void setPagesVisible(int fromPageId, int toPageId, boolean pv) {
+		System.out.println("Setting pages " + fromPageId + "-" + toPageId + " " + (pv ? "visible" : "hidden"));
+		boolean pageVisibilityChanged = false;
+		for (int p = fromPageId; p <= toPageId; p++) {
+			if (this.ipmpVisible[p] == pv) {
+				System.out.println(" - page " + p + " already " + (pv ? "visible" : "hidden"));
+				continue;
+			}
+			pageVisibilityChanged = true;
+			System.out.println(" - setting page " + p + " " + (pv ? "visible" : "hidden"));
+			this.ipmpVisible[p] = pv;
+			if (this.ipmpVisible[p] && (this.ipmps[p] == null)) {
+				this.ipmps[p] = new ImPageMarkupPanel(this.document.getPage(p), this.maxPageWidth, this.maxPageHeight);
+				System.out.println(" --> page panel created");
+			}
+		}
+		if (pageVisibilityChanged) {
+			System.out.println(" ==> laying out pages");
+			this.layoutPages();
+		}
+		else System.out.println(" ==> no need for laying out pages");
+	}
+	
+	/**
+	 * Retrieve the factor by which hidden page place holders are reduced in
+	 * size in comparison to normal page display.
+	 * @return the reduction factor for hidden page place holders
+	 */
+	public int getHiddenPageReductionFactor() {
+		return this.hiddenPageReductionFactor;
+	}
+	
+	/**
+	 * Set the factor by which hidden page place holders are reduced in size
+	 * in comparison to normal page display. The reduction factor is actually
+	 * an integer dimensions re divided by, and thus a higher reduction factor
+	 * makes the place holders smaller.
+	 * @param hprf the reduction factor for hidden page place holders
+	 */
+	public void setHiddenPageReductionFactor(int hprf) {
+		this.hiddenPageReductionFactor = hprf;
+	}
+	
+	/**
+	 * Retrieve the number of pages displayed side by side before breaking into
+	 * a new row.
+	 * @return the number of pages per row
+	 */
+	public int getSideBySidePages() {
+		return this.sideBySidePages;
+	}
+	
+	/**
+	 * Set the number of pages displayed side by side before breaking into a
+	 * new row. If the argument number is less than 1, all pages are lain out
+	 * in one single row left to right.
+	 * @param sbsp the number of pages per row
+	 */
+	public void setSideBySidePages(int sbsp) {
+		if (this.sideBySidePages == sbsp)
+			return;
+		this.sideBySidePages = sbsp;
+		this.layoutPages();
+		if (this.idvc != null)
+			this.idvc.updateControls();
+	}
+	
+	/**
+	 * Retrieve the color for highlighting word selections.
+	 * @return the color of word selections
+	 */
+	public Color getSelectionHighlightColor() {
+		return this.selectionHighlightColor;
+	}
+
+	/**
+	 * Set the color for highlighting word selections.
+	 * @param shc the color of word selections
+	 */
+	public void setSelectionHighlightColor(Color shc) {
+		this.selectionHighlightColor = shc;
+		this.validate();
+		this.repaint();
+	}
+
+	/**
+	 * Retrieve the color of rectangles visualizing box selections.
+	 * @return the color of the selection box
+	 */
+	public Color getSelectionBoxColor() {
+		return this.selectionBoxColor;
+	}
+
+	/**
+	 * Set the color of the rectangles visualizing box selections.
+	 * @param sbc the color for the selection box
+	 */
+	public void setSelectionBoxColor(Color sbc) {
+		this.selectionBoxColor = sbc;
+		this.validate();
+		this.repaint();
+	}
+
+	/**
+	 * Retrieve the line thickness (in pixels) used for rectangles visualizing
+	 * box selections.
+	 * @return the line thickness of the selection box in pixels
+	 */
+	public int getSelectionBoxThickness() {
+		return this.selectionBoxThickness;
+	}
+	
+	/**
+	 * Set the line thickness (in pixels) used for the rectangles visualizing
+	 * box selections.
+	 * @param sbt the thickness of the selection box in pixels
+	 */
+	public void setSelectionBoxThickness(int sbt) {
+		this.selectionBoxThickness = sbt;
+		this.validate();
+		this.repaint();
+	}
+	
+	/**
+	 * Retrieve the maximum unscaled width (in pixels) of a page displayed in
+	 * this document markup panel
+	 * @return the maximum page width
+	 */
+	public int getMaxPageWidth() {
+		return this.maxPageWidth;
+	}
+	
+	/**
+	 * Retrieve the maximum unscaled height (in pixels) of a page displayed in
+	 * this document markup panel
+	 * @return the maximum page height
+	 */
+	public int getMaxPageHeight() {
+		return this.maxPageHeight;
+	}
+	
+	/**
+	 * Retrieve the maximum original resolution (in DPI) of a page displayed in
+	 * this document markup panel
+	 * @return the maximum resolution
+	 */
+	public int getMaxPageImageDpi() {
+		return this.maxPageImageDpi;
+	}
+	
+	/**
+	 * Retrieve the current rendering DPI.
+	 * @return the current rendering DPI
+	 */
+	public int getRenderingDpi() {
+		return this.renderingDpi;
+	}
+	
+	/**
+	 * Set the rendering DPI. This method also affects the zoom percentage;
+	 * namely, this method sets the zoom percentage to <code>renderingDpi
+	 * * 100 / 96</code>.
+	 * @param renderingDpi the new rendering DPI
+	 */
+	public void setRenderingDpi(int renderingDpi) {
+		if (this.renderingDpi == renderingDpi)
+			return;
+		this.renderingDpi = renderingDpi;
+		if (this.isVisible()) {
+			this.viewModCount++;
+			this.getLayout().layoutContainer(this);
+			this.validate();
+			this.repaint();
+		}
+	}
+	
+	/**
+	 * Retrieve the current zoom percentage, rounded to the next full percent.
+	 * @return the current zoom percentage
+	 */
+	public int getZoomPercentage() {
+		return Math.round(((float) (this.renderingDpi * 100)) / DEFAULT_RENDERING_DPI);
+	}
+	
+	/**
+	 * Set the zoom percentage. This method also affects the rendering DPI;
+	 * namely, the rendering DPI are set to <code>zoomPercentage * 96 / 100
+	 * </code>.
+	 * @param zoomPercentage the zoomPercentage to set
+	 */
+	public void setZoomPercentage(int zoomPercentage) {
+		this.setRenderingDpi(Math.round(((float) (zoomPercentage * DEFAULT_RENDERING_DPI)) / 100));
+	}
+	
+	/**
+	 * Retrieve the layout object types currently registered.
+	 * @return an array holding the types
+	 */
+	public String[] getLayoutObjectTypes() {
+		return ((String[]) this.layoutObjectColors.keySet().toArray(new String[this.layoutObjectColors.size()]));
+	}
+	
+	/**
+	 * Retrieve the color used for painting layout objects of a specific type.
+	 * @param type the type of layout object to retrieve the color for
+	 * @return the color to use for painting the layout objects of the argument
+	 *            type
+	 */
+	public Color getLayoutObjectColor(String type) {
+		return this.getLayoutObjectColor(type, false);
+	}
+	private Color getLayoutObjectColor(String type, boolean create) {
+		Color loc = ((Color) this.layoutObjectColors.get(type));
+		if ((loc == null) && create) {
+			loc = new Color(Color.HSBtoRGB(((float) Math.random()), 0.7f, 1.0f));
+			this.layoutObjectColors.put(type, loc);
+		}
+		return loc;
+	}
+	
+	/**
+	 * Set the color to use for painting layout objects of a specific type.
+	 * @param type the type of layout object to set the color for
+	 * @param colors the color to use for painting the layout objects of the
+	 *            argument type
+	 */
+	public void setLayoutObjectColor(String type, Color color) {
+		this.layoutObjectColors.put(type, color);
+		if (this.isVisible() && this.areRegionsPainted(type)) {
+			this.viewModCount++;
+			this.validate();
+			this.repaint();
+		}
+		if (this.idvc != null) {
+			RegionControl rc = ((RegionControl) this.idvc.regionControls.get(type));
+			if (rc != null)
+				rc.color = color;
+		}
+	}
+	
+	/**
+	 * Retrieve the text stream types currently registered.
+	 * @return an array holding the types
+	 */
+	public String[] getTextStreamTypes() {
+		return ((String[]) this.textStreamTypeColors.keySet().toArray(new String[this.textStreamTypeColors.size()]));
+	}
+	
+	/**
+	 * Retrieve the color used for painting text streams of a specific type.
+	 * @param type the type of text stream to retrieve the color for
+	 * @return the color to use for painting the text streams of the argument
+	 *            type
+	 */
+	public Color getTextStreamTypeColor(String type) {
+		return this.getTextStreamTypeColor(type, false);
+	}
+	private Color getTextStreamTypeColor(String type, boolean create) {
+		Color tstc = ((Color) this.textStreamTypeColors.get(type));
+		if ((tstc == null) && create) {
+			tstc = new Color(Color.HSBtoRGB(((float) Math.random()), 0.7f, 1.0f));
+			this.textStreamTypeColors.put(type, tstc);
+		}
+		return tstc;
+	}
+	
+	/**
+	 * Set the color to use for painting text streams of a specific type. If
+	 * the argument text stream type does not exist yet, it is added.
+	 * @param type the type of text streams to set the color for
+	 * @param colors the color to use for painting the text streams of the
+	 *            argument type
+	 */
+	public void setTextStreamTypeColor(String type, Color color) {
+		this.textStreamTypeColors.put(type, color);
+		if (this.isVisible()) {
+			this.viewModCount++;
+			this.validate();
+			this.repaint();
+		}
+	}
+	
+	/**
+	 * Retrieve the annotation types currently registered.
+	 * @return an array holding the types
+	 */
+	public String[] getAnnotationTypes() {
+		return ((String[]) this.annotationColors.keySet().toArray(new String[this.annotationColors.size()]));
+	}
+	
+	/**
+	 * Retrieve the color used for painting annotations of a specific type.
+	 * @param type the type of annotation to retrieve the color for
+	 * @return the color to use for painting the annotations of the argument
+	 *            type
+	 */
+	public Color getAnnotationColor(String type) {
+		return this.getAnnotationColor(type, false);
+	}
+	private Color getAnnotationColor(String type, boolean create) {
+		Color ac = ((Color) this.annotationColors.get(type));
+		if ((ac == null) && create) {
+			ac = new Color(Color.HSBtoRGB(((float) Math.random()), 0.7f, 1.0f));
+			this.annotationColors.put(type, ac);
+		}
+		return ac;
+	}
+	
+	/**
+	 * Set the color to use for painting annotations of a specific type.
+	 * @param type the type of annotations to set the color for
+	 * @param colors the color to use for painting the annotations of the
+	 *            argument type
+	 */
+	public void setAnnotationColor(String type, Color color) {
+		this.annotationColors.put(type, color);
+		if (this.isVisible() && this.areAnnotationsPainted(type)) {
+			this.viewModCount++;
+			this.validate();
+			this.repaint();
+		}
+		if (this.idvc != null) {
+			AnnotControl ac = ((AnnotControl) this.idvc.annotControls.get(type));
+			if (ac != null)
+				ac.color = color;
+		}
+	}
+	
+	/**
+	 * Check whether or not regions of a specific type are painted.
+	 * @param type the type of regions to check
+	 * @return true if regions of the argument type are painted
+	 */
+	public boolean areRegionsPainted(String type) {
+		return this.paintedLayoutObjectTypes.contains(type);
+	}
+	
+	/**
+	 * Activate or deactivate painting regions of a specific type.
+	 * @param type the type of region to modify the painting behavior for
+	 * @param paint paint the regions or not?
+	 */
+	public void setRegionsPainted(String type, boolean paint) {
+		this.setRegionsPainted(type, paint, true);
+	}
+	private void setRegionsPainted(String type, boolean paint, boolean isApiCall) {
+		boolean changed;
+		if (paint)
+			changed = this.paintedLayoutObjectTypes.add(type);
+		else changed = this.paintedLayoutObjectTypes.remove(type);
+		if (changed && this.isVisible()) {
+			this.viewModCount++;
+			this.validate();
+			this.repaint();
+		}
+		if (isApiCall && (this.idvc != null)) {
+			RegionControl rc = ((RegionControl) this.idvc.regionControls.get(type));
+			if (rc != null)
+				rc.paint.setSelected(paint);
+		}
+	}
+	
+	/**
+	 * Check whether or not annotations of a specific type are painted.
+	 * @param type the type of annotation to check
+	 * @return true if annotations of the argument type are painted
+	 */
+	public boolean areAnnotationsPainted(String type) {
+		return this.paintedAnnotationTypes.contains(type);
+	}
+	
+	/**
+	 * Activate or deactivate painting annotations of a specific type.
+	 * @param type the type of annotation to modify the painting behavior for
+	 * @param paint paint the annotations or not?
+	 */
+	public void setAnnotationsPainted(String type, boolean paint) {
+		this.setAnnotationsPainted(type, paint, true);
+	}
+	private void setAnnotationsPainted(String type, boolean paint, boolean isApiCall) {
+		boolean changed;
+		if (paint)
+			changed = this.paintedAnnotationTypes.add(type);
+		else changed = this.paintedAnnotationTypes.remove(type);
+		if (changed && this.isVisible()) {
+			this.viewModCount++;
+			this.validate();
+			this.repaint();
+		}
+		if (isApiCall && (this.idvc != null)) {
+			AnnotControl ac = ((AnnotControl) this.idvc.annotControls.get(type));
+			if (ac != null)
+				ac.paint.setSelected(paint);
+		}
+	}
+	
+	/**
+	 * Retrieve the current annotation highlight margin.
+	 * @return the annotation highlight margin
+	 */
+	public int getAnnotationHighlightMargin() {
+		return this.annotationHighlightMargin;
+	}
+	
+	/**
+	 * Set the annotation highlight margin, i.e., the (unscaled) number of
+	 * pixels the highlight exceeds the bounding boxes of annotated words.
+	 * @param ahm the new annotation highlight margin
+	 */
+	public void setAnnotationHighlightMargin(int ahm) {
+		this.setAnnotationHighlightMargin(ahm, true);
+	}
+	private void setAnnotationHighlightMargin(int ahm, boolean isApiCall) {
+		this.annotationHighlightMargin = ahm;
+		if (this.isVisible()) {
+			this.viewModCount++;
+			this.validate();
+			this.repaint();
+		}
+	}
+	
+	/**
+	 * Check whether or not text streams are painted.
+	 * @return true if text streams are painted, false otherwise
+	 */
+	public boolean areTextStreamsPainted() {
+		return this.textStreamsPainted;
+	}
+	
+	/**
+	 * Activate or deactivate painting of text streams. If the property is set
+	 * to true, words of each logical text stream are painted in different
+	 * colors, and words are connected to their successors by lines.
+	 * @param textStreamsPainted paint text streams?
+	 */
+	public void setTextStreamsPainted(boolean textStreamsPainted) {
+		this.setTextStreamsPainted(textStreamsPainted, true);
+	}
+	private void setTextStreamsPainted(boolean textStreamsPainted, boolean isApiCall) {
+		this.textStreamsPainted = textStreamsPainted;
+		if (this.isVisible()) {
+			this.viewModCount++;
+			this.validate();
+			this.repaint();
+		}
+		if (isApiCall && (this.idvc != null))
+			this.idvc.wordControl.paint.setSelected(textStreamsPainted);
+	}
+	
+	/**
+	 * Check whether or not text strings are painted.
+	 * @return true if text strings are painted, false otherwise
+	 */
+	public boolean areTextStringsPainted() {
+		return this.textStringsPainted;
+	}
+	
+	/**
+	 * Activate or deactivate painting of text strings. If the property is set
+	 * to true, the string value of each word is painted into the word bounding
+	 * box.
+	 * @param textStringsPainted paint text strings?
+	 */
+	public void setTextStringsPainted(boolean textStringsPainted) {
+		this.setTextStringsPainted(textStringsPainted, true);
+	}
+	private void setTextStringsPainted(boolean textStringsPainted, boolean isApiCall) {
+		this.textStringsPainted = textStringsPainted;
+		if (this.isVisible()) {
+			this.viewModCount++;
+			this.validate();
+			this.repaint();
+		}
+		if (isApiCall && (this.idvc != null))
+			this.idvc.wordControl.showOcr.setSelected(textStringsPainted);
+	}
+	
+	/**
+	 * Retrieve the available actions for a word selection. This implementation
+	 * provides basic actions. Sub classes overwriting it thus have to include
+	 * the actions returned by this implementation.
+	 * @param start the word where the selection started, one corner of the box
+	 * @param end the point word the selection ended, the opposite corner of
+	 *            the box
+	 * @return true if the document was changed by the method, false otherwise
+	 */
+	protected SelectionAction[] getActions(final ImWord start, final ImWord end) {
+		LinkedList actions = new LinkedList();
+//		System.out.println("Doing word action between " + start + " and " + end);
+		return ((SelectionAction[]) actions.toArray(new SelectionAction[actions.size()]));
+	}
+	
+	/**
+	 * Retrieve the available actions for a box selection. This implementation
+	 * provides basic actions. Sub classes overwriting it thus have to include
+	 * the actions returned by this implementation.
+	 * @param start the point where the selection started, one corner of the
+	 *            box
+	 * @param end the point where the selection ended, the opposite corner of
+	 *            the box
+	 * @param page the document page the selection lies in
+	 * @return true if the document was changed by the method, false otherwise
+	 */
+	protected SelectionAction[] getActions(final ImPage page, Point start, Point end) {
+		BoundingBox selectedBox = new BoundingBox(Math.min(start.x, end.x), Math.max(start.x, end.x), Math.min(start.y, end.y), Math.max(start.y, end.y));
+		
+		LinkedList actions = new LinkedList();
+		
+		ImRegion[] allRegions = page.getRegions();
+		LinkedList regionList = new LinkedList();
+		for (int r = 0; r < allRegions.length; r++) {
+			if (allRegions[r].bounds.right < selectedBox.left)
+				continue;
+			if (selectedBox.right < allRegions[r].bounds.left)
+				continue;
+			if (allRegions[r].bounds.bottom < selectedBox.top)
+				continue;
+			if (selectedBox.bottom < allRegions[r].bounds.top)
+				continue;
+			if (areRegionsPainted(allRegions[r].getType()))
+				regionList.add(allRegions[r]);
+		}
+		final ImRegion[] selectedRegions = ((ImRegion[]) regionList.toArray(new ImRegion[regionList.size()]));
+		
+		if (selectedRegions.length == 0) {
+			actions.add(new SelectionAction("Hide Page", "Hide/fold the page.") {
+				public boolean performAction(ImDocumentMarkupPanel invoker) {
+					setPageVisible(page.pageId, false);
+					return false;
+				}
+			});
+		}
+//		System.out.println("Doing box action between " + start + " and " + end);
+		return ((SelectionAction[]) actions.toArray(new SelectionAction[actions.size()]));
+	}
+	
+	/**
+	 * Apply an image markup tool to the document displayed in this editor
+	 * panel. If the argument annotation is null, the image markup tool is
+	 * applied to the whole image markup document displayed in this editor
+	 * panel.
+	 * @param imt the image markup tool to apply
+	 * @param annot the annotation to apply the image markup tool to
+	 */
+	public void applyMarkupTool(final ImageMarkupTool imt, final ImAnnotation annot) {
+		
+		//	get progress monitor
+		final ProgressMonitor pm = this.getProgressMonitor(("Running '" + imt.getLabel() + "', Please Wait"), "", false, true);
+		
+		//	initialize atomic UNDO
+		this.beginAtomicAction("Apply " + imt.getLabel());
+		
+		//	apply document processor, in separate thread
+		Thread imtThread = new Thread() {
+			public void run() {
+				ImDocumentListener idl = null;
+				try {
+					
+					//	wait for splash screen progress monitor to come up (we must not reach the dispose() line before the splash screen even comes up)
+					while ((pm instanceof Dialog) && !((Dialog) pm).isVisible()) try {
+						Thread.sleep(10);
+					} catch (InterruptedException ie) {}
+					
+					//	count what is added and removed
+					final CountingStringSet regionCss = new CountingStringSet();
+					final CountingStringSet annotCss = new CountingStringSet();
+					
+					//	listen for annotations being added, but do not update display control for every change
+					idl = new ImDocumentListener() {
+						public void typeChanged(ImObject object, String oldType) {
+							if (object instanceof ImAnnotation) {
+								annotCss.remove(oldType);
+								annotCss.add(object.getType());
+							}
+							else if (object instanceof ImRegion) {
+								regionCss.remove(oldType);
+								regionCss.add(object.getType());
+							}
+						}
+						public void attributeChanged(ImObject object, String attributeName, Object oldValue) {}
+						public void regionAdded(ImRegion region) {
+							regionCss.add(region.getType());
+						}
+						public void regionRemoved(ImRegion region) {
+							regionCss.remove(region.getType());
+						}
+						public void annotationAdded(ImAnnotation annotation) {
+							annotCss.add(annotation.getType());
+						}
+						public void annotationRemoved(ImAnnotation annotation) {
+							annotCss.remove(annotation.getType());
+						}
+					};
+					document.addDocumentListener(idl);
+					
+					//	deactivate immediate control panel updates
+					immediatelyUpdateIdvc = false;
+					
+					//	apply image markup tool
+					imt.process(document, annot, ImDocumentMarkupPanel.this, pm);
+					
+					//	make sure newly added objects are visible
+					for (StringIterator rtit = regionCss.getIterator(); rtit.hasNext();)
+						setRegionsPainted(rtit.nextString(), true);
+					for (StringIterator atit = annotCss.getIterator(); atit.hasNext();)
+						setAnnotationsPainted(atit.nextString(), true);
+				}
+				
+				//	catch whatever might happen
+				catch (Throwable t) {
+					t.printStackTrace(System.out);
+					JOptionPane.showMessageDialog(DialogFactory.getTopWindow(), ("Error applying " + imt.getLabel() + ":\n" + t.getMessage()), "Error Running DocumentProcessor", JOptionPane.ERROR_MESSAGE);
+				}
+				
+				//	clean up
+				finally {
+					
+					//	re-activate control panel updates
+					immediatelyUpdateIdvc = true;
+					
+					//	stop listening
+					if (idl != null)
+						document.removeDocumentListener(idl);
+					
+					//	finish atomic UNDO
+					endAtomicAction();
+					
+					//	dispose splash screen progress monitor
+					if (pm instanceof Dialog)
+						((Dialog) pm).dispose();
+					
+					//	make changes show
+					validate();
+					repaint();
+					validateControlPanel();
+				}
+			}
+		};
+		imtThread.start();
+		
+		//	open splash screen progress monitor (this waits)
+		if (pm instanceof Dialog)
+			((Dialog) pm).setVisible(true);
+	}
+	
+	private static class CountingStringSet {
+		private TreeMap content = new TreeMap();
+//		private int size = 0;
+		CountingStringSet() {}
+		StringIterator getIterator() {
+			final Iterator it = this.content.keySet().iterator();
+			return new StringIterator() {
+				public boolean hasNext() {
+					return it.hasNext();
+				}
+				public Object next() {
+					return it.next();
+				}
+				public void remove() {}
+				public boolean hasMoreStrings() {
+					return it.hasNext();
+				}
+				public String nextString() {
+					return ((String) it.next());
+				}
+			};
+		}
+//		boolean addAll(Collection c) {
+//			boolean added = false;
+//			for (Iterator it = c.iterator(); it.hasNext();) {
+//				Object obj = it.next();
+//				if (this.add(obj.toString()))
+//					added = true;
+//			}
+//			return added;
+//		}
+//		int getCount(String string) {
+//			Int i = ((Int) this.content.get(string));
+//			return ((i == null) ? 0 : i.intValue());
+//		}
+//		int getSize() {
+//			return this.size;
+//		}
+//		int getElementCount() {
+//			return this.content.size();
+//		}
+		boolean add(String string) {
+			Int i = ((Int) this.content.get(string));
+//			this.size++;
+			if (i == null) {
+				this.content.put(string, new Int(1));
+				return true;
+			}
+			else {
+				i.increment();
+				return false;
+			}
+		}
+		boolean remove(String string) {
+			Int i = ((Int) this.content.get(string));
+			if (i == null)
+				return false;
+//			this.size--;
+			if (i.intValue() > 1) {
+				i.decrement();
+				return false;
+			}
+			else {
+				this.content.remove(string);
+				return true;
+			}
+		}
+		private class Int {
+			private int value;
+			Int(int val) {
+				this.value = val;
+			}
+			int intValue() {
+				return this.value;
+			}
+			void increment() {
+				this.value ++;
+			}
+//			void increment(int i) {
+//				this.value += i;
+//			}
+			void decrement() {
+				this.value --;
+			}
+//			void decrement(int d) {
+//				this.value -= d;
+//			}
+		}
+	}
+	
+	/**
+	 * Start an atomic action, consisting of one or more edits to the Image
+	 * Markup document being edited in the panel. This default implementation
+	 * does nothing; sub classes are welcome to overwrite it as needed.
+	 * @param label the label of the action
+	 */
+	public void beginAtomicAction(String label) {}
+	
+	/**
+	 * End an atomic action, consisting of one or more edits to the Image
+	 * Markup document being edited in the panel. This default implementation
+	 * does nothing; sub classes are welcome to overwrite it as needed.
+	 * thus have to make the super call.
+	 */
+	public void endAtomicAction() {}
+	
+	/**
+	 * Produce a progress monitor for observing some activity on the image
+	 * markup document open in this editor panel. Implementations that do not
+	 * support pausing/resuming and aborting can return a plain progress
+	 * monitor, ignoring the two boolean arguments; ones willing to support
+	 * pausing/resuming and aborting have to return a controlling progress
+	 * monitor. If the returned object is a dialog, it has to be positioned and
+	 * sized as desired, but need not be opened by implementations, as the code
+	 * calling this method takes care of opening and closing. This default
+	 * implementation returns a basic progress monitor that simply writes all
+	 * output to the system console.
+	 * @param title the title for the progress monitor
+	 * @param text the explanation text for the progress monitor
+	 * @param supportPauseResume support pausing the monitored process?
+	 * @param supportAbort support aborting the monitored process?
+	 * @return a progress monitor
+	 */
+	public ProgressMonitor getProgressMonitor(String title, String text, boolean supportPauseResume, boolean supportAbort) {
+		return ProgressMonitor.dummy;
+	}
+	
+	/* (non-Javadoc)
+	 * @see javax.swing.JComponent#paint(java.awt.Graphics)
+	 */
+	public void paint(Graphics graphics) {
+		super.paint(graphics);
+		
+		//	paint trans page word connections
+		if (this.areTextStreamsPainted()) {
+			Color preTpwcColor = graphics.getColor();
+			for (Iterator wcit = transPageWordConnections.iterator(); wcit.hasNext();) {
+				TransPageWordConnection tpwc = ((TransPageWordConnection) wcit.next());
+				 
+				//	get connector line sequence (zoomed)
+				Point[] cls = tpwc.getConnectorLineSequence();
+				
+				//	anything to draw?
+				if (cls == null)
+					continue;
+				 
+				//	paint connector line sequence (zoomed)
+				graphics.setColor(getTextStreamTypeColor(tpwc.fromWord.getTextStreamType(), true));
+				for (int p = 0; p < (cls.length-1); p++)
+					graphics.drawLine(cls[p].x, cls[p].y, cls[p+1].x, cls[p+1].y);
+			}
+			graphics.setColor(preTpwcColor);
+		}
+	}
+	
+	private class TransPageWordConnection {
+		ImWord fromWord;
+		ImWord toWord;
+		private String hashString = null;
+		private int hashCode = 0;
+		private Point[] connectorLineSequence = null;
+		TransPageWordConnection(ImWord fromWord, ImWord toWord) {
+			this.fromWord = fromWord;
+			this.toWord = toWord;
+		}
+		public int hashCode() {
+			if (this.hashCode == 0)
+				this.hashCode = this.toString().hashCode();
+			return this.hashCode;
+		}
+		public boolean equals(Object obj) {
+			return ((obj instanceof TransPageWordConnection) && this.toString().equals(obj.toString()));
+		}
+		public String toString() {
+			if (this.hashString == null)
+				this.hashString = (this.fromWord.bounds.toString() + "-" + this.toWord.bounds.toString());
+			return this.hashString;
+		}
+		Point[] getConnectorLineSequence() {
+			if (!isPageVisible(this.fromWord.pageId) || !isPageVisible(this.toWord.pageId))
+				return null;
+			if (this.connectorLineSequence != null)
+				return this.connectorLineSequence;
+			
+			//	translate bounding boxes to document panel coordinate space
+			ImPageMarkupPanel fromIpmp = ipmps[this.fromWord.pageId];
+			Point fromIpmpLocation = fromIpmp.getLocation();
+			BoundingBox from = new BoundingBox(
+					(((this.fromWord.bounds.left * renderingDpi) / fromIpmp.pageImageDpi) + fromIpmpLocation.x + fromIpmp.getLeftOffset()),
+					(((this.fromWord.bounds.right * renderingDpi) / fromIpmp.pageImageDpi) + fromIpmpLocation.x + fromIpmp.getLeftOffset()),
+					(((this.fromWord.bounds.top * renderingDpi) / fromIpmp.pageImageDpi) + fromIpmpLocation.y + fromIpmp.getTopOffset()),
+					(((this.fromWord.bounds.bottom * renderingDpi) / fromIpmp.pageImageDpi) + fromIpmpLocation.y + fromIpmp.getTopOffset())
+				);
+			ImPageMarkupPanel toIpmp = ipmps[this.toWord.pageId];
+			Point toIpmpLocation = toIpmp.getLocation();
+			BoundingBox to = new BoundingBox(
+					(((this.toWord.bounds.left * renderingDpi) / toIpmp.pageImageDpi) + toIpmpLocation.x + toIpmp.getLeftOffset()),
+					(((this.toWord.bounds.right * renderingDpi) / toIpmp.pageImageDpi) + toIpmpLocation.x + toIpmp.getLeftOffset()),
+					(((this.toWord.bounds.top * renderingDpi) / toIpmp.pageImageDpi) + toIpmpLocation.y + toIpmp.getTopOffset()),
+					(((this.toWord.bounds.bottom * renderingDpi) / toIpmp.pageImageDpi) + toIpmpLocation.y + toIpmp.getTopOffset())
+				);
+			
+			//	collect connector angles
+			LinkedList cls = new LinkedList();
+			
+			//	boxes adjacent in reading order, use simple horizontal line
+			if ((from.right <= to.left) && (from.top < to.bottom) && (from.bottom > to.top)) {
+				cls.add(new Point(from.right, ((from.top + from.bottom + to.top + to.bottom) / 4)));
+				cls.add(new Point(to.left, ((from.top + from.bottom + to.top + to.bottom) / 4)));
+			}
+			
+			//	use angled connection
+			else {
+				
+				//	add starting point
+				cls.add(new Point(from.right, ((from.top + from.bottom) / 2)));
+				
+				//	successor to lower left of predecessor (next page below)
+				if ((from.right > to.left) && (from.bottom <= to.top)) {
+					int outswing = Math.min(((to.top - from.bottom) / 2), (renderingDpi / 6));
+					cls.add(new Point((from.right + outswing), ((from.top + from.bottom) / 2)));
+					cls.add(new Point((from.right + outswing), ((from.bottom + to.top) / 2)));
+					cls.add(new Point((to.left - outswing), ((from.bottom + to.top) / 2)));
+					cls.add(new Point((to.left - outswing), ((to.top + to.bottom) / 2)));
+				}
+				
+				//	successor to right of predecessor, but at different height (next page to the right)
+				else if (from.right < to.left) {
+					int fromPageRight = (fromIpmpLocation.x + fromIpmp.getWidth());
+					int toPageLeft = toIpmpLocation.x;
+					cls.add(new Point(((fromPageRight + toPageLeft) / 2), ((from.top + from.bottom) / 2)));
+					cls.add(new Point(((fromPageRight + toPageLeft) / 2), ((to.top + to.bottom) / 2)));
+				}
+				
+				//	add end point
+				cls.add(new Point(to.left, ((to.top + to.bottom) / 2)));
+			}
+			
+			//	finally ...
+			this.connectorLineSequence = ((Point[]) cls.toArray(new Point[cls.size()]));
+			return this.connectorLineSequence;
+		}
+	}
+	private HashSet transPageWordConnections = new HashSet();
+	
+	private void cleanupSelection() {
+		this.selectionStartWord = null;
+		this.selectionEndWord = null;
+		this.selectionWordClicked = false;
+		this.pendingTwoClickAction = null;
+		if (this.twoClickActionMessenger != null)
+			this.twoClickActionMessenger.twoClickActionChanged(null);
+		this.selectionStartPoint = null;
+		this.selectionEndPoint = null;
+		this.pointSelectionPage = null;
+	}
+	
+	/* (non-Javadoc)
+	 * @see java.awt.Container#validate()
+	 */
+	public void validate() {
+		if (this.transPageWordConnections != null)
+			this.transPageWordConnections.clear();
+		if (this.ipmps != null)
+			for (int p = 0; p < this.ipmps.length; p++) {
+				if (this.ipmpVisible[p])
+					this.ipmps[p].validate();
+			}
+		for (Iterator hpbit = this.hiddenPageBanners.iterator(); hpbit.hasNext();)
+			((HiddenPageBanner) hpbit.next()).validate();
+		if (this.idvc != null)
+			this.idvc.updateControls();
+		super.validate();
+	}
+	
+	/**
+	 * Set the component to notify when the two-click action changes, usually
+	 * the component responsible for displaying the respective message.
+	 * @param tcam the two-click action messenger to notify
+	 */
+	public void setTwoClickActionMessenger(TwoClickActionMessenger tcam) {
+		this.twoClickActionMessenger = tcam;
+	}
+	
+	/**
+	 * A component to notify when a two-click action changes.
+	 * 
+	 * @author sautter
+	 */
+	public static interface TwoClickActionMessenger {
+		/**
+		 * Receive notification of a change to the pending two-click action
+		 * @param tcsa the new pending two-click action
+		 */
+		public abstract void twoClickActionChanged(TwoClickSelectionAction tcsa);
+	}
+	
+	/**
+	 * Open a properties editor for a given word, to modify its string and font
+	 * properties.
+	 * @param word the word to edit
+	 */
+	public void editWord(ImWord word) {
+		this.editWord(word, this.ipmps[word.pageId]);
+	}
+	
+	private boolean editWord(ImWord word, ImPageMarkupPanel ipmp) {
+		this.editWordPage = ipmp;
+		Component comp = ipmp;
+		Window w = DialogFactory.getTopWindow();
+		if (w == null)
+			return false;
+		int xOff = 0;
+		int yOff = 0;
+		while (comp != null) {
+			if (comp == w)
+				break;
+			Point loc = comp.getLocation();
+			xOff += loc.x;
+			yOff += loc.y;
+			comp = comp.getParent();
+			if (comp instanceof Window)
+				break;
+		}
+		float zoom = (((float) renderingDpi) / editWordPage.pageImageDpi);
+		int x = (Math.round(zoom * word.bounds.left) + this.editWordPage.getLeftOffset());
+		int y = (Math.round(zoom * word.bounds.top) + this.editWordPage.getTopOffset());
+		EditWordDialog ewd;
+		if (w instanceof Frame)
+			ewd = new EditWordDialog(((Frame) w), word, getLayoutObjectColor(WORD_ANNOTATION_TYPE, true), false) {
+				public void dispose() {
+					cleanupSelection();
+					super.dispose();
+					editWordDialog = null;
+					if (editWordPage != null) {
+						editWordPage.textStringImage = null;
+						editWordPage = null;
+						ImDocumentMarkupPanel.this.repaint();
+					}
+				}
+			};
+		else if (w instanceof Dialog)
+			ewd = new EditWordDialog(((Dialog) w), word, getLayoutObjectColor(WORD_ANNOTATION_TYPE, true), false) {
+				public void dispose() {
+					cleanupSelection();
+					super.dispose();
+					editWordDialog = null;
+					if (editWordPage != null) {
+						editWordPage.textStringImage = null;
+						editWordPage = null;
+						ImDocumentMarkupPanel.this.repaint();
+					}
+				}
+			};
+		else return false;
+		this.editWordDialog = ewd;
+		ewd.setLocation((x + xOff + w.getLocation().x), (y + yOff + w.getLocation().y));
+		ewd.setVisible(true);
+		return ewd.isCommitted();
+	}
+	
+	/**
+	 * A tool to apply to an Image Markup document displayed in an instance of
+	 * this class, to perform changes as a visitor.
+	 * 
+	 * @author sautter
+	 */
+	public static interface ImageMarkupTool {
+		
+		/**
+		 * Get a nice name for the tool, to use in a user interface.
+		 * @return the label of the tool
+		 */
+		public abstract String getLabel();
+		
+		/**
+		 * Get an explanation text for what the tool does, to use in a user
+		 * interface.
+		 * @return an explanation text for the tool
+		 */
+		public abstract String getTooltip();
+		
+		/**
+		 * Get a help text explaining in detail what the tool does, to use in a
+		 * user interface.
+		 * @return a help text for the tool
+		 */
+		public abstract String getHelpText();
+		
+		/**
+		 * Process an Image Markup document or an annotation on that document. The
+		 * argument document is never null, but the argument annotation can be. If
+		 * the annotation is null, the whole document is to be processed; otherwise,
+		 * the annotation is to be processed, with the document providing context
+		 * information. The argument markup panel provides access to the surrounding
+		 * user interface, if any.
+		 * @param doc the document to process
+		 * @param annot the annotation to process
+		 * @param idmp the document markup panel displaying the document, if any
+		 * @param pm a progress monitor observing processing progress
+		 */
+		public abstract void process(ImDocument doc, ImAnnotation annot, ImDocumentMarkupPanel idmp, ProgressMonitor pm);
+	}
+	
+	protected ImImageEditTool[] getImageEditTools() {
+		
+		//	create a few tools
+		ImImageEditTool[] tools = {
+//			new PatternOverpaintImageEditTool("Eraser SQ 5", null, "11111\n11111\n11111\n11111\n11111", Color.WHITE),
+//			new PatternOverpaintImageEditTool("Eraser C 5", null, "01110\n11111\n11111\n11111\n01110", Color.WHITE),
+//			new PatternOverpaintImageEditTool("Eraser RH 5", null, "00100\n01110\n11111\n01110\n00100", Color.WHITE),
+//			new PatternOverpaintImageEditTool("Eraser B 9/3", null, "111111111\n111111111\n111111111", Color.WHITE),
+//			new PatternOverpaintImageEditTool("Eraser B 3/9", null, "111\n111\n111\n111\n111\n111\n111\n111\n111", Color.WHITE),
+//			new PatternOverpaintImageEditTool("Eraser SQ 9", null, "111111111\n111111111\n111111111\n111111111\n111111111\n111111111\n111111111\n111111111\n111111111", Color.WHITE),
+//			new PatternOverpaintImageEditTool("Eraser C 9", null, "000111000\n011111110\n011111110\n111111111\n111111111\n111111111\n011111110\n011111110\n000111000", Color.WHITE),
+//			new PatternOverpaintImageEditTool("Eraser RH 9", null, "000010000\n000111000\n001111100\n011111110\n111111111\n011111110\n001111100\n000111000\n000010000", Color.WHITE),
+//			new PatternOverpaintImageEditTool("Eraser B 15/5", null, "111111111111111\n111111111111111\n111111111111111\n111111111111111\n111111111111111", Color.WHITE),
+//			new PatternOverpaintImageEditTool("Eraser B 5/15", null, "11111\n11111\n11111\n11111\n11111\n11111\n11111\n11111\n11111\n11111\n11111\n11111\n11111\n11111\n11111", Color.WHITE),
+//			new PatternOverpaintImageEditTool("Pen 1", null, "1", Color.BLACK),
+//			new PatternOverpaintImageEditTool("Pen 3", null, "111\n111\n111", Color.BLACK),
+//			new PatternOverpaintImageEditTool("Pen 5", null, "01110\n11111\n11111\n11111\n01110", Color.BLACK),
+//			new SelectionImageEditTool("Line", null, null, false) {
+//				protected void doEdit(ImImageEditorPanel iiep, int sx, int sy, int ex, int ey) {
+//					Graphics gr = iiep.getImage().getGraphics();
+//					Color bc = gr.getColor();
+//					gr.setColor(Color.RED);
+//					gr.drawLine(sx, sy, ex, ey);
+//					gr.setColor(bc);
+//				}
+//			},
+		};
+		return tools;
+	}
+	
+	/**
+	 * Open a page for editing the image and words. This method takes care of
+	 * making the edit an atomic operation.
+	 * @param pageId the ID of the page to edit
+	 */
+	public boolean editPage(int pageId) {
+		if ((pageId < 0) || (this.ipmpVisible.length <= pageId) || !this.ipmpVisible[pageId])
+			return false;
+		return this.editPage(this.ipmps[pageId]);
+	}
+	
+	private boolean editPage(ImPageMarkupPanel ipmp) {
+		
+		//	get words
+		ImWord[] pageWords = ipmp.page.getWords();
+		
+		//	create editor panel
+		ImImageEditorPanel iiep = new ImImageEditorPanel(ipmp.page.getPageImage(), this.getImageEditTools(), ipmp.page, this.getAnnotationColor(WORD_ANNOTATION_TYPE, true));
+		
+		//	create editor dialog
+		final JDialog ped = DialogFactory.produceDialog("Edit Page Image & Words", true);
+		ped.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+		
+		//	add buttons
+		final boolean[] cancelled = {false};
+		JButton ok = new JButton("OK");
+		ok.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent ae) {
+				ped.dispose();
+			}
+		});
+		JButton cancel = new JButton("Cancel");
+		cancel.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent ae) {
+				cancelled[0] = true;
+				ped.dispose();
+			}
+		});
+		JPanel buttons = new JPanel(new FlowLayout(FlowLayout.CENTER), true);
+		buttons.add(ok);
+		buttons.add(cancel);
+		
+		//	assemble dialog content
+		ped.getContentPane().setLayout(new BorderLayout());
+		ped.getContentPane().add(iiep, BorderLayout.CENTER);
+		ped.getContentPane().add(buttons, BorderLayout.SOUTH);
+		
+		//	position dialog and open it
+		ped.setSize(ped.getOwner().getSize());
+		ped.setLocationRelativeTo(ped.getOwner());
+		ped.setVisible(true);
+		
+		//	cancelled
+		if (cancelled[0])
+			return false;
+		
+		//	start atomic action
+		this.beginAtomicAction("Edit Page Image & Words");
+		
+		//	write through word edits
+		HashMap pageWordsByID = new HashMap();
+		for (int w = 0; w < pageWords.length; w++)
+			pageWordsByID.put(pageWords[w].getLocalID(), pageWords[w]);
+		ImWord[] ePageWords = iiep.getWords();
+		for (int w = 0; w < ePageWords.length; w++) {
+			ImWord pageWord = ((ImWord) pageWordsByID.remove(ePageWords[w].getLocalID()));
+			if (pageWord == null) {
+				System.out.println("Adding word '" + ePageWords[w].getString() + "' at " + ePageWords[w].bounds.toString());
+				ipmp.page.addWord(ePageWords[w]);
+			}
+			else {
+				System.out.println("Retaining word '" + ePageWords[w].getString() + "' at " + ePageWords[w].bounds.toString());
+				ePageWords[w] = null;
+			}
+		}
+		for (Iterator wit = pageWordsByID.keySet().iterator(); wit.hasNext();) {
+			ImWord imw = ((ImWord) pageWordsByID.get(wit.next()));
+			ImWord pWord = imw.getPreviousWord();
+			ImWord nWord = imw.getNextWord();
+			if ((pWord != null) && (nWord != null))
+				pWord.setNextWord(nWord);
+			else {
+				imw.setPreviousWord(null);
+				imw.setNextWord(null);
+			}
+			System.out.println("Removing word '" + imw.getString() + "' at " + imw.bounds.toString());
+			ipmp.page.removeWord(imw, true);
+		}
+		
+		//	complete text stream integration
+		for (int w = 0; w < ePageWords.length; w++) {
+			if (ePageWords[w] == null)
+				continue;
+			ImWord prevWord = ((ImWord) ePageWords[w].removeAttribute(ImWord.PREVIOUS_WORD_ATTRIBUTE + "Temp"));
+			if ((prevWord != null) && (prevWord.getPage() != null))
+				ePageWords[w].setPreviousWord(prevWord);
+			ImWord nextWord = ((ImWord) ePageWords[w].removeAttribute(ImWord.NEXT_WORD_ATTRIBUTE + "Temp"));
+			if ((nextWord != null) && (nextWord.getPage() != null))
+				ePageWords[w].setNextWord(nextWord);
+		}
+		
+		//	remove regions that are empty now, and shrink others
+		ImRegion[] regions = ipmp.page.getRegions();
+		for (int r = 0; r < regions.length; r++) {
+			ImWord[] regionWords = regions[r].getWords();
+			if (regionWords.length == 0)
+				ipmp.page.removeRegion(regions[r]);
+			else {
+				int rLeft = regions[r].bounds.right;
+				int rRight = regions[r].bounds.left;
+				int rTop = regions[r].bounds.bottom;
+				int rBottom = regions[r].bounds.top;
+				for (int c = 0; c < regionWords.length; c++) {
+					rLeft = Math.min(rLeft, regionWords[c].bounds.left);
+					rRight = Math.max(rRight, regionWords[c].bounds.right);
+					rTop = Math.min(rTop, regionWords[c].bounds.top);
+					rBottom = Math.max(rBottom, regionWords[c].bounds.bottom);
+				}
+				if ((rLeft < rRight) && (rTop < rBottom) && ((regions[r].bounds.left < rLeft) || (rRight < regions[r].bounds.right) || (regions[r].bounds.top < rTop) || (rBottom < regions[r].bounds.bottom))) {
+					BoundingBox rBox = new BoundingBox(rLeft, rRight, rTop, rBottom);
+					ImRegion region = new ImRegion(ipmp.page, rBox, regions[r].getType());
+					region.copyAttributes(regions[r]);
+					ipmp.page.removeRegion(regions[r]);
+				}
+			}
+		}
+		
+		//	replace page image
+		ipmp.page.setImage(iiep.getPageImage());
+		
+		//	trigger re-rendering
+		ipmp.pageImage = null;
+		ipmp.backgroundImage = null;
+		ipmp.textStringImage = null;
+		ipmp.docModCount++;
+		ipmp.validate();
+		ipmp.repaint();
+		
+		//	finish atomic action
+		this.endAtomicAction();
+		
+		//	finally ...
+		return true;
+	}
+	
+	/**
+	 * Edit the attributes of some Image Markup object belonging to the
+	 * document being edited in this panel. This method takes care of making
+	 * the attribute changes an atomic operation.
+	 * @param attributed the object whose attributes to edit
+	 * @param type the type of object whose attribute to edit
+	 * @param value the textual value of the object whose attribute to edit
+	 */
+	public void editAttributes(Attributed attributed, final String type, String value) {
+		final AttributeEditor aePanel = new AttributeEditor(attributed, type, value, null);
+		
+		final JDialog aeDialog = DialogFactory.produceDialog("Edit Attributes", true);
+		aeDialog.addWindowListener(new WindowAdapter() {
+			public void windowClosed(WindowEvent e) {
+				attributeEditorDialogSize = aeDialog.getSize();
+				attributeEditorDialogLocation = aeDialog.getLocation(attributeEditorDialogLocation);
+			}
+		});
+		
+		JButton commit = new JButton("OK");
+		commit.setBorder(BorderFactory.createRaisedBevelBorder());
+		commit.setPreferredSize(new Dimension(80, 21));
+		commit.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent ae) {
+				beginAtomicAction("Edit " + type + " Attributes");
+				aePanel.writeChanges();
+				aeDialog.dispose();
+				endAtomicAction();
+			}
+		});
+		JButton cancel = new JButton("Cancel");
+		cancel.setBorder(BorderFactory.createRaisedBevelBorder());
+		cancel.setPreferredSize(new Dimension(80, 21));
+		cancel.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent ae) {
+				aeDialog.dispose();
+			}
+		});
+		JPanel aeButtons = new JPanel(new FlowLayout(FlowLayout.CENTER));
+		aeButtons.add(commit);
+		aeButtons.add(cancel);
+		
+		aeDialog.getContentPane().setLayout(new BorderLayout());
+		aeDialog.getContentPane().add(aePanel, BorderLayout.CENTER);
+		aeDialog.getContentPane().add(aeButtons, BorderLayout.SOUTH);
+		
+		aeDialog.setResizable(true);
+		aeDialog.setSize(attributeEditorDialogSize);
+		if (attributeEditorDialogLocation == null)
+			aeDialog.setLocationRelativeTo(DialogFactory.getTopWindow());
+		else aeDialog.setLocation(attributeEditorDialogLocation);
+		aeDialog.setVisible(true);
+	}
+	private static Dimension attributeEditorDialogSize = new Dimension(400, 300);
+	private static Point attributeEditorDialogLocation = null;
+	
+	/**
+	 * @param args
+	 */
+	public static void main(String[] args) throws Exception {
+		try {
+			UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+		} catch (Exception e) {}
+		
+		final File baseFolder = new File("E:/Testdaten/PdfExtract/");
+		String pdfName;
+		pdfName = "dikow_2012.pdf";
+		pdfName = "3868.pdf";
+//		pdfName = "MEZ_909-919.pdf";
+		
+		ImDocument imDoc = ImfIO.loadDocument(new FileInputStream(new File(baseFolder, (pdfName + ".imf"))));
+//		ImPage[] imPages = imDoc.getPages();
+//		System.out.println("Document loaded, got " + imPages.length + " pages");
+//		for (int p = 0; p < imPages.length; p++) {
+//			ImWord[] imWords = imPages[p].getWords();
+//			System.out.println(" - got " + imWords.length + " words in gape " + p);
+//			PageImage pi = PageImage.getPageImage(imDoc.docId, imPages[p].pageId);
+//			System.out.println(" - got page image, size is " + pi.image.getWidth() + "x" + pi.image.getHeight());
+//			
+//			if (p == 4) {
+//				new ImAnnotation(imDoc, imWords[0], imWords[5], "heading");
+//				new ImAnnotation(imDoc, imWords[6], "pageNumber");
+//				for (ImWord imw = imWords[0]; imw != null; imw = imw.getNextWord()) {
+//					if ("Abdomen".equals(imw.getString())) {
+//						new ImAnnotation(imDoc, imw, imw.getNextWord().getNextWord(), "inLineHeading");
+//						new ImAnnotation(imDoc, imw, "inLineHeadWord");
+//						new ImAnnotation(imDoc, imw.getPreviousWord(), imw, "crossLineHeadWord");
+//						ImWord pew;
+//						for (pew = imw; pew != null; pew = pew.getNextWord()) {
+//							if (pew.getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END)
+//								break;
+//						}
+//						new ImAnnotation(imDoc, imw, pew, "paragraph");
+//					}
+//				}
+//			}
+//		}
+		
+		JFrame f = new JFrame();
+		
+		ImDocumentMarkupPanel p = new ImDocumentMarkupPanel(imDoc, 0, 4);
+//		p.setTextStreamsPainted(true);
+		p.setRenderingDpi(150);
+//		p.setRegionsPainted(BLOCK_ANNOTATION_TYPE, true);
+//		p.setRegionsPainted(PARAGRAPH_TYPE, true);
+		p.setSideBySidePages(2);
+		p.setTextStreamsPainted(true);
+		JScrollPane pbox = new JScrollPane();
+		pbox.getVerticalScrollBar().setUnitIncrement(50);
+		pbox.getVerticalScrollBar().setBlockIncrement(50);
+		pbox.setViewport(new IdmpViewport(p));
+		f.setSize(Math.min((p.getPreferredSize().width + p.getControlPanel().getPreferredSize().width), 1500), 1000);
+		
+		f.getContentPane().setLayout(new BorderLayout());
+		f.getContentPane().add(pbox, BorderLayout.CENTER);
+		f.getContentPane().add(p.getControlPanel(), BorderLayout.EAST);
+		f.setLocationRelativeTo(null);
+		f.setVisible(true);
+	}
+	
+	private static class IdmpViewport extends JViewport implements TwoClickActionMessenger {
+		private static Color halfTransparentRed = new Color(Color.red.getRed(), Color.red.getGreen(), Color.red.getBlue(), 128);
+		private ImDocumentMarkupPanel idvp;
+		private String tcaMessage = null;
+		IdmpViewport(ImDocumentMarkupPanel idvp) {
+			this.idvp = idvp;
+			this.idvp.setTwoClickActionMessenger(this);
+			this.setView(this.idvp);
+			this.setOpaque(false);
+		}
+		public void twoClickActionChanged(TwoClickSelectionAction tcsa) {
+			this.tcaMessage = ((tcsa == null) ? null : tcsa.getActiveLabel());
+			this.validate();
+			this.repaint();
+		}
+		public void paint(Graphics g) {
+			super.paint(g);
+			if (this.tcaMessage == null)
+				return;
+			Font f = new Font("Helvetica", Font.PLAIN, 20);
+			g.setFont(f);
+			TextLayout wtl = new TextLayout(this.tcaMessage, f, ((Graphics2D) g).getFontRenderContext());
+			g.setColor(halfTransparentRed);
+			g.fillRect(0, 0, this.getViewRect().width, ((int) Math.ceil(wtl.getBounds().getHeight() + (wtl.getDescent() * 3))));
+			g.setColor(Color.white);
+			((Graphics2D) g).drawString(this.tcaMessage, ((this.getViewRect().width - wtl.getAdvance()) / 2), ((int) Math.ceil(wtl.getBounds().getHeight() + wtl.getDescent())));
+		}
+	}
+	
+	private class ImPageMarkupPanel extends JPanel {
+		
+		/** the page displayed in this panel */
+		final ImPage page;
+		
+		long docModCount = 0; // changes to the document proper (all we need is the listener)
+		
+		private PageImage pageImage;
+		private int pageImageDpi = -1;
+		
+		private int pageWidth;
+		private int pageHeight;
+		private int pageMarginLeft;
+		private int pageMarginTop;
+		
+		ImPageMarkupPanel(ImPage page, int pageWidth, int pageHeight) {
+			super(new BorderLayout(), true);
+			this.page = page;
+			this.pageWidth = pageWidth;
+			this.pageHeight = pageHeight;
+			this.pageMarginLeft = ((this.pageWidth - (this.page.bounds.right - this.page.bounds.left)) / 2);
+			this.pageMarginTop = ((this.pageHeight - (this.page.bounds.bottom - this.page.bounds.top)) / 2);
+			Object piDpi = this.page.getAttribute(IMAGE_DPI_ATTRIBUTE);
+			if (piDpi == null)
+				this.pageImageDpi = this.page.getImage().currentDpi;
+			else try {
+				this.pageImageDpi = Integer.parseInt(piDpi.toString());
+			} catch (NumberFormatException nfe) {}
+		}
+		
+		int getLeftOffset() {
+			return (fixPageMargin + Math.round(((float) (this.pageMarginLeft * renderingDpi)) / this.pageImageDpi));
+		}
+		
+		int getTopOffset() {
+			return (fixPageMargin + Math.round(((float) (this.pageMarginTop * renderingDpi)) / this.pageImageDpi));
+		}
+		
+		private PageImage getPageImage() {
+			if (this.pageImage == null) {
+				PageImage pi = this.page.getPageImage();
+				BufferedImage bi = new BufferedImage(pi.image.getWidth(), pi.image.getHeight(), BufferedImage.TYPE_4BYTE_ABGR);
+				Graphics g = bi.createGraphics();
+				g.drawImage(pi.image, 0, 0, null);
+				int white = Color.WHITE.getRGB();
+				byte alpha = 0;
+				alpha %= 0xff; 
+				int rgb;
+				for (int x = 0; x < pi.image.getWidth(); x++) {
+					for (int y = 0; y < pi.image.getHeight(); y++) {
+						rgb = pi.image.getRGB(x, y);
+						if (rgb != white)
+							continue;
+			            int mc = (alpha << 24) | 0x00ffffff;
+			            rgb = rgb & mc;
+			            bi.setRGB(x, y, rgb);  
+					}
+				}
+				this.pageImage = new PageImage(bi, pi.originalWidth, pi.originalHeight, pi.originalDpi, pi.currentDpi, pi.leftEdge, pi.rightEdge, pi.topEdge, pi.bottomEdge, pi.source);
+				this.pageImageDpi = this.pageImage.currentDpi;
+			}
+			return this.pageImage;
+		}
+		
+		/* (non-Javadoc)
+		 * @see javax.swing.JComponent#getPreferredSize()
+		 */
+		public Dimension getPreferredSize() {
+			if (this.pageImageDpi == -1)
+				return super.getPreferredSize();
+			return new Dimension((Math.round(((float) (this.pageWidth * renderingDpi)) / this.pageImageDpi) + (fixPageMargin * 2)), (Math.round(((float) (this.pageHeight * renderingDpi)) / this.pageImageDpi) + (fixPageMargin * 2)));
+		}
+		
+		private BufferedImage getTextStringImage() {
+			if (this.textStringImage != null)
+				return this.textStringImage;
+			
+			//	get page image and compute zoom
+			PageImage pi = this.getPageImage();
+			float zoom = (((float) renderingDpi) / this.pageImageDpi);
+			
+			//	create image
+			this.textStringImage = new BufferedImage(Math.round(pi.image.getWidth() * zoom), Math.round(pi.image.getHeight() * zoom), BufferedImage.TYPE_4BYTE_ABGR);
+			Graphics2D graphics = this.textStringImage.createGraphics();
+			
+			//	paint words
+			int estimatedWordFontSize = 1;
+			ImRegion line = null;
+			ImWord[] tshs = this.page.getTextStreamHeads();
+			for (int h = 0; h < tshs.length; h++) {
+				
+				//	paint current text stream
+				for (ImWord imw = tshs[h]; (imw != null) && (imw.pageId == this.page.pageId); imw = imw.getNextWord()) {
+					
+					//	check if we are still in line
+					if ((line != null) && !line.bounds.includes(imw.bounds, true))
+						line = null;
+					
+					//	find current line
+					if (line == null) {
+						ImRegion[] regions = this.page.getRegionsIncluding(imw.bounds, true);
+						for (int r = 0; r < regions.length; r++)
+							if (LINE_ANNOTATION_TYPE.equals(regions[r].getType())) {
+								line = regions[r];
+								break;
+							}
+					}
+					
+					//	paint half-transparent while background
+					graphics.setColor(textStringBackgroundWhite);
+					this.fillBox(graphics, new BoundingBox((imw.bounds.left + 1), (imw.bounds.right - 1), (imw.bounds.top + 1), (imw.bounds.bottom - 1)), zoom, 0, 0);
+					
+					//	paint word text
+					graphics.setColor(Color.black);
+					String imwString = imw.getString();
+					int fontStyle = Font.PLAIN;
+					if (imw.hasAttribute(BOLD_ATTRIBUTE))
+						fontStyle = (fontStyle | Font.BOLD);
+					if (imw.hasAttribute(ITALICS_ATTRIBUTE))
+						fontStyle = (fontStyle | Font.ITALIC);
+					int fontSize;
+					Font rf;
+					int wordBaseline = ((documentBornDigital || (line == null)) ? -1 : Integer.parseInt((String) line.getAttribute(BASELINE_ATTRIBUTE, "-1")));
+					if (imw.hasAttribute(FONT_SIZE_ATTRIBUTE) && documentBornDigital) {
+						fontSize = Integer.parseInt((String) imw.getAttribute(FONT_SIZE_ATTRIBUTE));
+						rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+					}
+					else if (this.isFlatString(imwString)) {
+						fontSize = estimatedWordFontSize;
+						rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+					}
+					else {
+						fontSize = estimatedWordFontSize;
+						rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+						TextLayout wtl = new TextLayout(imwString, rf, graphics.getFontRenderContext());
+						while (wtl.getBounds().getHeight() < (imw.bounds.bottom - imw.bounds.top)) {
+							fontSize++;
+							rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+							wtl = new TextLayout(imwString, rf, graphics.getFontRenderContext());
+						}
+						while ((imw.bounds.bottom - imw.bounds.top) < wtl.getBounds().getHeight()) {
+							fontSize--;
+							rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+							wtl = new TextLayout(imwString, rf, graphics.getFontRenderContext());
+						}
+						estimatedWordFontSize = fontSize;
+					}
+					
+					//	test if string has descent
+					boolean imwHasDecent = false;
+					for (int c = 0; c < imwString.length(); c++)
+						if ("gjpqy".indexOf(imwString.charAt(c)) != -1) {
+							imwHasDecent = true;
+							break;
+						}
+					
+					//	if baseline above word center, don't use it
+					if (wordBaseline < imw.centerY)
+						wordBaseline = -1;
+					
+					//	adjust word size and vertical position
+					graphics.setFont(rf);
+					LineMetrics wlm = rf.getLineMetrics(imwString, graphics.getFontRenderContext());
+					TextLayout wtl = new TextLayout(imwString, rf, graphics.getFontRenderContext());
+					double hScale = (((double) (imw.bounds.right - imw.bounds.left)) / wtl.getBounds().getWidth());
+//					System.out.println("Printing '" + imw.getString() + "' in " + imw.bounds.toString() + ", font size is " + fontSize + ", hScale is " + hScale + ", baseline is " + wordBaseline);
+					
+					//	draw word
+					AffineTransform at = graphics.getTransform();
+					graphics.scale(zoom, zoom);
+					graphics.translate(imw.bounds.left, 0);
+					if (hScale != 1)
+						graphics.scale(hScale, 1);
+					graphics.drawString(imwString, 0, ((wordBaseline < 1) ? (imw.bounds.bottom - ((documentBornDigital || imwHasDecent) ? Math.round(wlm.getDescent()) : 0)) : wordBaseline));
+					graphics.setTransform(at);
+				}
+			}
+			
+			//	finally ...
+			this.textStringImageDocModCount = this.docModCount;
+			this.textStringImageViewModCount = viewModCount;
+			return this.textStringImage;
+		}
+		private BufferedImage textStringImage = null;
+		private long textStringImageDocModCount = 0;
+		private long textStringImageViewModCount = 0;
+		
+		private boolean isFlatString(String str) {
+			for (int c = 0; c < str.length(); c++) {
+				if (".,:;°_-~*+'´`\"\u2012\u2013\u2014\u2015\u2212".indexOf(str.charAt(c)) == -1)
+					return false;
+			}
+			return true;
+		}
+		
+		private BufferedImage getBackgroundImage() {
+			if (this.backgroundImage != null)
+				return this.backgroundImage;
+			
+			//	get page image and compute zoom
+			PageImage pi = this.getPageImage();
+			float zoom = (((float) renderingDpi) / this.pageImageDpi);
+			
+			//	create image
+			this.backgroundImage = new BufferedImage((Math.round(pi.image.getWidth() * zoom) + (fixPageMargin * 2)), (Math.round(pi.image.getHeight() * zoom) + (fixPageMargin * 2)), BufferedImage.TYPE_4BYTE_ABGR);
+			Graphics2D graphics = this.backgroundImage.createGraphics();
+			
+			//	get words
+			Color preWordColor = graphics.getColor();
+			this.textStreamHeads = this.page.getTextStreamHeads();
+			
+			//	record outer limits of text, and collect text stream tails
+			int textLeft = pi.image.getWidth();
+			int textRight = 0;
+			int textTop = pi.image.getHeight();
+			int textBottom = 0;
+			ImWord[] tsts = new ImWord[this.textStreamHeads.length];
+			
+			//	get highlight margin
+			int ahm = annotationHighlightMargin;
+			if (ahm < 0) ahm = 0;
+			
+			//	paint words
+			for (int h = 0; h < this.textStreamHeads.length; h++) {
+				
+				//	set color
+				graphics.setColor(getTextStreamTypeColor(this.textStreamHeads[h].getTextStreamType(), true));
+				
+				//	paint current text stream
+				for (ImWord imw = this.textStreamHeads[h]; (imw != null) && (imw.pageId == this.page.pageId); imw = imw.getNextWord()) {
+					
+					//	check whether or not to paint left and right line of word box
+					boolean paintLeft = ((imw.getPreviousWord() == null) || ((imw.getPreviousWord().getNextRelation() != ImWord.NEXT_RELATION_HYPHENATED) && (imw.getPreviousWord().getNextRelation() != ImWord.NEXT_RELATION_CONTINUE)));
+					boolean paintRight = ((imw.getNextWord() == null) || ((imw.getNextRelation() != ImWord.NEXT_RELATION_HYPHENATED) && (imw.getNextRelation() != ImWord.NEXT_RELATION_CONTINUE)));
+					
+					//	paint word box
+					this.paintBox(graphics, imw.bounds, zoom, fixPageMargin, fixPageMargin, paintLeft, paintRight);
+					
+					//	draw word relation markers for artifacts and deleted words
+					if (!ImWord.TEXT_STREAM_TYPE_DELETED.equals(imw.getTextStreamType()) && !ImWord.TEXT_STREAM_TYPE_ARTIFACT.equals(imw.getTextStreamType())) {
+						
+						//	visualize paragraph start
+						if ((imw.getPreviousWord() == null) || (imw.getPreviousWord().getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END)) {
+							
+							//	thicken left word edge
+							graphics.drawLine((Math.round(imw.bounds.left * zoom) + fixPageMargin - 1), (Math.round(imw.bounds.top * zoom) + fixPageMargin - 1), (Math.round(imw.bounds.left * zoom) + fixPageMargin - 1), (Math.round(imw.bounds.bottom * zoom) + fixPageMargin));
+							graphics.drawLine((Math.round(imw.bounds.left * zoom) + fixPageMargin - 2), (Math.round(imw.bounds.top * zoom) + fixPageMargin - 2), (Math.round(imw.bounds.left * zoom) + fixPageMargin - 2), (Math.round(imw.bounds.bottom * zoom) + fixPageMargin));
+							
+							//	thicken top word edge
+							graphics.drawLine((Math.round(imw.bounds.left * zoom) + fixPageMargin - 1), (Math.round(imw.bounds.top * zoom) + fixPageMargin - 1), (Math.round(imw.bounds.right * zoom) + fixPageMargin), (Math.round(imw.bounds.top * zoom) + fixPageMargin - 1));
+							graphics.drawLine((Math.round(imw.bounds.left * zoom) + fixPageMargin - 2), (Math.round(imw.bounds.top * zoom) + fixPageMargin - 2), (Math.round(imw.bounds.right * zoom) + fixPageMargin), (Math.round(imw.bounds.top * zoom) + fixPageMargin - 2));
+						}
+						
+						//	visualize paragraph end
+						if ((imw.getNextWord() == null) || (imw.getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END)) {
+							
+							//	thicken right word edge
+							graphics.drawLine((Math.round(imw.bounds.right * zoom) + fixPageMargin + 1), (Math.round(imw.bounds.top * zoom) + fixPageMargin), (Math.round(imw.bounds.right * zoom) + fixPageMargin + 1), (Math.round(imw.bounds.bottom * zoom) + fixPageMargin + 1));
+							graphics.drawLine((Math.round(imw.bounds.right * zoom) + fixPageMargin + 2), (Math.round(imw.bounds.top * zoom) + fixPageMargin), (Math.round(imw.bounds.right * zoom) + fixPageMargin + 2), (Math.round(imw.bounds.bottom * zoom) + fixPageMargin + 2));
+							
+							//	thicken bottom word edge
+							graphics.drawLine((Math.round(imw.bounds.left * zoom) + fixPageMargin), (Math.round(imw.bounds.bottom * zoom) + fixPageMargin + 1), (Math.round(imw.bounds.right * zoom) + fixPageMargin + 1), (Math.round(imw.bounds.bottom * zoom) + fixPageMargin + 1));
+							graphics.drawLine((Math.round(imw.bounds.left * zoom) + fixPageMargin), (Math.round(imw.bounds.bottom * zoom) + fixPageMargin + 2), (Math.round(imw.bounds.right * zoom) + fixPageMargin + 2), (Math.round(imw.bounds.bottom * zoom) + fixPageMargin + 2));
+						}
+					}
+					
+					//	no text stream connectors to paint
+					if (!areTextStreamsPainted())
+						continue;
+					
+					//	record outer limits of text
+					textLeft = Math.min(textLeft,  imw.bounds.left);
+					textRight = Math.max(textRight,  imw.bounds.right);
+					textTop = Math.min(textTop,  imw.bounds.top);
+					textBottom = Math.max(textBottom,  imw.bounds.bottom);
+					tsts[h] = imw;
+					
+					//	no predecessor on same page to connect to
+					if ((imw.getPreviousWord() == null) || (imw.getPreviousWord().pageId != imw.pageId))
+						continue;
+					
+					//	compute connector line sequence (zoom independent)
+					Point[] cls = this.getConnectorLineSequence(imw.getPreviousWord().bounds, imw.bounds);
+					
+					//	paint connector line sequence (zoomed)
+					for (int p = 0; p < (cls.length-1); p++)
+						graphics.drawLine((Math.round(cls[p].x * zoom) + fixPageMargin), (Math.round(cls[p].y * zoom) + fixPageMargin), (Math.round(cls[p+1].x * zoom) + fixPageMargin), (Math.round(cls[p+1].y * zoom) + fixPageMargin));
+				}
+			}
+			
+			//	reset graphics
+			graphics.setColor(preWordColor);
+			
+			//	paint other (activated) layout objects
+			Color preRegionColor = graphics.getColor();
+			ImRegion[] regions = this.page.getRegions();
+			for (int r = 0; r < regions.length; r++) {
+				if (!areRegionsPainted(regions[r].getType()))
+					continue;
+				graphics.setColor(getLayoutObjectColor(regions[r].getType(), true));
+				this.paintBox(graphics, regions[r].bounds, zoom, fixPageMargin, fixPageMargin);
+			}
+			graphics.setColor(preRegionColor);
+			
+			//	paint (activated) annotations
+			Color preAnnotColor = graphics.getColor();
+			ImAnnotation[] annots = this.page.getDocument().getAnnotations(this.page.pageId);
+			
+			//	count starts and ends
+			CountingSet seCounts = new CountingSet();
+			for (int a = 0; a < annots.length; a++) {
+				if (!areAnnotationsPainted(annots[a].getType()))
+					continue;
+				seCounts.add("S" + annots[a].getFirstWord().getLocalID());
+				seCounts.add("E" + annots[a].getLastWord().getLocalID());
+			}
+			
+			//	paint (activated) annotations
+			for (int a = 0; a < annots.length; a++) {
+				if (!areAnnotationsPainted(annots[a].getType()))
+					continue;
+				
+				//	create transparent color
+				Color annotColor = getAnnotationColor(annots[a].getType(), true);
+				graphics.setColor(annotColor);
+				
+				//	get anchor words
+				ImWord fw = annots[a].getFirstWord();
+				ImWord lw = annots[a].getLastWord();
+				
+				//	paint opaque kind of square bracket before first and after last word
+				AffineTransform at = graphics.getTransform();
+				graphics.translate(fixPageMargin, fixPageMargin);
+				graphics.scale(zoom, zoom);
+				if (fw.pageId == this.page.pageId) {
+					int out = seCounts.getCount("S" + fw.getLocalID());
+					graphics.drawLine((fw.bounds.left - (out * ahm)), (fw.bounds.top - out), (fw.bounds.left - (out * ahm)), (fw.bounds.bottom + out));
+					graphics.drawLine((fw.bounds.left - (out * ahm) + 1), (fw.bounds.top - out), (fw.bounds.left - (out * ahm) + 1), (fw.bounds.bottom + out));
+					graphics.drawLine((fw.bounds.left - (out * ahm)), (fw.bounds.top - out), (fw.bounds.left + ahm), (fw.bounds.top - out));
+					graphics.drawLine((fw.bounds.left - (out * ahm)), (fw.bounds.bottom + out), (fw.bounds.left + ahm), (fw.bounds.bottom + out));
+					seCounts.remove("S" + fw.getLocalID());
+				}
+				if (lw.pageId == this.page.pageId) {
+					int out = seCounts.getCount("E" + fw.getLocalID());
+					graphics.drawLine((lw.bounds.right + (out * ahm)), (lw.bounds.top - out), (lw.bounds.right + (out * ahm)), (lw.bounds.bottom + out));
+					graphics.drawLine((lw.bounds.right + (out * ahm) - 1), (lw.bounds.top - out), (lw.bounds.right + (out * ahm) - 1), (lw.bounds.bottom + out));
+					graphics.drawLine((lw.bounds.right + (out * ahm)), (lw.bounds.top - out), (lw.bounds.right - ahm), (lw.bounds.top - out));
+					graphics.drawLine((lw.bounds.right + (out * ahm)), (lw.bounds.bottom + out), (lw.bounds.right - ahm), (lw.bounds.bottom + out));
+					seCounts.remove("E" + lw.getLocalID());
+				}
+				graphics.setTransform(at);
+				
+				//	paint word highlights
+				Color annotHighlightColor = new Color(annotColor.getRed(), annotColor.getGreen(), annotColor.getBlue(), 64);
+				graphics.setColor(annotHighlightColor);
+				for (ImWord imw = fw; imw != null; imw = ((imw == lw) ? null : imw.getNextWord())) {
+					if (imw.pageId < this.page.pageId)
+						continue;
+					if (imw.pageId > this.page.pageId)
+						break;
+					
+					BoundingBox imwHighlight;
+					if ((imw == fw) || (imw.getPreviousWord() == null) || (imw.getPreviousWord().pageId != imw.pageId) || (imw.getPreviousWord().bounds.right > imw.bounds.left) || (imw.getPreviousWord().bounds.top > imw.bounds.bottom) || (imw.getPreviousWord().bounds.bottom < imw.bounds.top))
+						imwHighlight = new BoundingBox(imw.bounds.left - ahm, imw.bounds.right + ahm, imw.bounds.top - ahm, imw.bounds.bottom + ahm);
+					else imwHighlight = new BoundingBox(imw.getPreviousWord().bounds.right + ahm, imw.bounds.right + ahm, imw.bounds.top - ahm, imw.bounds.bottom + ahm);
+					this.fillBox(graphics, imwHighlight, zoom, fixPageMargin, fixPageMargin);
+				}
+			}
+			
+			//	reset graphics
+			graphics.setColor(preAnnotColor);
+			
+			//	finally ...
+			this.backgroundImageDocModCount = this.docModCount;
+			this.backgroundImageViewModCount = viewModCount;
+			return this.backgroundImage;
+		}
+		private BufferedImage backgroundImage = null;
+		private ImWord[] textStreamHeads = null;
+		private long backgroundImageDocModCount = 0;
+		private long backgroundImageViewModCount = 0;
+		
+		/* (non-Javadoc)
+		 * @see java.awt.Container#validate()
+		 */
+		public void validate() {
+			if ((this.backgroundImageDocModCount < this.docModCount) || (this.backgroundImageViewModCount < viewModCount)) {
+				this.backgroundImage = null;
+				this.textStreamHeads = null;
+			}
+			if ((this.textStringImageDocModCount < this.docModCount) || (this.textStringImageViewModCount < viewModCount))
+				this.textStringImage = null;
+			super.validate();
+		}
+		
+		/* (non-Javadoc)
+		 * @see javax.swing.JComponent#paint(java.awt.Graphics)
+		 */
+		public void paint(Graphics graphics) {
+			super.paint(graphics);
+			
+			//	paint background
+			Color preBackgroundColor = graphics.getColor();
+			graphics.setColor(Color.white);
+			graphics.fillRect(0, 0, this.getWidth(), this.getHeight());
+			graphics.setColor(preBackgroundColor);
+			
+			//	get page image and compute zoom
+			PageImage pi = this.getPageImage();
+			float zoom = (((float) renderingDpi) / this.pageImageDpi);
+			
+			//	get highlight margin
+			int ahm = annotationHighlightMargin;
+			if (ahm < 0) ahm = 0;
+			
+			//	highlight word selection (if any)
+			Color preSelectionColor = graphics.getColor();
+			if (selectionStartWord != null) {
+				ImWord sew = ((selectionEndWord == null) ? selectionStartWord : selectionEndWord);
+				graphics.setColor(selectionHighlightColor);
+				if (selectionStartWord.getTextStreamId().equals(sew.getTextStreamId())) {
+					ImWord fw;
+					ImWord lw;
+					if (selectionStartWord.pageId == sew.pageId) {
+						fw = ((selectionStartWord.getTextStreamPos() <= sew.getTextStreamPos()) ? selectionStartWord : sew);
+						lw = ((selectionStartWord.getTextStreamPos() <= sew.getTextStreamPos()) ? sew : selectionStartWord);
+					}
+					else if (selectionStartWord.pageId < sew.pageId) {
+						fw = selectionStartWord;
+						lw = sew;
+					}
+					else {
+						fw = sew;
+						lw = selectionStartWord;
+					}
+					for (ImWord imw = fw; imw != null; imw = ((imw == lw) ? null : imw.getNextWord())) {
+						if (imw.pageId < this.page.pageId)
+							continue;
+						if (imw.pageId != this.page.pageId)
+							break;
+						BoundingBox imwHighlight;
+						if ((imw == fw) || (imw.getPreviousWord() == null) || (imw.getPreviousWord().bounds.right > imw.bounds.left) || (imw.getPreviousWord().bounds.top > imw.bounds.bottom) || (imw.getPreviousWord().bounds.bottom < imw.bounds.top))
+							imwHighlight = new BoundingBox(imw.bounds.left - ahm, imw.bounds.right + ahm, imw.bounds.top - ahm, imw.bounds.bottom + ahm);
+						else imwHighlight = new BoundingBox(imw.getPreviousWord().bounds.right + ahm, imw.bounds.right + ahm, imw.bounds.top - ahm, imw.bounds.bottom + ahm);
+						this.fillBox(graphics, imwHighlight, zoom, this.getLeftOffset(), this.getTopOffset());
+					}
+				}
+				else {
+					if (selectionStartWord.pageId == this.page.pageId) {
+						BoundingBox imwHighlight = new BoundingBox(selectionStartWord.bounds.left - ahm, selectionStartWord.bounds.right + ahm, selectionStartWord.bounds.top - ahm, selectionStartWord.bounds.bottom + ahm);
+						this.fillBox(graphics, imwHighlight, zoom, this.getLeftOffset(), this.getTopOffset());
+					}
+					if (sew.pageId == this.page.pageId) {
+						BoundingBox imwHighlight = new BoundingBox(sew.bounds.left - ahm, sew.bounds.right + ahm, sew.bounds.top - ahm, sew.bounds.bottom + ahm);
+						this.fillBox(graphics, imwHighlight, zoom, this.getLeftOffset(), this.getTopOffset());
+					}
+				}
+			}
+			if ((pendingTwoClickAction != null) && (pendingTwoClickAction.getFirstWord().pageId == this.page.pageId)) {
+				ImWord tcaStartWord = pendingTwoClickAction.getFirstWord();
+				graphics.setColor(new Color((255 - ((255 - selectionHighlightColor.getRed()) / 2)), (255 - ((255 - selectionHighlightColor.getGreen()) / 2)), (255 - ((255 - selectionHighlightColor.getBlue()) / 2)))); // cut distance to white in half for each component color
+				BoundingBox imwHighlight = new BoundingBox(tcaStartWord.bounds.left - ahm, tcaStartWord.bounds.right + ahm, tcaStartWord.bounds.top - ahm, tcaStartWord.bounds.bottom + ahm);
+				this.fillBox(graphics, imwHighlight, zoom, this.getLeftOffset(), this.getTopOffset());
+			}
+			graphics.setColor(preSelectionColor);
+			
+			//	paint background / highlight image
+			BufferedImage bi = this.getBackgroundImage();
+			graphics.drawImage(bi, (this.getLeftOffset() - fixPageMargin), (this.getTopOffset() - fixPageMargin), bi.getWidth(), bi.getHeight(), this);
+			
+			//	connect text stream heads to predecessors (text stream heads are present after getting background image)
+			if (areTextStreamsPainted())
+				for (int h = 0; h < this.textStreamHeads.length; h++) {
+					if (this.textStreamHeads[h].getPreviousWord() != null)
+						transPageWordConnections.add(new TransPageWordConnection(this.textStreamHeads[h].getPreviousWord(), this.textStreamHeads[h]));
+				}
+			
+			//	draw box selection (if any)
+			preSelectionColor = graphics.getColor();
+			if ((pointSelectionPage == this) && (selectionStartPoint != null) && (selectionEndPoint != null)) {
+				graphics.setColor(selectionBoxColor);
+				BoundingBox selection;
+				for (int i = 0; i < selectionBoxThickness; i++) {
+					selection = new BoundingBox(
+							Math.min(selectionStartPoint.x, selectionEndPoint.x)+i,
+							Math.max(selectionStartPoint.x, selectionEndPoint.x)-i,
+							Math.min(selectionStartPoint.y, selectionEndPoint.y)+i,
+							Math.max(selectionStartPoint.y, selectionEndPoint.y)-i
+						);
+					if ((selection.left < selection.right) && (selection.top < selection.bottom))
+						this.paintBox(graphics, selection, zoom, this.getLeftOffset(), this.getTopOffset());
+					else break;
+				}
+			}
+			graphics.setColor(preSelectionColor);
+			
+			//	paint image only now, putting text on top of highlights (zoomed to size)
+			graphics.drawImage(pi.image, this.getLeftOffset(), this.getTopOffset(), Math.round(zoom * pi.image.getWidth()), Math.round(zoom * pi.image.getHeight()), this);
+			
+			//	draw text strings instead if selected
+			if (areTextStringsPainted()) {
+				BufferedImage tsi = this.getTextStringImage();
+				graphics.drawImage(tsi, this.getLeftOffset(), this.getTopOffset(), tsi.getWidth(), tsi.getHeight(), this);
+			}
+		}
+		private void paintBox(Graphics graphics, BoundingBox box, float zoom, int leftOffset, int topOffset) {
+			this.paintBox(graphics, box, zoom, leftOffset, topOffset, true, true);
+		}
+		private void paintBox(Graphics graphics, BoundingBox box, float zoom, int leftOffset, int topOffset, boolean paintLeft, boolean paintRight) {
+			if (paintLeft && paintRight)
+				graphics.drawRect((leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * box.top)), Math.round(zoom * (box.right - box.left)), Math.round(zoom * (box.bottom - box.top)));
+			else {
+				graphics.drawLine((leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * box.top)), (leftOffset + Math.round(zoom * (box.right-1))), (topOffset + Math.round(zoom * box.top)));
+				graphics.drawLine((leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * (box.bottom-1))), (leftOffset + Math.round(zoom * (box.right-1))), (topOffset + Math.round(zoom * (box.bottom-1))));
+				if (paintLeft)
+					graphics.drawLine((leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * box.top)), (leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * (box.bottom-1))));
+				if (paintRight)
+					graphics.drawLine((leftOffset + Math.round(zoom * (box.right-1))), (topOffset + Math.round(zoom * box.top)), (leftOffset + Math.round(zoom * (box.right-1))), (topOffset + Math.round(zoom * (box.bottom-1))));
+			}
+		}
+		private void fillBox(Graphics graphics, BoundingBox box, float zoom, int leftOffset, int topOffset) {
+			graphics.fillRect((leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * box.top)), Math.round(zoom * (box.right - box.left)), Math.round(zoom * (box.bottom - box.top)));
+		}
+		
+		private Point[] getConnectorLineSequence(BoundingBox from, BoundingBox to) {
+			LinkedList cls = new LinkedList();
+			
+			//	rightward connection
+			if (from.right <= to.left) {
+				
+				//	boxes adjacent in reading order, use simple horizontal line
+				if ((from.top < to.bottom) && (from.bottom > to.top)) {
+					cls.add(new Point(from.right, ((from.top + from.bottom + to.top + to.bottom) / 4)));
+					cls.add(new Point(to.left, ((from.top + from.bottom + to.top + to.bottom) / 4)));
+				}
+				
+				//	successor to upper right of predecessor (column break)
+				else if (to.bottom <= from.top) {
+					ImRegion[] fromRegions = this.page.getRegionsIncluding(from, false);
+					ImRegion fromRegion = null;
+					for (int r = 0; r < fromRegions.length; r++)
+						if (!fromRegions[r].bounds.includes(to, false)) {
+							fromRegion = fromRegions[r];
+							break;
+						}
+					int fromRight = ((fromRegion == null) ? from.right : fromRegion.bounds.right);
+					ImRegion[] toRegions = this.page.getRegionsIncluding(to, false);
+					ImRegion toRegion = null;
+					for (int r = 0; r < toRegions.length; r++)
+						if (!toRegions[r].bounds.includes(from, false)) {
+							toRegion = toRegions[r];
+							break;
+						}
+					int toLeft = ((toRegion == null) ? to.left : toRegion.bounds.left);
+					cls.add(new Point(from.right, ((from.top + from.bottom) / 2)));
+					cls.add(new Point(((fromRight + toLeft) / 2), ((from.top + from.bottom) / 2)));
+					cls.add(new Point(((fromRight + toLeft) / 2), ((to.top + to.bottom) / 2)));
+					cls.add(new Point(to.left, ((to.top + to.bottom) / 2)));
+				}
+				
+				//	successor to lower right of predecessor (block break)
+				else {
+					cls.add(new Point(from.right, ((from.top + from.bottom) / 2)));
+					cls.add(new Point(((from.right + to.left) / 2), ((from.top + from.bottom) / 2)));
+					cls.add(new Point(((from.right + to.left) / 2), ((to.top + to.bottom) / 2)));
+					cls.add(new Point(to.left, ((to.top + to.bottom) / 2)));
+				}
+			}
+			
+			//	successor to left of predecessor, can only be lower (line break)
+			else if ((from.right > to.left) && (from.bottom <= to.top)) {
+				int outswing = Math.min(((to.top - from.bottom) / 2), (renderingDpi / 6));
+				cls.add(new Point(from.right, ((from.top + from.bottom) / 2)));
+				cls.add(new Point((from.right + outswing), ((from.top + from.bottom) / 2)));
+				cls.add(new Point((from.right + outswing), ((from.bottom + to.top) / 2)));
+				cls.add(new Point((to.left - outswing), ((from.bottom + to.top) / 2)));
+				cls.add(new Point((to.left - outswing), ((to.top + to.bottom) / 2)));
+				cls.add(new Point(to.left, ((to.top + to.bottom) / 2)));
+			}
+			
+			//	finally ...
+			return ((Point[]) cls.toArray(new Point[cls.size()]));
+		}
+	}
+	
+	private static class CountingSet {
+		private HashMap counts = new HashMap();
+		private class Count {
+			int value = 0;
+		}
+		void add(String str) {
+			Count cnt = this.getCount(str, true);
+			cnt.value++;
+		}
+		void remove(String str) {
+			Count cnt = this.getCount(str, false);
+			if (cnt != null) {
+				cnt.value--;
+				if (cnt.value == 0)
+					this.counts.remove(str);
+			}
+		}
+		int getCount(String str) {
+			Count cnt = this.getCount(str, false);
+			return ((cnt == null) ? 0 : cnt.value);
+		}
+		private Count getCount(String str, boolean create) {
+			Count cnt = ((Count) this.counts.get(str));
+			if ((cnt == null) && create) {
+				cnt = new Count();
+				this.counts.put(str, cnt);
+			}
+			return cnt;
+		}
+	}
+	
+	/**
+	 * Open a dialog allowing to configure the display.
+	 */
+	public void showControlPanel() {
+		final JDialog d = DialogFactory.produceDialog("Configure Display", true);
+		d.getContentPane().setLayout(new BorderLayout());
+		
+		JButton c = new JButton("Close");
+		c.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent ae) {
+				d.dispose();
+			}
+		});
+		
+		d.getContentPane().add(this.getControlPanel(), BorderLayout.CENTER);
+		d.getContentPane().add(c, BorderLayout.SOUTH);
+		d.setSize(300, 600);
+		d.setLocationRelativeTo(this);
+		d.setVisible(true);
+	}
+	
+	/**
+	 * Refresh any display control panel retrieved from the
+	 * <code>getControlPanel()</code> method.
+	 */
+	public void validateControlPanel() {
+		if (this.idvc != null)
+			this.idvc.updateControls();
+	}
+	
+	/**
+	 * Retrieve a control panel allowing to configure the display.
+	 * @return the control panel
+	 */
+	public ImDocumentViewControl getControlPanel() {
+		if (this.idvc == null)
+			this.idvc = new ImDocumentViewControl(this);
+		else this.idvc.updateControls();
+		return this.idvc;
+	}
+	private ImDocumentViewControl idvc = null;
+	private boolean immediatelyUpdateIdvc = true;
+	
+	/**
+	 * Configuration widget for image viewer panel.
+	 * 
+	 * @author sautter
+	 */
+	public class ImDocumentViewControl extends JPanel {
+		private ImDocumentMarkupPanel idmp;
+		private JPanel controlPanel = new JPanel(new GridBagLayout(), true);
+		private WordControl wordControl;
+		private JLabel regionLabel = new JLabel("Regions, Blocks, etc.", JLabel.CENTER);
+		private TreeMap regionControls = new TreeMap(String.CASE_INSENSITIVE_ORDER);
+		private JLabel annotLabel = new JLabel("Annotations", JLabel.CENTER);
+		private TreeMap annotControls = new TreeMap(String.CASE_INSENSITIVE_ORDER);
+		
+		ImDocumentViewControl(ImDocumentMarkupPanel idmp) {
+			super(new BorderLayout(), true);
+			this.idmp = idmp;
+			this.add(new JLabel("Display Control", JLabel.CENTER), BorderLayout.NORTH);
+			JScrollPane controlPanelBox = new JScrollPane(this.controlPanel);
+			controlPanelBox.getVerticalScrollBar().setUnitIncrement(50);
+			this.add(controlPanelBox, BorderLayout.CENTER);
+			this.wordControl = new WordControl();
+			this.updateControls();
+		}
+		
+		synchronized void updateControls() {
+			HashMap tempControls = new HashMap();
+			
+			tempControls.clear();
+			tempControls.putAll(this.regionControls);
+			this.regionControls.clear();
+			TreeSet regionTypes = new TreeSet();
+			for (int p = 0; p < ipmps.length; p++) {
+				if (isPageVisible(p))
+					regionTypes.addAll(Arrays.asList(ipmps[p].page.getRegionTypes()));
+			}
+			for (Iterator rtit = regionTypes.iterator(); rtit.hasNext();) {
+				String rt = ((String) rtit.next());
+				RegionControl rc = ((RegionControl) tempControls.get(rt));
+				if (rc == null)
+					rc = new RegionControl(rt);
+				this.regionControls.put(rc.type, rc);
+			}
+			
+			tempControls.clear();
+			tempControls.putAll(this.annotControls);
+			this.annotControls.clear();
+			String[] annotTypes = this.idmp.document.getAnnotationTypes();
+			for (int a = 0; a < annotTypes.length; a++) {
+				AnnotControl ac = ((AnnotControl) tempControls.get(annotTypes[a]));
+				if (ac == null)
+					ac = new AnnotControl(annotTypes[a]);
+				this.annotControls.put(ac.type, ac);
+			}
+			
+			this.layoutControls();
+		}
+		
+		void layoutControls() {
+			this.controlPanel.removeAll();
+			
+			GridBagConstraints gbc = new GridBagConstraints();
+			gbc.gridheight = 1;
+			gbc.weighty = 0;
+			gbc.gridy = 0;
+			gbc.insets.left = 4;
+			gbc.insets.right = 4;
+			gbc.insets.top = 2;
+			gbc.insets.bottom = 2;
+			gbc.fill = GridBagConstraints.BOTH;
+			
+			gbc.gridwidth = 1;
+			gbc.gridx = 0;
+			gbc.weightx = 0;
+			this.controlPanel.add(this.wordControl.paint, gbc.clone());
+			gbc.gridwidth = 1;
+			gbc.gridx = 1;
+			gbc.weightx = 0;
+			this.controlPanel.add(this.wordControl.showOcr, gbc.clone());
+			gbc.gridx = 2;
+			gbc.weightx = 1;
+			this.controlPanel.add(this.wordControl.label, gbc.clone());
+			gbc.gridy++;
+			
+			gbc.gridwidth = 3;
+			gbc.gridx = 0;
+			gbc.weightx = 1;
+			this.controlPanel.add(this.regionLabel, gbc.clone());
+			gbc.gridy++;
+			for (Iterator cit = this.regionControls.keySet().iterator(); cit.hasNext();) {
+				RegionControl rc = ((RegionControl) this.regionControls.get(cit.next()));
+				gbc.gridwidth = 2;
+				gbc.gridx = 0;
+				gbc.weightx = 0;
+				this.controlPanel.add(rc.paint, gbc.clone());
+				gbc.gridx = 2;
+				gbc.weightx = 1;
+				this.controlPanel.add(rc.label, gbc.clone());
+				gbc.gridy++;
+			}
+			
+			gbc.gridwidth = 3;
+			gbc.gridx = 0;
+			gbc.weightx = 1;
+			this.controlPanel.add(this.annotLabel, gbc.clone());
+			gbc.gridy++;
+			for (Iterator cit = this.annotControls.keySet().iterator(); cit.hasNext();) {
+				AnnotControl ac = ((AnnotControl) this.annotControls.get(cit.next()));
+				gbc.gridwidth = 2;
+				gbc.gridx = 0;
+				gbc.weightx = 0;
+				this.controlPanel.add(ac.paint, gbc.clone());
+				gbc.gridx = 2;
+				gbc.weightx = 1;
+				this.controlPanel.add(ac.label, gbc.clone());
+				gbc.gridy++;
+			}
+			
+			gbc.gridwidth = 3;
+			gbc.gridx = 0;
+			gbc.weightx = 1;
+			gbc.weighty = 1;
+			this.controlPanel.add(new JPanel(), gbc.clone());
+			
+			this.validate();
+			this.repaint();
+		}
+		
+		abstract class TypeControl {
+			String type;
+			Color color;
+			JCheckBox paint = new JCheckBox();
+			JButton label = new JButton();
+			TypeControl(String type, boolean paint, Color color) {
+				this.type = type;
+				this.color = color;
+				this.label.setText(type);
+				this.label.setOpaque(true);
+				this.label.setBorder(BorderFactory.createLineBorder(this.label.getBackground(), 2));
+				this.label.setBackground(color);
+				this.label.addActionListener(new ActionListener() {
+					public void actionPerformed(ActionEvent ae) {
+						Color color = JColorChooser.showDialog(TypeControl.this.label, TypeControl.this.type, TypeControl.this.color);
+						if (color != null) {
+							TypeControl.this.color = color;
+							TypeControl.this.label.setBackground(color);
+							TypeControl.this.colorChanged(color);
+						}
+					}
+				});
+				this.paint.setSelected(paint);
+				this.paint.setHorizontalAlignment(JCheckBox.CENTER);
+				this.paint.addItemListener(new ItemListener() {
+					public void itemStateChanged(ItemEvent ie) {
+						TypeControl.this.paintChanged(TypeControl.this.paint.isSelected());
+					}
+				});
+			}
+			abstract void paintChanged(boolean paint);
+			abstract void colorChanged(Color color);
+		}
+		class WordControl extends TypeControl {
+			JCheckBox showOcr;
+			WordControl() {
+				super(WORD_ANNOTATION_TYPE, idmp.areTextStreamsPainted(), idmp.getLayoutObjectColor(WORD_ANNOTATION_TYPE, true));
+				this.paint.setToolTipText("Display logical text streams?");
+				this.showOcr = new JCheckBox("", idmp.areTextStringsPainted());
+				this.showOcr.setToolTipText("Show OCR text on top of page image?");
+				this.showOcr.addItemListener(new ItemListener() {
+					public void itemStateChanged(ItemEvent ie) {
+						idmp.setTextStringsPainted(showOcr.isSelected(), false);
+					}
+				});
+			}
+			void paintChanged(boolean paint) {
+				idmp.setTextStreamsPainted(paint, false);
+			}
+			void colorChanged(Color color) {
+				idmp.setLayoutObjectColor(WORD_ANNOTATION_TYPE, color);
+			}
+		}
+		class RegionControl extends TypeControl {
+			RegionControl(String type) {
+				super(type, idmp.areRegionsPainted(type), idmp.getLayoutObjectColor(type, true));
+				this.paint.setToolTipText("Display regions of type '" + type + "'?");
+			}
+			void paintChanged(boolean paint) {
+				idmp.setRegionsPainted(this.type, paint, false);
+			}
+			void colorChanged(Color color) {
+				idmp.setLayoutObjectColor(this.type, color);
+			}
+		}
+		class AnnotControl extends TypeControl {
+			AnnotControl(String type) {
+				super(type, idmp.areAnnotationsPainted(type), idmp.getAnnotationColor(type, true));
+				this.paint.setToolTipText("Display annotations of type '" + type + "'?");
+			}
+			void paintChanged(boolean paint) {
+				idmp.setAnnotationsPainted(this.type, paint, false);
+			}
+			void colorChanged(Color color) {
+				idmp.setAnnotationColor(this.type, color);
+			}
+		}
+	}
+	
+	/**
+	 * Implementation of an action to perform for a box or word selection. Sub
+	 * classes have to implement the <code>performAction()</code> method. They
+	 * can further overwrite the <code>getMenuItem()</code> method, e.g. to
+	 * provide a sub menu instead of a single menu item. In the latter case,
+	 * the <code>performAction()</code> method should be implemented to do
+	 * nothing, putting the functionality into the sub menu content.
+	 * 
+	 * @author sautter
+	 */
+	public static abstract class SelectionAction {
+		
+		/** including this constant action in an array of actions causes a separator to be added to the context menu */
+		public static SelectionAction SEPARATOR = new SelectionAction("SEPARATOR") {
+			public boolean performAction(ImDocumentMarkupPanel invoker) { return false; }
+		};
+		
+		final String label;
+		final String tooltip;
+		
+		/** Constructor
+		 * @param label the label string to show in the context menu
+		 */
+		public SelectionAction(String label) {
+			this(label, null);
+		}
+		
+		/** Constructor
+		 * @param label the label string to show in the context menu
+		 * @param tooltip the tooltip text for the context menu
+		 */
+		public SelectionAction(String label, String tooltip) {
+			this.label = label;
+			this.tooltip = tooltip;
+		}
+		
+		/**
+		 * Perform the action.
+		 * @param invoker the component the parent menu shows on
+		 * @return true if the document was changed by the method, false otherwise
+		 */
+		public abstract boolean performAction(ImDocumentMarkupPanel invoker);
+		
+		/**
+		 * Retrieve a menu item to represent the action in the context menu.
+		 * This default implementation returns a <code>JMenuItem</code> with
+		 * the label and tooltip handed to the constructor, and an action
+		 * listener calling the performAction() method. If the latter returns
+		 * true, the argument invoker is repainted. Sub classes may overwrite
+		 * this method to provide a better suited representation of themselves.
+		 * As this method also handles atomicity of the changes performed in
+		 * the argument document, however, sub classes overwriting this method
+		 * have to take care of the latter as well.
+		 * @param invoker the component the parent menu shows on
+		 * @return a menu item to represent the action in the context menu
+		 */
+		public JMenuItem getMenuItem(final ImDocumentMarkupPanel invoker) {
+			JMenuItem mi = new JMenuItem(this.label);
+			if (this.tooltip != null)
+				mi.setToolTipText(this.tooltip);
+			mi.addActionListener(new ActionListener() {
+				public void actionPerformed(ActionEvent ae) {
+					invoker.beginAtomicAction(label);
+					boolean changed = performAction(invoker);
+					if (changed) {
+						invoker.validate();
+						invoker.repaint();
+						invoker.endAtomicAction();
+					}
+				}
+			});
+			return mi;
+		}
+	}
+	
+	/**
+	 * Selection action that works with two clicks rather than one, usually
+	 * with intermediate scrolling. If a two-click action is selected in the
+	 * context menu after a click, it remains active until completed by a click
+	 * on a second word, or cancelled by a new selection or a click outside any
+	 * word.
+	 * 
+	 * @author sautter
+	 */
+	public static abstract class TwoClickSelectionAction extends SelectionAction {
+		
+		/** Constructor
+		 * @param label the label string to show in the context menu
+		 */
+		public TwoClickSelectionAction(String label) {
+			super(label);
+		}
+		
+		/** Constructor
+		 * @param label the label string to show in the context menu
+		 * @param tooltip the tooltip text for the context menu
+		 */
+		public TwoClickSelectionAction(String label, String tooltip) {
+			super(label, tooltip);
+		}
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.util.ImDocumentViewerPanel.SelectionAction#performAction()
+		 */
+		public final boolean performAction(ImDocumentMarkupPanel invoker) {
+			invoker.pendingTwoClickAction = this;
+			if (invoker.twoClickActionMessenger != null)
+				invoker.twoClickActionMessenger.twoClickActionChanged(this);
+			return false;
+		}
+		
+		/**
+		 * Sub classes overwriting this method to return something else but a
+		 * single menu item have to make sure to call the <code>performAction()</code>
+		 * method, as the latter registers the two-click action as pending
+		 * @see de.uka.ipd.idaho.im.util.ImPageMarkupPanel.SelectionAction#getMenuItem(ImDocumentMarkupPanel)
+		 */
+		public JMenuItem getMenuItem(ImDocumentMarkupPanel invoker) {
+			return super.getMenuItem(invoker);
+		}
+		
+		/**
+		 * Retrieve the word this two-click action was created upon, aka the
+		 * first word to be combined with a second word on the second click.
+		 * @return the word this two-click action was created upon
+		 */
+		public abstract ImWord getFirstWord();
+		
+		/**
+		 * Perform the action. The argument word is the word on which the second
+		 * click occurred.
+		 * @param secondWord the second word
+		 * @return true if the document was changed by the method, false otherwise
+		 */
+		public abstract boolean performAction(ImWord secondWord);
+		
+		/**
+		 * Retrieve a label to display when the action is active, awaiting the
+		 * second click
+		 * @return the active label
+		 */
+		public abstract String getActiveLabel();
+	}
+}

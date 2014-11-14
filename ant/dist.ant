@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+
+<!--
+	Does all the packing. That is, creates the files that live in dist/
+-->
+
+<project name="dist">
+	<target name="jars" depends="imagemarkupjar,ocrjar,ocrbinjar,pdfjar,pdfbinjar">
+	</target>
+	
+	<target name="imagemarkupjar">
+		<delete file="${jar.imagemarkup}" />
+		<jar destfile="${jar.imagemarkup}" >
+			<fileset dir="${build.home}/classes" includes="**/idaho/im/*.class" />
+			<fileset dir="${build.home}/classes" includes="**/idaho/im/analysis/*.class" />
+			<fileset dir="${build.home}/classes" includes="**/idaho/im/gamta/*.class" />
+			<fileset dir="${build.home}/classes" includes="**/idaho/im/util/*.class" />
+			<fileset dir="${src.home}" includes="**/idaho/im/*.java" />
+			<fileset dir="${src.home}" includes="**/idaho/im/analysis/*.java" />
+			<fileset dir="${src.home}" includes="**/idaho/im/gamta/*.java" />
+			<fileset dir="${src.home}" includes="**/idaho/im/util/*.java" />
+			<fileset dir="." includes="LICENSE.txt"/>
+		</jar>
+	</target>
+	
+	<target name="ocrjar">
+		<delete file="${jar.ocr}" />
+		<jar destfile="${jar.ocr}" >
+			<fileset dir="${build.home}/classes" includes="**/idaho/im/ocr/**" />
+			<fileset dir="${src.home}" includes="**/idaho/im/ocr/**" />
+			<fileset dir="." includes="LICENSE.txt"/>
+		</jar>
+	</target>
+	
+	<target name="ocrbinjar">
+		<delete file="${jar.ocrbin}" />
+		<jar destfile="${jar.ocrbin}" >
+			<fileset dir="${file.home}" includes="bin/StreamTess/**" />
+			<fileset dir="." includes="LICENSE.txt"/>
+		</jar>
+	</target>
+	
+	<target name="pdfjar">
+		<delete file="${jar.pdf}" />
+		<jar destfile="${jar.pdf}" >
+			<fileset dir="${build.home}/classes" includes="**/idaho/im/pdf/**" />
+			<fileset dir="${build.home}/classes" includes="**/idaho/im/pdf/test/**" />
+			<fileset dir="${src.home}" includes="**/idaho/im/pdf/**" />
+			<fileset dir="${src.home}" includes="**/idaho/im/pdf/test/**" />
+			<fileset dir="${src.home}" includes="**/idaho/im/pdf/afmRes/**" />
+			<fileset dir="." includes="LICENSE.txt"/>
+		</jar>
+	</target>
+	
+	<target name="pdfbinjar">
+		<delete file="${jar.pdfbin}" />
+		<jar destfile="${jar.pdfbin}" >
+			<fileset dir="${file.home}" includes="bin/ImageMagick/**" />
+			<fileset dir="." includes="LICENSE.txt"/>
+		</jar>
+	</target>
+</project>
