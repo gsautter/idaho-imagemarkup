@@ -35,11 +35,23 @@ import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
 
 /**
- * A region in an image markup document, e.g. a block or a column.
+ * A region in an image markup document, e.g. a block, a column, or a table.
  * 
  * @author sautter
  */
 public class ImRegion extends ImLayoutObject {
+	
+	/** the region type for marking tables, namely 'table', intentionally distinct from HTML counterpart */
+	public static final String TABLE_TYPE = "table";
+	
+	/** the region type for marking table rows, namely 'tableRow', intentionally distinct from HTML counterpart */
+	public static final String TABLE_ROW_TYPE = "tableRow";
+	
+	/** the region type for marking table columns, namely 'tableCol' */
+	public static final String TABLE_COL_TYPE = "tableCol";
+	
+	/** the region type for marking table cells, namely 'tableCell', intentionally distinct from HTML counterpart */
+	public static final String TABLE_CELL_TYPE = "tableCell";
 	
 	private ImPage page;
 	

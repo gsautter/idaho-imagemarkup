@@ -189,9 +189,9 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 				return this.aData.getType();
 			else if (this.rData != null) {
 				String type = this.rData.getType();
-				if (TABLE_ROW_TYPE.equals(type))
+				if (ImRegion.TABLE_ROW_TYPE.equals(type))
 					return TABLE_ROW_ANNOTATION_TYPE;
-				else if (TABLE_CELL_TYPE.equals(type))
+				else if (ImRegion.TABLE_CELL_TYPE.equals(type))
 					return TABLE_CELL_ANNOTATION_TYPE;
 				else return type;
 			}
@@ -770,7 +770,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 				for (int r = 0; r < regions.length; r++) {
 					
 					//	handle tables separately
-					if (TABLE_ANNOTATION_TYPE.equals(regions[r].getType()) || TABLE_ROW_TYPE.equals(regions[r].getType()) || TABLE_COL_TYPE.equals(regions[r].getType()) || TABLE_CELL_TYPE.equals(regions[r].getType()))
+					if (ImRegion.TABLE_TYPE.equals(regions[r].getType()) || ImRegion.TABLE_ROW_TYPE.equals(regions[r].getType()) || ImRegion.TABLE_COL_TYPE.equals(regions[r].getType()) || ImRegion.TABLE_CELL_TYPE.equals(regions[r].getType()))
 						continue;
 					
 					//	get region words
@@ -900,7 +900,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 				for (int r = 0; r < regions.length; r++) {
 					
 					//	handle tables separately
-					if (TABLE_ANNOTATION_TYPE.equals(regions[r].getType()) || TABLE_ROW_TYPE.equals(regions[r].getType()) || TABLE_COL_TYPE.equals(regions[r].getType()) || TABLE_CELL_TYPE.equals(regions[r].getType()))
+					if (ImRegion.TABLE_TYPE.equals(regions[r].getType()) || ImRegion.TABLE_ROW_TYPE.equals(regions[r].getType()) || ImRegion.TABLE_COL_TYPE.equals(regions[r].getType()) || ImRegion.TABLE_CELL_TYPE.equals(regions[r].getType()))
 						continue;
 					
 					//	get region words
@@ -1044,7 +1044,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			for (int r = 0; r < regions.length; r++) {
 				
 				//	handle tables separately
-				if (TABLE_ANNOTATION_TYPE.equals(regions[r].getType()) || TABLE_ROW_TYPE.equals(regions[r].getType()) || TABLE_COL_TYPE.equals(regions[r].getType()) || TABLE_CELL_TYPE.equals(regions[r].getType()))
+				if (ImRegion.TABLE_TYPE.equals(regions[r].getType()) || ImRegion.TABLE_ROW_TYPE.equals(regions[r].getType()) || ImRegion.TABLE_COL_TYPE.equals(regions[r].getType()) || ImRegion.TABLE_CELL_TYPE.equals(regions[r].getType()))
 					continue;
 				
 				//	we already have this one
@@ -1093,19 +1093,16 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	}
 	
 	//	represent a table with annotations TODO figure out where to put these constants
-	private static final String TABLE_ROW_TYPE = "tableRow";
-	private static final String TABLE_COL_TYPE = "tableCol";
-	private static final String TABLE_CELL_TYPE = "tableCell";
 	private void annotateTableStructure(ImRegion table) {
 		this.addAnnotation(table);
-		ImRegion[] rows = table.getRegions(TABLE_ROW_TYPE);
+		ImRegion[] rows = table.getRegions(ImRegion.TABLE_ROW_TYPE);
 		for (int r = 0; r < rows.length; r++) {
 			ImWord[] rowWords = rows[r].getWords();
 			if (rowWords.length != 0) {
 				Arrays.sort(rowWords, ImUtils.textStreamOrder);
 				this.addAnnotation(rows[r], rowWords);
 			}
-			ImRegion[] rowCells = rows[r].getRegions(TABLE_CELL_TYPE);
+			ImRegion[] rowCells = rows[r].getRegions(ImRegion.TABLE_CELL_TYPE);
 			for (int c = 0; c < rowCells.length; c++) {
 				ImWord[] cellWords = rowCells[c].getWords();
 				if (cellWords.length != 0) {

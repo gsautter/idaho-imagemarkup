@@ -53,6 +53,7 @@ import java.awt.font.LineMetrics;
 import java.awt.font.TextLayout;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
+import java.awt.image.ImageObserver;
 import java.io.File;
 import java.io.FileInputStream;
 import java.util.Arrays;
@@ -126,6 +127,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	
 	private ImPageMarkupPanel[] ipmps;
 	private boolean[] ipmpVisible;
+	private PageThumbnail[] pts;
 	private LinkedList hiddenPageBanners = new LinkedList();
 	
 	private long viewModCount = 0; // highlights switched on or off, color changed, or zoom changed
@@ -142,7 +144,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	
 	private int sideBySidePages = 1;
 	
-	private int hiddenPageReductionFactor = 16;
+	private int pageThumbnailReductionFactor = 16;
 	
 	private int maxPageImageDpi = -1;
 	private int renderingDpi = DEFAULT_RENDERING_DPI;
@@ -211,6 +213,8 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		Arrays.fill(this.ipmps, null);
 		this.ipmpVisible = new boolean[pages.length];
 		Arrays.fill(this.ipmpVisible, false);
+		this.pts = new PageThumbnail[pages.length];
+		Arrays.fill(this.pts, null);
 		
 		int minPageWidth = Integer.MAX_VALUE;
 		int minPageHeight = Integer.MAX_VALUE;
@@ -495,11 +499,11 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		private int maxPageId = 0;
 		private int maxPageTileHeight;
 		private int maxPageTileWidth;
-		private int estimatedPidFontSize = -1;
 		private LinkedList pageTiles = new LinkedList();
 		private JPanel pageTilePanel = new JPanel(new GridBagLayout(), true);
 		private GridBagConstraints gbc = new GridBagConstraints();
 		private JPanel fillerPanel = new JPanel();
+		
 		HiddenPageBanner() {
 			super(new BorderLayout(), true);
 			this.gbc.insets.left = 2;
@@ -522,6 +526,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			pageTilePanelBox.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
 			this.add(pageTilePanelBox, BorderLayout.CENTER);
 		}
+		
 		public Dimension getPreferredSize() {
 			if ((this.preferredSize == null) || (this.preferredSizeDpi != renderingDpi)) {
 				this.maxPageTileWidth = 0;
@@ -538,6 +543,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		}
 		private Dimension preferredSize = null;
 		private int preferredSizeDpi = 0;
+		
 		void addPage(ImPage page) {
 			this.minPageId = Math.min(this.minPageId, page.pageId);
 			this.maxPageId = Math.max(this.maxPageId, page.pageId);
@@ -557,40 +563,39 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			this.validate();
 			this.repaint();
 		}
+		
 		private class HiddenPageTile extends JPanel {
-			private ImPage page;
-			private BufferedImage pageImageThumbnail;
-			private int pageImageDpi;
-			HiddenPageTile(ImPage page) {
+			private PageThumbnail pageThumbnail;
+			HiddenPageTile(final ImPage page) {
 				super(new BorderLayout(), true);
-				this.page = page;
+				this.pageThumbnail = getPageThumbnail(page);
+				this.setToolTipText(this.pageThumbnail.getTooltipText());
 				this.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY, 1));
-				this.setBackground(Color.WHITE);
 				this.addMouseListener(new MouseAdapter() {
 					public void mouseClicked(MouseEvent me) {
 						JPopupMenu pm = new JPopupMenu();
 						JMenuItem mi;
-						mi = new JMenuItem("Show Page " + HiddenPageTile.this.page.pageId);
+						mi = new JMenuItem("Show Page " + page.pageId);
 						mi.addActionListener(new ActionListener() {
 							public void actionPerformed(ActionEvent ae) {
-								setPageVisible(HiddenPageTile.this.page.pageId, true);
+								setPageVisible(page.pageId, true);
 							}
 						});
 						pm.add(mi);
-						if (minPageId < HiddenPageTile.this.page.pageId) {
-							mi = new JMenuItem("Show Pages " + minPageId + "-" + HiddenPageTile.this.page.pageId);
+						if (minPageId < page.pageId) {
+							mi = new JMenuItem("Show Pages " + minPageId + "-" + page.pageId);
 							mi.addActionListener(new ActionListener() {
 								public void actionPerformed(ActionEvent ae) {
-									setPagesVisible(minPageId, HiddenPageTile.this.page.pageId, true);
+									setPagesVisible(minPageId, page.pageId, true);
 								}
 							});
 							pm.add(mi);
 						}
-						if (HiddenPageTile.this.page.pageId < maxPageId) {
-							mi = new JMenuItem("Show Pages " + HiddenPageTile.this.page.pageId + "-" + maxPageId);
+						if (page.pageId < maxPageId) {
+							mi = new JMenuItem("Show Pages " + page.pageId + "-" + maxPageId);
 							mi.addActionListener(new ActionListener() {
 								public void actionPerformed(ActionEvent ae) {
-									setPagesVisible(HiddenPageTile.this.page.pageId, maxPageId, true);
+									setPagesVisible(page.pageId, maxPageId, true);
 								}
 							});
 							pm.add(mi);
@@ -599,50 +604,19 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 					}
 				});
 				
-				//	get page image and store its resolution for zooming
-				PageImage pageImage = this.page.getImage();
-				this.pageImageDpi = pageImage.currentDpi;
-				
 				//	initialize size
 				this.getPreferredSize();
-				
-				//	render page image thumbnail, reduced by factor, but not zoomed to rendering resolution
-				this.pageImageThumbnail = new BufferedImage(((maxPageWidth * pageImage.currentDpi) / (pageImage.originalDpi * hiddenPageReductionFactor)), ((maxPageHeight * pageImage.currentDpi) / (pageImage.originalDpi * hiddenPageReductionFactor)), BufferedImage.TYPE_BYTE_GRAY);
-				Graphics2D pitGraphics = this.pageImageThumbnail.createGraphics();
-				pitGraphics.setColor(Color.WHITE);
-				pitGraphics.fillRect(0, 0, this.pageImageThumbnail.getWidth(), this.pageImageThumbnail.getHeight());
-				pitGraphics.drawImage(pageImage.image,
-						((((maxPageWidth - (page.bounds.right - page.bounds.left)) / 2) * pageImage.currentDpi) / (pageImage.originalDpi * hiddenPageReductionFactor)),
-						((((maxPageHeight - (page.bounds.bottom - page.bounds.top)) / 2) * pageImage.currentDpi) / (pageImage.originalDpi * hiddenPageReductionFactor)),
-						(((page.bounds.right - page.bounds.left) * pageImage.currentDpi) / (pageImage.originalDpi * hiddenPageReductionFactor)),
-						(((page.bounds.bottom - page.bounds.top) * pageImage.currentDpi) / (pageImage.originalDpi * hiddenPageReductionFactor)),
-						this);
-				
-				//	paint gray page ID over page
-				pitGraphics.setColor(Color.GRAY);
-				String pidString = ("" + this.page.pageId);
-				this.setToolTipText("Page " + this.page.pageId + (this.page.hasAttribute(PAGE_NUMBER_ATTRIBUTE) ? (" (page number " + ((String) this.page.getAttribute(PAGE_NUMBER_ATTRIBUTE)) + ")") : ""));
-				int fontSize = ((estimatedPidFontSize == -1) ? (pageImage.currentDpi / 4) : estimatedPidFontSize);
-				Font pidFont = new Font("Sans", Font.BOLD, fontSize);
-				TextLayout pidTl = new TextLayout(pidString, pidFont, pitGraphics.getFontRenderContext());
-				while (pidTl.getBounds().getHeight() < (this.pageImageThumbnail.getHeight() / 3)) {
-					fontSize++;
-					pidFont = new Font("Sans", Font.BOLD, fontSize);
-					pidTl = new TextLayout(pidString, pidFont, pitGraphics.getFontRenderContext());
-				}
-				while (((this.pageImageThumbnail.getHeight() / 3) < pidTl.getBounds().getHeight()) || ((this.pageImageThumbnail.getWidth() * 4) < (pidTl.getBounds().getWidth() * 5))) {
-					fontSize--;
-					pidFont = new Font("Sans", Font.BOLD, fontSize);
-					pidTl = new TextLayout(pidString, pidFont, pitGraphics.getFontRenderContext());
-				}
-				estimatedPidFontSize = fontSize;
-				pitGraphics.setFont(pidFont);
-				pidTl = new TextLayout(pidString, pidFont, pitGraphics.getFontRenderContext());
-				pitGraphics.drawString(pidString, ((int) Math.round((this.pageImageThumbnail.getWidth() - pidTl.getBounds().getWidth()) / 2)), ((int) Math.round(((this.pageImageThumbnail.getHeight() + pidTl.getBounds().getHeight()) / 2)/* - Math.round(wlm.getDescent())*/)));
 			}
+			
+			public void paint(Graphics g) {
+				super.paint(g);
+				this.pageThumbnail.paint(g, 1, 1, this);
+			}
+			
 			public Dimension getPreferredSize() {
 				if ((this.preferredSize == null) || (this.preferredSizeDpi != renderingDpi)) {
-					this.preferredSize = new Dimension((Math.round(((float) (maxPageWidth * renderingDpi)) / (this.pageImageDpi * hiddenPageReductionFactor)) + 2), (Math.round(((float) (maxPageHeight * renderingDpi)) / (this.pageImageDpi * hiddenPageReductionFactor)) + 2));
+					Dimension ptps = this.pageThumbnail.getPreferredSize();
+					this.preferredSize = new Dimension((ptps.width + 2), (ptps.height + 2));
 					this.preferredSizeDpi = renderingDpi;
 				}
 				maxPageTileWidth = Math.max(maxPageTileWidth, this.preferredSize.width);
@@ -651,11 +625,6 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			}
 			private Dimension preferredSize = null;
 			private int preferredSizeDpi = 0;
-			public void paint(Graphics graphics) {
-				super.paint(graphics);
-				//	paint page image (zoomed to to rendering resolution now)
-				graphics.drawImage(this.pageImageThumbnail, 1, 1, (this.getWidth()-2), (this.getHeight()-2), this);
-			}
 		}
 	}
 	
@@ -746,24 +715,208 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	}
 	
 	/**
-	 * Retrieve the factor by which hidden page place holders are reduced in
-	 * size in comparison to normal page display.
-	 * @return the reduction factor for hidden page place holders
+	 * Set the visible pages. This method sets all pages whose ID is contained
+	 * in the argument array to visible, and hides all others.
+	 * @param visiblePageIDs an array holding the IDs of the pages to set visible
 	 */
-	public int getHiddenPageReductionFactor() {
-		return this.hiddenPageReductionFactor;
+	public void setVisiblePages(int[] visiblePageIDs) {
+		System.out.println("Setting visible pages to " + Arrays.toString(visiblePageIDs));
+		HashSet visiblePageIdSet = new HashSet();
+		for (int i = 0; i < visiblePageIDs.length; i++)
+			visiblePageIdSet.add(new Integer(visiblePageIDs[i]));
+		boolean pageVisibilityChanged = false;
+		for (int p = 0; p < this.ipmps.length; p++) {
+			boolean pv = visiblePageIdSet.contains(new Integer(p));
+			if (this.ipmpVisible[p] == pv) {
+				System.out.println(" - page " + p + " already " + (pv ? "visible" : "hidden"));
+				continue;
+			}
+			pageVisibilityChanged = true;
+			System.out.println(" - setting page " + p + " " + (pv ? "visible" : "hidden"));
+			this.ipmpVisible[p] = pv;
+			if (this.ipmpVisible[p] && (this.ipmps[p] == null)) {
+				this.ipmps[p] = new ImPageMarkupPanel(this.document.getPage(p), this.maxPageWidth, this.maxPageHeight);
+				System.out.println(" --> page panel created");
+			}
+		}
+		if (pageVisibilityChanged) {
+			System.out.println(" ==> laying out pages");
+			this.layoutPages();
+		}
+		else System.out.println(" ==> no need for laying out pages");
 	}
 	
 	/**
-	 * Set the factor by which hidden page place holders are reduced in size
-	 * in comparison to normal page display. The reduction factor is actually
-	 * an integer dimensions re divided by, and thus a higher reduction factor
-	 * makes the place holders smaller.
-	 * @param hprf the reduction factor for hidden page place holders
+	 * Retrieve the factor by which page thumbnails are reduced in size in
+	 * comparison to normal pages.
+	 * @return the reduction factor for page thumbnails
 	 */
-	public void setHiddenPageReductionFactor(int hprf) {
-		this.hiddenPageReductionFactor = hprf;
+	public int getPageThumbnailReductionFactor() {
+		return this.pageThumbnailReductionFactor;
 	}
+	
+	/**
+	 * Set the factor by which page thumbnails are reduced in size in comparison
+	 * to normal pages. The reduction factor is actually an integer dimensions
+	 * are divided by, and thus a higher reduction factor makes the thumbnails
+	 * smaller.
+	 * @param ptrf the reduction factor for page thumbnails
+	 */
+	public void setPageThumbnailReductionFactor(int ptrf) {
+		if (this.pageThumbnailReductionFactor == ptrf)
+			return;
+		this.pageThumbnailReductionFactor = ptrf;
+		if (this.hiddenPageBanners.size() != 0)
+			this.layoutPages();
+	}
+	
+	/**
+	 * Retrieve a thumbnail for a page. The thumbnail contains a grayscale copy
+	 * of the page image, scaled down by the thumbnail reduction factor, overlaid
+	 * with the page ID and, if present, the page number. The thumbnails adjust
+	 * their preferred size automatically when the rendering DPI change.
+	 * @param pageId the ID of the page to retrieve the thumbnail for
+	 * @return a thumbnail of the page with the argument ID
+	 */
+	public PageThumbnail getPageThumbnail(int pageId) {
+		if (this.pts[pageId] == null)
+			this.pts[pageId] = new PageThumbnail(this.document.getPage(pageId));
+		else this.pts[pageId].validate();
+		return this.pts[pageId];
+	}
+	private PageThumbnail getPageThumbnail(ImPage page) {
+		if (this.pts[page.pageId] == null)
+			this.pts[page.pageId] = new PageThumbnail(page);
+		else this.pts[page.pageId].validate();
+		return this.pts[page.pageId];
+	}
+	
+	/**
+	 * A thumbnail representation of a page, containing a grayscale copy of the
+	 * page image, scaled down by the thumbnail reduction factor, overlaid with
+	 * the page ID and, if present, the page number. Thumbnails automatically
+	 * adjust their preferred size when the rendering DPI or the reduction
+	 * factor change.
+	 * 
+	 * @author sautter
+	 */
+	public class PageThumbnail {
+		private ImPage page;
+		private int pageImageDpi;
+		private String tooltipText = null;
+		PageThumbnail(ImPage page) {
+			this.page = page;
+			this.validate();
+		}
+		
+		private BufferedImage getPageImageThumbnail(ImageObserver io) {
+			if ((this.pageImageThumbnail == null) || (this.pageImageThumbnailReductionFactor != pageThumbnailReductionFactor)) {
+				
+				//	get page image and store its resolution for zooming
+				PageImage pageImage = this.page.getImage();
+				this.pageImageDpi = pageImage.currentDpi;
+				
+				//	render page image thumbnail, reduced by factor, but not zoomed to rendering resolution
+				this.pageImageThumbnail = new BufferedImage(((maxPageWidth * pageImage.currentDpi) / (pageImage.originalDpi * pageThumbnailReductionFactor)), ((maxPageHeight * pageImage.currentDpi) / (pageImage.originalDpi * pageThumbnailReductionFactor)), BufferedImage.TYPE_BYTE_GRAY);
+				Graphics2D pitGraphics = this.pageImageThumbnail.createGraphics();
+				pitGraphics.setColor(Color.WHITE);
+				pitGraphics.fillRect(0, 0, this.pageImageThumbnail.getWidth(), this.pageImageThumbnail.getHeight());
+				pitGraphics.drawImage(pageImage.image,
+						((((maxPageWidth - (page.bounds.right - page.bounds.left)) / 2) * pageImage.currentDpi) / (pageImage.originalDpi * pageThumbnailReductionFactor)),
+						((((maxPageHeight - (page.bounds.bottom - page.bounds.top)) / 2) * pageImage.currentDpi) / (pageImage.originalDpi * pageThumbnailReductionFactor)),
+						(((page.bounds.right - page.bounds.left) * pageImage.currentDpi) / (pageImage.originalDpi * pageThumbnailReductionFactor)),
+						(((page.bounds.bottom - page.bounds.top) * pageImage.currentDpi) / (pageImage.originalDpi * pageThumbnailReductionFactor)),
+						io);
+				
+				//	paint gray page ID over page (adjust to at most one third of image height, and at most 80% of image width)
+				//	TODO add page number if present (smaller, below page ID)
+				pitGraphics.setColor(Color.GRAY);
+				String pidString = ("" + this.page.pageId);
+				int fontSize = ((pageThumbnailFontSize == -1) ? (pageImage.currentDpi / 4) : pageThumbnailFontSize);
+				Font pidFont = new Font("Sans", Font.BOLD, fontSize);
+				TextLayout pidTl = new TextLayout(pidString, pidFont, pitGraphics.getFontRenderContext());
+				while (pidTl.getBounds().getHeight() < (this.pageImageThumbnail.getHeight() / 3)) {
+					fontSize++;
+					pidFont = new Font("Sans", Font.BOLD, fontSize);
+					pidTl = new TextLayout(pidString, pidFont, pitGraphics.getFontRenderContext());
+				}
+				while (((this.pageImageThumbnail.getHeight() / 3) < pidTl.getBounds().getHeight()) || ((this.pageImageThumbnail.getWidth() * 4) < (pidTl.getBounds().getWidth() * 5))) {
+					fontSize--;
+					pidFont = new Font("Sans", Font.BOLD, fontSize);
+					pidTl = new TextLayout(pidString, pidFont, pitGraphics.getFontRenderContext());
+				}
+				pageThumbnailFontSize = fontSize;
+				pitGraphics.setFont(pidFont);
+				pidTl = new TextLayout(pidString, pidFont, pitGraphics.getFontRenderContext());
+				pitGraphics.drawString(pidString, ((int) Math.round((this.pageImageThumbnail.getWidth() - pidTl.getBounds().getWidth()) / 2)), ((int) Math.round(((this.pageImageThumbnail.getHeight() + pidTl.getBounds().getHeight()) / 2)/* - Math.round(wlm.getDescent())*/)));
+				
+				//	remember rendering factor
+				this.pageImageThumbnailReductionFactor = pageThumbnailReductionFactor;
+			}
+			return this.pageImageThumbnail;
+		}
+		private BufferedImage pageImageThumbnail;
+		private int pageImageThumbnailReductionFactor = -1;
+		
+		/**
+		 * Retrieve the tooltip text for the page thumbnail.
+		 * @return the tooltip text
+		 */
+		public String getTooltipText() {
+			return this.tooltipText;
+		}
+		
+		/**
+		 * Retrieve the preferred size of the page tumbnail.
+		 * @return the preferred size
+		 */
+		public Dimension getPreferredSize() {
+			if ((this.preferredSize == null) || (this.preferredSizeDpi != renderingDpi) || (this.preferredSizeReductionFactor != pageThumbnailReductionFactor)) {
+				this.preferredSize = new Dimension(Math.round(((float) (maxPageWidth * renderingDpi)) / (this.pageImageDpi * pageThumbnailReductionFactor)), Math.round(((float) (maxPageHeight * renderingDpi)) / (this.pageImageDpi * pageThumbnailReductionFactor)));
+				this.preferredSizeDpi = renderingDpi;
+				this.preferredSizeReductionFactor = pageThumbnailReductionFactor;
+			}
+			return this.preferredSize;
+		}
+		private Dimension preferredSize = null;
+		private int preferredSizeDpi = 0;
+		private int preferredSizeReductionFactor = 0;
+		
+		void validate() {
+			this.tooltipText = ("Page " + this.page.pageId + (this.page.hasAttribute(PAGE_NUMBER_ATTRIBUTE) ? (" (page number " + ((String) this.page.getAttribute(PAGE_NUMBER_ATTRIBUTE)) + ")") : ""));
+			this.getPageImageThumbnail(null);
+			this.getPreferredSize();
+		}
+		
+		/**
+		 * Render the page thumbnail through some graphics object, in the
+		 * preferred size. This method is intended for components wanting to
+		 * display the thumbnail to call in their <code>paint()</code> method.
+		 * @param graphics the graphics object to render to
+		 * @param x the x coordinate
+		 * @param y the y coordinate
+		 * @param io object to be notified as more of the image is converted
+		 */
+		public void paint(Graphics graphics, int x, int y, ImageObserver io) {
+			graphics.drawImage(this.getPageImageThumbnail(io), x, y, this.getPreferredSize().width, this.getPreferredSize().height, io);
+		}
+		
+		/**
+		 * Render the page thumbnail through some graphics object. This method
+		 * is intended for components wanting to display the thumbnail to call
+		 * in their <code>paint()</code> method.
+		 * @param graphics the graphics object to render to
+		 * @param x the x coordinate
+		 * @param y the y coordinate
+		 * @param width the width of the rectangle
+		 * @param height the height of the rectangle
+		 * @param io object to be notified as more of the image is converted
+		 */
+		public void paint(Graphics graphics, int x, int y, int width, int height, ImageObserver io) {
+			graphics.drawImage(this.getPageImageThumbnail(io), x, y, width, height, io);
+		}
+	}
+	private int pageThumbnailFontSize = -1;
 	
 	/**
 	 * Retrieve the number of pages displayed side by side before breaking into
@@ -1286,8 +1439,8 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 					} catch (InterruptedException ie) {}
 					
 					//	count what is added and removed
-					final CountingStringSet regionCss = new CountingStringSet();
-					final CountingStringSet annotCss = new CountingStringSet();
+					final CountingSet regionCss = new CountingSet();
+					final CountingSet annotCss = new CountingSet();
 					
 					//	listen for annotations being added, but do not update display control for every change
 					idl = new ImDocumentListener() {
@@ -1367,10 +1520,10 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			((Dialog) pm).setVisible(true);
 	}
 	
-	private static class CountingStringSet {
+	private static class CountingSet {
 		private TreeMap content = new TreeMap();
 //		private int size = 0;
-		CountingStringSet() {}
+		CountingSet() {}
 		StringIterator getIterator() {
 			final Iterator it = this.content.keySet().iterator();
 			return new StringIterator() {
@@ -1398,10 +1551,10 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 //			}
 //			return added;
 //		}
-//		int getCount(String string) {
-//			Int i = ((Int) this.content.get(string));
-//			return ((i == null) ? 0 : i.intValue());
-//		}
+		int getCount(String string) {
+			Int i = ((Int) this.content.get(string));
+			return ((i == null) ? 0 : i.intValue());
+		}
 //		int getSize() {
 //			return this.size;
 //		}
@@ -1771,34 +1924,15 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		public abstract void process(ImDocument doc, ImAnnotation annot, ImDocumentMarkupPanel idmp, ProgressMonitor pm);
 	}
 	
+	/**
+	 * Retrieve the tools for editing page images. This default implementation
+	 * returns an empty array; sub classes willing to provide page image
+	 * editing functionality have to overwrite this method to return an array
+	 * of tools.
+	 * @return an array of image editing tools
+	 */
 	protected ImImageEditTool[] getImageEditTools() {
-		
-		//	create a few tools
-		ImImageEditTool[] tools = {
-//			new PatternOverpaintImageEditTool("Eraser SQ 5", null, "11111\n11111\n11111\n11111\n11111", Color.WHITE),
-//			new PatternOverpaintImageEditTool("Eraser C 5", null, "01110\n11111\n11111\n11111\n01110", Color.WHITE),
-//			new PatternOverpaintImageEditTool("Eraser RH 5", null, "00100\n01110\n11111\n01110\n00100", Color.WHITE),
-//			new PatternOverpaintImageEditTool("Eraser B 9/3", null, "111111111\n111111111\n111111111", Color.WHITE),
-//			new PatternOverpaintImageEditTool("Eraser B 3/9", null, "111\n111\n111\n111\n111\n111\n111\n111\n111", Color.WHITE),
-//			new PatternOverpaintImageEditTool("Eraser SQ 9", null, "111111111\n111111111\n111111111\n111111111\n111111111\n111111111\n111111111\n111111111\n111111111", Color.WHITE),
-//			new PatternOverpaintImageEditTool("Eraser C 9", null, "000111000\n011111110\n011111110\n111111111\n111111111\n111111111\n011111110\n011111110\n000111000", Color.WHITE),
-//			new PatternOverpaintImageEditTool("Eraser RH 9", null, "000010000\n000111000\n001111100\n011111110\n111111111\n011111110\n001111100\n000111000\n000010000", Color.WHITE),
-//			new PatternOverpaintImageEditTool("Eraser B 15/5", null, "111111111111111\n111111111111111\n111111111111111\n111111111111111\n111111111111111", Color.WHITE),
-//			new PatternOverpaintImageEditTool("Eraser B 5/15", null, "11111\n11111\n11111\n11111\n11111\n11111\n11111\n11111\n11111\n11111\n11111\n11111\n11111\n11111\n11111", Color.WHITE),
-//			new PatternOverpaintImageEditTool("Pen 1", null, "1", Color.BLACK),
-//			new PatternOverpaintImageEditTool("Pen 3", null, "111\n111\n111", Color.BLACK),
-//			new PatternOverpaintImageEditTool("Pen 5", null, "01110\n11111\n11111\n11111\n01110", Color.BLACK),
-//			new SelectionImageEditTool("Line", null, null, false) {
-//				protected void doEdit(ImImageEditorPanel iiep, int sx, int sy, int ex, int ey) {
-//					Graphics gr = iiep.getImage().getGraphics();
-//					Color bc = gr.getColor();
-//					gr.setColor(Color.RED);
-//					gr.drawLine(sx, sy, ex, ey);
-//					gr.setColor(bc);
-//				}
-//			},
-		};
-		return tools;
+		return new ImImageEditTool[0];
 	}
 	
 	/**
@@ -2680,37 +2814,37 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		}
 	}
 	
-	private static class CountingSet {
-		private HashMap counts = new HashMap();
-		private class Count {
-			int value = 0;
-		}
-		void add(String str) {
-			Count cnt = this.getCount(str, true);
-			cnt.value++;
-		}
-		void remove(String str) {
-			Count cnt = this.getCount(str, false);
-			if (cnt != null) {
-				cnt.value--;
-				if (cnt.value == 0)
-					this.counts.remove(str);
-			}
-		}
-		int getCount(String str) {
-			Count cnt = this.getCount(str, false);
-			return ((cnt == null) ? 0 : cnt.value);
-		}
-		private Count getCount(String str, boolean create) {
-			Count cnt = ((Count) this.counts.get(str));
-			if ((cnt == null) && create) {
-				cnt = new Count();
-				this.counts.put(str, cnt);
-			}
-			return cnt;
-		}
-	}
-	
+//	private static class CountingSet {
+//		private HashMap counts = new HashMap();
+//		private class Count {
+//			int value = 0;
+//		}
+//		void add(String str) {
+//			Count cnt = this.getCount(str, true);
+//			cnt.value++;
+//		}
+//		void remove(String str) {
+//			Count cnt = this.getCount(str, false);
+//			if (cnt != null) {
+//				cnt.value--;
+//				if (cnt.value == 0)
+//					this.counts.remove(str);
+//			}
+//		}
+//		int getCount(String str) {
+//			Count cnt = this.getCount(str, false);
+//			return ((cnt == null) ? 0 : cnt.value);
+//		}
+//		private Count getCount(String str, boolean create) {
+//			Count cnt = ((Count) this.counts.get(str));
+//			if ((cnt == null) && create) {
+//				cnt = new Count();
+//				this.counts.put(str, cnt);
+//			}
+//			return cnt;
+//		}
+//	}
+//	
 	/**
 	 * Open a dialog allowing to configure the display.
 	 */

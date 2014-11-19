@@ -607,7 +607,7 @@ public class ImUtils implements ImagingConstants {
 	 */
 	public static String getString(ImWord firstWord, ImWord lastWord, boolean ignoreLineBreaks) {
 		StringBuffer sb = new StringBuffer();
-		for (ImWord imw = firstWord;; imw = imw.getNextWord()) {
+		for (ImWord imw = firstWord; imw != null; imw = imw.getNextWord()) {
 			sb.append(imw.getString());
 			if (imw == lastWord)
 				break;
