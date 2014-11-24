@@ -518,11 +518,12 @@ public class OcrEngine implements ImagingConstants {
 			int bwbBottom = blockWordBox.bottom;
 			while (bwbLeft < bwbRight) {
 				boolean gotNonWhite = false;
-				for (int r = bwbTop; r < bwbBottom; r++)
-					if (pageImage.image.getRGB(bwbLeft, r) != whiteRgb) {
+				for (int r = bwbTop; r < bwbBottom; r++) {
+					if (pageImage.image.getRGB((bwbLeft - pageImage.leftEdge), (r - pageImage.topEdge)) != whiteRgb) {
 						gotNonWhite = true;
 						break;
 					}
+				}
 				if (gotNonWhite)
 					break;
 				bwbLeft++;
@@ -530,7 +531,7 @@ public class OcrEngine implements ImagingConstants {
 			while (bwbLeft < bwbRight) {
 				boolean gotNonWhite = false;
 				for (int r = bwbTop; r < bwbBottom; r++)
-					if (pageImage.image.getRGB((bwbRight-1), r) != whiteRgb) {
+					if (pageImage.image.getRGB((bwbRight-1 - pageImage.leftEdge), (r - pageImage.topEdge)) != whiteRgb) {
 						gotNonWhite = true;
 						break;
 					}
@@ -542,7 +543,7 @@ public class OcrEngine implements ImagingConstants {
 				while (bwbTop < bwbBottom) {
 					boolean gotNonWhite = false;
 					for (int c = bwbLeft; c < bwbRight; c++)
-						if (pageImage.image.getRGB(c, bwbTop) != whiteRgb) {
+						if (pageImage.image.getRGB((c - pageImage.leftEdge), (bwbTop - pageImage.topEdge)) != whiteRgb) {
 							gotNonWhite = true;
 							break;
 						}
@@ -553,7 +554,7 @@ public class OcrEngine implements ImagingConstants {
 				while (bwbTop < bwbBottom) {
 					boolean gotNonWhite = false;
 					for (int c = bwbLeft; c < bwbRight; c++)
-						if (pageImage.image.getRGB(c, (bwbBottom-1)) != whiteRgb) {
+						if (pageImage.image.getRGB((c - pageImage.leftEdge), (bwbBottom-1 - pageImage.topEdge)) != whiteRgb) {
 							gotNonWhite = true;
 							break;
 						}
@@ -682,14 +683,24 @@ public class OcrEngine implements ImagingConstants {
 		//	do OCR
 		OcrWord[] blockWords = poi.doBlockOcr(blockTextImage);
 		
-		//	make word bounds relative to original page image
+		//	make word bounds relative to original page image, and sort out words whose bounds don't make sense
+		LinkedList blockWordList = new LinkedList();
 		for (int w = 0; w < blockWords.length; w++) {
 			int left = (blockWords[w].box.left - rightShift - textImageMargin);
+			if (left < 0)
+				continue;
 			int right = (blockWords[w].box.right - rightShift - textImageMargin);
+			if ((right <= left) || (blockTextImage.getWidth() < right))
+				continue;
 			int top = (blockWords[w].box.top - textImageMargin);
+			if (top < 0)
+				continue;
 			int bottom = (blockWords[w].box.bottom - textImageMargin);
-			blockWords[w] = new OcrWord(blockWords[w].str, new BoundingBox(left, Math.min(right, maxRight), top, Math.min(bottom, maxBottom)));
+			if ((bottom <= top) || (blockTextImage.getHeight() < bottom))
+				continue;
+			blockWordList.add(new OcrWord(blockWords[w].str, new BoundingBox(left, Math.min(right, maxRight), top, Math.min(bottom, maxBottom))));
 		}
+		blockWords = ((OcrWord[]) blockWordList.toArray((blockWords.length == blockWordList.size()) ? blockWords : new OcrWord[blockWordList.size()]));
 		
 		//	catch empty blocks
 		if (blockWords.length == 0) {

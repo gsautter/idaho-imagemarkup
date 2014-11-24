@@ -115,9 +115,10 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	//	==> GUI can be replaced (theoretically)
 	
 	private static Color textStringBackgroundWhite = new Color(Color.white.getRed(), Color.white.getGreen(), Color.white.getBlue(), 192);
+	private static int transparentWhite = new Color(Color.white.getRed(), Color.white.getGreen(), Color.white.getBlue(), 0).getRGB();
 	
 	/** the default DPI for rendering images, namely 96 */
-	public static int DEFAULT_RENDERING_DPI = 96; // TODO_ne figure out how to compute this for current display device ==> Toolkit.getDefaultToolkit().getScreenResolution() returns the resolution, in DPI, and it's usually 96
+	public static int DEFAULT_RENDERING_DPI = 96; // TODO_ne figure out how to compute this for current display device ==> Toolkit.getDefaultToolkit().getScreenResolution() returns the resolution, in DPI, and it's usually 96, always
 	
 	/** the image markup document displayed in this viewer panel */
 	public final ImDocument document;
@@ -829,7 +830,6 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 						io);
 				
 				//	paint gray page ID over page (adjust to at most one third of image height, and at most 80% of image width)
-				//	TODO add page number if present (smaller, below page ID)
 				pitGraphics.setColor(Color.GRAY);
 				String pidString = ("" + this.page.pageId);
 				int fontSize = ((pageThumbnailFontSize == -1) ? (pageImage.currentDpi / 4) : pageThumbnailFontSize);
@@ -2273,18 +2273,14 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				BufferedImage bi = new BufferedImage(pi.image.getWidth(), pi.image.getHeight(), BufferedImage.TYPE_4BYTE_ABGR);
 				Graphics g = bi.createGraphics();
 				g.drawImage(pi.image, 0, 0, null);
-				int white = Color.WHITE.getRGB();
-				byte alpha = 0;
-				alpha %= 0xff; 
-				int rgb;
+				Color col;
+				float[] hsb = null;
 				for (int x = 0; x < pi.image.getWidth(); x++) {
 					for (int y = 0; y < pi.image.getHeight(); y++) {
-						rgb = pi.image.getRGB(x, y);
-						if (rgb != white)
-							continue;
-			            int mc = (alpha << 24) | 0x00ffffff;
-			            rgb = rgb & mc;
-			            bi.setRGB(x, y, rgb);  
+						col = new Color(bi.getRGB(x, y));
+						hsb = Color.RGBtoHSB(col.getRed(), col.getGreen(), col.getBlue(), hsb);
+						if (0.99f < hsb[2])
+							bi.setRGB(x, y, transparentWhite);  
 					}
 				}
 				this.pageImage = new PageImage(bi, pi.originalWidth, pi.originalHeight, pi.originalDpi, pi.currentDpi, pi.leftEdge, pi.rightEdge, pi.topEdge, pi.bottomEdge, pi.source);

@@ -308,7 +308,13 @@ public class PdfExtractorTest implements ImagingConstants {
 //		pdfName = "Milleretal2014Anthracotheres.pdf"; // born-digital, renders perfectly fine
 		pdfName = "arac-38-02-328.pdf"; // born-digital, renders OK, fonts take long to decode, all fonts mis-classified as bold
 		
+		//	very crappy one from Donat
+		pdfName = "Cynoglossum_cheranganiense.pdf"; // crappy 150 DPI scanned document, both page images linked to both pages !!!
+//		pdfName = "Cynoglossum_cheranganiense.a.pdf"; // same, only saved back with Acrobat Pro 9.0 ==> no changes
+//		pdfName = "Cynoglossum_cheranganiense.ab.pdf"; // same, only bound into new PDF with Acrobat Pro 9.0 ==> no changes
 		
+		//	monograph from Donat
+		pdfName = "6506.pdf"; // scanned, some coordinate problem in page 21
 		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
@@ -366,9 +372,9 @@ public class PdfExtractorTest implements ImagingConstants {
 			pdm.popUp(false);
 			
 //			doc = pdfExtractor.loadImagePdf(doc, pdfDoc, bytes, scaleFactor, null);
-//			doc = pdfExtractor.loadImagePdfBlocks(doc, pdfDoc, bytes, scaleFactor, null);
+			doc = pdfExtractor.loadImagePdfBlocks(doc, pdfDoc, bytes, scaleFactor, null);
 //			doc = pdfExtractor.loadImagePdfPages(doc, pdfDoc, bytes, scaleFactor, null);
-			doc = pdfExtractor.loadTextPdf(doc, pdfDoc, bytes, pdm);
+//			doc = pdfExtractor.loadTextPdf(doc, pdfDoc, bytes, pdm);
 //			doc = pdfExtractor.loadGenericPdf(doc, pdfDoc, bytes, scaleFactor, null);
 			
 //			ProcessStatusMonitor psm = new ProcessStatusMonitor() {

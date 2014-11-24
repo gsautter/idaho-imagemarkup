@@ -37,10 +37,12 @@ import java.awt.font.TextLayout;
 import java.awt.geom.AffineTransform;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
+import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.StringReader;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -739,6 +741,11 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			if ((docWordCount / pageTree.getNumberOfPages()) < minAveragePageWords)
 				throw new IOException("Too few words per page (" + docWordCount + " on " + pageTree.getNumberOfPages() + " pages, less than " + minAveragePageWords + ")");
 		}
+		
+		/* TODO attach non-standard (embedded) PDF fonts to ImDocument
+		 * - font name
+		 * - mapping of chars to glyph images
+		 */
 		
 		//	put PDF words into images
 		pm.setStep("Generating page images");
@@ -2261,6 +2268,55 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					}
 					pageImages[p] = new HashMap(2);
 					
+					//	check contents (not whole resource dictionary might be rendered in every page)
+					HashMap contentsImgResKeyPos = new HashMap();
+					Object contentsObj = PdfParser.getObject(pages[p], "Contents", objects);
+					if (contentsObj == null) synchronized (pm) {
+						pm.setInfo(" --> content not found");
+					}
+					else {
+						synchronized (pm) {
+							pm.setInfo(" --> got content");
+						}
+						ByteArrayOutputStream baos = new ByteArrayOutputStream();
+						if (contentsObj instanceof PStream) {
+							Object filter = ((PStream) contentsObj).params.get("Filter");
+							synchronized (pm) {
+								pm.setInfo("   --> stream content, filter is " + filter + " (from " + ((PStream) contentsObj).params + ")");
+							}
+//							try {
+								PdfParser.decode(filter, ((PStream) contentsObj).bytes, ((PStream) contentsObj).params, baos, objects);
+//							} catch (Exception e) { pm.setInfo("   --> decoding failed: " + e.getMessage()); }
+						}
+						else if (contentsObj instanceof Vector) {
+							synchronized (pm) {
+								pm.setInfo("   --> array content");
+							}
+							for (Iterator cit = ((Vector) contentsObj).iterator(); cit.hasNext();) {
+								Object contentObj = PdfParser.dereference(cit.next(), objects);
+								if (contentObj instanceof PStream) {
+									Object filter = ((PStream) contentObj).params.get("Filter");
+									if (filter == null)
+										continue;
+									pm.setInfo("   --> stream content part, filter is " + filter + " (from " + ((PStream) contentObj).params + ")");
+//									try {
+										 PdfParser.decode(filter, ((PStream) contentObj).bytes, ((PStream) contentObj).params, baos, objects);
+//									} catch (Exception e) { pm.setInfo("   --> decoding failed: " + e.getMessage()); }
+								}
+							}
+						}
+						System.out.println(" --> content decoded: " + new String(baos.toByteArray()));
+						BufferedReader baosBr = new BufferedReader(new StringReader(new String(baos.toByteArray())));
+						int imgCount = 0;
+						for (String contentsLine; (contentsLine = baosBr.readLine()) != null;) {
+							if (!contentsLine.matches("\\/[\\u0021-\\u007E]+\\s+Do"))
+								continue;
+							String imgResKey = contentsLine.substring("/".length());
+							imgResKey = imgResKey.substring(0, (imgResKey.length() - " Do".length())).trim();
+							contentsImgResKeyPos.put(imgResKey, new Integer(imgCount++));
+						}
+					}
+					
 					//	get resources
 					Object resourcesObj = PdfParser.getObject(pages[p], "Resources", objects);
 					if ((resourcesObj == null) || !(resourcesObj instanceof Hashtable)) {
@@ -2293,11 +2349,18 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 								Object xResObj = PdfParser.dereference(((Hashtable) resObj).get(xResKey), objects);
 								if (xResObj == null)
 									continue;
+								if ((contentsImgResKeyPos.size() != 0) && !contentsImgResKeyPos.containsKey(xResKey.toString()))
+									continue;
 								if (xResObj instanceof PStream) {
-									pageImages[p].put(("i" + imgCount), new PImage((PStream) xResObj));
+									if (contentsImgResKeyPos.isEmpty())
+										pageImages[p].put(("i" + imgCount), new PImage((PStream) xResObj));
+									else pageImages[p].put(("i" + contentsImgResKeyPos.get(xResKey.toString())), new PImage((PStream) xResObj));
 									PImage mImg = PdfParser.getMaskImage(((PStream) xResObj), objects);
-									if (mImg != null)
-										pageImages[p].put(("m" + imgCount), mImg);
+									if (mImg != null) {
+										if (contentsImgResKeyPos.isEmpty())
+											pageImages[p].put(("m" + imgCount), mImg);
+										else pageImages[p].put(("m" + contentsImgResKeyPos.get(xResKey.toString())), new PImage((PStream) xResObj));
+									}
 									imgCount++;
 								}
 							}

@@ -180,6 +180,7 @@ public class PdfParser {
 				decode(fObj, stream, params, fBaos, objects);
 				stream = fBaos.toByteArray();
 			}
+			baos.write(stream);
 			return;
 		}
 		
@@ -794,6 +795,13 @@ public class PdfParser {
 			this.params = params;
 			this.bytes = bytes;
 		}
+		
+		/* (non-Javadoc)
+		 * @see java.lang.Object#toString()
+		 */
+		public String toString() {
+			return (this.params.toString() + ", [" + this.bytes.length + "]");
+		}
 	}
 	
 	/**
@@ -1078,7 +1086,7 @@ public class PdfParser {
 //			bytes = new PdfByteInputStream(new ByteArrayInputStream(page));
 //		}
 //		
-		//	get fonts
+		//	get fonts TODO somehow return fonts
 		final Object fontsObj = dereference(resources.get("Font"), objects);
 		if (PdfFont.DEBUG_LOAD_FONTS) System.out.println(" --> font object is " + fontsObj);
 		Hashtable fonts = new Hashtable();

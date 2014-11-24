@@ -29,7 +29,6 @@ package de.uka.ipd.idaho.im.analysis;
 
 import java.awt.Color;
 import java.awt.image.BufferedImage;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -319,9 +318,8 @@ public class PageImageAnalysis implements ImagingConstants {
 	 *            images)
 	 * @param psm a monitor object for reporting progress, e.g. to a UI
 	 * @return the root region, representing the whole page
-	 * @throws IOException
 	 */
-	public static Region getPageRegion(AnalysisImage ai, int dpi, boolean filterImageBlocks, ProgressMonitor psm) throws IOException {
+	public static Region getPageRegion(AnalysisImage ai, int dpi, boolean filterImageBlocks, ProgressMonitor psm) {
 		ImagePartRectangle pageBounds = Imaging.getContentBox(ai);
 //		int minHorizontalBlockMargin = (dpi / 15); // TODO find out if this makes sense (will turn out in the long haul only, though)
 		int minHorizontalBlockMargin = (dpi / 10); // TODO find out if this makes sense (will turn out in the long haul only, though)
