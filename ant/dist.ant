@@ -15,10 +15,12 @@
 			<fileset dir="${build.home}/classes" includes="**/idaho/im/analysis/*.class" />
 			<fileset dir="${build.home}/classes" includes="**/idaho/im/gamta/*.class" />
 			<fileset dir="${build.home}/classes" includes="**/idaho/im/util/*.class" />
+			<fileset dir="${build.home}/classes" includes="**/idaho/im/utilities/*.class" />
 			<fileset dir="${src.home}" includes="**/idaho/im/*.java" />
 			<fileset dir="${src.home}" includes="**/idaho/im/analysis/*.java" />
 			<fileset dir="${src.home}" includes="**/idaho/im/gamta/*.java" />
 			<fileset dir="${src.home}" includes="**/idaho/im/util/*.java" />
+			<fileset dir="${src.home}" includes="**/idaho/im/utilities/*.java" />
 			<fileset dir="." includes="LICENSE.txt"/>
 		</jar>
 	</target>
@@ -45,7 +47,7 @@
 		<jar destfile="${jar.pdf}" >
 			<fileset dir="${build.home}/classes" includes="**/idaho/im/pdf/**" />
 			<fileset dir="${build.home}/classes" includes="**/idaho/im/pdf/test/**" />
-			<fileset dir="${src.home}" includes="**/idaho/im/pdf/**" />
+			<fileset dir="${src.home}" includes="**/idaho/im/pdf/**" excludes="**/idaho/im/pdf/**.zip" />
 			<fileset dir="${src.home}" includes="**/idaho/im/pdf/test/**" />
 			<fileset dir="${src.home}" includes="**/idaho/im/pdf/afmRes/**" />
 			<fileset dir="." includes="LICENSE.txt"/>
