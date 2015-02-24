@@ -82,6 +82,7 @@ public class PageImageAnalysis implements ImagingConstants {
 	 */
 	public static class Region extends PagePart {
 		boolean isAtomic = false;
+		boolean isImage = false;
 		Block block;
 		final boolean isColumn;
 		final Region superRegion;
@@ -113,6 +114,13 @@ public class PageImageAnalysis implements ImagingConstants {
 					return false;
 			}
 			return true;
+		}
+		public boolean isImage() {
+			return this.isImage;
+		}
+		void setImage() {
+			this.setAtomic();
+			this.isImage = true;
 		}
 		public boolean isColumn() {
 			return this.isColumn;
@@ -407,8 +415,11 @@ public class PageImageAnalysis implements ImagingConstants {
 			//	atomic and more than an inch in either direction, check brightness if required
 			if (filterImageBlocks && subRegion.isAtomic() && ((subRegion.bounds.bottomRow - subRegion.bounds.topRow) > dpi) && ((subRegion.bounds.rightCol - subRegion.bounds.leftCol) > dpi)) {
 				byte avgBrightness = Imaging.computeAverageBrightness(subRegions[r]);
-				if (avgBrightness <= 96)
+				if (avgBrightness <= 96) {
+					subRegion.setImage();
+					region.addSubRegion(subRegion);
 					continue;
+				}
 			}
 			
 			//	what remains of this sub region is less than on fifteenth of an inch (5 pt font size) high, and thus very unlikely to be text
@@ -418,8 +429,13 @@ public class PageImageAnalysis implements ImagingConstants {
 			//	this sub region is too tall (higher than 72pt font size) to be a single line, and narrower than one inch, and thus very unlikely to be text if no line splits exist
 			if (((subRegion.bounds.bottomRow - subRegion.bounds.topRow) > dpi) && ((subRegion.bounds.rightCol - subRegion.bounds.leftCol) < dpi)) {
 				ImagePartRectangle[] lines = Imaging.splitIntoRows(subRegions[r]);
-				if (lines.length < 2)
+				if (lines.length < 2) {
+					if ((subRegion.bounds.rightCol - subRegion.bounds.leftCol) > (dpi / 2)) {
+						subRegion.setImage();
+						region.addSubRegion(subRegion);
+					}
 					continue;
+				}
 			}
 			
 			//	this sub region might be a single character with a large (up to 72 pt) font size, but is too narrow even for a capital I, and thus is very unlikely to be text
@@ -440,7 +456,7 @@ public class PageImageAnalysis implements ImagingConstants {
 					continue;
 			}
 			
-			//	block with single child-column (column cannot be atomic, as otherwise block would be atomic and have no childern) (scenario can happen if some artifact column is eliminated) ==> add child-blocks of child-column instead of block itself
+			//	block with single child-column (column cannot be atomic, as otherwise block would be atomic and have no children) (scenario can happen if some artifact column is eliminated) ==> add child-blocks of child-column instead of block itself
 			if (!subRegion.isColumn && (subRegion.getSubRegionCount() == 1)) {
 				Region onlyChildColumn = subRegion.getSubRegion(0);
 				for (int s = 0; s < onlyChildColumn.getSubRegionCount(); s++)
@@ -454,7 +470,9 @@ public class PageImageAnalysis implements ImagingConstants {
 		//	only found one sub region worth retaining, so we were merely subtracting dirt, and sub region actually is atomic ==> region is atomic
 		if ((region.getSubRegionCount() == 1) && region.getSubRegion(0).isAtomic()) {
 			Imaging.copyBounds(region.getSubRegion(0).bounds, region.bounds);
-			region.setAtomic();
+			if (region.getSubRegion(0).isImage())
+				region.setImage();
+			else region.setAtomic();
 		}
 		
 		//	multiple sub regions worth retaining, shrink bounds of region to hull of their bounds
@@ -1469,6 +1487,110 @@ public class PageImageAnalysis implements ImagingConstants {
 				return (((BoundingBox) o1).left - ((BoundingBox) o2).left);
 			}
 		});
+//		
+//		//	TODO identify lines by counting number of word box pixels for each pixel row in block
+//		//	==> more reliable than current approach with small superscripts and subscripts
+//		
+//		//	count number of word-occupied columns for each row in block, and compute average word height
+//		int avgWordHeight = 0;
+//		int[] rowWordColumns = new int[block.bounds.getHeight()];
+//		Arrays.fill(rowWordColumns, 0);
+//		for (int w = 0; w < existingBlockWords.length; w++) {
+//			avgWordHeight += (existingBlockWords[w].bottom - existingBlockWords[w].top);
+//			for (int r = Math.max(block.bounds.getTopRow(), existingBlockWords[w].top); r < Math.min(block.bounds.getBottomRow(), existingBlockWords[w].bottom); r++)
+//				rowWordColumns[r - block.bounds.getTopRow()] += (existingBlockWords[w].right - existingBlockWords[w].left);
+//		}
+//		avgWordHeight /= existingBlockWords.length;
+//		System.out.println("Average height of " + existingBlockWords.length + " block words is " + avgWordHeight);
+//		
+////		System.out.println("Checking row word columns:");
+//		int wordHeightRowColumnSum = 0;
+//		for (int r = 0; r < rowWordColumns.length; r++) {
+//			wordHeightRowColumnSum += rowWordColumns[r];
+//			if (avgWordHeight <= r)
+//				wordHeightRowColumnSum -= rowWordColumns[r - avgWordHeight];
+//			if ((r+1) < avgWordHeight)
+//				continue;
+//			for (int c = (r - avgWordHeight + 3); c < (r-1); c++) {
+//				if (rowWordColumns[c] == 0)
+//					continue;
+//				if ((rowWordColumns[c] >= rowWordColumns[r - avgWordHeight + 1]) || (rowWordColumns[c] >= rowWordColumns[r - avgWordHeight + 2]))
+//					continue;
+//				if ((rowWordColumns[c] >= rowWordColumns[r]) || (rowWordColumns[c] >= rowWordColumns[r-1]))
+//					continue;
+//				if ((rowWordColumns[c] * 5) < (wordHeightRowColumnSum / avgWordHeight)) {
+////					System.out.println(" - cleaning up row " + (c + block.bounds.getTopRow()) + " with minor " + rowWordColumns[c] + " word columns");
+//					wordHeightRowColumnSum -= rowWordColumns[c];
+//					rowWordColumns[c] = 0;
+//				}
+//			}
+//		}
+//		
+//		//	compute minimum and maximum line height, as well as distances between line starts and line ends
+//		int minLineHeight = block.bounds.getHeight();
+//		int maxLineHeight = 0;
+//		int lineTopRow = -1;
+//		int lineCount = 0;
+//		int lastLineTopRow = -1;
+//		int minLineTopRowDist = block.bounds.getHeight();
+//		int maxLineTopRowDist = 0;
+//		int avgLineTopRowDist = 0;
+//		int lastLineBottomRow = -1;
+//		int minLineBottomRowDist = block.bounds.getHeight();
+//		int maxLineBottomRowDist = 0;
+//		int avgLineBottomRowDist = 0;
+////		System.out.println("Evaluating row word columns:");
+//		for (int r = 0; r < rowWordColumns.length; r++) {
+////			System.out.println(" - " + (r + block.bounds.getTopRow()) + ": " + rowWordColumns[r]);
+//			if (rowWordColumns[r] == 0) {
+//				if (lineTopRow != -1) {
+//					minLineHeight = Math.min(minLineHeight, (r - lineTopRow));
+//					maxLineHeight = Math.max(maxLineHeight, (r - lineTopRow));
+//					if (lastLineBottomRow != -1) {
+//						minLineBottomRowDist = Math.min(minLineBottomRowDist, (r - lastLineBottomRow));
+//						maxLineBottomRowDist = Math.max(maxLineBottomRowDist, (r - lastLineBottomRow));
+//						avgLineBottomRowDist += (r - lastLineBottomRow);
+//					}
+//					lastLineBottomRow = r;
+//					lineCount++;
+//				}
+//				lineTopRow = -1;
+//			}
+//			else if (lineTopRow == -1) {
+//				lineTopRow = r;
+//				if (lastLineTopRow != -1) {
+//					minLineTopRowDist = Math.min(minLineTopRowDist, (lineTopRow - lastLineTopRow));
+//					maxLineTopRowDist = Math.max(maxLineTopRowDist, (lineTopRow - lastLineTopRow));
+//					avgLineTopRowDist += (lineTopRow - lastLineTopRow);
+//				}
+//				lastLineTopRow = r;
+//			}
+//		}
+//		if (lineTopRow != -1) {
+//			minLineHeight = Math.min(minLineHeight, (rowWordColumns.length - lineTopRow));
+//			maxLineHeight = Math.max(maxLineHeight, (rowWordColumns.length - lineTopRow));
+//			if (lastLineBottomRow != -1) {
+//				minLineBottomRowDist = Math.min(minLineBottomRowDist, (rowWordColumns.length - lastLineBottomRow));
+//				maxLineBottomRowDist = Math.max(maxLineBottomRowDist, (rowWordColumns.length - lastLineBottomRow));
+//				avgLineBottomRowDist += (rowWordColumns.length - lastLineBottomRow);
+//			}
+//			lineCount++;
+//		}
+//		if (lineCount > 1) {
+//			avgLineTopRowDist /= (lineCount-1);
+//			avgLineBottomRowDist /= (lineCount-1);
+//		}
+//		System.out.println("Minimum line height is " + minLineHeight + ", maximum is " + maxLineHeight);
+//		System.out.println("Average line top distance is " + avgLineTopRowDist + " (" + minLineTopRowDist + "," + maxLineTopRowDist + ")");
+//		System.out.println("Average line bottom distance is " + avgLineBottomRowDist + " (" + minLineBottomRowDist + "," + maxLineBottomRowDist + ")");
+//		
+//		//	check plausibility
+//		if ((maxLineHeight * 4) < (minLineHeight * 5)) {
+//			System.out.println(" ==> Counting line split plausible in terms of line height");
+//		}
+//		if ((maxLineHeight * 4) < (avgWordHeight * 5)) {
+//			System.out.println(" ==> Counting line split plausible in terms of line height vs. word height");
+//		}
 		
 		//	group words into lines
 		while (true) {
@@ -1501,24 +1623,29 @@ public class PageImageAnalysis implements ImagingConstants {
 				if (lineBottom < existingBlockWords[w].top)
 					continue;
 				
-				//	word completely inside line
+				//	word completely inside line (the most usual case)
 				if ((existingBlockWords[w].top >= lineTop) && (existingBlockWords[w].bottom <= lineBottom)) {}
 				
-				//	line completely inside word
+				//	line completely inside word (happens when starting line with bullet dash or the like)
 				else if ((existingBlockWords[w].top <= lineTop) && (existingBlockWords[w].bottom >= lineBottom)) {}
 				
-				//	check for at least 50% overlap
+				//	check for overlap
 				else {
 					int maxTop = Math.max(existingBlockWords[w].top, lineTop);
 					int minBottom = Math.min(existingBlockWords[w].bottom, lineBottom);
 					int overlap = (minBottom - maxTop);
-					if ((overlap * 2) < (lineBottom - lineTop))
-						continue;
-					if ((overlap * 2) < (existingBlockWords[w].bottom - existingBlockWords[w].top))
-						continue;
+					
+					//	word over 50% inside line
+					if ((existingBlockWords[w].bottom - existingBlockWords[w].top) < (overlap * 2)) {}
+					
+					//	line over 50% inside word
+					else if ((lineBottom - lineTop) < (overlap * 2)) {}
+					
+					//	insufficient overlap
+					else continue;
 				}
 				
-				//	word overlaps with last (can happen due to in-word font change in PDF) ==> merge them
+				//	word overlaps with last (can happen due to in-word font change or tokenization) ==> merge them
 				if (lastWord.right >= existingBlockWords[w].left) {
 					lastWord = new BoundingBox(
 							lastWord.left, 

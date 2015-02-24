@@ -50,7 +50,7 @@ import java.util.Map.Entry;
 import javax.imageio.ImageIO;
 
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
-import de.uka.ipd.idaho.gamta.util.imaging.utilities.ImageDisplayDialog;
+import de.uka.ipd.idaho.im.utilities.ImageDisplayDialog;
 import de.uka.ipd.idaho.stringUtils.csvHandler.StringTupel;
 
 /**
@@ -382,15 +382,16 @@ public class Imaging {
 		
 		//	correct page rotation
 		changed = false;
-		changed = correctPageRotation(ai, 0.1, ADJUST_MODE_SQUARE_ROOT);
+		changed = correctPageRotation(ai, dpi, 0.1, ADJUST_MODE_SQUARE_ROOT);
 		if (changed)
 			psm.setInfo("   - page rotation corrected");
 		
-		//	cut white margins
-		ImagePartRectangle textBounds = getContentBox(ai);
-		ai = textBounds.toImage();
-		psm.setInfo("   - white margins removed, size is " + ai.getImage().getWidth() + " x " + ai.getImage().getHeight());
-		
+//		//	cut white margins
+//		//	LET'S NOT DO THIS - SAVES LITTLE, BUT BLOWS PAGES OUT OF PROPORTION
+//		ImagePartRectangle textBounds = getContentBox(ai);
+//		ai = textBounds.toImage();
+//		psm.setInfo("   - white margins removed, size is " + ai.getImage().getWidth() + " x " + ai.getImage().getHeight());
+//		
 		//	we're done here
 		return ai;
 	}
@@ -885,24 +886,26 @@ public class Imaging {
 		byte[][] brightness = ai.getBrightness();
 		if (brightness.length == 0)
 			return new int[0][0];
-		int[][] regionCodes = new int[brightness.length][brightness[0].length];
-		for (int c = 0; c < regionCodes.length; c++)
-			Arrays.fill(regionCodes[c], 0);
-		int currentRegionCode = 1;
+		int[][] regionColors = new int[brightness.length][brightness[0].length];
+		for (int c = 0; c < regionColors.length; c++)
+			Arrays.fill(regionColors[c], 0);
+		int currentRegionColor = 1;
 		for (int c = 0; c < brightness.length; c++)
 			for (int r = 0; r < brightness[c].length; r++) {
-				if (brightness[c][r] == 127)
+				if ((0 < brightnessThreshold) && (brightnessThreshold <= brightness[c][r]))
 					continue;
-				if (regionCodes[c][r] != 0)
+				if ((brightnessThreshold < 0) && (brightness[c][r] <= -brightnessThreshold))
 					continue;
-				int rs = colorRegion(brightness, regionCodes, c, r, currentRegionCode, brightnessThreshold, includeDiagonal);
-				if (DEBUG_REGION_COLORING) System.out.println("Region " + currentRegionCode + " is sized " + rs);
-				currentRegionCode++;
+				if (regionColors[c][r] != 0)
+					continue;
+				int rs = colorRegion(brightness, regionColors, c, r, currentRegionColor, brightnessThreshold, includeDiagonal);
+				if (DEBUG_REGION_COLORING) System.out.println("Region " + currentRegionColor + " is sized " + rs);
+				currentRegionColor++;
 				//	TODO assemble region size distribution, use it to estimate font size, and use estimate for cleanup thresholds
 			}
-		return regionCodes;
+		return regionColors;
 	}
-	private static int colorRegion(byte[][] brightness, int[][] regionCodes, int c, int r, int regionCode, byte brightnessThreshold, boolean isBinaryImage) {
+	private static int colorRegion(byte[][] brightness, int[][] regionColors, int c, int r, int regionColor, byte brightnessThreshold, boolean includeDiagonal) {
 		ArrayList points = new ArrayList() {
 			HashSet distinctContent = new HashSet();
 			public boolean add(Object obj) {
@@ -922,22 +925,22 @@ public class Imaging {
 				continue;
 			if ((brightnessThreshold < 0) && (brightness[point.c][point.r] <= -brightnessThreshold))
 				continue;
-			if (regionCodes[point.c][point.r] != 0)
+			if (regionColors[point.c][point.r] != 0)
 				continue;
-			regionCodes[point.c][point.r] = regionCode;
+			regionColors[point.c][point.r] = regionColor;
 			regionSize++;
 			
-			if (isBinaryImage)
+			if (includeDiagonal)
 				points.add(new Point((point.c - 1), (point.r - 1)));
 			points.add(new Point((point.c - 1), point.r));
-			if (isBinaryImage)
+			if (includeDiagonal)
 				points.add(new Point((point.c - 1), (point.r + 1)));
 			points.add(new Point(point.c, (point.r - 1)));
 			points.add(new Point(point.c, (point.r + 1)));
-			if (isBinaryImage)
+			if (includeDiagonal)
 				points.add(new Point((point.c + 1), (point.r - 1)));
 			points.add(new Point((point.c + 1), point.r));
-			if (isBinaryImage)
+			if (includeDiagonal)
 				points.add(new Point((point.c + 1), (point.r + 1)));
 		}
 		return regionSize;
@@ -1365,7 +1368,7 @@ public class Imaging {
 	private static final boolean DEBUG_FEATHERDUST = false;
 	private static final int maxAttachRounds = 3;
 	/* working left to right, this should be sufficient for dotted lines, as
-	 * well as punctuation marks like colons and semi colons, while preventing
+	 * well as punctuation marks like colons and semicolons, while preventing
 	 * randomly dotted areas from being attached gradually from a few standalone
 	 * spots */
 	
@@ -2483,12 +2486,13 @@ public class Imaging {
 	 * rotates the analysisImage back to the vertical if the deviation is more than the
 	 * specified granularity.
 	 * @param analysisImage the analysisImage to correct
+	 * @param dpi the resolution of the image
 	 * @param granularity the granularity in degrees
 	 * @param adjustMode the FFT peak adjust mode
 	 * @return the corrected analysisImage
 	 */
-	public static boolean correctPageRotation(AnalysisImage analysisImage, double granularity, int adjustMode) {
-		return correctPageRotation(analysisImage, granularity, null, -1, adjustMode);
+	public static boolean correctPageRotation(AnalysisImage analysisImage, int dpi, double granularity, int adjustMode) {
+		return correctPageRotation(analysisImage, dpi, granularity, null, -1, adjustMode);
 	}
 	
 	/**
@@ -2500,6 +2504,7 @@ public class Imaging {
 	 * argument FFT is null, this method computes it as a 256 by 256 complex
 	 * array.
 	 * @param analysisImage the analysisImage to correct
+	 * @param dpi the resolution of the image
 	 * @param granularity the granularity in degrees
 	 * @param fft the FFT of the analysisImage (set to null to have it computed here)
 	 * @param max the adjusted maximum peak height of the argument FFT (set to a
@@ -2507,7 +2512,7 @@ public class Imaging {
 	 * @param adjustMode the FFT peak adjust mode
 	 * @return true if the analysisImage was corrected, false otherwise
 	 */
-	public static boolean correctPageRotation(AnalysisImage analysisImage, double granularity, Complex[][] fft, double max, int adjustMode) {
+	public static boolean correctPageRotation(AnalysisImage analysisImage, int dpi, double granularity, Complex[][] fft, double max, int adjustMode) {
 		if (fft == null) {
 			fft = analysisImage.getFft();
 			max = getMax(fft, adjustMode);
@@ -2523,15 +2528,81 @@ public class Imaging {
 //			ImageIO.write(fftImage, "png", new File("E:/Testdaten/PdfExtract/FFT." + System.currentTimeMillis() + ".png"));
 //		} catch (IOException ioe) {}
 		
-		double angle = getPageRotationAngle(peaks, 20, (180 * ((int) (1 / granularity))));
-		System.out.println("Page rotation angle is " + (((float) ((int) ((180 / Math.PI) * angle * 100))) / 100) + "°");
-		if (angle > maxPageRotationCorrectionAngle)
-			return false;
-		if (Math.abs(angle) > ((Math.PI / 180) * granularity)) {
-			analysisImage.setImage(rotateImage(analysisImage.getImage(), -angle));
-			return true;
+		boolean rotationCorrected = false;
+		
+		//	detect and correct major skewing via FFT
+		double pageRotationAngle = getPageRotationAngle(peaks, 20, (180 * ((int) (1 / granularity))));
+		System.out.println("Page rotation angle by FFT is " + (((float) ((int) ((180 / Math.PI) * pageRotationAngle * 100))) / 100) + "°");
+//		if (fftAngle > maxPageRotationCorrectionAngle)
+//			return false;
+//		if (Math.abs(angle) > ((Math.PI / 180) * granularity)) {
+//			analysisImage.setImage(rotateImage(analysisImage.getImage(), -angle));
+//			return true;
+//		}
+//		else return false;
+		if ((pageRotationAngle < maxPageRotationCorrectionAngle) && (Math.abs(pageRotationAngle) > ((Math.PI / 180) * granularity))) {
+			analysisImage.setImage(rotateImage(analysisImage.getImage(), -pageRotationAngle));
+			rotationCorrected = true;
 		}
-		else return false;
+		
+		//	detect and correct minor skewing via block line focusing
+		ArrayList blocks = new ArrayList();
+		blocks.add(getContentBox(analysisImage));
+		for (int blk = 0; blk < blocks.size(); blk++) {
+			ImagePartRectangle ipr = ((ImagePartRectangle) blocks.get(blk));
+			if (DEBUG_LINE_FOCUSSING) System.out.println("Splitting " + ipr.getId() + ":");
+			ArrayList iprParts = new ArrayList();
+			ImagePartRectangle[] iprBlocks = splitIntoRows(ipr, (dpi / 8), maxBlockRotationAngle); // 3 mm
+			for (int b = 0; b < iprBlocks.length; b++) {
+				iprBlocks[b] = narrowLeftAndRight(iprBlocks[b]);
+				if (DEBUG_LINE_FOCUSSING) System.out.println(" - " + iprBlocks[b].getId());
+				ImagePartRectangle[] iprCols = splitIntoColumns(iprBlocks[b], (dpi / 8), maxBlockRotationAngle, true); // 3 mm
+				for (int c = 0; c < iprCols.length; c++) {
+					iprCols[c] = narrowTopAndBottom(iprCols[c]);
+					if (DEBUG_LINE_FOCUSSING) System.out.println("   - " + iprCols[c].getId());
+					iprParts.add(iprCols[c]);
+				}
+			}
+			if (iprParts.size() > 1) {
+				blocks.addAll(iprParts);
+				blocks.remove(blk--);
+			}
+		}
+		if (DEBUG_LINE_FOCUSSING) System.out.println("Got " + blocks.size() + " blocks:");
+		for (int b = 0; b < blocks.size(); b++) {
+			ImagePartRectangle block = ((ImagePartRectangle) blocks.get(b));
+			if (DEBUG_LINE_FOCUSSING) System.out.println(" - " + block.getId());
+			if (block.getWidth() < dpi) {
+				blocks.remove(b--);
+				if (DEBUG_LINE_FOCUSSING) System.out.println(" ==> too small");
+			}
+			else if (DEBUG_LINE_FOCUSSING) System.out.println(" ==> looks useful");
+		}
+		
+		//	get weighted average rotation angle for page blocks
+		double weightedBlockRotationAngleSum = 0.0;
+		int blockWeightSum = 0;
+		for (int b = 0; b < blocks.size(); b++) {
+			ImagePartRectangle block = ((ImagePartRectangle) blocks.get(b));
+			double blockRotationAngle = getBlockRotationAngle(analysisImage, block);
+			if (blockRotationAngle == invalidBlockRotationAngle) {
+				if (DEBUG_LINE_FOCUSSING) System.out.println("Could not determine block rotation angle");
+				continue;
+			}
+			if (DEBUG_LINE_FOCUSSING) System.out.println("Block rotation angle is " + (((float) ((int) (blockRotationAngle * 100))) / 100) + "°");
+			int blockWeight = (block.getWidth() * block.getHeight());
+			weightedBlockRotationAngleSum += (blockRotationAngle * blockWeight);
+			blockWeightSum += blockWeight;
+		}
+		double blockRotationAngle = (weightedBlockRotationAngleSum / blockWeightSum);
+		System.out.println("Page rotation angle by block line focusing is " + (((float) ((int) (blockRotationAngle * 100))) / 100) + "°");
+		if (blockRotationAngle > blockRotationAngleStep) {
+			analysisImage.setImage(rotateImage(analysisImage.getImage(), ((Math.PI / 180) * -blockRotationAngle)));
+			rotationCorrected = true;
+		}
+		
+		//	finally ...
+		return rotationCorrected;
 	}
 //	private static final double maxPageRotationAngle = ((Math.PI / 180) * 30); // 30°;
 //	/* we have to use this limit, as in quite a few page images background
@@ -2598,16 +2669,119 @@ public class Imaging {
 		return angle;
 	}
 	
+	private static final boolean DEBUG_LINE_FOCUSSING = false;
+	/* Rationale behind rotation angle test: lower case letters create dark
+	 * stripes across block, line gaps create bright stripes. The contrast
+	 * between the two is strongest if page is absolutely horizontal, as then
+	 * the two kinds of stripes are never in the same pixel row, preventing any
+	 * blurring.
+	 */
+	private static final double invalidBlockRotationAngle = -360;
+	private static final double minBlockRotationAngle = -2;
+	private static final double maxBlockRotationAngle = 2;
+	private static final double blockRotationAngleStep = 0.05;
+	private static double getBlockRotationAngle(AnalysisImage analysisImage, ImagePartRectangle block) {
+		if (DEBUG_LINE_FOCUSSING)
+			System.out.println("Testing rotation of block " + block.getId());
+		
+		//	generate list of rotation angles to test
+		ArrayList testAngleList = new ArrayList();
+		for (double angle = minBlockRotationAngle; angle < (maxBlockRotationAngle + (blockRotationAngleStep / 2)); angle += blockRotationAngleStep)
+			testAngleList.add(new Double(angle));
+		double[] testAngles = new double[testAngleList.size()];
+		for (int a = 0; a < testAngleList.size(); a++) {
+			testAngles[a] = ((Double) testAngleList.get(a)).doubleValue();
+			testAngles[a] = (((double) Math.round(testAngles[a] * 1000)) / 1000);
+//			System.out.println("Angle " + testAngles[a] + "° = " + ((Math.PI / 180) * testAngles[a]));
+		}
+		
+		//	test rotation angles, and identify best one
+		byte[][] brightness = analysisImage.getBrightness();
+		double rotationAngle = invalidBlockRotationAngle;
+		int rotationAngleScore = 0;
+		for (int a = 0; a < testAngles.length; a++) {
+			
+			//	compute vertical offset for each column
+			int[] colOffsets = new int[block.getWidth()];
+			double maxOffset = (block.getWidth() * Math.sin(((Math.PI / 180) * testAngles[a])));
+			for (int c = 0; c < colOffsets.length; c++)
+				colOffsets[c] = ((int) Math.round((maxOffset * c) / block.getWidth()));
+			
+			//	compute brightness for each row, as well as overall
+			int brightnessSum = 0;
+			int[] rowBrightnessSums = new int[block.getHeight()];
+			Arrays.fill(rowBrightnessSums, 0);
+			for (int c = 0; c < block.getWidth(); c++) {
+				for (int r = 0; r < block.getHeight(); r++) {
+					int or = r + colOffsets[c];
+					byte b = (((or < 0) || (block.getHeight() <= or)) ? 127 : brightness[c + block.getLeftCol()][or + block.getTopRow()]);
+					brightnessSum += b;
+					rowBrightnessSums[r] += b;
+				}
+			}
+			if (DEBUG_LINE_FOCUSSING) {
+				System.out.println("Row brightness for " + testAngles[a] + "° = " + ((Math.PI / 180) * testAngles[a]) + ":");
+				System.out.print(" - row brightness:");
+			}
+			
+			//	compute minimum, maximum, and average row brightness, as well as contrast (distance of individual row brightnesses from average)
+			int minRowBrightness = Byte.MAX_VALUE;
+			int maxRowBrightness = 0;
+			int avgRowBrightness = (brightnessSum / (block.getWidth() * block.getHeight()));
+			int avgDistSquareSum = 0;
+			int rowBrightnessDistSum = 0;
+			int rowBrightnessDistSquareSum = 0;
+			for (int r = 0; r < block.getHeight(); r++) {
+				int rowBrightness = ((rowBrightnessSums[r] + (block.getWidth() / 2)) / block.getWidth());
+				if (DEBUG_LINE_FOCUSSING) System.out.print(" " + rowBrightness);
+				minRowBrightness = Math.min(minRowBrightness, rowBrightness);
+				maxRowBrightness = Math.max(maxRowBrightness, rowBrightness);
+				avgDistSquareSum += ((rowBrightness - avgRowBrightness) * (rowBrightness - avgRowBrightness));
+				if (r != 0) {
+					int prevRowBrightness = ((rowBrightnessSums[r-1] + (block.getWidth() / 2)) / block.getWidth());
+					rowBrightnessDistSum += Math.abs(rowBrightness - prevRowBrightness);
+					rowBrightnessDistSquareSum += ((rowBrightness - prevRowBrightness) * (rowBrightness - prevRowBrightness));
+				}
+			}
+			if (DEBUG_LINE_FOCUSSING) {
+				System.out.println();
+				System.out.println(" - min is " + minRowBrightness);
+				System.out.println(" - max is " + maxRowBrightness);
+				System.out.println(" - avg is " + avgRowBrightness);
+				System.out.println(" - avg square distance to avg " + ((avgDistSquareSum + (block.getHeight() / 2)) / block.getHeight()));
+				System.out.println(" - avg distance between rows " + ((rowBrightnessDistSum + (block.getHeight() / 2)) / block.getHeight()));
+				System.out.println(" - avg square distance between rows " + ((rowBrightnessDistSquareSum + (block.getHeight() / 2)) / block.getHeight()));
+			}
+			
+			//	is this angle significant?
+			if (((rowBrightnessDistSquareSum + (block.getHeight() / 2)) / block.getHeight()) < ((maxRowBrightness - minRowBrightness) / 2)) {
+				if (DEBUG_LINE_FOCUSSING) System.out.println(" --> unsafe");
+				continue;
+			}
+			
+			//	do we have a new top angle?
+			int testAngleScore = ((avgDistSquareSum + (block.getHeight() / 2)) / block.getHeight());
+			if (testAngleScore > rotationAngleScore) {
+				if (DEBUG_LINE_FOCUSSING) System.out.println(" --> new top angle");
+				rotationAngle = testAngles[a];
+				rotationAngleScore = testAngleScore;
+			}
+		}
+		
+		//	finally ...
+		return rotationAngle;
+	}
+	
 	private static BufferedImage rotateImage(BufferedImage image, double angle) {
-		BufferedImage rImage = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_RGB);
+		BufferedImage rImage = new BufferedImage(image.getWidth(), image.getHeight(), image.getType());
 		Graphics2D rImageGraphics = rImage.createGraphics();
 		Color originalColor = rImageGraphics.getColor();
 		rImageGraphics.setColor(Color.WHITE);
 		rImageGraphics.fillRect(0, 0, rImage.getWidth(), rImage.getHeight());
 		rImageGraphics.setColor(originalColor);
 		AffineTransform originalTransform = rImageGraphics.getTransform();
-		rImageGraphics.rotate((angle / 2), (image.getWidth()/2), (image.getHeight()/2));
-//		rImageGraphics.rotate((angle / 1), (image.getWidth()/2), (image.getHeight()/2));
+//		rImageGraphics.rotate((angle / 2), (image.getWidth()/2), (image.getHeight()/2));
+		rImageGraphics.rotate(angle, (image.getWidth() / 2), (image.getHeight() / 2));
 		rImageGraphics.drawRenderedImage(image, null);
 		rImageGraphics.setTransform(originalTransform);
 		return rImage;
@@ -2898,6 +3072,7 @@ public class Imaging {
 		//	finally ...
 		return true;
 	}
+	
 	private static class ImageTile {
 		final int left;
 		final int right;
@@ -3115,6 +3290,92 @@ public class Imaging {
 		//	finally ...
 		return st;
 	}
+//	
+//	//	FOR TESTS ONLY !!!
+//	public static void main(String[] args) throws Exception {
+//		
+//		//	test several page images
+//		String pageImageName;
+//		pageImageName = "NHMD_LighthouseBirds_1887_15-17.pdf.0000.png";
+////		pageImageName = "5834.pdf.0002.png";
+//		
+//		//	load page image
+//		FileInputStream fis = new FileInputStream(new File("E:/Testdaten/PdfExtract", pageImageName));
+//		PageImageInputStream piis = new PageImageInputStream(fis, null);
+//		PageImage pi = new PageImage(piis);
+//		fis.close();
+//		
+//		//	wrap page image
+//		AnalysisImage ai = wrapImage(pi.image, null);
+//		
+//		//	slice and dice page image into blocks
+//		ArrayList blocks = new ArrayList();
+//		blocks.add(getContentBox(ai));
+//		for (int blk = 0; blk < blocks.size(); blk++) {
+//			ImagePartRectangle ipr = ((ImagePartRectangle) blocks.get(blk));
+//			System.out.println("Splitting " + ipr.getId() + ":");
+//			ArrayList iprParts = new ArrayList();
+//			ImagePartRectangle[] iprBlocks = splitIntoRows(ipr, (pi.currentDpi / 8), maxBlockRotationAngle); // 3 mm
+//			for (int b = 0; b < iprBlocks.length; b++) {
+//				iprBlocks[b] = narrowLeftAndRight(iprBlocks[b]);
+//				System.out.println(" - " + iprBlocks[b].getId());
+//				ImagePartRectangle[] iprCols = splitIntoColumns(iprBlocks[b], (pi.currentDpi / 8), maxBlockRotationAngle, true); // 3 mm
+//				for (int c = 0; c < iprCols.length; c++) {
+//					iprCols[c] = narrowTopAndBottom(iprCols[c]);
+//					System.out.println("   - " + iprCols[c].getId());
+//					iprParts.add(iprCols[c]);
+//				}
+//			}
+//			if (iprParts.size() > 1) {
+//				blocks.addAll(iprParts);
+//				blocks.remove(blk--);
+//			}
+//		}
+//		System.out.println("Got " + blocks.size() + " blocks:");
+//		for (int b = 0; b < blocks.size(); b++)
+//			System.out.println(((ImagePartRectangle) blocks.get(b)).getId());
+//		
+//		//	for each block, check row brightness distribution in 0.1° steps, between -2° and 2°
+//		double weightedBlockRotationAngleSum = 0.0;
+//		int blockWeightSum = 0;
+//		for (int b = 0; b < blocks.size(); b++) {
+//			ImagePartRectangle block = ((ImagePartRectangle) blocks.get(b));
+//			double blockRotationAngle = getBlockRotationAngle(ai, block);
+//			int blockWeight = (block.getWidth() * block.getHeight());
+//			weightedBlockRotationAngleSum += (blockRotationAngle * blockWeight);
+//			blockWeightSum += blockWeight;
+//		}
+//		double pageRotationAngle = (weightedBlockRotationAngleSum / blockWeightSum);
+//		System.out.println("Determined page rotation angle as " + pageRotationAngle + "° = " + ((Math.PI / 180) * pageRotationAngle));
+//		
+//		//	display what we got
+//		BufferedImage bi = new BufferedImage(pi.image.getWidth(), pi.image.getHeight(), BufferedImage.TYPE_3BYTE_BGR);
+//		Graphics2D gr = bi.createGraphics();
+//		gr.setColor(Color.WHITE);
+//		gr.fillRect(0, 0, bi.getWidth(), bi.getHeight());
+//		if (pageRotationAngle > blockRotationAngleStep) {
+//			AffineTransform at = gr.getTransform();
+//			gr.rotate(((Math.PI / 180) * -pageRotationAngle), (pi.image.getWidth() / 2), (pi.image.getHeight() / 2));
+//			gr.drawImage(pi.image, 0, 0, pi.image.getWidth(), pi.image.getHeight(), null);
+//			gr.setTransform(at);
+//		}
+//		else gr.drawImage(pi.image, 0, 0, pi.image.getWidth(), pi.image.getHeight(), null);
+//		gr.setColor(Color.RED);
+//		for (int b = 0; b < blocks.size(); b++) {
+//			ImagePartRectangle block = ((ImagePartRectangle) blocks.get(b));
+//			gr.drawRect(block.getLeftCol(), block.getTopRow(), block.getWidth(), block.getHeight());
+//		}
+//		final ImageDisplayDialog dialog = new ImageDisplayDialog("");
+//		dialog.addImage(bi, "Page");
+//		dialog.setSize(800, 1000);
+//		dialog.setLocationRelativeTo(null);
+//		Thread dialogThread = new Thread() {
+//			public void run() {
+//				dialog.setVisible(true);
+//			}
+//		};
+//		dialogThread.start();
+//	}
 	
 	//	FOR TESTS ONLY !!!
 	public static void main(String[] args) throws Exception {
@@ -3327,7 +3588,7 @@ public class Imaging {
 		//	enhance contrast
 		//enhanceContrast(ai, dpi, 120);
 		//	contrast enhancement seems to do more harm than good
-		//	==> TODO think of something else to make letters darker, but only tellers
+		//	==> TODO think of something else to make letters darker, but only letters
 		
 		BufferedImage birc = getRegionImage(ai, 127);
 //		gaussBlur(ai, (dpi / 20), (dpi / 25), true); // for region coloring, we have to blur with 1/4 the designed minimum distance (diameter of blur x2), and 2/3 of that to counter the x3 enlarged kernel radius

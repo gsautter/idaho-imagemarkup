@@ -86,10 +86,13 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 		//	get lines
 		ImRegion[] lines = getParagraphLayoutLines(block);
 		psm.setInfo(" - found " + lines.length + " relevant lines in block");
+		if (lines.length < 1)
+			return;
 		
 		//	perform split
 		splitIntoParagraphsShortLine(block, dpi, psm, lines);
 		splitIntoParagraphsLineStart(block, dpi, psm, lines, computeAverageHeight(lines));
+		splitIntoParagraphsLineAlignment(block, dpi, psm, lines);
 		//	TODOne figure out which method is better
 		//	==> line distance seems to be more reliable
 //		splitIntoParagraphsLineMargin(block, dpi, psm, lines);
@@ -101,6 +104,64 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 		
 		//	compute font size of paragraphs
 		computeParagraphFontSize(block);
+	}
+	
+	private static void splitIntoParagraphsLineAlignment(ImRegion block, int dpi, ProgressMonitor psm, ImRegion[] lines) {
+		
+		//	try to further split first generation of paragraphs at indented/exdented lines
+		ImRegion[] paragraphs = block.getRegions(MutableAnnotation.PARAGRAPH_TYPE);
+		
+		//	group lines by paragraphs
+		ImRegion[][] paragraphLines = getParagraphLines(paragraphs, lines);
+		
+		//	split preliminary paragraphs at alignment mismatches
+		for (int p = 0; p < paragraphs.length; p++) {
+			int spStartLineIndex = 0;
+			psm.setInfo(" - investigating preliminary paragraph " + p + " with " + paragraphLines[p].length + " lines, paragraph is " + paragraphs[p].bounds.toString());
+			
+			//	assess line orientation
+			boolean[] isLineLeftAligned = new boolean[paragraphLines[p].length];
+			boolean[] isLineRightAligned = new boolean[paragraphLines[p].length];
+			boolean[] isLineCenterAligned = new boolean[paragraphLines[p].length];
+			for (int l = 0; l < paragraphLines[p].length; l++) {
+				int leftGap = (paragraphLines[p][l].bounds.left - block.bounds.left);
+				int rightGap = (block.bounds.right - paragraphLines[p][l].bounds.right);
+				isLineLeftAligned[l] = ((leftGap * 10) < (block.bounds.right - block.bounds.left)); // at most 10% left gap, for indents
+				isLineRightAligned[l] = ((rightGap * 20) < (block.bounds.right - block.bounds.left)); // at most 5% right gap
+				isLineCenterAligned[l] = (((rightGap * 19) < (leftGap * 20)) && ((leftGap * 19) < (rightGap * 20))); // at most 5% width difference between left and right gaps
+			}
+			
+			for (int l = 1; l < paragraphLines[p].length; l++) {
+				
+				//	evaluate line start based on whatever we have
+				boolean split = false;
+				
+				//	split if alignment mismatch on both sides
+				if ((isLineLeftAligned[l-1] != isLineLeftAligned[l]) && (isLineRightAligned[l-1] != isLineRightAligned[l]))
+					split = true;
+				
+				//	split if previous line centered and aligned neither way, and current line is not centered and aligned either way
+				if (isLineCenterAligned[l-1] && !isLineLeftAligned[l-1] && !isLineRightAligned[l-1] && !isLineCenterAligned[l] && (isLineLeftAligned[l] || isLineRightAligned[l]))
+					split = true;
+				
+				//	this one looks like a paragraph start, perform split
+				if (split) {
+					ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, l), MutableAnnotation.PARAGRAPH_TYPE);
+					spStartLineIndex = l;
+					psm.setInfo(" - created sub paragraph at " + splitParagraph.bounds.toString());
+				}
+			}
+			
+			//	we've split something, mark last part, and remove original paragraph
+			if (spStartLineIndex != 0) {
+				ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, paragraphLines[p].length), MutableAnnotation.PARAGRAPH_TYPE);
+				psm.setInfo(" - created final sub paragraph at " + splitParagraph.bounds.toString());
+				block.getPage().removeRegion(paragraphs[p]);
+			}
+		}
+		
+		//	compute paragraph bounding boxes and compute indentation
+		wrapAroundChildren(block, MutableAnnotation.PARAGRAPH_TYPE, LINE_ANNOTATION_TYPE);
 	}
 	
 	/**
@@ -718,7 +779,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			}
 		}
 		
-		//	no significant indent or exdent
+		//	no significant indent or outdent
 		int minSignificantDifference = (dpi / 20); // little more than one millimeter
 		if ((maxLineStart - minLineStart) < minSignificantDifference) {
 			psm.setInfo(" ==> line starts vary only by " + (maxLineStart - minLineStart) + ", line start split too unreliable");
