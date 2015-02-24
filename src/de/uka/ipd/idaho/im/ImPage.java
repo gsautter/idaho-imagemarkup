@@ -45,7 +45,8 @@ import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
  */
 public class ImPage extends ImRegion {
 	
-	private static final String PAGE_IMAGE_ATTRIBUTE = "pageImage";
+	/** the name of the attribute by which the page image can be retrieved in a generic manner */
+	public static final String PAGE_IMAGE_ATTRIBUTE = "pageImage";
 	
 	private static class WordIndex {
 		private static class WordIndexRegion extends LinkedList {
@@ -54,8 +55,7 @@ public class ImPage extends ImRegion {
 					this.addLast(imw);
 			}
 			void removeWord(ImWord imw) {
-				boolean removed = this.remove(imw);
-				System.out.println(" - removing word for point " + (removed ? "successful" : "failed"));
+				this.remove(imw);
 			}
 		}
 		private int step;
@@ -179,10 +179,14 @@ public class ImPage extends ImRegion {
 	 * the page is no longer usable after an invocation of this method.
 	 */
 	void dispose() {
-		this.regions.clear();
-		this.words.clear();
-		this.wordsByBounds.clear();
-		this.wordsByPoints.clear();
+		synchronized (this.regions) {
+			this.regions.clear();
+		}
+		synchronized (this.words) {
+			this.words.clear();
+			this.wordsByBounds.clear();
+			this.wordsByPoints.clear();
+		}
 	}
 	
 	/**
@@ -239,9 +243,11 @@ public class ImPage extends ImRegion {
 	public void addWord(ImWord word) {
 		if (word.pageId != this.pageId)
 			throw new IllegalArgumentException("Page ID mismatch, " + word.pageId + " != " + this.pageId);
-		this.words.add(word);
-		this.wordsByBounds.put(word.bounds.toString(), word);
-		this.wordsByPoints.addWord(word);
+		synchronized (this.words) {
+			this.words.add(word);
+			this.wordsByBounds.put(word.bounds.toString(), word);
+			this.wordsByPoints.addWord(word);
+		}
 		word.setPage(this);
 		this.getDocument().notifyRegionAdded(word);
 	}
@@ -259,6 +265,8 @@ public class ImPage extends ImRegion {
 	 * @return true if the argument word was removed, false otherwise
 	 */
 	public boolean removeWord(ImWord word, boolean removeAnnots) {
+		if (word.getPage() != this)
+			return false;
 		
 		//	get annotations starting or ending at word to remove
 		ImAnnotation[] wordAnnots = this.getDocument().getAnnotations(word);
@@ -280,11 +288,11 @@ public class ImPage extends ImRegion {
 			nWord.setPreviousWord(null);
 		
 		//	remove word
-		this.wordsByPoints.removeWord(word);
-		Object removedWord = this.wordsByBounds.remove(word.bounds.toString());
-		System.out.println(" - removing word from index " + ((removedWord != null) ? "successful" : "failed"));
-		boolean removed = this.words.remove(word);
-		System.out.println(" - removing word from list " + (removed ? "successful" : "failed"));
+		synchronized (this.words) {
+			this.wordsByPoints.removeWord(word);
+			this.wordsByBounds.remove(word.bounds.toString());
+			this.words.remove(word);
+		}
 		
 		//	detach word & notify listeners
 		word.setPage(null);
@@ -387,7 +395,9 @@ public class ImPage extends ImRegion {
 			this.addWord((ImWord) region);
 		else if (region instanceof ImPage) {}
 		else {
-			this.regions.add(region);
+			synchronized (this.regions) {
+				this.regions.add(region);
+			}
 			region.setPage(this);
 			this.getDocument().notifyRegionAdded(region);
 		}
@@ -404,8 +414,10 @@ public class ImPage extends ImRegion {
 		if (region instanceof ImWord)
 			this.removeWord(((ImWord) region), false);
 		else if (region instanceof ImPage) {}
-		else {
-			this.regions.remove(region);
+		else if (region.getPage() == this) {
+			synchronized (this.regions) {
+				this.regions.remove(region);
+			}
 			region.setPage(null);
 			this.getDocument().notifyRegionRemoved(region);
 		}
@@ -506,5 +518,19 @@ public class ImPage extends ImRegion {
 		for (int r = 0; r < this.regions.size(); r++)
 			regionTypes.add(((ImRegion) this.regions.get(r)).getType());
 		return ((String[]) regionTypes.toArray(new String[regionTypes.size()]));
+	}
+	
+	/**
+	 * Retrieve the supplements present in the page.
+	 * @return an array holding the supplements
+	 */
+	public ImSupplement[] getSupplements() {
+		ImSupplement[] docSupplements = this.getDocument().getSupplements();
+		ArrayList pageSupplements = new ArrayList();
+		for (int s = 0; s < docSupplements.length; s++) {
+			if (("" + this.pageId).equals(docSupplements[s].getAttribute(PAGE_ID_ATTRIBUTE, "").toString()))
+				pageSupplements.add(docSupplements[s]);
+		}
+		return ((ImSupplement[]) pageSupplements.toArray(new ImSupplement[pageSupplements.size()]));
 	}
 }

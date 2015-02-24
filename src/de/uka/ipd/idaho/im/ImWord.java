@@ -309,10 +309,6 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	
 	/** the text stream type indicating a text stream is a caption */
 	public static final String TEXT_STREAM_TYPE_CAPTION = LiteratureConstants.CAPTION_TYPE;
-//	
-//	/** the text stream type indicating a text stream is a bibliographic
-//	 * reference */
-//	public static final String TEXT_STREAM_TYPE_BIBLIOGRAPHIC_REFERENCE = LiteratureConstants.BIBLIOGRAPHIC_REFERENCE_TYPE;
 	
 	/** the text stream type indicating a text stream is a table */
 	public static final String TEXT_STREAM_TYPE_TABLE = "table";
@@ -362,8 +358,6 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	private int textStreamPos = 0; // position within text stream in page
 	private String textStreamType = TEXT_STREAM_TYPE_MAIN_TEXT; // type of the text stream the word belongs to
 	
-//	private LinkedList listeners = null;
-//	
 	/** Constructor (automatically adds the word to the argument page; if this
 	 * is undesired for whatever reason, one of the constructors taking a
 	 * document and a page ID as arguments has to be used instead)
@@ -433,33 +427,6 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	 */
 	public void setLastWord(ImWord lastWord) {}
 	
-//	/**
-//	 * Register a listener to receive notification of property changes to the word.
-//	 * @param iwl the listener to register
-//	 */
-//	public void addListener(ImWordListener iwl) {
-//		if (this.listeners == null)
-//			this.listeners = new LinkedList();
-//		if (!this.listeners.contains(iwl))
-//			this.listeners.addLast(iwl);
-//	}
-//	
-//	/**
-//	 * Remove a listener from the word.
-//	 * @param iwl the listener to remove
-//	 */
-//	public void removeListener(ImWordListener iwl) {
-//		if (this.listeners != null)
-//			this.listeners.remove(iwl);
-//	}
-//	
-//	private void notifyListeners(String property, Object oldValue) {
-//		if (this.listeners == null)
-//			return;
-//		for (Iterator lit = this.listeners.iterator(); lit.hasNext();)
-//			((ImWordListener) lit.next()).wordPropertyChanged(this, property, oldValue);
-//	}
-//	
 	/**
 	 * Retrieve a document local ID for the layout object. This is helpful for
 	 * indexing, storage, etc. The ID takes the form
@@ -542,6 +509,10 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	public void setPreviousWord(ImWord prevWord) {
 		if (prevWord == this.prevWord)
 			return;
+		if (prevWord == this)
+			throw new IllegalArgumentException("Cannot set predecessor to self.");
+		else if ((prevWord != null) && (prevWord.textStreamId.equals(this.textStreamId)) && (this.pageId == prevWord.pageId) && (this.textStreamPos < prevWord.textStreamPos))
+			throw new IllegalArgumentException("Cannot set predecessor to successor.");
 		ImWord oldPrev = this.prevWord;
 		ImWord prevOldNext = ((prevWord == null) ? null : prevWord.nextWord);
 		this.prevWord = prevWord;
@@ -615,6 +586,10 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	public void setNextWord(ImWord nextWord) {
 		if (nextWord == this.nextWord)
 			return;
+		if (nextWord == this)
+			throw new IllegalArgumentException("Cannot set successor to self.");
+		else if ((nextWord != null) && (nextWord.textStreamId.equals(this.textStreamId)) && (this.pageId == nextWord.pageId) && (nextWord.textStreamPos < this.textStreamPos))
+			throw new IllegalArgumentException("Cannot set successor to predecessor.");
 		ImWord oldNext = this.nextWord;
 		ImWord nextOldPrev = ((nextWord == null) ? null : nextWord.prevWord);
 		this.nextWord = nextWord;
@@ -693,7 +668,6 @@ public class ImWord extends ImRegion implements ImAnnotation {
 		if ((NEXT_RELATION_CONTINUE == nextRelation) || (NEXT_RELATION_HYPHENATED == nextRelation) || (NEXT_RELATION_PARAGRAPH_END == nextRelation))
 			this.nextRelation = nextRelation;
 		else this.nextRelation = NEXT_RELATION_SEPARATE;
-//		this.notifyListeners(NEXT_RELATION_ATTRIBUTE, ("" + oldNextRelation));
 		if (this.getPage() != null)
 			this.getDocument().notifyAttributeChanged(this, NEXT_RELATION_ATTRIBUTE, oldNextRelation);
 	}
@@ -861,6 +835,17 @@ public class ImWord extends ImRegion implements ImAnnotation {
 		}
 		
 		return oldTextStreamType;
+	}
+	
+	/**
+	 * Retrieve the font of the word. This method only returns a non-null value
+	 * if the word belongs to an Image Markup document created from a
+	 * born-digital source document. It is a shorthand for
+	 * <code>getDocument().getFont((String) getAttribute(FONT_NAME_ATTRIBUTE))</code>.
+	 * @return the font of the word
+	 */
+	public ImFont getFont() {
+		return this.getDocument().getFont((String) this.getAttribute(FONT_NAME_ATTRIBUTE));
 	}
 	
 	/**

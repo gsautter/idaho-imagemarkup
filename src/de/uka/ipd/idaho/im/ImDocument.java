@@ -341,6 +341,9 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	/** the orientation of the text in the images contained in the document, determining the reading order of words */
 	public final ComponentOrientation orientation;
 	
+	private TreeMap fontsByName = new TreeMap();
+	private TreeMap supplementsById = new TreeMap();
+	
 	private TreeMap pagesById = new TreeMap();
 	
 	private ImDocumentAnnotationList annotations = new ImDocumentAnnotationList();
@@ -384,12 +387,14 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 		for (int p = 0; p < pages.length; p++)
 			pages[p].dispose();
 		this.pagesById.clear();
-		this.annotations.clear();
-		this.annotationsById.clear();
-		this.annotationsByPageId.clear();
-		clearAnnotationIndex(this.annotationsByType);
-		clearAnnotationIndex(this.annotationsByFirstWord);
-		clearAnnotationIndex(this.annotationsByLastWord);
+		synchronized (this.annotations) {
+			this.annotations.clear();
+			this.annotationsById.clear();
+			this.annotationsByPageId.clear();
+			clearAnnotationIndex(this.annotationsByType);
+			clearAnnotationIndex(this.annotationsByFirstWord);
+			clearAnnotationIndex(this.annotationsByLastWord);
+		}
 	}
 	private static void clearAnnotationIndex(TreeMap index) {
 		for (Iterator alkit = index.keySet().iterator(); alkit.hasNext();) {
@@ -482,6 +487,74 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 		return this;
 	}
 	
+	/**
+	 * Add a font to the document.
+	 * @param font the font to add
+	 */
+	public void addFont(ImFont font) {
+		synchronized (this.fontsByName) {
+			this.fontsByName.put(font.name, font);
+		}
+	}
+	
+	/**
+	 * Retrieve a font by its name.
+	 * @param name the name of the required font
+	 */
+	public ImFont getFont(String name) {
+		return ((name == null) ? null : ((ImFont) this.fontsByName.get(name)));
+	}
+	
+	/**
+	 * Retrieve the names of the fonts present in the document.
+	 * @return an array holding the font names
+	 */
+	public String[] getFontNames() {
+		return ((String[]) this.fontsByName.keySet().toArray(new String[this.fontsByName.size()]));
+	}
+	
+	/**
+	 * Retrieve the fonts present in the document.
+	 * @return an array holding the fonts
+	 */
+	public ImFont[] getFonts() {
+		return ((ImFont[]) this.fontsByName.values().toArray(new ImFont[this.fontsByName.size()]));
+	}
+	
+	/**
+	 * Add a supplement to the document.
+	 * @param ims the supplement to add
+	 */
+	public void addSupplement(ImSupplement ims) {
+		synchronized (this.supplementsById) {
+			this.supplementsById.put(ims.getId(), ims);
+		}
+	}
+	
+	/**
+	 * Retrieve a supplement by its ID.
+	 * @param sid the ID of the required supplement
+	 */
+	public ImSupplement getSupplement(String sid) {
+		return ((sid == null) ? null : ((ImSupplement) this.supplementsById.get(sid)));
+	}
+	
+	/**
+	 * Retrieve the IDs of the supplements present in the document.
+	 * @return an array holding the supplement IDs
+	 */
+	public String[] getSupplementIDs() {
+		return ((String[]) this.supplementsById.keySet().toArray(new String[this.supplementsById.size()]));
+	}
+	
+	/**
+	 * Retrieve the supplements present in the document.
+	 * @return an array holding the supplements
+	 */
+	public ImSupplement[] getSupplements() {
+		return ((ImSupplement[]) this.supplementsById.values().toArray(new ImSupplement[this.supplementsById.size()]));
+	}
+	
 	void addPage(ImPage page) {
 		this.pagesById.put(new Integer(page.pageId), page);
 	}
@@ -563,19 +636,21 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 		ImDocumentAnnotation annot = new ImDocumentAnnotation(firstWord, lastWord, type);
 		if (this.annotationsById.containsKey(annot.getId()))
 			return ((ImAnnotation) this.annotationsById.get(annot.getId()));
-		this.annotations.addAnnot(annot);
-		this.annotationsById.put(annot.getId(), annot);
-		for (int p = firstWord.pageId; p <= lastWord.pageId; p++) {
-			ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
-			if (pageAnnots == null) {
-				pageAnnots = new ArrayList();
-				this.annotationsByPageId.put(new Integer(p), pageAnnots);
+		synchronized (this.annotations) {
+			this.annotations.addAnnot(annot);
+			this.annotationsById.put(annot.getId(), annot);
+			for (int p = firstWord.pageId; p <= lastWord.pageId; p++) {
+				ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
+				if (pageAnnots == null) {
+					pageAnnots = new ArrayList();
+					this.annotationsByPageId.put(new Integer(p), pageAnnots);
+				}
+				pageAnnots.add(annot);
 			}
-			pageAnnots.add(annot);
+			updateAnnotationIndex(this.annotationsByType, null, annot.getType(), annot);
+			updateAnnotationIndex(this.annotationsByFirstWord, null, annot.getFirstWord().getLocalID(), annot);
+			updateAnnotationIndex(this.annotationsByLastWord, null, annot.getLastWord().getLocalID(), annot);
 		}
-		updateAnnotationIndex(this.annotationsByType, null, annot.getType(), annot);
-		updateAnnotationIndex(this.annotationsByFirstWord, null, annot.getFirstWord().getLocalID(), annot);
-		updateAnnotationIndex(this.annotationsByLastWord, null, annot.getLastWord().getLocalID(), annot);
 		this.notifyAnnotationAdded(annot);
 		return annot;
 	}
@@ -587,70 +662,78 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 */
 	public void removeAnnotation(ImAnnotation annot) {
 		if ((annot instanceof ImDocumentAnnotation) && (annot.getDocument() == this)) {
-			this.annotations.removeAnnot((ImDocumentAnnotation) annot);
-			this.annotationsById.remove(((ImDocumentAnnotation) annot).getId());
-			for (int p = annot.getFirstWord().pageId; p <= annot.getLastWord().pageId; p++) {
-				ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
-				if (pageAnnots != null)
-					pageAnnots.remove(annot);
+			synchronized (this.annotations) {
+				this.annotations.removeAnnot((ImDocumentAnnotation) annot);
+				this.annotationsById.remove(((ImDocumentAnnotation) annot).getId());
+				for (int p = annot.getFirstWord().pageId; p <= annot.getLastWord().pageId; p++) {
+					ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
+					if (pageAnnots != null)
+						pageAnnots.remove(annot);
+				}
+				updateAnnotationIndex(this.annotationsByType, annot.getType(), null, ((ImDocumentAnnotation) annot));
+				updateAnnotationIndex(this.annotationsByFirstWord, annot.getFirstWord().getLocalID(), null, ((ImDocumentAnnotation) annot));
+				updateAnnotationIndex(this.annotationsByLastWord, annot.getLastWord().getLocalID(), null, ((ImDocumentAnnotation) annot));
 			}
-			updateAnnotationIndex(this.annotationsByType, annot.getType(), null, ((ImDocumentAnnotation) annot));
-			updateAnnotationIndex(this.annotationsByFirstWord, annot.getFirstWord().getLocalID(), null, ((ImDocumentAnnotation) annot));
-			updateAnnotationIndex(this.annotationsByLastWord, annot.getLastWord().getLocalID(), null, ((ImDocumentAnnotation) annot));
 			this.notifyAnnotationRemoved(annot);
 		}
 	}
 	
 	void annotationTypeChanged(ImDocumentAnnotation annot, String oldType, String oldId) {
-		this.annotationsById.remove(oldId);
-		this.annotationsById.put(annot.getId(), annot);
-		updateAnnotationIndex(this.annotationsByType, oldType, annot.getType(), annot);
+		synchronized (this.annotations) {
+			this.annotationsById.remove(oldId);
+			this.annotationsById.put(annot.getId(), annot);
+			updateAnnotationIndex(this.annotationsByType, oldType, annot.getType(), annot);
+		}
 	}
 	
 	void annotationFirstWordChanged(ImDocumentAnnotation annot, ImWord oldFirstWord, String oldId) {
-		this.annotations.reSort();
-		ImDocumentAnnotationList typeAnnots = ((ImDocumentAnnotationList) this.annotationsByType.get(annot.getType()));
-		if (typeAnnots != null)
-			typeAnnots.reSort();
-		this.annotationsById.remove(oldId);
-		this.annotationsById.put(annot.getId(), annot);
-		for (int p = oldFirstWord.pageId; p < annot.getFirstWord().pageId; p++) {
-			ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
-			if (pageAnnots != null)
-				pageAnnots.remove(annot);
-		}
-		for (int p = annot.getFirstWord().pageId; p < oldFirstWord.pageId; p++) {
-			ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
-			if (pageAnnots == null) {
-				pageAnnots = new ArrayList();
-				this.annotationsByPageId.put(new Integer(p), pageAnnots);
+		synchronized (this.annotations) {
+			this.annotations.reSort();
+			ImDocumentAnnotationList typeAnnots = ((ImDocumentAnnotationList) this.annotationsByType.get(annot.getType()));
+			if (typeAnnots != null)
+				typeAnnots.reSort();
+			this.annotationsById.remove(oldId);
+			this.annotationsById.put(annot.getId(), annot);
+			for (int p = oldFirstWord.pageId; p < annot.getFirstWord().pageId; p++) {
+				ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
+				if (pageAnnots != null)
+					pageAnnots.remove(annot);
 			}
-			pageAnnots.add(annot);
+			for (int p = annot.getFirstWord().pageId; p < oldFirstWord.pageId; p++) {
+				ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
+				if (pageAnnots == null) {
+					pageAnnots = new ArrayList();
+					this.annotationsByPageId.put(new Integer(p), pageAnnots);
+				}
+				pageAnnots.add(annot);
+			}
+			updateAnnotationIndex(this.annotationsByFirstWord, oldFirstWord.getLocalID(), annot.getFirstWord().getLocalID(), annot);
 		}
-		updateAnnotationIndex(this.annotationsByFirstWord, oldFirstWord.getLocalID(), annot.getFirstWord().getLocalID(), annot);
 	}
 	
 	void annotationLastWordChanged(ImDocumentAnnotation annot, ImWord oldLastWord, String oldId) {
-		this.annotations.reSort();
-		ImDocumentAnnotationList typeAnnots = ((ImDocumentAnnotationList) this.annotationsByType.get(annot.getType()));
-		if (typeAnnots != null)
-			typeAnnots.reSort();
-		this.annotationsById.remove(oldId);
-		this.annotationsById.put(annot.getId(), annot);
-		for (int p = (annot.getLastWord().pageId + 1); p <= oldLastWord.pageId; p++) {
-			ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
-			if (pageAnnots != null)
-				pageAnnots.remove(annot);
-		}
-		for (int p = (oldLastWord.pageId + 1); p <= annot.getLastWord().pageId; p++) {
-			ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
-			if (pageAnnots == null) {
-				pageAnnots = new ArrayList();
-				this.annotationsByPageId.put(new Integer(p), pageAnnots);
+		synchronized (this.annotations) {
+			this.annotations.reSort();
+			ImDocumentAnnotationList typeAnnots = ((ImDocumentAnnotationList) this.annotationsByType.get(annot.getType()));
+			if (typeAnnots != null)
+				typeAnnots.reSort();
+			this.annotationsById.remove(oldId);
+			this.annotationsById.put(annot.getId(), annot);
+			for (int p = (annot.getLastWord().pageId + 1); p <= oldLastWord.pageId; p++) {
+				ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
+				if (pageAnnots != null)
+					pageAnnots.remove(annot);
 			}
-			pageAnnots.add(annot);
+			for (int p = (oldLastWord.pageId + 1); p <= annot.getLastWord().pageId; p++) {
+				ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
+				if (pageAnnots == null) {
+					pageAnnots = new ArrayList();
+					this.annotationsByPageId.put(new Integer(p), pageAnnots);
+				}
+				pageAnnots.add(annot);
+			}
+			updateAnnotationIndex(this.annotationsByLastWord, oldLastWord.getLocalID(), annot.getLastWord().getLocalID(), annot);
 		}
-		updateAnnotationIndex(this.annotationsByLastWord, oldLastWord.getLocalID(), annot.getLastWord().getLocalID(), annot);
 	}
 	
 	private static void updateAnnotationIndex(TreeMap index, String oldKey, String newKey, ImDocumentAnnotation annot) {
@@ -790,7 +873,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			}
 		}
 		if (lastWord != null) {
-			ImDocumentAnnotationList lastWordAnnots = ((ImDocumentAnnotationList) this.annotationsByLastWord.get(firstWord.getLocalID()));
+			ImDocumentAnnotationList lastWordAnnots = ((ImDocumentAnnotationList) this.annotationsByLastWord.get(lastWord.getLocalID()));
 			if (lastWordAnnots != null)
 				for (int a = 0; a < lastWordAnnots.size(); a++) {
 					ImDocumentAnnotation annot = lastWordAnnots.getAnnot(a);
