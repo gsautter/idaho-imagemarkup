@@ -1229,7 +1229,6 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	}
 	
 	private void addAnnotation(ImAnnotation annot) {
-//		this.indexAnnotationBase(new ImAnnotationBase(annot));
 		this.indexAnnotationBase(this.getAnnotationBase(annot));
 	}
 	private void addAnnotation(ImRegion region) {

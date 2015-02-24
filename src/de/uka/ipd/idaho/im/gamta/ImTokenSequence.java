@@ -207,6 +207,16 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 				return (super.hasAttribute(name) || ((ImWord) this.imWords.get(this.imWords.size()-1)).getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE));
 			else if (ImWord.TEXT_STREAM_TYPE_ATTRIBUTE.equals(name))
 				return true;
+			else if (ImWord.BOLD_ATTRIBUTE.equals(name))
+				return ((ImWord) this.imWords.get(0)).hasAttribute(ImWord.BOLD_ATTRIBUTE);
+			else if (ImWord.ITALICS_ATTRIBUTE.equals(name))
+				return ((ImWord) this.imWords.get(0)).hasAttribute(ImWord.ITALICS_ATTRIBUTE);
+			else if (ImWord.ALL_CAPS_ATTRIBUTE.equals(name))
+				return ((ImWord) this.imWords.get(0)).hasAttribute(ImWord.ALL_CAPS_ATTRIBUTE);
+			else if (ImWord.FONT_SIZE_ATTRIBUTE.equals(name))
+				return ((ImWord) this.imWords.get(0)).hasAttribute(ImWord.FONT_SIZE_ATTRIBUTE);
+			else if (ImWord.FONT_NAME_ATTRIBUTE.equals(name))
+				return ((ImWord) this.imWords.get(0)).hasAttribute(ImWord.FONT_NAME_ATTRIBUTE);
 			else return super.hasAttribute(name);
 		}
 		public Object getAttribute(String name, Object def) {
@@ -226,6 +236,16 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 				return ("" + ((ImWord) this.imWords.get(this.imWords.size()-1)).getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE));
 			else if (ImWord.TEXT_STREAM_TYPE_ATTRIBUTE.equals(name))
 				return ((ImWord) this.imWords.get(0)).getTextStreamType();
+			else if (ImWord.BOLD_ATTRIBUTE.equals(name))
+				return ((ImWord) this.imWords.get(0)).getAttribute(ImWord.BOLD_ATTRIBUTE, def);
+			else if (ImWord.ITALICS_ATTRIBUTE.equals(name))
+				return ((ImWord) this.imWords.get(0)).getAttribute(ImWord.ITALICS_ATTRIBUTE, def);
+			else if (ImWord.ALL_CAPS_ATTRIBUTE.equals(name))
+				return ((ImWord) this.imWords.get(0)).getAttribute(ImWord.ALL_CAPS_ATTRIBUTE, def);
+			else if (ImWord.FONT_SIZE_ATTRIBUTE.equals(name))
+				return ((ImWord) this.imWords.get(0)).getAttribute(ImWord.FONT_SIZE_ATTRIBUTE, def);
+			else if (ImWord.FONT_NAME_ATTRIBUTE.equals(name))
+				return ((ImWord) this.imWords.get(0)).getAttribute(ImWord.FONT_NAME_ATTRIBUTE, def);
 			else return super.getAttribute(name, def);
 		}
 		public Object getAttribute(String name) {
@@ -245,6 +265,16 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 				return ("" + ((ImWord) this.imWords.get(this.imWords.size()-1)).getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE));
 			else if (ImWord.TEXT_STREAM_TYPE_ATTRIBUTE.equals(name))
 				return ((ImWord) this.imWords.get(0)).getTextStreamType();
+			else if (ImWord.BOLD_ATTRIBUTE.equals(name))
+				return ((ImWord) this.imWords.get(0)).getAttribute(ImWord.BOLD_ATTRIBUTE);
+			else if (ImWord.ITALICS_ATTRIBUTE.equals(name))
+				return ((ImWord) this.imWords.get(0)).getAttribute(ImWord.ITALICS_ATTRIBUTE);
+			else if (ImWord.ALL_CAPS_ATTRIBUTE.equals(name))
+				return ((ImWord) this.imWords.get(0)).getAttribute(ImWord.ALL_CAPS_ATTRIBUTE);
+			else if (ImWord.FONT_SIZE_ATTRIBUTE.equals(name))
+				return ((ImWord) this.imWords.get(0)).getAttribute(ImWord.FONT_SIZE_ATTRIBUTE);
+			else if (ImWord.FONT_NAME_ATTRIBUTE.equals(name))
+				return ((ImWord) this.imWords.get(0)).getAttribute(ImWord.FONT_NAME_ATTRIBUTE);
 			else return super.getAttribute(name);
 		}
 		public String[] getAttributeNames() {
@@ -254,6 +284,16 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 			if (this.getBoundingBox() != null)
 				ans.add(BOUNDING_BOX_ATTRIBUTE);
 			ans.add(ImWord.TEXT_STREAM_TYPE_ATTRIBUTE);
+			if (((ImWord) this.imWords.get(0)).hasAttribute(ImWord.BOLD_ATTRIBUTE))
+				ans.add(ImWord.BOLD_ATTRIBUTE);
+			if (((ImWord) this.imWords.get(0)).hasAttribute(ImWord.ITALICS_ATTRIBUTE))
+				ans.add(ImWord.ITALICS_ATTRIBUTE);
+			if (((ImWord) this.imWords.get(0)).hasAttribute(ImWord.ALL_CAPS_ATTRIBUTE))
+				ans.add(ImWord.ALL_CAPS_ATTRIBUTE);
+			if (((ImWord) this.imWords.get(0)).hasAttribute(ImWord.FONT_SIZE_ATTRIBUTE))
+				ans.add(ImWord.FONT_SIZE_ATTRIBUTE);
+			if (((ImWord) this.imWords.get(0)).hasAttribute(ImWord.FONT_NAME_ATTRIBUTE))
+				ans.add(ImWord.FONT_NAME_ATTRIBUTE);
 			return ((String[]) ans.toArray(new String[ans.size()]));
 		}
 		ImToken deltaClone(int deltaOffset, int deltaIndex) {
@@ -448,6 +488,8 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 	
 	void addImWord(ImWord imw, boolean forceNewToken) {
 //		System.out.println("ADDING WORD " + imw.getString() + " " + imw.bounds);
+		if ((imw.getString() == null) || (imw.getString().length() == 0))
+			return;
 		
 		if (this.tokens.isEmpty()) {
 			ImToken imt = new ImToken(0, 0, imw);
