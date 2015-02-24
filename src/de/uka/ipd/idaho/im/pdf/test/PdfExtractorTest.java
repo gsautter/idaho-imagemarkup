@@ -38,6 +38,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.HashMap;
 
 import javax.swing.UIManager;
 
@@ -51,7 +52,6 @@ import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImageInputStream;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImageStore;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImageStore.AbstractPageImageStore;
-import de.uka.ipd.idaho.gamta.util.imaging.utilities.ImageDisplayDialog;
 import de.uka.ipd.idaho.gamta.util.swing.DialogFactory;
 import de.uka.ipd.idaho.gamta.util.swing.ProgressMonitorDialog;
 import de.uka.ipd.idaho.im.ImDocument;
@@ -60,6 +60,7 @@ import de.uka.ipd.idaho.im.ImRegion;
 import de.uka.ipd.idaho.im.ImWord;
 import de.uka.ipd.idaho.im.pdf.PdfExtractor;
 import de.uka.ipd.idaho.im.util.ImfIO;
+import de.uka.ipd.idaho.im.utilities.ImageDisplayDialog;
 
 /**
  * Test engine for PDF import into Image Markup data model.
@@ -78,23 +79,41 @@ public class PdfExtractorTest implements ImagingConstants {
 		
 		//	register page image source
 		PageImageStore pis = new AbstractPageImageStore() {
+			HashMap byteCache = new HashMap();
 			public boolean isPageImageAvailable(String name) {
 				if (!name.endsWith(IMAGE_FORMAT))
 					name += ("." + IMAGE_FORMAT);
-				return dataProvider.isDataAvailable(name);
+				if (dataProvider.isDataAvailable(name))
+					return true;
+				else if (aimAtPage == -1)
+					return false;
+				else return this.byteCache.containsKey(name);
 			}
 			public PageImageInputStream getPageImageAsStream(String name) throws IOException {
 				if (!name.endsWith(IMAGE_FORMAT))
 					name += ("." + IMAGE_FORMAT);
-				if (!dataProvider.isDataAvailable(name))
+				if (dataProvider.isDataAvailable(name))
+					return new PageImageInputStream(dataProvider.getInputStream(name), this);
+				else if (aimAtPage == -1)
 					return null;
-				return new PageImageInputStream(dataProvider.getInputStream(name), this);
+				else if (this.byteCache.containsKey(name))
+					return new PageImageInputStream(new ByteArrayInputStream((byte[]) this.byteCache.get(name)), this);
+				else return null;
 			}
 			public boolean storePageImage(String name, PageImage pageImage) throws IOException {
 				if (!name.endsWith(IMAGE_FORMAT))
 					name += ("." + IMAGE_FORMAT);
+				final String fName = name;
 				try {
-					OutputStream imageOut = dataProvider.getOutputStream(name);
+					OutputStream imageOut;
+					if (aimAtPage == -1)
+						imageOut = dataProvider.getOutputStream(name);
+					else imageOut = new ByteArrayOutputStream() {
+						public void close() throws IOException {
+							super.close();
+							byteCache.put(fName, this.toByteArray());
+						}
+					};
 					pageImage.write(imageOut);
 					imageOut.close();
 					return true;
@@ -255,7 +274,7 @@ public class PdfExtractorTest implements ImagingConstants {
 		
 		//	test PDF from Roos Mounce
 //		pdfName = "zt03652p155_p31-p35.pdf";
-//		pdfName = "zt03652p155.pdf";
+		pdfName = "zt03652p155.pdf";
 		
 		//	more test files from Jeremy
 //		pdfName = "98_sulawesi_2012.pdf"; // text renders with one command per character, and all characters come in hex strings
@@ -268,7 +287,7 @@ public class PdfExtractorTest implements ImagingConstants {
 		
 		//	comprehensive tests from Jeremy
 //		pdfName = "RSZ117_121.pdf"; // scanned PDF at 500 DPI, with embedded OCR, page cleanup destroying multiple dots ==> page cleanup fixed, was due to error in resolution correction
-		pdfName = "RSZ117_121.bd.pdf"; // same as above, but born-digital version, TODO_ne massive problems with decoding SID fonts ==> some fraction characters below minimum match threshold (==> excluded from minimum), and some characters not completely surrounded by white pixels, causing problems with filling (white edge of one pixel added)
+//		pdfName = "RSZ117_121.bd.pdf"; // same as above, but born-digital version, TODO_ne massive problems with decoding SID fonts ==> some fraction characters below minimum match threshold (==> excluded from minimum), and some characters not completely surrounded by white pixels, causing problems with filling (white edge of one pixel added)
 //		pdfName = "RSZ117_57.pdf"; // works OK after array index bugfix in Imaging
 //		pdfName = "RSZ118_49.pdf"; // works OK after line metric correction bugfix
 //		pdfName = "2010 Gao Li Artema atlanta a Pantropical Species New for.pdf"; // born-digital with identity text matrix, working with transformer matrix instead ==> OK after transformation matrix factored in on positioning and font sizing
@@ -302,23 +321,46 @@ public class PdfExtractorTest implements ImagingConstants {
 //		pdfName = "zt3699p0001-0061.pdf"; // born-digital
 //		pdfName = "3651_0250.pdf"; // scanned, with weird '%BeginPhotoshop' entry, which throws off parser ==> this is comments
 //		pdfName = "3651_0250.s.pdf"; // scanned, above one saved from Acrobat Pro 9.0, opens perfectly fine
-		pdfName = "27545.pdf"; // born-digital 13 MB PDF TODO test it
+//		pdfName = "27545.pdf"; // born-digital 13 MB PDF TODO test it
 		
 		//	recent one from Jeremy
 //		pdfName = "Milleretal2014Anthracotheres.pdf"; // born-digital, renders perfectly fine
-		pdfName = "arac-38-02-328.pdf"; // born-digital, renders OK, fonts take long to decode, all fonts mis-classified as bold
+//		pdfName = "arac-38-02-328.pdf"; /* born-digital, renders OK, fonts take long to decode, all fonts mis-classified as bold
+//		 	 ==> reason fonts take forever to load is them containing a plethora of spurious characters, which are never even used in the document text
+//		 	 ==> most chars actually are what their postscript name (if any) says, but some are not in some fonts, rendering mathematical symbols instead
+//		 	 ==> TODO_ne load fonts at least half on demand:
+//		 	 	 - first go through page texts and record which chars are used in which font
+//		 	 	 - then only load and decode those chars that are actually used
+//		 	 */
 		
 		//	very crappy one from Donat
-		pdfName = "Cynoglossum_cheranganiense.pdf"; // crappy 150 DPI scanned document, both page images linked to both pages !!!
+//		pdfName = "Cynoglossum_cheranganiense.pdf"; // crappy 150 DPI scanned document, both page images linked to both pages !!!
 //		pdfName = "Cynoglossum_cheranganiense.a.pdf"; // same, only saved back with Acrobat Pro 9.0 ==> no changes
 //		pdfName = "Cynoglossum_cheranganiense.ab.pdf"; // same, only bound into new PDF with Acrobat Pro 9.0 ==> no changes
 		
-		//	monograph from Donat
-		pdfName = "6506.pdf"; // scanned, some coordinate problem in page 21
+		//	Zootaxa from Donat
+//		pdfName = "zt03683p356.pdf"; // born-digital, renders fine, safe for page 3, which is rotated by 90° degrees ==> TODO have to detect this and rotate back on rendering, resulting in a landscape page image
+		
+		//	problem PDF from Donat
+//		pdfName = "s4.pdf"; // born-digital, but converter fails to find words ==> document text wrapped in PDF forms !!!
+//		pdfName = "s4.pdfa.pdf"; // saved as PDF/A with Acrobat 9 Pro, doesn't change anything
+//		pdfName = "s4.p.pdf"; // printed to a PDF with Acrobat 9 Pro, this one seems to work, but embedded fonts take forever to decode
+//		pdfName = "s4.ps.pdf"; // printed to a PDF with Acrobat 9 Pro, optimized for small file size, but same as before
+//		pdfName = "Enabling Accessible Knowledge.pdf"; // printed from browser ... text rendered with graphics commands, little we can do but OCR
+//		pdfName = "NHMD_LighthouseBirds_1887_15-17.pdf"; // scanned, two pages per image ==> solved, splitting landscape pages down the middle now
+		
+		//	problem PDFs from Jeremy
+//		pdfName = "11664_Dankittipakul_&_Singtripop_2011_Rev_118_207-221.pdf"; // born-digital, overlapping words on page 4 TODO test font decoding with this one, has some non-postscript char names
+		pdfName = "sutory_cynoglossum.pdf"; // Donat reports font decoding problems ==> char name overwrite based on 'Differences' mapping caused problems ==> deactivated
+//		pdfName = "arac-38-02-328.pdf"; // have to test said 'Differences' based char name overwrite
+		
+		//	problems with fi and fl ligatures, fonts are not embedded, see top of page 13
+		pdfName = "dikow_2012.test.pdf";
+//		pdfName = "dikowlondt_2000b.test.pdf"; // born-digital, male and femal symbols don't decode properly
 		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
-		aimAtPage = -1; // TODO always set this to -1 for JAR export
+		aimAtPage = 25; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
 		//	TODO try pages 12, 13, 16, 17, and 21 of Prasse 1979
 		System.out.println("Aiming at page " + aimAtPage);
 		
@@ -372,9 +414,9 @@ public class PdfExtractorTest implements ImagingConstants {
 			pdm.popUp(false);
 			
 //			doc = pdfExtractor.loadImagePdf(doc, pdfDoc, bytes, scaleFactor, null);
-			doc = pdfExtractor.loadImagePdfBlocks(doc, pdfDoc, bytes, scaleFactor, null);
+//			doc = pdfExtractor.loadImagePdfBlocks(doc, pdfDoc, bytes, scaleFactor, null);
 //			doc = pdfExtractor.loadImagePdfPages(doc, pdfDoc, bytes, scaleFactor, null);
-//			doc = pdfExtractor.loadTextPdf(doc, pdfDoc, bytes, pdm);
+			doc = pdfExtractor.loadTextPdf(doc, pdfDoc, bytes, pdm);
 //			doc = pdfExtractor.loadGenericPdf(doc, pdfDoc, bytes, scaleFactor, null);
 			
 //			ProcessStatusMonitor psm = new ProcessStatusMonitor() {
@@ -432,8 +474,8 @@ public class PdfExtractorTest implements ImagingConstants {
 //			
 			int scaleDown = 1;
 			int displayDpi = (((aimAtPage == -1) && (pages.length > 5)) ? 150 : 300);
-			while ((scaleDown * displayDpi) < pi.currentDpi)
-				scaleDown++;
+//			while ((scaleDown * displayDpi) < pi.currentDpi)
+//				scaleDown++;
 			System.out.println("Scaledown is " + scaleDown);
 			int imageMargin = 8;
 			final BufferedImage bi = new BufferedImage(((pi.image.getWidth()/scaleDown)+(imageMargin*2)), ((pi.image.getHeight()/scaleDown)+(imageMargin*2)), BufferedImage.TYPE_3BYTE_BGR);

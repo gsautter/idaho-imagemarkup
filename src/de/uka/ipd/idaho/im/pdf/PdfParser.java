@@ -38,6 +38,8 @@ import java.util.HashMap;
 import java.util.Hashtable;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
 import java.util.Vector;
 
 import org.icepdf.core.io.BitStream;
@@ -121,7 +123,7 @@ public class PdfParser {
 		return objects;
 	}
 	
-	static void decodeObjectStream(PStream objStream, HashMap objects, boolean forInfo) throws IOException {
+	static void decodeObjectStream(PStream objStream, Map objects, boolean forInfo) throws IOException {
 		Object fObj = objStream.params.get("First");
 		int f = ((fObj == null) ? 0 : Integer.parseInt(fObj.toString()));
 		Object filter = objStream.params.get("Filter");
@@ -160,7 +162,7 @@ public class PdfParser {
 	 * @param baos the output stream to store the decoded bytes in
 	 * @throws IOException
 	 */
-	public static void decode(Object filter, byte[] stream, Hashtable params, ByteArrayOutputStream baos, HashMap objects) throws IOException {
+	public static void decode(Object filter, byte[] stream, Hashtable params, ByteArrayOutputStream baos, Map objects) throws IOException {
 		
 		//	make sure we got all the input we need, pad with carriage returns if necessary
 		Object length = getObject(params, "Length", objects);
@@ -279,13 +281,13 @@ public class PdfParser {
 	 * @param objects the object map to use for dereferencing
 	 * @return the dereferences object.
 	 */
-	public static Object dereference(Object obj, HashMap objects) {
+	public static Object dereference(Object obj, Map objects) {
 		while (obj instanceof Reference)
 			obj = objects.get(((Reference) obj).getObjectNumber() + " " + ((Reference) obj).getGenerationNumber());
 		return obj;
 	}
 	
-	private static void dereferenceObjects(HashMap objects) {
+	private static void dereferenceObjects(Map objects) {
 		ArrayList ids = new ArrayList(objects.keySet());
 		for (Iterator idit = ids.iterator(); idit.hasNext();) {
 			Object id = idit.next();
@@ -299,7 +301,7 @@ public class PdfParser {
 		}
 	}
 	
-	private static void dereferenceObjects(Hashtable dict, HashMap objects) {
+	private static void dereferenceObjects(Hashtable dict, Map objects) {
 		ArrayList ids = new ArrayList(dict.keySet());
 		for (Iterator idit = ids.iterator(); idit.hasNext();) {
 			Object id = idit.next();
@@ -329,7 +331,7 @@ public class PdfParser {
 		}
 	}
 	
-	private static void dereferenceObjects(Vector array, HashMap objects) {
+	private static void dereferenceObjects(Vector array, Map objects) {
 		for (int i = 0; i < array.size(); i++) {
 			Object obj = array.get(i);
 			if (obj instanceof Reference) {
@@ -367,7 +369,7 @@ public class PdfParser {
 	 * @param objects the object map to use for dereferencing
 	 * @return the sought object
 	 */
-	public static Object getObject(Hashtable data, String name, HashMap objects) {
+	public static Object getObject(Hashtable data, String name, Map objects) {
 		return dereference(data.get(name), objects);
 	}
 	
@@ -873,24 +875,24 @@ public class PdfParser {
 				string.append((char) convertUnsigned(this.bytes[c]));
 			return string.toString();
 		}
-		public String toString(PdfFont font) {
-			if (font == null)
-				return this.toString();
-			StringBuffer string = new StringBuffer();
-			if (this.isHex2) {
-				for (int b = 0; b < this.bytes.length; b += 2)
-					string.append(font.getUnicode(this.getHex2(b)));
-			}
-			else if (this.isHex4) {
-//				for (int b = 0; b < (this.bytes.length - 3); b += 4)
+//		public String toString(PdfFont font) {
+//			if (font == null)
+//				return this.toString();
+//			StringBuffer string = new StringBuffer();
+//			if (this.isHex2) {
+//				for (int b = 0; b < this.bytes.length; b += 2)
+//					string.append(font.getUnicode(this.getHex2(b)));
+//			}
+//			else if (this.isHex4) {
+////				for (int b = 0; b < (this.bytes.length - 3); b += 4)
+////					string.append(font.getUnicode(this.getHex4(b)));
+//				for (int b = 0; b < this.bytes.length; b += 4)
 //					string.append(font.getUnicode(this.getHex4(b)));
-				for (int b = 0; b < this.bytes.length; b += 4)
-					string.append(font.getUnicode(this.getHex4(b)));
-			}
-			else for (int c = 0; c < this.bytes.length; c++)
-				string.append(font.getUnicode(convertUnsigned(this.bytes[c])));
-			return string.toString();
-		}
+//			}
+//			else for (int c = 0; c < this.bytes.length; c++)
+//				string.append(font.getUnicode(convertUnsigned(this.bytes[c])));
+//			return string.toString();
+//		}
 		public int length() {
 			return (this.isHex4 ? ((this.bytes.length + 3) / 4) : (this.isHex2 ? ((this.bytes.length + 1) / 2) : this.bytes.length));
 //			return (this.isHex ? (this.bytes.length / 4) : this.bytes.length);
@@ -972,10 +974,10 @@ public class PdfParser {
 	 * Extract the mask image of an image object. If the argument image does not
 	 * specify a mask image, this method returns null.
 	 * @param img the image to extract the mask from
-	 * @param objects the object map to use for dereferencing obbjects
+	 * @param objects the object map to use for dereferencing objects
 	 * @return the an image object representing the mask image
 	 */
-	public static PImage getMaskImage(PStream img, HashMap objects) {
+	public static PImage getMaskImage(PStream img, Map objects) {
 		Object maskImgObj = getObject(img.params, "SMask", objects);
 		if (maskImgObj == null)
 			maskImgObj = getObject(img.params, "Mask", objects);
@@ -987,7 +989,7 @@ public class PdfParser {
 	}
 	
 	/**
-	 * Wrapper object for a raw undecoded image, also providing a cache
+	 * Wrapper object for a raw un-decoded image, also providing a cache
 	 * reference for the decoded version. This is to support lazy decoding.
 	 * 
 	 * @author sautter
@@ -1027,66 +1029,67 @@ public class PdfParser {
 	 * @author sautter
 	 */
 	public static class PWord {
+		public static final int LEFT_RIGHT_FONT_DIRECTION = 0;
+		public static final int BOTTOM_UP_FONT_DIRECTION = 1;
+		public static final int TOP_DOWN_FONT_DIRECTION = -1;
+		public final String charCodes;
 		public final String str;
 		public final Rectangle2D bounds;
 		public final boolean bold;
 		public final boolean italics;
-//		public final String fontName;
 		public final int fontSize;
-//		public final boolean fontHasDescent;
-		final PdfFont font;
-		PWord(String str, Rectangle2D bounds, int fontSize, PdfFont font) {
+		public final int fontDirection;
+		public final PdfFont font;
+		PWord(String charCodes, String str, Rectangle2D bounds, int fontSize, int fontDirection, PdfFont font) {
+			this.charCodes = charCodes;
 			this.str = str;
 			this.bounds = bounds;
 			this.bold = font.bold;
-			this.italics = font.italic;
-//			this.fontName = font.name;
+			this.italics = font.italics;
 			this.fontSize = fontSize;
-//			this.fontHasDescent = font.hasDescent;
+			this.fontDirection = fontDirection;
 			this.font = font;
 		}
-//		PWord(String str, Rectangle2D bounds, int fontSize, boolean bold, boolean italics, String fontName, boolean fontHasDescent) {
-//			this.str = str;
-//			this.bounds = bounds;
-//			this.fontSize = fontSize;
-//			this.bold = bold;
-//			this.italics = italics;
-//			this.fontName = fontName;
-//			this.fontHasDescent = fontHasDescent;
-//		}
 		public String toString() {
 			return (this.str + " [" + Math.round(this.bounds.getMinX()) + "," + Math.round(this.bounds.getMaxX()) + "," + Math.round(this.bounds.getMinY()) + "," + Math.round(this.bounds.getMaxY()) + "], sized " + this.fontSize + (this.bold ? ", bold" : "") + (this.italics ? ", italic" : ""));
 		}
 	}
 	
-	//	factor to apply to a font's normal space width to capture narrow spaces when outputting strings from an array
-	private static final float narrowSpaceToleranceFactor = 0.67f;
+	/**
+	 * Wrapper for a figure (image embedded in a page) and its properties.
+	 * 
+	 * @author sautter
+	 */
+	public static class PFigure {
+		public final String name;
+		public final Rectangle2D bounds;
+		PFigure(String name, Rectangle2D bounds) {
+			this.name = name;
+			this.bounds = bounds;
+		}
+		public String toString() {
+			return (this.name + " [" + Math.round(this.bounds.getMinX()) + "," + Math.round(this.bounds.getMaxX()) + "," + Math.round(this.bounds.getMinY()) + "," + Math.round(this.bounds.getMaxY()) + "]");
+		}
+	}
 	
 	/**
-	 * Parse a content stream of a text page.
+	 * Assess which chars from which fonts are actually used in page text. This
+	 * method simulates the word extraction process, but without actually
+	 * constructing any words. Fonts are loaded only to the basic data, without
+	 * any glyph decoding.
 	 * @param page the bytes to parse
 	 * @param resources the page resource map
 	 * @param objects a map holding objects that might be required, such as
 	 *            fonts, etc.
-	 * @param tokenizer get tokenizer to check and split words with
 	 * @return the words extracted from the page
 	 * @throws IOException
 	 */
-	public static PWord[] getPageWords(byte[] page, Hashtable resources, HashMap objects, Tokenizer tokenizer, ProgressMonitor pm) throws IOException {
+	public static void getPageWordChars(byte[] page, Hashtable resources, HashMap objects, ProgressMonitor pm) throws IOException {
 		
 		//	line up bytes
 		PdfByteInputStream bytes = new PdfByteInputStream(new ByteArrayInputStream(page));
 		
-//		//	TODO_ne deactivate this after tests
-//		if (DEBUG_RENDER_TEXT) {
-//			byte[] buf = new byte[256];
-//			int rd;
-//			while ((rd = bytes.read(buf, 0, buf.length)) != -1)
-//				System.out.write(buf, 0, rd);
-//			bytes = new PdfByteInputStream(new ByteArrayInputStream(page));
-//		}
-//		
-		//	get fonts TODO somehow return fonts
+		//	get fonts
 		final Object fontsObj = dereference(resources.get("Font"), objects);
 		if (PdfFont.DEBUG_LOAD_FONTS) System.out.println(" --> font object is " + fontsObj);
 		Hashtable fonts = new Hashtable();
@@ -1122,6 +1125,87 @@ public class PdfParser {
 			}
 		}
 		
+		//	create renderer to record char usage
+		PageWordRenderer pwr = new PageWordRenderer(fonts);
+		
+		//	process page content through renderer
+		Object obj;
+		LinkedList stack = new LinkedList();
+		while ((obj = cropNext(bytes, true, false)) != null) {
+			if (obj instanceof PtTag) {
+				if (DEBUG_RENDER_PAGE_CONTENT) System.out.println("Content tag: " + ((PtTag) obj).tag);
+				pwr.evaluateTag(((PtTag) obj).tag, stack);
+			}
+			else {
+				if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(obj.getClass().getName() + ": " + obj.toString());
+				stack.addLast(obj);
+			}
+		}
+	}
+	
+	//	factor to apply to a font's normal space width to capture narrow spaces when outputting strings from an array
+	private static final float narrowSpaceToleranceFactor = 0.67f;
+	
+	/**
+	 * Parse a content stream of a text page and extract the text word by word.
+	 * @param page the bytes to parse
+	 * @param resources the page resource map
+	 * @param objects a map holding objects that might be required, such as
+	 *            fonts, etc.
+	 * @param tokenizer get tokenizer to check and split words with
+	 * @param pm a progress monitor to receive updates on the word extraction
+	 *            process
+	 * @return the words extracted from the page
+	 * @throws IOException
+	 */
+	public static PWord[] getPageWords(byte[] page, Hashtable resources, Map objects, List figures, Tokenizer tokenizer, ProgressMonitor pm) throws IOException {
+		
+		//	line up bytes
+		PdfByteInputStream bytes = new PdfByteInputStream(new ByteArrayInputStream(page));
+		
+		//	get fonts
+		final Object fontsObj = dereference(resources.get("Font"), objects);
+		if (PdfFont.DEBUG_LOAD_FONTS) System.out.println(" --> font object is " + fontsObj);
+		Hashtable fonts = new Hashtable();
+		if ((fontsObj != null) && (fontsObj instanceof Hashtable)) {
+			for (Iterator fit = ((Hashtable) fontsObj).keySet().iterator(); fit.hasNext();) {
+				Object fontKey = fit.next();
+				Object fontRef = null;
+				Object fontObj = ((Hashtable) fontsObj).get(fontKey);
+				if (fontObj instanceof Reference) {
+					fontRef = fontObj;
+					fontObj = dereference(fontRef, objects);
+				}
+				if (fontObj == null) 
+					continue;
+				
+				if (PdfFont.DEBUG_LOAD_FONTS)
+					System.out.println("Loading font " + ((Reference) fontRef).getObjectNumber() + " " + ((Reference) fontRef).getGenerationNumber());
+				if (fontObj instanceof PdfFont) { // should always be the case with char usage assessment ...
+					if (PdfFont.DEBUG_LOAD_FONTS)
+						System.out.println("Decoding chars in font " + ((PdfFont) fontObj).name);
+					((PdfFont) fontObj).decodeChars(pm);
+					fonts.put(fontKey, ((PdfFont) fontObj));
+					if (PdfFont.DEBUG_LOAD_FONTS && (fontRef != null))
+						System.out.println("Font cache hit for " + ((Reference) fontRef).getObjectNumber() + " " + ((Reference) fontRef).getGenerationNumber());
+				}
+				else if (fontObj instanceof Hashtable) { // ... but we better make sure
+					if (PdfFont.DEBUG_LOAD_FONTS)
+						System.out.println("Loading font from " + fontObj);
+					PdfFont pFont = PdfFont.readFont(fontKey, ((Hashtable) fontObj), objects, true, pm);
+					if (pFont != null) {
+						pFont.decodeChars(pm);
+						fonts.put(fontKey, pFont);
+						if (fontRef != null) {
+							objects.put((((Reference) fontRef).getObjectNumber() + " " + ((Reference) fontRef).getGenerationNumber()), pFont);
+							if (PdfFont.DEBUG_LOAD_FONTS) System.out.println("Font cached as " + ((Reference) fontRef).getObjectNumber() + " " + ((Reference) fontRef).getGenerationNumber());
+						}
+					}
+				}
+				else if (PdfFont.DEBUG_LOAD_FONTS) System.out.println("Strange font: " + fontObj);
+			}
+		}
+		
 //		if (true) // FOR FONT LOAD TESTING
 //			throw new RuntimeException("Only fonts for now");
 //		
@@ -1131,29 +1215,34 @@ public class PdfParser {
 		
 		//	create word list and renderer to fill it
 		ArrayList pageWords = new ArrayList();
-		PageWordRenderer pwr = new PageWordRenderer(fonts, pageWords);
+		PageWordRenderer pwr = new PageWordRenderer(fonts, pageWords, figures);
 		
 		//	process page content through renderer
 		Object obj;
 		LinkedList stack = new LinkedList();
 		while ((obj = cropNext(bytes, true, false)) != null) {
 			if (obj instanceof PtTag) {
-				if (DEBUG_RENDER_TEXT) System.out.println("Content tag: " + ((PtTag) obj).tag);
+				if (DEBUG_RENDER_PAGE_CONTENT) System.out.println("Content tag: " + ((PtTag) obj).tag);
 				pwr.evaluateTag(((PtTag) obj).tag, stack);
 			}
 			else {
-				if (DEBUG_RENDER_TEXT) System.out.println(obj.getClass().getName() + ": " + obj.toString());
+				if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(obj.getClass().getName() + ": " + obj.toString());
 				stack.addLast(obj);
 			}
 		}
-		if (DEBUG_RENDER_TEXT)
+		if (DEBUG_RENDER_PAGE_CONTENT) {
 			System.out.println("Rendering done, got " + pageWords.size() + " words");
+			for (int w = 0; w < pageWords.size(); w++) {
+				PWord pw = ((PWord) pageWords.get(w));
+				System.out.println(" - '" + pw.str + "' @ " + pw.bounds);
+			}
+		}
 		
 		//	sort out words with invalid bounding boxes
 		for (int w = 0; w < pageWords.size(); w++) {
 			PWord pw = ((PWord) pageWords.get(w));
 			if ((pw.bounds.getWidth() <= 0) || (pw.bounds.getHeight() <= 0)) {
-				if (DEBUG_RENDER_TEXT)
+				if (DEBUG_RENDER_PAGE_CONTENT)
 					System.out.println("Removing word with invalid bounds: '" + pw.str + "', " + pw.bounds);
 				pageWords.remove(w--);
 			}
@@ -1162,80 +1251,76 @@ public class PdfParser {
 		//	join words with extremely close or overlapping bounding boxes (can be split due to in-word font changes, for instance)
 		if (pageWords.size() > 1) {
 			PWord lastWord = ((PWord) pageWords.get(0));
-			double lastWordMiddle = ((lastWord.bounds.getMinY() + lastWord.bounds.getMaxY()) / 2);
+			double lastWordMiddleX = ((lastWord.bounds.getMinX() + lastWord.bounds.getMaxX()) / 2);
+			double lastWordMiddleY = ((lastWord.bounds.getMinY() + lastWord.bounds.getMaxY()) / 2);
 			for (int w = 1; w < pageWords.size(); w++) {
 				PWord word = ((PWord) pageWords.get(w));
-				double wordMiddle = ((word.bounds.getMinY() + word.bounds.getMaxY()) / 2);
-				if ((lastWord.bold != word.bold) || (lastWord.italics != word.italics) || (lastWord.font.hasDescent != word.font.hasDescent)) {
+				if (DEBUG_JOIN_WORDS) System.out.println("Checking words " + lastWord.str + " @" + lastWord.bounds.toString() + " and " + word.str + " @" + word.bounds.toString());
+				double wordMiddleX = ((word.bounds.getMinX() + word.bounds.getMaxX()) / 2);
+				double wordMiddleY = ((word.bounds.getMinY() + word.bounds.getMaxY()) / 2);
+				if (!areWordsCompatible(lastWord, lastWordMiddleX, lastWordMiddleY, word, wordMiddleX, wordMiddleY, ((word.str.length() != 1) || (COMBINABLE_ACCENTS.indexOf(word.str.charAt(0)) == -1)))) {
 					lastWord = word;
-					lastWordMiddle = wordMiddle;
-					continue;
-				}
-				if ((lastWordMiddle < word.bounds.getMinY()) || (lastWordMiddle > word.bounds.getMaxY())) {
-					lastWord = word;
-					lastWordMiddle = wordMiddle;
-					continue;
-				}
-				if ((wordMiddle < lastWord.bounds.getMinY()) || (wordMiddle > lastWord.bounds.getMaxY())) {
-					lastWord = word;
-					lastWordMiddle = wordMiddle;
-					continue;
-				}
-				if ((word.bounds.getMinX() < lastWord.bounds.getMinX()) || (word.bounds.getMaxX() < lastWord.bounds.getMaxX())) {
-					lastWord = word;
-					lastWordMiddle = wordMiddle;
+					lastWordMiddleX = wordMiddleX;
+					lastWordMiddleY = wordMiddleY;
+					if (DEBUG_JOIN_WORDS) System.out.println(" --> incompatible");
 					continue;
 				}
 				
 				TokenSequence lastWordTokens = tokenizer.tokenize(lastWord.str);
-				TokenSequence wordTokens = tokenizer.tokenize(word.str);
+				TokenSequence wordTokens = tokenizer.tokenize((COMBINABLE_ACCENTS.indexOf(word.str.charAt(0)) == -1) ? word.str : word.str.substring(1));
 				boolean needsSpace = ((lastWordTokens.size() != 0) && (wordTokens.size() != 0) && Gamta.spaceAfter(lastWordTokens.lastValue()) && Gamta.spaceBefore(wordTokens.firstValue()));
 				
-				if ((word.bounds.getMinX() - lastWord.bounds.getMaxX()) > (1 - (needsSpace ? narrowSpaceToleranceFactor : 0))) {
+				if (!areWordsCloseEnough(lastWord, word, needsSpace)) {
 					lastWord = word;
-					lastWordMiddle = wordMiddle;
+					lastWordMiddleX = wordMiddleX;
+					lastWordMiddleY = wordMiddleY;
+					if (DEBUG_JOIN_WORDS) System.out.println(" --> too far apart");
 					continue;
 				}
 				
-				TokenSequence jointWordTokens = tokenizer.tokenize(lastWord.str + word.str);
-				if ((lastWordTokens.size() + wordTokens.size()) <= jointWordTokens.size()) {
+				TokenSequence jointWordTokens = tokenizer.tokenize(lastWord.str + ((COMBINABLE_ACCENTS.indexOf(word.str.charAt(0)) == -1) ? word.str : word.str.substring(1)));
+				if ((1 < jointWordTokens.size()) && ((lastWordTokens.size() + wordTokens.size()) <= jointWordTokens.size())) {
 					lastWord = word;
-					lastWordMiddle = wordMiddle;
+					lastWordMiddleY = wordMiddleY;
+					if (DEBUG_JOIN_WORDS) System.out.println(" --> tokenization mismatch");
 					continue;
 				}
 				
+				float minX = ((float) Math.min(lastWord.bounds.getMinX(), word.bounds.getMinX()));
+				float maxX = ((float) Math.max(lastWord.bounds.getMaxX(), word.bounds.getMaxX()));
 				float minY = ((float) Math.min(lastWord.bounds.getMinY(), word.bounds.getMinY()));
 				float maxY = ((float) Math.max(lastWord.bounds.getMaxY(), word.bounds.getMaxY()));
-				Rectangle2D.Float jointWordBox = new Rectangle2D.Float(((float) lastWord.bounds.getMinX()), minY, ((float) (word.bounds.getMaxX() - lastWord.bounds.getMinX())), (maxY - minY));
+//				Rectangle2D.Float jointWordBox = new Rectangle2D.Float(((float) lastWord.bounds.getMinX()), minY, ((float) (word.bounds.getMaxX() - lastWord.bounds.getMinX())), (maxY - minY));
+				Rectangle2D.Float jointWordBox = new Rectangle2D.Float(minX, minY, (maxX - minX), (maxY - minY));
 				PWord jointWord;
 				
 				//	test if second word (a) starts with combinable accent, (b) this accent is combinable with last char of first word, and (c) there is sufficient overlap
-				if (((word.bounds.getMinX() - 1) < lastWord.bounds.getMaxX()) && COMBINABLE_ACCENTS.indexOf(word.str.charAt(0)) != -1) {
-					if (DEBUG_RENDER_TEXT) {
+				if (areWordsCloseEnoughForCombinedAccent(lastWord, word) && COMBINABLE_ACCENTS.indexOf(word.str.charAt(0)) != -1) {
+					if (DEBUG_RENDER_PAGE_CONTENT || DEBUG_JOIN_WORDS) {
 						System.out.println("Testing for possible letter diacritic merger:");
 						System.out.println(" - second word starts with '" + word.str.charAt(0) + "' (" + ((int) word.str.charAt(0)) + ")");
 					}
 					String combinedCharName = ("" + lastWord.str.charAt(lastWord.str.length() - 1) + "" + COMBINABLE_ACCENT_MAPPINGS.get(new Character(word.str.charAt(0))));
-					if (DEBUG_RENDER_TEXT)
+					if (DEBUG_RENDER_PAGE_CONTENT || DEBUG_JOIN_WORDS)
 						System.out.println(" - combined char name is '" + combinedCharName + "'");
 					char combinedChar = StringUtils.getCharForName(combinedCharName);
-					if (DEBUG_RENDER_TEXT)
+					if (DEBUG_RENDER_PAGE_CONTENT || DEBUG_JOIN_WORDS)
 						System.out.println(" - combined char is '" + combinedChar + "' (" + ((int) combinedChar) + ")");
 					if (combinedChar > 0) {
-						jointWord = new PWord((lastWord.str.substring(0, lastWord.str.length()-1) + combinedChar + word.str.substring(1)), jointWordBox, Math.max(lastWord.fontSize, word.fontSize), lastWord.font);
-						if (DEBUG_RENDER_TEXT)
+						jointWord = new PWord((lastWord.charCodes.substring(0, lastWord.charCodes.length()-1) + ((char) (((int) lastWord.charCodes.charAt(lastWord.charCodes.length()-1)) & 255)) + word.charCodes), (lastWord.str.substring(0, lastWord.str.length()-1) + combinedChar + word.str.substring(1)), jointWordBox, Math.max(lastWord.fontSize, word.fontSize), lastWord.fontDirection, lastWord.font);
+						if (DEBUG_RENDER_PAGE_CONTENT || DEBUG_JOIN_WORDS)
 							System.out.println(" --> combined letter and diacritic marker");
 					}
 					else {
-						jointWord = new PWord((lastWord.str + word.str), jointWordBox, Math.max(lastWord.fontSize, word.fontSize), lastWord.font);
-						if (DEBUG_RENDER_TEXT)
+						jointWord = new PWord((lastWord.charCodes + word.charCodes), (lastWord.str + word.str), jointWordBox, Math.max(lastWord.fontSize, word.fontSize), lastWord.fontDirection, lastWord.font);
+						if (DEBUG_RENDER_PAGE_CONTENT || DEBUG_JOIN_WORDS)
 							System.out.println(" --> combination not possible");
 					}
 				}
-				else jointWord = new PWord((lastWord.str + word.str), jointWordBox, Math.max(lastWord.fontSize, word.fontSize), lastWord.font);
+				else jointWord = new PWord((lastWord.charCodes + word.charCodes), (lastWord.str + word.str), jointWordBox, Math.max(lastWord.fontSize, word.fontSize), lastWord.fontDirection, lastWord.font);
 				
-				if (DEBUG_RENDER_TEXT) {
-					System.out.println("Got joint word: " + jointWord.str);
+				if (DEBUG_RENDER_PAGE_CONTENT || DEBUG_JOIN_WORDS) {
+					System.out.println("Got joint word: '" + jointWord.str + "' @ " + jointWord.bounds);
 					System.out.println(" --> extent is " + ((float) jointWordBox.getMinX()) + "-" + ((float) jointWordBox.getMaxX()) + " x " + ((float) jointWordBox.getMaxY()) + "-" + ((float) jointWordBox.getMinY()));
 					System.out.println(" --> base extents are\n" +
 							"     " + ((float) lastWord.bounds.getMinX()) + "-" + ((float) lastWord.bounds.getMaxX()) + " x " + ((float) lastWord.bounds.getMaxY()) + "-" + ((float) lastWord.bounds.getMinY()) + "\n" +
@@ -1246,12 +1331,73 @@ public class PdfParser {
 				pageWords.set((w-1), jointWord);
 				pageWords.remove(w--);
 				lastWord = jointWord;
-				lastWordMiddle = ((jointWord.bounds.getMinY() + jointWord.bounds.getMaxY()) / 2);
+				lastWordMiddleX = ((jointWord.bounds.getMinX() + jointWord.bounds.getMaxX()) / 2);
+				lastWordMiddleY = ((jointWord.bounds.getMinY() + jointWord.bounds.getMaxY()) / 2);
 			}
 		}
 		
 		//	finally ...
 		return ((PWord[]) pageWords.toArray(new PWord[pageWords.size()]));
+	}
+	
+	private static boolean areWordsCloseEnoughForCombinedAccent(PWord lastWord, PWord word) {
+		if (lastWord.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION)
+			return ((word.bounds.getMinX() - 1) < lastWord.bounds.getMaxX());
+		else if (lastWord.fontDirection == PWord.BOTTOM_UP_FONT_DIRECTION)
+			return ((word.bounds.getMinY() - 1) < lastWord.bounds.getMaxY());
+		else if (lastWord.fontDirection == PWord.TOP_DOWN_FONT_DIRECTION)
+			return ((word.bounds.getMaxY() - 1) > lastWord.bounds.getMinY());
+		else return false;
+	}
+	
+	private static boolean areWordsCloseEnough(PWord lastWord, PWord word, boolean needsSpace) {
+		double wordDistance;
+		if (lastWord.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION)
+			wordDistance = (word.bounds.getMinX() - lastWord.bounds.getMaxX());
+		else if (lastWord.fontDirection == PWord.BOTTOM_UP_FONT_DIRECTION)
+			wordDistance = (word.bounds.getMinY() - lastWord.bounds.getMaxY());
+		else if (lastWord.fontDirection == PWord.TOP_DOWN_FONT_DIRECTION)
+			wordDistance = (word.bounds.getMaxY() - lastWord.bounds.getMinY());
+		else return false;
+		
+		//	are we close enough
+		return (wordDistance < (1 - (needsSpace ? narrowSpaceToleranceFactor : 0)));
+	}
+	
+	private static boolean areWordsCompatible(PWord lastWord, double lastWordMiddleX, double lastWordMiddleY, PWord word, double wordMiddleX, double wordMiddleY, boolean checkHorizontalAlignment) {
+		
+		//	compare basic properties
+		if ((lastWord.bold != word.bold) || (lastWord.italics != word.italics) || (lastWord.font.hasDescent != word.font.hasDescent) || (lastWord.fontDirection != word.fontDirection)) {
+			if (DEBUG_JOIN_WORDS) System.out.println(" --> font style mismatch");
+			return false;
+		}
+		
+		//	check in-line alignment
+		if ((lastWord.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) ? ((lastWordMiddleY < word.bounds.getMinY()) || (lastWordMiddleY > word.bounds.getMaxY())) : ((lastWordMiddleX < word.bounds.getMinX()) || (lastWordMiddleX > word.bounds.getMaxX()))) {
+			if (DEBUG_JOIN_WORDS) System.out.println(" --> vertical alignment mismatch (1)");
+			return false;
+		}
+		if ((lastWord.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) ? ((wordMiddleY < lastWord.bounds.getMinY()) || (wordMiddleY > lastWord.bounds.getMaxY())) : ((wordMiddleX < lastWord.bounds.getMinX()) || (wordMiddleX > lastWord.bounds.getMaxX()))) {
+			if (DEBUG_JOIN_WORDS) System.out.println(" --> vertical alignment mismatch (2)");
+			return false;
+		}
+		
+		//	check distance
+		if (checkHorizontalAlignment && (lastWord.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) && ((word.bounds.getMinX() < lastWord.bounds.getMinX()) || (word.bounds.getMaxX() < lastWord.bounds.getMaxX()))) {
+			if (DEBUG_JOIN_WORDS) System.out.println(" --> horizontal alignment mismatch (1)");
+			return false;
+		}
+		if (checkHorizontalAlignment && (lastWord.fontDirection == PWord.BOTTOM_UP_FONT_DIRECTION) && ((word.bounds.getMinY() < lastWord.bounds.getMinY()) || (word.bounds.getMaxY() < lastWord.bounds.getMaxY()))) {
+			if (DEBUG_JOIN_WORDS) System.out.println(" --> horizontal alignment mismatch (2)");
+			return false;
+		}
+		if (checkHorizontalAlignment && (lastWord.fontDirection == PWord.TOP_DOWN_FONT_DIRECTION) && ((word.bounds.getMinY() > lastWord.bounds.getMinY()) || (word.bounds.getMaxY() > lastWord.bounds.getMaxY()))) {
+			if (DEBUG_JOIN_WORDS) System.out.println(" --> horizontal alignment mismatch (3)");
+			return false;
+		}
+		
+		//	OK, we didn't find any red flags about these two
+		return true;
 	}
 	
 	private static final String COMBINABLE_ACCENTS;
@@ -1299,7 +1445,8 @@ public class PdfParser {
 		COMBINABLE_ACCENTS = combinableAccentCollector.toString();
 	}
 	
-	private static final boolean DEBUG_RENDER_TEXT = true;
+	private static final boolean DEBUG_RENDER_PAGE_CONTENT = true;
+	private static final boolean DEBUG_JOIN_WORDS = false;
 	
 	//	observe <userSpace> = <textSpace> * <textMatrix> * <transformationMatrix>
 	private static float[] transform(float x, float y, float z, float[][] matrix) {
@@ -1418,6 +1565,7 @@ public class PdfParser {
 		
 		private float pwrFontSize = -1;
 		private float eFontSize = -1;
+		private int eFontDirection = PWord.LEFT_RIGHT_FONT_DIRECTION;
 		private float pwrLineHeight = 0;
 		private float pwrCharSpacing = 0;
 		private float pwrWordSpacing = 0;
@@ -1433,21 +1581,37 @@ public class PdfParser {
 		
 		private LinkedList graphicsStateStack = new LinkedList();
 		
-		private ArrayList words;
+		private List words;
+		private List figures;
 		
-		PageWordRenderer(Hashtable fonts, ArrayList words) {
+		//	constructor for text char extraction
+		PageWordRenderer(Hashtable fonts) {
 			this.fonts = fonts;
-			this.words = words;
+			this.words = null;
+			this.figures = null;
 			for (int c = 0; c < this.textMatrix.length; c++) {
 				Arrays.fill(this.textMatrix[c], 0);
 				this.textMatrix[c][c] = 1;
 			}
 			cloneValues(this.textMatrix, this.lineMatrix);
-//			cloneValues(this.textMatrix, this.transformerMatrix);
+			//	TODO consider switching off all the computational rigmarole if word list is null
+		}
+		
+		//	constructor for actual word extraction
+		PageWordRenderer(Hashtable fonts, List words, List figures) {
+			this.fonts = fonts;
+			this.words = words;
+			this.figures = figures;
+			for (int c = 0; c < this.textMatrix.length; c++) {
+				Arrays.fill(this.textMatrix[c], 0);
+				this.textMatrix[c][c] = 1;
+			}
+			cloneValues(this.textMatrix, this.lineMatrix);
 		}
 		
 		private void doBT(LinkedList stack) {
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> start text");
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> start text");
 			for (int c = 0; c < this.textMatrix.length; c++) {
 				Arrays.fill(this.textMatrix[c], 0);
 				this.textMatrix[c][c] = 1;
@@ -1456,58 +1620,50 @@ public class PdfParser {
 		}
 		
 		private void doET(LinkedList stack) {
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> end text");
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> end text");
 		}
 		
 		private void doBMC(LinkedList stack) {
 			Object n = stack.removeLast();
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> start marked content: " + n);
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> start marked content: " + n);
 		}
 		
 		private void doBDC(LinkedList stack) {
 			Object d = stack.removeLast();
 			Object n = stack.removeLast();
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> start marked content with dictionary: " + n + " - " + d);
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> start marked content with dictionary: " + n + " - " + d);
 		}
 		
 		private void doEMC(LinkedList stack) {
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> end marked content");
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> end marked content");
 		}
 		
 		private void doMP(LinkedList stack) {
 			Object n = stack.removeLast();
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> mark point: " + n);
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> mark point: " + n);
 		}
 		
 		private void doDP(LinkedList stack) {
 			Object d = stack.removeLast();
 			Object n = stack.removeLast();
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> mark point with dictionary: " + n + " - " + d);
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> mark point with dictionary: " + n + " - " + d);
 		}
 		
 		private void doq(LinkedList stack) {
-//			float[][] transformerMatrix = new float[3][3];
-//			cloneValues(this.transformerMatrix, transformerMatrix);
-//			this.transformerMatrixStack.addLast(transformerMatrix);
 			this.graphicsStateStack.addLast(new SavedGraphicsState());
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> save graphics state");
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> save graphics state");
 		}
 		
 		private void doQ(LinkedList stack) {
-//			if (this.transformerMatrixStack.size() != 0) {
-//				float[][] transformerMatrix = ((float[][]) this.transformerMatrixStack.removeLast());
-//				cloneValues(transformerMatrix, this.transformerMatrix);
-//			}
-//			else for (int c = 0; c < this.transformerMatrix.length; c++) {
-//				Arrays.fill(this.transformerMatrix[c], 0);
-//				this.transformerMatrix[c][c] = 1;
-//			}
-//			if (DEBUG_RENDER_TEXT) {
-//				System.out.println(" --> restore graphics state:");
-//				printMatrix(this.transformerMatrix);
-//			}
 			((SavedGraphicsState) this.graphicsStateStack.removeLast()).restore();
-			if (DEBUG_RENDER_TEXT) {
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null)) {
 				System.out.println(" --> restore graphics state:");
 				for (Iterator tmit = this.pwrTransformationMatrices.iterator(); tmit.hasNext();) {
 					float[][] tm = ((float[][]) tmit.next());
@@ -1516,23 +1672,10 @@ public class PdfParser {
 						System.out.println();
 				}
 			}
-			this.computeEffectiveFontSize();
+			this.computeEffectiveFontSizeAndDirection();
 		}
 		
 		private void docm(LinkedList stack) {
-//			this.transformerMatrix[2][2] = 1;
-//			this.transformerMatrix[1][2] = ((Number) stack.removeLast()).floatValue();
-//			this.transformerMatrix[0][2] = ((Number) stack.removeLast()).floatValue();
-//			this.transformerMatrix[2][1] = 0;
-//			this.transformerMatrix[1][1] = ((Number) stack.removeLast()).floatValue();
-//			this.transformerMatrix[0][1] = ((Number) stack.removeLast()).floatValue();
-//			this.transformerMatrix[2][0] = 0;
-//			this.transformerMatrix[1][0] = ((Number) stack.removeLast()).floatValue();
-//			this.transformerMatrix[0][0] = ((Number) stack.removeLast()).floatValue();
-//			if (DEBUG_RENDER_TEXT) {
-//				System.out.println(" --> transformation matrix set to");
-//				printMatrix(this.transformerMatrix);
-//			}
 			float[][] nTm = new float[3][3];
 			nTm[2][2] = 1;
 			nTm[1][2] = ((Number) stack.removeLast()).floatValue();
@@ -1549,7 +1692,7 @@ public class PdfParser {
 			 * concatenate them, but not from which side, and concatenating
 			 * from the left seems to cause less garble (none) than from the
 			 * right (messing up a few test files) */
-			if (DEBUG_RENDER_TEXT) {
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null)) {
 				System.out.println(" --> transformation matrix stack set to");
 				for (Iterator tmit = this.pwrTransformationMatrices.iterator(); tmit.hasNext();) {
 					float[][] tm = ((float[][]) tmit.next());
@@ -1558,12 +1701,10 @@ public class PdfParser {
 						System.out.println();
 				}
 			}
-			this.computeEffectiveFontSize();
+			this.computeEffectiveFontSizeAndDirection();
 		}
 		
 		private float[] applyTransformationMatrices(float[] f) {
-//			if (IGNORE_TRANSFORMER_MATRICES)
-//				return f;
 			for (Iterator tmit = this.pwrTransformationMatrices.iterator(); tmit.hasNext();) {
 				float[][] tm = ((float[][]) tmit.next());
 				f = transform(f, tm);
@@ -1573,76 +1714,88 @@ public class PdfParser {
 		
 		// d i j J M w gs
 		private void dod(LinkedList stack)  {
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> dash pattern");
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> dash pattern");
 		}
 		
 		private void doi(LinkedList stack)  {
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> flatness");
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> flatness");
 		}
 		
 		private void doj(LinkedList stack) {
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> line join");
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> line join");
 		}
 		
 		private void doJ(LinkedList stack) {
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> line ends");
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> line ends");
 		}
 		
 		private void doM(LinkedList stack) {
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> line miter limit");
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> line miter limit");
 		}
 		
 		private void dow(LinkedList stack) {
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> line width");
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> line width");
 		}
 		
 		private void dogs(LinkedList stack) {
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> graphics state to " + stack.getLast());
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> graphics state to " + stack.getLast());
 		}
 		
 		private void doTc(LinkedList stack) {
 			this.pwrCharSpacing = ((Number) stack.removeLast()).floatValue();
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> char spacing " + this.pwrCharSpacing);
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> char spacing " + this.pwrCharSpacing);
 		}
 		
 		private void doTw(LinkedList stack) {
 			this.pwrWordSpacing = ((Number) stack.removeLast()).floatValue();
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> word spacing " + this.pwrWordSpacing);
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> word spacing " + this.pwrWordSpacing);
 		}
 		
 		private void doTz(LinkedList stack) {
 			this.pwrHorizontalScaling = ((Number) stack.removeLast()).floatValue();
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> horizontal scaling " + this.pwrHorizontalScaling);
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> horizontal scaling " + this.pwrHorizontalScaling);
 		}
 		
 		private void doTL(LinkedList stack) {
 			this.pwrLineHeight = ((Number) stack.removeLast()).floatValue();
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> leading (line height) " + this.pwrLineHeight);
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> leading (line height) " + this.pwrLineHeight);
 		}
 		
 		private void doTf(LinkedList stack) {
 			this.pwrFontSize = ((Number) stack.removeLast()).floatValue();
 			this.pwrFontKey = stack.removeLast();
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> font key set to " + this.pwrFontKey);
+			if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" --> font key set to " + this.pwrFontKey);
 			this.pwrFont = ((PdfFont) this.fonts.get(this.pwrFontKey));
 			if (this.pwrFont != null) {
 				this.pwrFontSpaceWidth = this.pwrFont.getCharWidth(' ');
-				if (DEBUG_RENDER_TEXT) {
+				if (DEBUG_RENDER_PAGE_CONTENT) {
 					System.out.println(" --> font " + this.pwrFontKey + " sized " + this.pwrFontSize);
 					System.out.println("   - font is " + this.pwrFont.data);
 					System.out.println("   - font descriptor " + this.pwrFont.descriptor);
 					System.out.println("   - font name " + this.pwrFont.name);
-					System.out.println("   - bold: " + this.pwrFont.bold + ", italic: " + this.pwrFont.italic);
+					System.out.println("   - bold: " + this.pwrFont.bold + ", italic: " + this.pwrFont.italics);
 					System.out.println("   - space width is " + this.pwrFontSpaceWidth);
 				}
-				this.computeEffectiveFontSize();
+				this.computeEffectiveFontSizeAndDirection();
 			}
 		}
 		
 		private void doTfs(LinkedList stack) {
 			this.pwrFontSize = ((Number) stack.removeLast()).floatValue();
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> font size " + this.pwrFontSize);
-			this.computeEffectiveFontSize();
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> font size " + this.pwrFontSize);
+			this.computeEffectiveFontSizeAndDirection();
 		}
 		
 		private void doTm(LinkedList stack) {
@@ -1656,41 +1809,49 @@ public class PdfParser {
 			this.textMatrix[1][0] = ((Number) stack.removeLast()).floatValue();
 			this.textMatrix[0][0] = ((Number) stack.removeLast()).floatValue();
 			cloneValues(this.textMatrix, this.lineMatrix);
-			if (DEBUG_RENDER_TEXT) {
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null)) {
 				System.out.println(" --> text matrix set to");
 				printMatrix(this.lineMatrix);
 			}
-			this.computeEffectiveFontSize();
+			this.computeEffectiveFontSizeAndDirection();
 		}
 		
 		//	compute effective font size as round(font size * ((a + d) / 2)) in text matrix
-		private void computeEffectiveFontSize() {
-			float temFontSize = ((Math.abs(this.textMatrix[0][0]) + Math.abs(this.textMatrix[1][1])) / 2);
-			if (temFontSize < 0.5)
-				temFontSize = ((Math.abs(this.textMatrix[0][1]) + Math.abs(this.textMatrix[1][0])) / 2);
-//			float trmFontSize = ((Math.abs(this.transformerMatrix[0][0]) + Math.abs(this.transformerMatrix[1][1])) / 2);
-//			if (trmFontSize < 0.5)
-//				trmFontSize = ((Math.abs(this.transformerMatrix[0][1]) + Math.abs(this.transformerMatrix[1][0])) / 2);
-			float trmFontSize = 1;
-			for (Iterator tmit = this.pwrTransformationMatrices.iterator(); tmit.hasNext();) {
-				float[][] tm = ((float[][]) tmit.next());
-				float tmFontSize = ((Math.abs(tm[0][0]) + Math.abs(tm[1][1])) / 2);
-				if (tmFontSize < 0.5)
-					tmFontSize = ((Math.abs(tm[0][1]) + Math.abs(tm[1][0])) / 2);
-				trmFontSize *= tmFontSize;
+		private void computeEffectiveFontSizeAndDirection() {
+			float[] pwrFontSize = {0, this.pwrFontSize, 0};
+			pwrFontSize = this.applyTransformationMatrices(transform(pwrFontSize, this.textMatrix));
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" ==> font analysis vector is " + Arrays.toString(pwrFontSize));
+			this.eFontSize = ((float) Math.sqrt((pwrFontSize[0] * pwrFontSize[0]) + (pwrFontSize[1] * pwrFontSize[1])));
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" ==> effective font size is " + this.eFontSize);
+			if (Math.abs(pwrFontSize[1]) > Math.abs(pwrFontSize[0])) {
+				this.eFontDirection = PWord.LEFT_RIGHT_FONT_DIRECTION;
+				if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+					System.out.println(" ==> effective font direction is left-right");
 			}
-			this.eFontSize = (this.pwrFontSize * temFontSize * trmFontSize);
-			if (DEBUG_RENDER_TEXT) System.out.println(" ==> effective font size is " + this.eFontSize);
+			else if (pwrFontSize[0] < 0) {
+				this.eFontDirection = PWord.BOTTOM_UP_FONT_DIRECTION;
+				if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+					System.out.println(" ==> effective font direction is bottom-up");
+			}
+			else {
+				this.eFontDirection = PWord.TOP_DOWN_FONT_DIRECTION;
+				if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+					System.out.println(" ==> effective font direction is top-down");
+			}
 		}
 		
 		private void doTr(LinkedList stack) {
 			Object r = stack.removeLast();
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> text rendering mode " + r);
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> text rendering mode " + r);
 		}
 		
 		private void doTs(LinkedList stack) {
 			this.pwrTextRise = ((Number) stack.removeLast()).floatValue();
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> text rise " + this.pwrTextRise);
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> text rise " + this.pwrTextRise);
 			//	TODO observe text rise when drawing strings
 		}
 		
@@ -1713,11 +1874,11 @@ public class PdfParser {
 			if (setLineHeight)
 				this.pwrLineHeight = -((Number) ty).floatValue();
 			Object tx = stack.removeLast();
-			if (DEBUG_RENDER_TEXT)
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
 				System.out.println("Moving to new line");
 			updateMatrix(this.textMatrix, ((Number) tx).floatValue(), ((Number) ty).floatValue());
 			cloneValues(this.textMatrix, this.lineMatrix);
-			if (DEBUG_RENDER_TEXT) {
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null)) {
 				System.out.println(" --> new line, offset by " + tx + "/" + ty + (setLineHeight ? (", and new leading (line height " + this.pwrLineHeight + ")") : ""));
 				printMatrix(this.lineMatrix);
 			}
@@ -1795,7 +1956,29 @@ public class PdfParser {
 			else if ("\"".equals(tag))
 				this.dodoublequote(stack);
 			
-			else if (DEBUG_RENDER_TEXT) System.out.println(" ==> UNKNOWN");
+			else if ("Do".equals(tag))
+				this.doDo(stack);
+			
+			else if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" ==> UNKNOWN");
+		}
+		
+		private void doDo(LinkedList stack) {
+			float[] origin = {0, 0, 1};
+			origin = this.applyTransformationMatrices(origin);
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.figures != null))
+				System.out.println(" ==> image rendering origin " + Arrays.toString(origin));
+			float[] dimensions = {1, 1, 0};
+			dimensions = this.applyTransformationMatrices(dimensions);
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.figures != null))
+				System.out.println(" ==> image rendering dimensions " + Arrays.toString(dimensions));
+			Rectangle2D bounds = new Rectangle2D.Float(origin[0], origin[1], dimensions[0], dimensions[1]);
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.figures != null))
+				System.out.println(" ==> image rendering bounds " + bounds);
+			String name = stack.removeLast().toString();
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.figures != null))
+				System.out.println(" ==> image name " + name);
+			if (this.figures != null)
+				this.figures.add(new PFigure(name, bounds));
 		}
 		
 		private void dohighcomma(LinkedList stack) {
@@ -1824,10 +2007,10 @@ public class PdfParser {
 				//	finish line, remembering any last word
 				this.endLine();
 				
-				if (DEBUG_RENDER_TEXT)
+				if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
 					System.out.println(" --> show string: '" + rStr + "'" + ((rStr.length() == 1) ? (" (" + ((int) rStr.charAt(0)) + ")") : ""));
 			}
-			else if (DEBUG_RENDER_TEXT) {
+			else if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null)) {
 				System.out.println(" --> show string (no font): '" + str + "'" + ((str.length() == 1) ? (" (" + ((int) str.charAt(0)) + ")") : ""));
 				System.out.println(" --> cs class is " + str.getClass().getName());
 			}
@@ -1838,12 +2021,14 @@ public class PdfParser {
 			Vector stros = ((Vector) stack.removeLast());
 			
 			//	print debug info
-			if (DEBUG_RENDER_TEXT) {
+			if (DEBUG_RENDER_PAGE_CONTENT) {
 				System.out.println("TEXT ARRAY: " + stros);
 				for (int s = 0; s < stros.size(); s++) {
 					Object o = stros.get(s);
-					if (o instanceof Number)
-						System.out.println(" - n " + o);
+					if (o instanceof Number) {
+						if (this.words != null)
+							System.out.println(" - n " + o);
+					}
 					else if (o instanceof CharSequence) {
 						CharSequence cs = ((CharSequence) o);
 						System.out.print(" - cs " + o + " (");
@@ -1863,8 +2048,10 @@ public class PdfParser {
 				Object o = stros.get(s);
 				if (o instanceof CharSequence) {
 					CharSequence str = ((CharSequence) o);
-					if (this.pwrFont == null)
-						totalRendered.append(str);
+					if (this.pwrFont == null) {
+						if (this.words != null)
+							totalRendered.append(str);
+					}
 					else {
 						String rStr = this.renderCharSequence(str);
 						totalRendered.append(rStr);
@@ -1878,7 +2065,7 @@ public class PdfParser {
 					}
 					else if ((s+1) == stros.size())
 						this.endWord();
-					if (DEBUG_RENDER_TEXT)
+					if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
 						System.out.println("Re-positioning by TJ array number " + d + "*" + this.pwrFontSize);
 					updateMatrix(this.lineMatrix, (-d * this.pwrFontSize), 0);
 				}
@@ -1888,9 +2075,11 @@ public class PdfParser {
 			this.endLine();
 			
 			//	print debug info
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> show strings from array" + ((this.pwrFont == null) ? " (nf)" : "") + ": '" + totalRendered + "'");
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" --> show strings from array" + ((this.pwrFont == null) ? " (nf)" : "") + ": '" + totalRendered + "'");
 		}
 		
+		private StringBuffer wordCharCodes = null;
 		private StringBuffer wordString = null;
 		private float[] start;
 		private float[] top;
@@ -1902,9 +2091,24 @@ public class PdfParser {
 			//	render characters
 			for (int c = 0; c < cs.length(); c++) {
 				char ch = cs.charAt(c);
-				String rCh = pwrFont.getUnicode((int) ch);
-				boolean isSpace = (rCh.trim().length() == 0);
-				boolean implicitSpace = ((this.pwrCharSpacing > ((this.pwrFontSpaceWidth * narrowSpaceToleranceFactor) / 1000)));
+				String rCh;
+				boolean isSpace;
+				boolean implicitSpace;
+				
+				//	we're only collecting chars
+				if (this.words == null) {
+					this.pwrFont.setCharUsed((int) ch);
+					rCh = ("(" + ((int) ch) + ")");
+					isSpace = (("" + ch).trim().length() == 0);
+					implicitSpace = ((this.pwrCharSpacing > ((this.pwrFontSpaceWidth * narrowSpaceToleranceFactor) / 1000)));				
+				}
+				
+				//	we're actually extracting words
+				else {
+					rCh = this.pwrFont.getUnicode((int) ch);
+					isSpace = (rCh.trim().length() == 0);
+					implicitSpace = ((this.pwrCharSpacing > ((this.pwrFontSpaceWidth * narrowSpaceToleranceFactor) / 1000)));				
+				}
 				
 				//	whitespace char, remember end of previous word (if any)
 				if (isSpace) {
@@ -1915,9 +2119,16 @@ public class PdfParser {
 				//	non-whitespace char, remember start of word
 				else {
 					this.startWord();
-					if (this.wordString != null)
-						this.wordString.append(rCh);
-					rendered.append(rCh);
+					String nrCh = dissolveLigature(rCh);
+					if ((this.wordCharCodes != null) && (this.wordString != null)) {
+//						this.wordCharCodes.append((char) ((rCh.length() * 256) | ((int) ch)));
+//						this.wordString.append(rCh);
+						this.wordCharCodes.append((char) ((nrCh.length() * 256) | ((int) ch)));
+						this.wordString.append(nrCh);
+					}
+//					rendered.append(rCh);
+					rendered.append(nrCh);
+					//	TODO dissolve ligatures
 				}
 				
 				//	update state (move caret forward)
@@ -1928,7 +2139,7 @@ public class PdfParser {
 					if (!isSpace)
 						rendered.append(' ');
 					this.endWord();
-					if (DEBUG_RENDER_TEXT)
+					if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
 						System.out.println("Drawing implicit space");
 					updateMatrix(this.lineMatrix, this.pwrCharSpacing, 0);
 				}
@@ -1939,21 +2150,23 @@ public class PdfParser {
 		}
 		
 		private void drawChar(char ch, boolean isSpace, boolean implicitSpace) {
-			float spacing = (isSpace ? this.pwrWordSpacing : (implicitSpace ? 0 : this.pwrCharSpacing));
+//			float spacing = (isSpace ? this.pwrWordSpacing : (implicitSpace ? 0 : this.pwrCharSpacing));
+			float spacing = (implicitSpace ? 0 : this.pwrCharSpacing);
+			if (isSpace)
+				spacing += this.pwrWordSpacing;
 			float width = ((((this.pwrFont.getCharWidth(ch) * this.pwrFontSize) + (spacing * 1000)) * this.pwrHorizontalScaling) / (1000 * 100));
-			if (DEBUG_RENDER_TEXT)
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
 				System.out.println("Drawing char '" + ch + "' (" + ((int) ch) + ")");
 			updateMatrix(this.lineMatrix, width, 0);
 		}
 		
-//		private static final boolean IGNORE_TRANSFORMER_MATRICES = false;
-//		
 		private void startLine() {
 			if ((this.top != null) && (this.bottom != null))
 				return;
 			if (this.pwrFont == null)
 				return;
-			this.top = transform(0, (this.pwrFont.capHeigth * this.pwrFontSize), 1, this.lineMatrix);
+//			this.top = transform(0, (this.pwrFont.capHeight * this.pwrFontSize), 1, this.lineMatrix);
+			this.top = transform(0, (Math.min(this.pwrFont.capHeight, this.pwrFont.ascent) * this.pwrFontSize), 1, this.lineMatrix);
 			this.top = this.applyTransformationMatrices(this.top);
 			this.bottom = transform(0, (this.pwrFont.descent * this.pwrFontSize), 1, this.lineMatrix);
 			this.bottom = this.applyTransformationMatrices(this.bottom);
@@ -1970,10 +2183,12 @@ public class PdfParser {
 				return;
 			if (this.start != null)
 				return;
+			this.wordCharCodes = new StringBuffer();
 			this.wordString = new StringBuffer();
 			this.start = transform(0, 0, 1, this.lineMatrix);
 			this.start = this.applyTransformationMatrices(this.start);
-			if (DEBUG_RENDER_TEXT) System.out.println(" start set to " + Arrays.toString(this.start));
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				System.out.println(" start set to " + Arrays.toString(this.start));
 		}
 		
 		private void endWord() {
@@ -1981,8 +2196,19 @@ public class PdfParser {
 				return;
 			float[] end = transform(0, 0, 1, this.lineMatrix);
 			end = this.applyTransformationMatrices(end);
-			if (DEBUG_RENDER_TEXT) System.out.println(" --> extent is " + this.start[0] + "-" + end[0] + " x " + this.top[1] + "-" + this.bottom[1]);
-			Rectangle2D pwb;
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null)) {
+				System.out.println(" - start is " + Arrays.toString(this.start));
+				System.out.println(" - end is " + Arrays.toString(end));
+				System.out.println(" - top is " + Arrays.toString(this.top));
+				System.out.println(" - bottom is " + Arrays.toString(this.bottom));
+				if (this.eFontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION)
+					System.out.println(" --> extent is " + this.start[0] + "-" + end[0] + " x " + this.top[1] + "-" + this.bottom[1]);
+				else if (this.eFontDirection == PWord.BOTTOM_UP_FONT_DIRECTION)
+					System.out.println(" --> extent is " + this.top[0] + "-" + this.bottom[0] + " x " + this.start[1] + "-" + end[1]);
+				else if (this.eFontDirection == PWord.TOP_DOWN_FONT_DIRECTION)
+					System.out.println(" --> extent is " + this.bottom[0] + "-" + this.top[0] + " x " + end[1] + "-" + this.start[1]);
+			}
+			Rectangle2D pwb = null;
 //			float bls = this.pwrFont.getRelativeBaselineShift(this.wordString.toString());
 //			if (bls == 0)
 //				pwb = new Rectangle2D.Float(this.start[0], this.bottom[1], (end[0] - this.start[0]), (this.top[1] - this.bottom[1]));
@@ -1991,11 +2217,29 @@ public class PdfParser {
 //				if (DEBUG_RENDER_TEXT) System.out.println(" --> extent corrected to " + this.start[0] + "-" + end[0] + " x " + (top[1] + bls) + "-" + (bottom[1] + bls));
 //				pwb = new Rectangle2D.Float(this.start[0], (this.bottom[1] + bls), (end[0] - this.start[0]), (this.top[1] - this.bottom[1]));
 //			}
-			pwb = new Rectangle2D.Float(this.start[0], this.bottom[1], (end[0] - this.start[0]), (this.top[1] - this.bottom[1]));
 			//	correction seems to be causing a bit of trouble, switched off for now
-			this.words.add(new PWord(this.wordString.toString(), pwb, Math.round(this.eFontSize), this.pwrFont));
+			if (this.eFontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION)
+				pwb = new Rectangle2D.Float(this.start[0], this.bottom[1], (end[0] - this.start[0]), (this.top[1] - this.bottom[1]));
+			else if (this.eFontDirection == PWord.BOTTOM_UP_FONT_DIRECTION)
+				pwb = new Rectangle2D.Float(this.top[0], this.start[1], (this.bottom[0] - this.top[0]), (end[1] - this.start[1]));
+			else if (this.eFontDirection == PWord.TOP_DOWN_FONT_DIRECTION)
+				pwb = new Rectangle2D.Float(this.bottom[0], end[1], (this.top[0] - this.bottom[0]), (this.start[1] - end[1]));
+			if ((pwb != null) && (this.words != null))
+				this.words.add(new PWord(this.wordCharCodes.toString(), this.wordString.toString(), pwb, Math.round(this.eFontSize), this.eFontDirection, this.pwrFont));
+			this.wordCharCodes = null;
 			this.wordString = null;
 			this.start = null;
+		}
+		
+		private static String dissolveLigature(String rCh) {
+			if (rCh.length() != 1)
+				return rCh;
+			String nrCh = StringUtils.getNormalForm(rCh.charAt(0));
+			if (nrCh.length() == 1)
+				return rCh;
+			if (DEBUG_RENDER_PAGE_CONTENT)
+				System.out.println("Dissolved '" + rCh + "' to '" + nrCh + "'");
+			return nrCh;
 		}
 		
 		private static final void updateMatrix(float[][] matrix, float tx, float ty) {
