@@ -36,8 +36,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.TreeSet;
 
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.JComboBox;
@@ -47,9 +50,15 @@ import javax.swing.JPanel;
 
 import de.uka.ipd.idaho.gamta.AnnotationUtils;
 import de.uka.ipd.idaho.gamta.Gamta;
+import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
+import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
 import de.uka.ipd.idaho.gamta.util.swing.DialogFactory;
 import de.uka.ipd.idaho.im.ImAnnotation;
+import de.uka.ipd.idaho.im.ImDocument;
+import de.uka.ipd.idaho.im.ImLayoutObject;
+import de.uka.ipd.idaho.im.ImPage;
+import de.uka.ipd.idaho.im.ImRegion;
 import de.uka.ipd.idaho.im.ImWord;
 
 /**
@@ -116,6 +125,28 @@ public class ImUtils implements ImagingConstants {
 		}
 	};
 	
+	/** Comparator sorting ImLayoutObjects left to right with regard to their
+	 * center points. With arrays or collections whose content objects are NOT
+	 * ImLayoutObjects, using this comparator results in ClassCastExceptions. */
+	public static final Comparator leftRightOrder = new Comparator() {
+		public int compare(Object obj1, Object obj2) {
+			ImLayoutObject ilo1 = ((ImLayoutObject) obj1);
+			ImLayoutObject ilo2 = ((ImLayoutObject) obj2);
+			return ((ilo1.bounds.left + ilo1.bounds.right) - (ilo2.bounds.left + ilo2.bounds.right));
+		}
+	};
+	
+	/** Comparator sorting ImLayoutObjects top to bottom with regard to their
+	 * center points. With arrays or collections whose content objects are NOT
+	 * ImLayoutObjects, using this comparator results in ClassCastExceptions. */
+	public static final Comparator topDownOrder = new Comparator() {
+		public int compare(Object obj1, Object obj2) {
+			ImLayoutObject ilo1 = ((ImLayoutObject) obj1);
+			ImLayoutObject ilo2 = ((ImLayoutObject) obj2);
+			return ((ilo1.bounds.top + ilo1.bounds.bottom) - (ilo2.bounds.top + ilo2.bounds.bottom));
+		}
+	};
+	
 	/**
 	 * Prompt the user for a type for an Image Markup object (usually an
 	 * annotation or region). If this method returns a non-null value, the
@@ -134,30 +165,6 @@ public class ImUtils implements ImagingConstants {
 		if (ssp.prompt(DialogFactory.getTopWindow()) != JOptionPane.OK_OPTION)
 			return null;
 		return ssp.typeOrNameAt(0, true);
-//		JPanel jp = new JPanel(new BorderLayout());
-//        JComboBox jcb = new JComboBox(existingTypes);
-//        jcb.setEditable(allowInput);
-//        if (existingType != null)
-//        	jcb.setSelectedItem(existingType);
-//        jp.add(new JLabel(text + " "), BorderLayout.WEST);
-//        jp.add(jcb, BorderLayout.CENTER);
-//		JPanel jpc = new JPanel(new BorderLayout());
-//		jpc.add(jp, BorderLayout.NORTH);
-//        jpc.setPreferredSize(new Dimension(400, 23));
-//        if (JOptionPane.showConfirmDialog(DialogFactory.getTopWindow(), jpc, title, JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION)
-//        	return null;
-//		Object typeObj = jcb.getSelectedItem();
-//		if (typeObj == null)
-//			return null;
-//		String type = typeObj.toString().trim();
-//		if (type.length() == 0)
-//			return null;
-//		if (AnnotationUtils.isValidAnnotationType(type))
-//			return type;
-//		else {
-//			JOptionPane.showMessageDialog(DialogFactory.getTopWindow(), ("'" + type.toString().trim() + "' is not a valid type."), "Invalid Type", JOptionPane.ERROR_MESSAGE);
-//			return null;
-//		}
 	}
 	
 	/**
@@ -176,7 +183,7 @@ public class ImUtils implements ImagingConstants {
 	public static StringPair promptForObjectTypeChange(String title, String textOld, String textNew, String[] existingTypes, String existingType, boolean allowInput) {
 		StringSelectorPanel ssp = new StringSelectorPanel(title);
 		ssp.addSelector(textOld, existingTypes, existingType, false);
-		ssp.addSelector(textNew, existingTypes, existingType, false);
+		ssp.addSelector(textNew, existingTypes, existingType, true);
 		if (ssp.prompt(DialogFactory.getTopWindow()) != JOptionPane.OK_OPTION)
 			return null;
 		String typeOld = ssp.typeOrNameAt(0, false);
@@ -184,42 +191,6 @@ public class ImUtils implements ImagingConstants {
 		if ((typeOld == null) || (typeNew == null) || typeOld.equals(typeNew))
 			return null;
 		return new StringPair(typeOld, typeNew);
-//		JPanel jpOld = new JPanel(new BorderLayout());
-//		JComboBox jcbOld = new JComboBox(existingTypes);
-//		if (existingType != null)
-//			jcbOld.setSelectedItem(existingType);
-//		jpOld.add(new JLabel(textOld + " "), BorderLayout.WEST);
-//		jpOld.add(jcbOld, BorderLayout.CENTER);
-//		
-//		JPanel jpNew = new JPanel(new BorderLayout());
-//		JComboBox jcbNew = new JComboBox(existingTypes);
-//		jcbNew.setEditable(allowInput);
-//		if (existingType != null)
-//			jcbNew.setSelectedItem(existingType);
-//		jpNew.add(new JLabel(textOld + " "), BorderLayout.WEST);
-//		jpNew.add(jcbNew, BorderLayout.CENTER);
-//		
-//		JPanel jpc = new JPanel(new BorderLayout());
-//		jpc.add(jpOld, BorderLayout.NORTH);
-//		jpc.add(jpNew, BorderLayout.SOUTH);
-//		jpc.setPreferredSize(new Dimension(400, 48));
-//        
-//        if (JOptionPane.showConfirmDialog(DialogFactory.getTopWindow(), jpc, title, JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION)
-//        	return null;
-//		Object typeObjOld = jcbOld.getSelectedItem();
-//		Object typeObjNew = jcbNew.getSelectedItem();
-//		if ((typeObjOld == null) || (typeObjNew == null))
-//			return null;
-//		String typeOld = typeObjOld.toString().trim();
-//		String typeNew = typeObjNew.toString().trim();
-//		if ((typeOld.length() == 0) || (typeNew.length() == 0) || typeOld.equals(typeNew))
-//			return null;
-//		else if (AnnotationUtils.isValidAnnotationType(typeOld) && AnnotationUtils.isValidAnnotationType(typeNew))
-//			return new StringPair(typeOld, typeNew);
-//		else {
-//			JOptionPane.showMessageDialog(DialogFactory.getTopWindow(), ("'" + typeNew.toString().trim() + "' is not a valid type."), "Invalid Type", JOptionPane.ERROR_MESSAGE);
-//			return null;
-//		}
 	}
 	
 	/**
@@ -619,5 +590,637 @@ public class ImUtils implements ImagingConstants {
 				sb.deleteCharAt(sb.length()-1);
 		}
 		return sb.toString();
+	}
+	
+	/**
+	 * Retrieve the rows of a table. If table rows are already marked, this
+	 * method simply returns them. If no rows are marked, this method tries to
+	 * generate them. If generation fails, e.g. if the argument region does not
+	 * contain any words, or if no row gaps exist, this method returns null.
+	 * Newly generated table rows are not attached to the page.
+	 * @param table the table whose rows to retrieve
+	 * @return an array holding the table rows
+	 */
+	public static ImRegion[] getTableRows(ImRegion table) {
+		
+		//	get page
+		ImPage page = table.getPage();
+		if (page == null)
+			page = table.getDocument().getPage(table.pageId);
+		
+		//	try and get existing table rows first
+		ImRegion[] tableRows = getRegionsInside(page, table.bounds, ImRegion.TABLE_ROW_TYPE, false);
+		
+		//	generate rows if none exist
+		if (tableRows.length == 0) {
+			
+			//	get page image for resolution
+			PageImage pageImage = page.getPageImage();
+			
+			//	get words
+			ImWord[] tableWords = page.getWordsInside(table.bounds);
+			if (tableWords.length == 0)
+				return null;
+			
+			//	assess column occupancy
+			int[] rowWordCols = new int[table.bounds.bottom - table.bounds.top];
+			Arrays.fill(rowWordCols, 0);
+			for (int w = 0; w < tableWords.length; w++) {
+				for (int r = Math.max(table.bounds.top, tableWords[w].bounds.top); r < Math.min(table.bounds.bottom, tableWords[w].bounds.bottom); r++)
+					rowWordCols[r - table.bounds.top] += (tableWords[w].bounds.right - tableWords[w].bounds.left);
+			}
+			
+			//	collect row gaps
+			ArrayList rowGaps = new ArrayList();
+			TreeSet rowGapWidths = new TreeSet(Collections.reverseOrder());
+			collectGaps(rowGaps, rowGapWidths, rowWordCols, (pageImage.currentDpi / 50) /* about 0.5mm */);
+			
+			//	do we have anything to work with?
+			if (rowGaps.isEmpty())
+				return null;
+			
+			//	create row regions
+			tableRows = new ImRegion[rowGaps.size() + 1];
+			for (int g = 0; g <= rowGaps.size(); g++) {
+				int tableRowTop = table.bounds.top + ((g == 0) ? 0 : ((Gap) rowGaps.get(g-1)).end);
+				int tableRowBottom = ((g == rowGaps.size()) ? table.bounds.bottom : (table.bounds.top + ((Gap) rowGaps.get(g)).start));
+				tableRows[g] = new ImRegion(table.getDocument(), table.pageId, new BoundingBox(table.bounds.left, table.bounds.right, tableRowTop, tableRowBottom), ImRegion.TABLE_ROW_TYPE);
+			}
+		}
+		
+		//	finally ...
+		return tableRows;
+	}
+	
+	/**
+	 * Retrieve the columns of a table. If table columns are already marked,
+	 * this method simply returns them. If no columns are marked, this method
+	 * tries to generate them. If generation fails, e.g. if the argument region
+	 * does not contain any words, or if no column gaps exist, this method
+	 * returns null. Newly generated table columns are not attached to the page.
+	 * @param table the table whose columns to retrieve
+	 * @return an array holding the table columns
+	 */
+	public static ImRegion[] getTableColumns(ImRegion table) {
+		
+		//	get page
+		ImPage page = table.getPage();
+		if (page == null)
+			page = table.getDocument().getPage(table.pageId);
+		
+		//	try and get existing table columns first
+		ImRegion[] tableCols = getRegionsInside(page, table.bounds, ImRegion.TABLE_COL_TYPE, false);
+		
+		//	generate columns if none exist
+		if (tableCols.length == 0) {
+			
+			//	get page image for resolution
+			PageImage pageImage = page.getPageImage();
+			
+			//	get words
+			ImWord[] tableWords = page.getWordsInside(table.bounds);
+			if (tableWords.length == 0)
+				return null;
+			
+			//	assess row occupancy
+			int[] colWordRows = new int[table.bounds.right - table.bounds.left];
+			Arrays.fill(colWordRows, 0);
+			for (int w = 0; w < tableWords.length; w++) {
+				for (int c = Math.max(table.bounds.left, tableWords[w].bounds.left); c < Math.min(table.bounds.right, tableWords[w].bounds.right); c++)
+					colWordRows[c - table.bounds.left] += (tableWords[w].bounds.bottom - tableWords[w].bounds.top);
+			}
+			
+			//	collect column gaps
+			ArrayList colGaps = new ArrayList();
+			TreeSet colGapWidths = new TreeSet(Collections.reverseOrder());
+			collectGaps(colGaps, colGapWidths, colWordRows, (pageImage.currentDpi / 30) /* less than 1mm */);
+			
+			//	do we have anything to work with?
+			if (colGaps.isEmpty())
+				return null;
+			
+			//	create column regions
+			tableCols = new ImRegion[colGaps.size() + 1];
+			for (int g = 0; g <= colGaps.size(); g++) {
+				int tableColLeft = table.bounds.left + ((g == 0) ? 0 : ((Gap) colGaps.get(g-1)).end);
+				int tableColRight = ((g == colGaps.size()) ? table.bounds.right : (table.bounds.left + ((Gap) colGaps.get(g)).start));
+				tableCols[g] = new ImRegion(tableWords[0].getDocument(), tableWords[0].pageId, new BoundingBox(tableColLeft, tableColRight, table.bounds.top, table.bounds.bottom), ImRegion.TABLE_COL_TYPE);
+			}
+		}
+		
+		//	finally ...
+		return tableCols;
+	}
+	
+	/**
+	 * Retrieve the cells of a table. If table cells are already marked, this
+	 * method simply returns them. If no cells are marked, this method tries to
+	 * generate them. If generation fails, e.g. if the argument region does not
+	 * contain any words, or if no column or row gaps exist, this method
+	 * returns null. Newly generated table cells are not attached to the page.
+	 * @param table the table whose cells to retrieve
+	 * @return an array holding the table cells
+	 */
+	public static ImRegion[][] getTableCells(ImRegion table, ImRegion[] rows, ImRegion[] cols) {
+		
+		//	get rows and columns if not given
+		if (rows == null) {
+			rows = getTableRows(table);
+			if (rows == null)
+				return null;
+		}
+		if (cols == null) {
+			cols = getTableColumns(table);
+			if (cols == null)
+				return null;
+		}
+		
+		//	sort rows and columns
+		Arrays.sort(rows, new Comparator() {
+			public int compare(Object obj1, Object obj2) {
+				return (((ImRegion) obj1).bounds.top - ((ImRegion) obj2).bounds.top);
+			}
+		});
+		Arrays.sort(cols, new Comparator() {
+			public int compare(Object obj1, Object obj2) {
+				return (((ImRegion) obj1).bounds.left - ((ImRegion) obj2).bounds.left);
+			}
+		});
+		
+		//	get page
+		ImPage page = table.getPage();
+		if (page == null)
+			page = table.getDocument().getPage(table.pageId);
+		
+		//	get and index existing cells
+		ImRegion[] existingCells = table.getRegions(ImRegion.TABLE_CELL_TYPE);
+		HashMap cellsByBounds = new HashMap();
+		for (int c = 0; c < existingCells.length; c++)
+			cellsByBounds.put(existingCells[c].bounds.toString(), existingCells[c]);
+		
+		//	get current cells
+		ImRegion[][] cells = new ImRegion[rows.length][cols.length];
+		for (int r = 0; r < rows.length; r++)
+			for (int c = 0; c < cols.length; c++) {
+				BoundingBox cellBounds = new BoundingBox(cols[c].bounds.left, cols[c].bounds.right, rows[r].bounds.top, rows[r].bounds.bottom);
+				ImWord[] cellWords = page.getWordsInside(cellBounds);
+				if (cellWords.length != 0) {
+					int cbLeft = cellBounds.right;
+					int cbRight = cellBounds.left;
+					int cbTop = cellBounds.bottom;
+					int cbBottom = cellBounds.top;
+					for (int w = 0; w < cellWords.length; w++) {
+						cbLeft = Math.min(cbLeft, cellWords[w].bounds.left);
+						cbRight = Math.max(cbRight, cellWords[w].bounds.right);
+						cbTop = Math.min(cbTop, cellWords[w].bounds.top);
+						cbBottom = Math.max(cbBottom, cellWords[w].bounds.bottom);
+					}
+					cellBounds = new BoundingBox(cbLeft, cbRight, cbTop, cbBottom);
+				}
+				cells[r][c] = ((ImRegion) cellsByBounds.remove(cellBounds.toString()));
+				if (cells[r][c] == null)
+					cells[r][c] = new ImRegion(page.getDocument(), page.pageId, cellBounds, ImRegion.TABLE_CELL_TYPE);
+			}
+		
+		//	remove spurious cells
+		for (Iterator cit = cellsByBounds.values().iterator(); cit.hasNext();) {
+			ImRegion cell = ((ImRegion) cit.next());
+			if (cell.getPage() != null)
+				page.removeRegion(cell);
+		}
+		
+		//	finally ...
+		return cells;
+	}
+	
+	/**
+	 * Order the words in a table. This method first makes the words from each
+	 * cell into a separate logical stream, then concatenates these streams
+	 * across table rows, and finally concatenates all the rows. All cells have
+	 * to be attached to document pages for this method to have any effect.
+	 * @param cells the table cells
+	 */
+	public static void orderTableWords(ImRegion[][] cells) {
+		for (int r = 0; r < cells.length; r++)
+			for (int c = 0; c < cells[r].length; c++) {
+				if (cells[r][c].getPage() == null)
+					return;
+			}
+		
+		ImWord lastCellEnd = null;
+		for (int r = 0; r < cells.length; r++)
+			for (int c = 0; c < cells[r].length; c++) {
+				ImWord[] cellWords = cells[r][c].getWords();
+				if (cellWords.length == 0)
+					continue;
+				ImUtils.makeStream(cellWords, null, null);
+				ImUtils.orderStream(cellWords, ImUtils.leftRightTopDownOrder);
+				Arrays.sort(cellWords, ImUtils.textStreamOrder);
+				if (lastCellEnd != null)
+					cellWords[0].setPreviousWord(lastCellEnd);
+				lastCellEnd = cellWords[cellWords.length-1];
+			}
+	}
+	
+	/**
+	 * Test if the rows of two tables are compatible. In particular, this means
+	 * that (a) the tables have the same number of rows, and (b) the rows have
+	 * the same leading labels. In addition, both tables have to be attached to
+	 * their pages.
+	 * @param table1 the first table
+	 * @param table2 the second table
+	 * @return true if the rows of the argument tables are compatible
+	 */
+	public static boolean areTableRowsCompatible(ImRegion table1, ImRegion table2) {
+		if ((table1.getPage() == null) || (table2.getPage() == null))
+			return false;
+		
+		//	get cells
+		ImRegion[][] cells1 = getTableCells(table1, null, null);
+		if (cells1 == null)
+			return false;
+		ImRegion[][] cells2 = getTableCells(table2, null, null);
+		if (cells2 == null)
+			return false;
+		
+		//	do we have the same number of rows
+		if (cells1.length != cells2.length)
+			return false;
+		
+		//	compare row labels (safe for header row)
+		for (int r = 1; r < cells1.length; r++) {
+			ImWord[] words1 = cells1[r][0].getWords();
+			ImWord[] words2 = cells2[r][0].getWords();
+			if (words1.length != words2.length)
+				return false;
+			if (words1.length == 0)
+				continue;
+			Arrays.sort(words1, textStreamOrder);
+			String label1 = getString(words1[0], words1[words1.length-1], true);
+			Arrays.sort(words2, textStreamOrder);
+			String label2 = getString(words2[0], words2[words2.length-1], true);
+			if (!label1.equals(label2))
+				return false;
+		}
+		
+		//	no problems found with these two
+		return true;
+	}
+	
+	/**
+	 * Connect two tables side by side, conceptually concatenating their rows.
+	 * If the columns of the argument tables are connected to other tables, the
+	 * connected tables must be compatible as well, and if so, their rows are
+	 * also connected.
+	 * @param leftTable the left table
+	 * @param rightTable the right table
+	 * @return true if the connection was successful, false otherwise
+	 */
+	public static boolean connectTableRows(ImRegion leftTable, ImRegion rightTable) {
+		ImRegion[] leftTables = getColumnConnectedTables(leftTable);
+		ImRegion[] rightTables = getColumnConnectedTables(rightTable);
+		if (leftTables.length != rightTables.length)
+			return false;
+		for (int t = 0; t < leftTables.length; t++) {
+			if (!areTableRowsCompatible(leftTables[t], rightTables[t]))
+				return false;
+		}
+		for (int t = 0; t < leftTables.length; t++) {
+			leftTables[t].setAttribute("rowsContinueIn", (rightTables[t].pageId + "." + rightTables[t].bounds));
+			rightTables[t].setAttribute("rowsContinueFrom", (leftTables[t].pageId + "." + leftTables[t].bounds));
+		}
+		return true;
+	}
+	
+	/**
+	 * Connect two tables atop one another, conceptually concatenating their
+	 * columns. If the rows of the argument tables are connected to other
+	 * tables, the connected tables must be compatible as well, and if so,
+	 * their columns are also connected.
+	 * @param topTable the upper table
+	 * @param topTable the lower table
+	 * @return true if the connection was successful, false otherwise
+	 */
+	public static boolean connectTableColumns(ImRegion topTable, ImRegion bottomTable) {
+		ImRegion[] topTables = getRowConnectedTables(topTable);
+		ImRegion[] bottomTables = getRowConnectedTables(bottomTable);
+		if (topTables.length != bottomTables.length)
+			return false;
+		for (int t = 0; t < topTables.length; t++) {
+			if (!areTableColumnsCompatible(topTables[t], bottomTables[t]))
+				return false;
+		}
+		for (int t = 0; t < topTables.length; t++) {
+			topTables[t].setAttribute("colsContinueIn", (bottomTables[t].pageId + "." + bottomTables[t].bounds));
+			bottomTables[t].setAttribute("colsContinueFrom", (topTables[t].pageId + "." + topTables[t].bounds));
+		}
+		return true;
+	}
+	
+	/**
+	 * Test if the columns of two tables are compatible. In particular, this
+	 * means that (a) the tables have the same number of columns, and (b) the
+	 * columns have the same headers. In addition, both tables have to be
+	 * attached to their pages.
+	 * @param table1 the first table
+	 * @param table2 the second table
+	 * @return true if the columns of the argument tables are compatible
+	 */
+	public static boolean areTableColumnsCompatible(ImRegion table1, ImRegion table2) {
+		if ((table1.getPage() == null) || (table2.getPage() == null))
+			return false;
+		
+		//	get cells
+		ImRegion[][] cells1 = getTableCells(table1, null, null);
+		if (cells1 == null)
+			return false;
+		ImRegion[][] cells2 = getTableCells(table2, null, null);
+		if (cells2 == null)
+			return false;
+		
+		//	do we have the same number of columns
+		if (cells1[0].length != cells2[0].length)
+			return false;
+		
+		//	compare column headers (safe for label column)
+		for (int c = 1; c < cells1[0].length; c++) {
+			ImWord[] words1 = cells1[0][c].getWords();
+			ImWord[] words2 = cells2[0][c].getWords();
+			if (words1.length != words2.length)
+				return false;
+			if (words1.length == 0)
+				continue;
+			Arrays.sort(words1, textStreamOrder);
+			String label1 = getString(words1[0], words1[words1.length-1], true);
+			Arrays.sort(words2, textStreamOrder);
+			String label2 = getString(words2[0], words2[words2.length-1], true);
+			if (!label1.equals(label2))
+				return false;
+		}
+		
+		//	no problems found with these two
+		return true;
+	}
+	
+	/**
+	 * Retrieve a table by its ID from an Image Markup document. The ID has the
+	 * form '&lt;pageId&gt;.&lt;boundingBox&gt;', as used by the
+	 * <code>connectTableRows()</code> and  <code>connectTableColumns()</code>
+	 * methods.
+	 * @param doc the document to retrieve the table from
+	 * @param id the table ID
+	 * @return the region representing the table with the argument ID
+	 */
+	public static ImRegion getTableForId(ImDocument doc, String id) {
+		if (id == null)
+			return null;
+		if (!id.matches("[0-9]+\\.\\[[0-9]+\\,[0-9]+\\,[0-9]+\\,[0-9]+\\]"))
+			return null;
+		ImPage page = doc.getPage(Integer.parseInt(id.substring(0, id.indexOf('.'))));
+		if (page == null)
+			return null;
+		ImRegion[] pageTables = page.getRegions(ImRegion.TABLE_TYPE);
+		for (int t = 0; t < pageTables.length; t++) {
+			if (id.endsWith("." + pageTables[t].bounds))
+				return pageTables[t];
+		}
+		return null;
+	}
+	
+	/**
+	 * Retrieve the tables whose rows are connected to the rows of the argument
+	 * table, directly or transitively. If the rows of the argument table are
+	 * not connected to other tables, the returned array holds the argument
+	 * table as its only element.
+	 * @param table the tables whose connected tables to find
+	 * @return an array holding the connected tables, in connection order
+	 */
+	public static ImRegion[] getRowConnectedTables(ImRegion table) {
+		LinkedList tables = new LinkedList();
+		for (ImRegion pTable = getTableForId(table.getDocument(), ((String) table.getAttribute("rowsContinueFrom"))); pTable != null; pTable = getTableForId(pTable.getDocument(), ((String) pTable.getAttribute("rowsContinueFrom"))))
+			tables.addFirst(pTable);
+		tables.add(table);
+		for (ImRegion sTable = getTableForId(table.getDocument(), ((String) table.getAttribute("rowsContinueIn"))); sTable != null; sTable = getTableForId(sTable.getDocument(), ((String) sTable.getAttribute("rowsContinueIn"))))
+			tables.addLast(sTable);
+		return ((ImRegion[]) tables.toArray(new ImRegion[tables.size()]));
+	}
+	
+	/**
+	 * Retrieve the tables whose columns are connected to the columns of the
+	 * argument table, directly or transitively. If the columns of the argument
+	 * table are not connected to other tables, the returned array holds the
+	 * argument table as its only element.
+	 * @param table the tables whose connected tables to find
+	 * @return an array holding the connected tables, in connection order
+	 */
+	public static ImRegion[] getColumnConnectedTables(ImRegion table) {
+		LinkedList tables = new LinkedList();
+		for (ImRegion pTable = getTableForId(table.getDocument(), ((String) table.getAttribute("colsContinueFrom"))); pTable != null; pTable = getTableForId(pTable.getDocument(), ((String) pTable.getAttribute("colsContinueFrom"))))
+			tables.addFirst(pTable);
+		tables.add(table);
+		for (ImRegion sTable = getTableForId(table.getDocument(), ((String) table.getAttribute("colsContinueIn"))); sTable != null; sTable = getTableForId(sTable.getDocument(), ((String) sTable.getAttribute("colsContinueIn"))))
+			tables.addLast(sTable);
+		return ((ImRegion[]) tables.toArray(new ImRegion[tables.size()]));
+	}
+	
+	/**
+	 * Retrieve the tables whose rows or columns are connected to the rows or
+	 * columns of the argument table, directly or transitively. The outer
+	 * dimension of the returned array is top-down, the inner left-right.
+	 * @param table the tables whose connected tables to find
+	 * @return an array holding the connected tables, in connection order
+	 */
+	public static ImRegion[][] getConnectedTables(ImRegion table) {
+		ImRegion[] colConTables = getColumnConnectedTables(table);
+		ImRegion[][] conTables = new ImRegion[colConTables.length][];
+		for (int t = 0; t < colConTables.length; t++)
+			conTables[t] = getRowConnectedTables(colConTables[t]);
+		return conTables;
+	}
+	
+	/**
+	 * Copy the data from a table in some column based format like CSV. If the
+	 * argument separator is the comma or semicolon, field values are enclosed
+	 * in double quotes.
+	 * @param table the table whose data to copy
+	 * @param separator the separator to use
+	 * @return the data from the argument table
+	 */
+	public static String getTableData(ImRegion table, char separator) {
+		
+		//	get rows and columns
+		ImRegion[] rows = getRegionsInside(table.getPage(), table.bounds, ImRegion.TABLE_ROW_TYPE, false);
+		Arrays.sort(rows, new Comparator() {
+			public int compare(Object obj1, Object obj2) {
+				return (((ImRegion) obj1).bounds.top - ((ImRegion) obj2).bounds.top);
+			}
+		});
+		ImRegion[] cols = getRegionsInside(table.getPage(), table.bounds, ImRegion.TABLE_COL_TYPE, false);
+		Arrays.sort(cols, new Comparator() {
+			public int compare(Object obj1, Object obj2) {
+				return (((ImRegion) obj1).bounds.left - ((ImRegion) obj2).bounds.left);
+			}
+		});
+		
+		//	write table data
+		StringBuffer tableData = new StringBuffer();
+		for (int r = 0; r < rows.length; r++)
+			for (int c = 0; c < cols.length; c++) {
+				appendCellData(table, rows[r], cols[c], separator, tableData);
+				if ((c+1) == cols.length)
+					tableData.append("\r\n");
+				else tableData.append(separator);
+			}
+		
+		//	finally ...
+		return tableData.toString();
+	}
+	
+	/**
+	 * Copy the data from a whole grid of connected tables in some column based
+	 * format like CSV. If the argument separator is the comma or semicolon,
+	 * field values are enclosed in double quotes.
+	 * @param table the table whose data to copy
+	 * @param separator the separator to use
+	 * @return the data from the argument table
+	 */
+	public static String getTableGridData(ImRegion table, char separator) {
+		
+		//	collect data row-wise
+		LinkedList rowDataList = new LinkedList();
+		
+		//	get whole grid of connected tables
+		ImRegion[][] tables = getConnectedTables(table);
+		for (int ty = 0; ty < tables.length; ty++) {
+			StringBuffer[] rowData = null;
+			for (int tx = 0; tx < tables[ty].length; tx++) {
+				
+				//	get columns and rows of current table
+				ImRegion[] rows = getRegionsInside(tables[ty][tx].getPage(), tables[ty][tx].bounds, ImRegion.TABLE_ROW_TYPE, false);
+				Arrays.sort(rows, ImUtils.topDownOrder);
+				ImRegion[] cols = getRegionsInside(tables[ty][tx].getPage(), tables[ty][tx].bounds, ImRegion.TABLE_COL_TYPE, false);
+				Arrays.sort(cols, ImUtils.leftRightOrder);
+				
+				//	initialize data on first table in grid row 
+				if (rowData == null) {
+					rowData = new StringBuffer[rows.length];
+					for (int r = 0; r < rowData.length; r++)
+						rowData[r] = new StringBuffer();
+				}
+				
+				//	append data to rows (column header row only for top row of grid, row label column only for first column of grid)
+				for (int r = ((ty == 0) ? 0 : 1); r < Math.min(rows.length, rowData.length); r++)
+					for (int c = ((tx == 0) ? 0 : 1); c < cols.length; c++) {
+						appendCellData(tables[ty][tx], rows[r], cols[c], separator, rowData[r]);
+						if (((c+1) < cols.length) || ((tx+1) < tables[ty].length))
+							rowData[r].append(separator);
+					}
+			}
+			
+			//	store data from grid row
+			for (int r = ((ty == 0) ? 0 : 1); r < rowData.length; r++)
+				rowDataList.add(rowData[r]);
+		}
+		
+		//	write table data
+		StringBuffer tableData = new StringBuffer();
+		for (Iterator rdit = rowDataList.iterator(); rdit.hasNext();) {
+			StringBuffer rowData = ((StringBuffer) rdit.next());
+			tableData.append(rowData);
+			tableData.append("\r\n");
+		}
+		
+		//	finally ...
+		return tableData.toString();
+	}
+	
+	private static void appendCellData(ImRegion table, ImRegion row, ImRegion col, char separator, StringBuffer data) {
+		if ((separator == ',') || (separator == ';'))
+			data.append('"');
+		BoundingBox cellBounds = new BoundingBox(col.bounds.left, col.bounds.right, row.bounds.top, row.bounds.bottom);
+		ImWord[] cellWords = table.getPage().getWordsInside(cellBounds);
+		if (cellWords.length != 0) {
+			Arrays.sort(cellWords, ImUtils.textStreamOrder);
+			String cellStr = getString(cellWords[0], cellWords[cellWords.length-1], true);
+			if (cellStr.matches("\\.\\s*[0-9]+"))
+				cellStr = ("0." + cellStr.substring(".".length()).trim());
+			if ((separator == ',') || (separator == ';')) {
+				StringBuffer eCellStr = new StringBuffer();
+				for (int i = 0; i < cellStr.length(); i++) {
+					char ch = cellStr.charAt(i);
+					if (ch == '"')
+						eCellStr.append('"');
+					eCellStr.append(ch);
+				}
+				cellStr = eCellStr.toString();
+			}
+			data.append(cellStr);
+		}
+		if ((separator == ',') || (separator == ';'))
+			data.append('"');
+	}
+	
+	private static ImRegion[] getRegionsInside(ImPage page, BoundingBox box, String type, boolean fuzzy) {
+		ImRegion[] regions = page.getRegionsInside(box, fuzzy);
+		ArrayList regionList = new ArrayList();
+		for (int r = 0; r < regions.length; r++) {
+			if (type.equals(regions[r].getType()))
+				regionList.add(regions[r]);
+		}
+		return ((ImRegion[]) regionList.toArray(new ImRegion[regionList.size()]));
+	}
+	
+	private static class Gap {
+		int start;
+		int end;
+		Gap(int start, int end) {
+			this.start = start;
+			this.end = end;
+		}
+		int getWidth() {
+			return (this.end - this.start);
+		}
+	}
+	
+	private static void collectGaps(ArrayList gaps, TreeSet gapWidths, int[] wordDensity, int minGapWidth) {
+		
+		//	collect gaps
+		int gapStart = -1;
+		for (int d = 0; d < wordDensity.length; d++) {
+			if (wordDensity[d] == 0) {
+				if (gapStart == -1)
+					gapStart = d;
+			}
+			else if (gapStart != -1) {
+				if ((d - gapStart) > minGapWidth) {
+					Gap gap = new Gap(gapStart, d);
+					gaps.add(gap);
+					gapWidths.add(new Integer(gap.getWidth()));
+				}
+				gapStart = -1;
+			}
+		}
+		
+		//	find best gap width
+		int maxScore = 0;
+		int maxScoreGapWidth = wordDensity.length;
+		for (Iterator cgwit = gapWidths.iterator(); cgwit.hasNext();) {
+			int gapWidth = ((Integer) cgwit.next()).intValue();
+			int gapCount = 0;
+			for (int g = 0; g < gaps.size(); g++) {
+				if (((Gap) gaps.get(g)).getWidth() >= gapWidth)
+					gapCount++;
+			}
+			if ((gapCount * gapWidth) > maxScore) {
+				maxScore = (gapCount * gapWidth);
+				maxScoreGapWidth = gapWidth;
+			}
+		}
+		
+		//	sort out gaps that are too narrow
+		for (int g = 0; g < gaps.size(); g++) {
+			if (((Gap) gaps.get(g)).getWidth() < maxScoreGapWidth)
+				gaps.remove(g--);
+		}
 	}
 }
