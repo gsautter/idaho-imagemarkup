@@ -33,13 +33,13 @@ import java.util.HashSet;
 import java.util.Properties;
 import java.util.TreeSet;
 
-import de.uka.ipd.idaho.gamta.MutableAnnotation;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.constants.TableConstants;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
 import de.uka.ipd.idaho.im.ImLayoutObject;
 import de.uka.ipd.idaho.im.ImRegion;
+import de.uka.ipd.idaho.im.util.ImUtils;
 
 /**
  * Function library for analyzing the structure of text blocks in pages,
@@ -52,7 +52,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 	/**
 	 * Group the lines inside a the blocks of a page into paragraphs. This
 	 * method is for convenience, it loops through to the splitIntoPargaraphs()
-	 * method that takes a single mutable annotations as an argument.
+	 * method that takes a single region as an argument.
 	 * @param blocks the blocks to split
 	 * @param dpi the resolution of the page image the bounding boxes of the
 	 *            argument annotations refer to
@@ -61,6 +61,25 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 	public static void splitIntoParagraphs(ImRegion[] blocks, int dpi, ProgressMonitor psm) {
 		for(int b = 0; b < blocks.length; b++)
 			splitIntoParagraphs(blocks[b], dpi, psm);
+	}
+	
+	/**
+	 * Group the lines inside a the blocks of a page into paragraphs. This
+	 * method is for convenience, it loops through to the splitIntoPargaraphs()
+	 * method that takes a single region as an argument.
+	 * @param blocks the blocks to split
+	 * @param dpi the resolution of the page image the bounding boxes of the
+	 *            argument annotations refer to
+	 * @param maxLineMarginFactor the factor whose to multiply the average line
+	 *            height with to obtain the maximum distance in pixels between
+	 *            two lines inside a paragraph (the advantage is that this
+	 *            method of threshold computation naturally scales with both
+	 *            DPI and font size)
+	 * @param psm an observer object monitoring progress
+	 */
+	public static void splitIntoParagraphs(ImRegion[] blocks, int dpi, float maxLineMarginFactor, ProgressMonitor psm) {
+		for(int b = 0; b < blocks.length; b++)
+			splitIntoParagraphs(blocks[b], dpi, maxLineMarginFactor, psm);
 	}
 	
 	/**
@@ -74,6 +93,25 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 	 * @param psm an observer object monitoring progress
 	 */
 	public static void splitIntoParagraphs(ImRegion block, int dpi, ProgressMonitor psm) {
+		splitIntoParagraphs(block, dpi, 0, psm);
+	}
+	
+	/**
+	 * Group the lines inside a the blocks of a page into paragraphs. This
+	 * convenience method first calls splitIntoPargarphsShortLines(), then
+	 * splitIntoParagraphsLineStart(), and finally
+	 * splitIntoParagraphsLineDistance().
+	 * @param block the block to split
+	 * @param dpi the resolution of the page image the bounding boxes of the
+	 *            argument annotation and its children refer to
+	 * @param maxLineMarginFactor the factor whose to multiply the average line
+	 *            height with to obtain the maximum distance in pixels between
+	 *            two lines inside a paragraph (the advantage is that this
+	 *            method of threshold computation naturally scales with both
+	 *            DPI and font size)
+	 * @param psm an observer object monitoring progress
+	 */
+	public static void splitIntoParagraphs(ImRegion block, int dpi, float maxLineMarginFactor, ProgressMonitor psm) {
 		if (psm == null)
 			psm = ProgressMonitor.dummy;
 		
@@ -88,18 +126,24 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 		psm.setInfo(" - found " + lines.length + " relevant lines in block");
 		if (lines.length < 1)
 			return;
+		Arrays.sort(lines, ImUtils.topDownOrder);
+		
+		//	compute average line height and maximum margin
+		int avgLineHeight = computeAverageHeight(lines);
+		int maxLineMargin = ((int) (avgLineHeight * maxLineMarginFactor));
 		
 		//	perform split
 		splitIntoParagraphsShortLine(block, dpi, psm, lines);
-		splitIntoParagraphsLineStart(block, dpi, psm, lines, computeAverageHeight(lines));
+		splitIntoParagraphsLineStart(block, dpi, psm, lines, avgLineHeight);
 		splitIntoParagraphsLineAlignment(block, dpi, psm, lines);
 		//	TODOne figure out which method is better
 		//	==> line distance seems to be more reliable
-//		splitIntoParagraphsLineMargin(block, dpi, psm, lines);
-		splitIntoParagraphsLineDistance(block, dpi, psm, lines);
+		if (maxLineMargin > 0)
+			splitIntoParagraphsLineMargin(block, dpi, maxLineMargin, psm, lines);
+		else splitIntoParagraphsLineDistance(block, dpi, psm, lines);
 		
 		//	compute paragraph bounding boxes and compute indentation
-		wrapAroundChildren(block, MutableAnnotation.PARAGRAPH_TYPE, LINE_ANNOTATION_TYPE);
+		wrapAroundChildren(block, ImRegion.PARAGRAPH_TYPE, LINE_ANNOTATION_TYPE);
 		computeBlockLayout(block, dpi);
 		
 		//	compute font size of paragraphs
@@ -109,7 +153,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 	private static void splitIntoParagraphsLineAlignment(ImRegion block, int dpi, ProgressMonitor psm, ImRegion[] lines) {
 		
 		//	try to further split first generation of paragraphs at indented/exdented lines
-		ImRegion[] paragraphs = block.getRegions(MutableAnnotation.PARAGRAPH_TYPE);
+		ImRegion[] paragraphs = block.getRegions(ImRegion.PARAGRAPH_TYPE);
 		
 		//	group lines by paragraphs
 		ImRegion[][] paragraphLines = getParagraphLines(paragraphs, lines);
@@ -146,7 +190,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 				
 				//	this one looks like a paragraph start, perform split
 				if (split) {
-					ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, l), MutableAnnotation.PARAGRAPH_TYPE);
+					ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, l), ImRegion.PARAGRAPH_TYPE);
 					spStartLineIndex = l;
 					psm.setInfo(" - created sub paragraph at " + splitParagraph.bounds.toString());
 				}
@@ -154,14 +198,14 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			
 			//	we've split something, mark last part, and remove original paragraph
 			if (spStartLineIndex != 0) {
-				ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, paragraphLines[p].length), MutableAnnotation.PARAGRAPH_TYPE);
+				ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, paragraphLines[p].length), ImRegion.PARAGRAPH_TYPE);
 				psm.setInfo(" - created final sub paragraph at " + splitParagraph.bounds.toString());
 				block.getPage().removeRegion(paragraphs[p]);
 			}
 		}
 		
 		//	compute paragraph bounding boxes and compute indentation
-		wrapAroundChildren(block, MutableAnnotation.PARAGRAPH_TYPE, LINE_ANNOTATION_TYPE);
+		wrapAroundChildren(block, ImRegion.PARAGRAPH_TYPE, LINE_ANNOTATION_TYPE);
 	}
 	
 	/**
@@ -195,7 +239,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 		Properties paragraphsToBlocks = new Properties();
 		for (int b = 0; b < blocks.length; b++) {
 			computeBlockLayout(blocks[b], dpi);
-			ImRegion[] paragraphs = blocks[b].getRegions(MutableAnnotation.PARAGRAPH_TYPE);
+			ImRegion[] paragraphs = blocks[b].getRegions(ImRegion.PARAGRAPH_TYPE);
 			for (int p = 0; p < paragraphs.length; p++)
 				paragraphsToBlocks.setProperty(paragraphs[p].bounds.toString(), blocks[b].bounds.toString());
 		}
@@ -206,7 +250,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			column.setAttribute(LINE_HEIGHT_ATTRIBUTE, ("" + avgLineHeigth));
 		
 		//	get paragraphs
-		ImRegion[] paragraphs = column.getRegions(MutableAnnotation.PARAGRAPH_TYPE);
+		ImRegion[] paragraphs = column.getRegions(ImRegion.PARAGRAPH_TYPE);
 		if (paragraphs.length < 2)
 			return;
 		
@@ -356,7 +400,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 	}
 	
 	private static final void computeBlockLayout(ImRegion block, int dpi) {
-		ImRegion[] paragraphs = block.getRegions(MutableAnnotation.PARAGRAPH_TYPE);
+		ImRegion[] paragraphs = block.getRegions(ImRegion.PARAGRAPH_TYPE);
 		if (paragraphs.length == 0)
 			return;
 		
@@ -409,7 +453,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 	}
 	
 	private static void computeParagraphFontSize(ImRegion block) {
-		ImRegion[] paragraphs = block.getRegions(MutableAnnotation.PARAGRAPH_TYPE);
+		ImRegion[] paragraphs = block.getRegions(ImRegion.PARAGRAPH_TYPE);
 		for (int p = 0; p < paragraphs.length; p++) {
 			ImRegion[] lines = getParagraphLayoutLines(paragraphs[p]);
 			int fontSizeSum = 0;
@@ -537,6 +581,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 		ImRegion[] lines = blockOrParagraph.getRegions(LINE_ANNOTATION_TYPE);
 		if (lines.length == 0)
 			return lines;
+		Arrays.sort(lines, ImUtils.topDownOrder);
 		
 		//	merge side-by-side lines for now
 		ArrayList lineList = new ArrayList();
@@ -625,7 +670,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 		
 		//	catch single-line paragraphs
 		if (lines.length == 1) {
-			ImRegion paragraph = new ImRegion(block.getPage(), lines[0].bounds, MutableAnnotation.PARAGRAPH_TYPE);
+			ImRegion paragraph = new ImRegion(block.getPage(), lines[0].bounds, ImRegion.PARAGRAPH_TYPE);
 			psm.setInfo(" ==> only one line in block, nothing to split");
 			psm.setInfo(" ==> created single line paragraph at " + paragraph.bounds.toString());
 			return;
@@ -658,7 +703,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 		//	no significant difference
 		int minSignificantDifference = (dpi / 20); // a little more than one millimeter
 		if ((maxLineEnd - minLineEnd) < minSignificantDifference) {
-			ImRegion paragraph = new ImRegion(block.getPage(), block.bounds, MutableAnnotation.PARAGRAPH_TYPE);
+			ImRegion paragraph = new ImRegion(block.getPage(), block.bounds, ImRegion.PARAGRAPH_TYPE);
 			psm.setInfo(" ==> line ends vary only by " + (maxLineEnd - minLineEnd) + ", short line split too unreliable");
 			psm.setInfo(" ==> created single paragraph at " + paragraph.bounds.toString());
 			return;
@@ -679,18 +724,18 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			//	if above line ends far to the left, start new paragraph
 			psm.setInfo(" - previous line end is " + (lines[l-1].bounds.right - block.bounds.left));
 			if (minSignificantDifference < (avgLineEnd - (lines[l-1].bounds.right - block.bounds.left))) {
-				ImRegion paragraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(lines, pStartLineIndex, l), MutableAnnotation.PARAGRAPH_TYPE);
+				ImRegion paragraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(lines, pStartLineIndex, l), ImRegion.PARAGRAPH_TYPE);
 				pStartLineIndex = l;
 				psm.setInfo(" - created paragraph at " + paragraph.bounds.toString());
 			}
 		}
 		if (pStartLineIndex < lines.length) {
-			ImRegion paragraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(lines, pStartLineIndex, lines.length), MutableAnnotation.PARAGRAPH_TYPE);
+			ImRegion paragraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(lines, pStartLineIndex, lines.length), ImRegion.PARAGRAPH_TYPE);
 			psm.setInfo(" - created final paragraph at " + paragraph.bounds.toString());
 		}
 		
 		//	compute paragraph bounding boxes and compute indentation
-		wrapAroundChildren(block, MutableAnnotation.PARAGRAPH_TYPE, LINE_ANNOTATION_TYPE);
+		wrapAroundChildren(block, ImRegion.PARAGRAPH_TYPE, LINE_ANNOTATION_TYPE);
 		computeBlockLayout(block, dpi);
 		
 		//	compute font size of paragraphs
@@ -737,7 +782,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 	private static void splitIntoParagraphsLineStart(ImRegion block, int dpi, ProgressMonitor psm, ImRegion[] lines, int avgLineHeight) {
 		
 		//	try to further split first generation of paragraphs at indented/exdented lines
-		ImRegion[] paragraphs = block.getRegions(MutableAnnotation.PARAGRAPH_TYPE);
+		ImRegion[] paragraphs = block.getRegions(ImRegion.PARAGRAPH_TYPE);
 //		
 //		//	too few paragraphs for start analysis, however
 //		//	even for single paragraphs, we can detect indent or exdent based on frequency
@@ -883,7 +928,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 				
 				//	this one looks like a paragraph start, perform split
 				if (split) {
-					ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, l), MutableAnnotation.PARAGRAPH_TYPE);
+					ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, l), ImRegion.PARAGRAPH_TYPE);
 					spStartLineIndex = l;
 					psm.setInfo(" - created sub paragraph at " + splitParagraph.bounds.toString());
 				}
@@ -891,14 +936,14 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			
 			//	we've split something, mark last part, and remove original paragraph
 			if (spStartLineIndex != 0) {
-				ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, paragraphLines[p].length), MutableAnnotation.PARAGRAPH_TYPE);
+				ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, paragraphLines[p].length), ImRegion.PARAGRAPH_TYPE);
 				psm.setInfo(" - created final sub paragraph at " + splitParagraph.bounds.toString());
 				block.getPage().removeRegion(paragraphs[p]);
 			}
 		}
 		
 		//	compute paragraph bounding boxes and compute indentation
-		wrapAroundChildren(block, MutableAnnotation.PARAGRAPH_TYPE, LINE_ANNOTATION_TYPE);
+		wrapAroundChildren(block, ImRegion.PARAGRAPH_TYPE, LINE_ANNOTATION_TYPE);
 		computeBlockLayout(block, dpi);
 		
 		//	compute font size of paragraphs
@@ -914,6 +959,23 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 	 * @param psm an observer object monitoring progress
 	 */
 	public static void splitIntoParagraphsLineMargin(ImRegion block, int dpi, ProgressMonitor psm) {
+		splitIntoParagraphsLineMargin(block, dpi, 0, psm);
+	}
+	
+	/**
+	 * Split the paragraphs in a block into smaller paragraphs at wide inner
+	 * horizontal margins.
+	 * @param block the block to split
+	 * @param dpi the resolution of the page image the bounding boxes of the
+	 *            argument annotation and its children refer to
+	 * @param maxLineMarginFactor the factor whose to multiply the average line
+	 *            height with to obtain the maximum distance in pixels between
+	 *            two lines inside a paragraph (the advantage is that this
+	 *            method of threshold computation naturally scales with both
+	 *            DPI and font size)
+	 * @param psm an observer object monitoring progress
+	 */
+	public static void splitIntoParagraphsLineMargin(ImRegion block, int dpi, float maxLineMarginFactor, ProgressMonitor psm) {
 		if (psm == null)
 			psm = ProgressMonitor.dummy;
 		
@@ -921,37 +983,45 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 		ImRegion[] lines = getParagraphLayoutLines(block);
 		psm.setInfo(" - found " + lines.length + " relevant lines in block");
 		
+		//	compute average line height and margin threshold
+		int avgLineHeight = computeAverageHeight(lines);
+		int maxLineMargin = ((int) (avgLineHeight * maxLineMarginFactor));
+		
 		//	perform split
-		splitIntoParagraphsLineMargin(block, dpi, psm, lines);
+		splitIntoParagraphsLineMargin(block, dpi, maxLineMargin, psm, lines);
 	}
 	
 	//	if we get here, we have sufficient lines, all with bounding boxes, and a non-null status monitor
-	private static void splitIntoParagraphsLineMargin(ImRegion block, int dpi, ProgressMonitor psm, ImRegion[] lines) {
+	private static void splitIntoParagraphsLineMargin(ImRegion block, int dpi, int maxLineMargin, ProgressMonitor psm, ImRegion[] lines) {
 		
 		//	get paragraphs
-		ImRegion[] paragraphs = block.getRegions(MutableAnnotation.PARAGRAPH_TYPE);
-		if (paragraphs.length < 3) {
+		ImRegion[] paragraphs = block.getRegions(ImRegion.PARAGRAPH_TYPE);
+		if ((paragraphs.length < 3) && (maxLineMargin < 1)) {
 			psm.setInfo(" ==> got " + paragraphs.length + " paragraphs, margin splitting too unreliable");
 			return;
 		}
 		
-		//	compute average paragraph margin and line margin
-		int paragraphMarginSum = 0;
-		for (int p = 1; p < paragraphs.length; p++)
-			paragraphMarginSum += (paragraphs[p].bounds.top - paragraphs[p-1].bounds.bottom);
-		int avgParagraphMargin = (paragraphMarginSum / (paragraphs.length - 1));
-		int lineMarginSum = 0;
-		for (int l = 1; l < lines.length; l++)
-			lineMarginSum += (lines[l].bounds.top - lines[l-1].bounds.bottom);
-		int avgLineMargin = (lineMarginSum / (lines.length - 1));
-		
+		//	compute average paragraph margin and line margin (only if we don't have a fixed threshold, though)
+		int avgLineMargin = 0;
+		int avgParagraphMargin = 0;
 		int minLineBlockMargin = (dpi / 20); // twice the regular line margin, but less than regular block margin
-		psm.setInfo(" - average line margin is " + avgLineMargin + ", min line block margin at " + minLineBlockMargin + ", average paragraph margin is " + avgParagraphMargin);
-		
-		//	make sure not to split at average lines (margins can be wide in some documents)
-		if (minLineBlockMargin < ((avgLineMargin * 3) / 2)) {
-			minLineBlockMargin = ((avgLineMargin * 3) / 2);
-			psm.setInfo(" - average line margin is " + avgLineMargin + ", increased min line block margin to " + minLineBlockMargin);
+		if (maxLineMargin < 1) {
+			int paragraphMarginSum = 0;
+			for (int p = 1; p < paragraphs.length; p++)
+				paragraphMarginSum += (paragraphs[p].bounds.top - paragraphs[p-1].bounds.bottom);
+			avgParagraphMargin = (paragraphMarginSum / (paragraphs.length - 1));
+			int lineMarginSum = 0;
+			for (int l = 1; l < lines.length; l++)
+				lineMarginSum += (lines[l].bounds.top - lines[l-1].bounds.bottom);
+			avgLineMargin = (lineMarginSum / (lines.length - 1));
+			
+			psm.setInfo(" - average line margin is " + avgLineMargin + ", min line block margin at " + minLineBlockMargin + ", average paragraph margin is " + avgParagraphMargin);
+			
+			//	make sure not to split at average lines (margins can be wide in some documents)
+			if (minLineBlockMargin < ((avgLineMargin * 3) / 2)) {
+				minLineBlockMargin = ((avgLineMargin * 3) / 2);
+				psm.setInfo(" - average line margin is " + avgLineMargin + ", increased min line block margin to " + minLineBlockMargin);
+			}
 		}
 		
 		//	group lines
@@ -962,13 +1032,24 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			int spStartLineIndex = 0;
 			psm.setInfo(" - investigating preliminary paragraph " + p + " with " + paragraphLines[p].length + " lines, paragraph is " + paragraphs[p].bounds.toString());
 			for (int l = 1; l < paragraphLines[p].length; l++) {
-				psm.setInfo(" - paragraph line distance is " + (paragraphLines[p][l].bounds.top - paragraphLines[p][l-1].bounds.bottom));
-				int apsd = Math.abs((paragraphLines[p][l].bounds.top - paragraphLines[p][l-1].bounds.bottom) - avgParagraphMargin);
-				int alsd = Math.abs((paragraphLines[p][l].bounds.top - paragraphLines[p][l-1].bounds.bottom) - avgLineMargin);
+				int lineMargin = (paragraphLines[p][l].bounds.top - paragraphLines[p][l-1].bounds.bottom);
+				psm.setInfo(" - paragraph line margin is " + lineMargin);
+				boolean splitForLineMargin = false;
 				
-				//	this margin is larger than usual, do split
-				if ((alsd > apsd) && (minLineBlockMargin < (paragraphLines[p][l].bounds.top - paragraphLines[p][l-1].bounds.bottom))) {
-					ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, l), MutableAnnotation.PARAGRAPH_TYPE);
+				//	we have a threshold, use it
+				if (0 < maxLineMargin)
+					splitForLineMargin = (maxLineMargin < lineMargin);
+				
+				//	no threshold set, check if margin is larger than usual
+				else {
+					int apsd = Math.abs(lineMargin - avgParagraphMargin);
+					int alsd = Math.abs(lineMargin - avgLineMargin);
+					splitForLineMargin = ((alsd > apsd) && (minLineBlockMargin < lineMargin));
+				}
+				
+				//	perform split
+				if (splitForLineMargin) {
+					ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, l), ImRegion.PARAGRAPH_TYPE);
 					spStartLineIndex = l;
 					psm.setInfo(" - created sub paragraph at " + splitParagraph.bounds.toString());
 				}
@@ -976,14 +1057,14 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			
 			//	we've split something, mark last part, and remove original paragraph
 			if (spStartLineIndex != 0) {
-				ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, paragraphLines[p].length), MutableAnnotation.PARAGRAPH_TYPE);
+				ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, paragraphLines[p].length), ImRegion.PARAGRAPH_TYPE);
 				psm.setInfo(" - created final sub paragraph at " + splitParagraph.bounds.toString());
 				block.getPage().removeRegion(paragraphs[p]);
 			}
 		}
 		
 		//	compute paragraph bounding boxes and compute indentation
-		wrapAroundChildren(block, MutableAnnotation.PARAGRAPH_TYPE, LINE_ANNOTATION_TYPE);
+		wrapAroundChildren(block, ImRegion.PARAGRAPH_TYPE, LINE_ANNOTATION_TYPE);
 		computeBlockLayout(block, dpi);
 		
 		//	compute font size of paragraphs
@@ -1015,7 +1096,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 	private static void splitIntoParagraphsLineDistance(ImRegion block, int dpi, ProgressMonitor psm, ImRegion[] lines) {
 		
 		//	get paragraphs
-		ImRegion[] paragraphs = block.getRegions(MutableAnnotation.PARAGRAPH_TYPE);
+		ImRegion[] paragraphs = block.getRegions(ImRegion.PARAGRAPH_TYPE);
 		
 		//	group lines
 		ImRegion[][] paragraphLines = getParagraphLines(paragraphs, lines);
@@ -1058,7 +1139,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 				
 				//	at least 25% above average, perform split
 				if ((avgLineBaselineDistance * 5) <= ((lineBaselines[l] - lineBaselines[l-1]) * 4)) {
-					ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, l), MutableAnnotation.PARAGRAPH_TYPE);
+					ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, l), ImRegion.PARAGRAPH_TYPE);
 					spStartLineIndex = l;
 					psm.setInfo(" - created sub paragraph at " + splitParagraph.bounds.toString());
 				}
@@ -1067,14 +1148,14 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			
 			//	we've split something, mark last part, and remove original one
 			if (spStartLineIndex != 0) {
-				ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, paragraphLines[p].length), MutableAnnotation.PARAGRAPH_TYPE);
+				ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, paragraphLines[p].length), ImRegion.PARAGRAPH_TYPE);
 				psm.setInfo(" - created final sub paragraph at " + splitParagraph.bounds.toString());
 				block.getPage().removeRegion(paragraphs[p]);
 			}
 		}
 		
 		//	compute paragraph bounding boxes and compute indentation
-		wrapAroundChildren(block, MutableAnnotation.PARAGRAPH_TYPE, LINE_ANNOTATION_TYPE);
+		wrapAroundChildren(block, ImRegion.PARAGRAPH_TYPE, LINE_ANNOTATION_TYPE);
 		computeBlockLayout(block, dpi);
 		
 		//	compute font size of paragraphs

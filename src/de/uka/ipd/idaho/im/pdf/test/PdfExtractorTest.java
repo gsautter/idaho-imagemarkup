@@ -128,7 +128,6 @@ public class PdfExtractorTest implements ImagingConstants {
 			}
 		};
 		PageImage.addPageImageSource(pis);
-		final PdfExtractor pdfExtractor = new PdfExtractor(pdfDataPath, pis, true);
 		
 		String pdfName;
 		pdfName = "abcofevolution00mcca.pdf"; // clean single column, narrative
@@ -351,18 +350,92 @@ public class PdfExtractorTest implements ImagingConstants {
 		
 		//	problem PDFs from Jeremy
 //		pdfName = "11664_Dankittipakul_&_Singtripop_2011_Rev_118_207-221.pdf"; // born-digital, overlapping words on page 4 TODO test font decoding with this one, has some non-postscript char names
-		pdfName = "sutory_cynoglossum.pdf"; // Donat reports font decoding problems ==> char name overwrite based on 'Differences' mapping caused problems ==> deactivated
+//		pdfName = "sutory_cynoglossum.pdf"; // Donat reports font decoding problems ==> char name overwrite based on 'Differences' mapping caused problems ==> deactivated
 //		pdfName = "arac-38-02-328.pdf"; // have to test said 'Differences' based char name overwrite
 		
-		//	problems with fi and fl ligatures, fonts are not embedded, see top of page 13
-		pdfName = "dikow_2012.test.pdf";
+//		//	problems with fi and fl ligatures, fonts are not embedded, see top of page 13
+//		pdfName = "dikow_2012.test.pdf";
 //		pdfName = "dikowlondt_2000b.test.pdf"; // born-digital, male and femal symbols don't decode properly
+		
+//		//	excerpt from BHL scan, with two tailing born-digital meta pages; page media boxes blown, have to estimate DPI
+//		pdfName = "RSZ_Pictet1893.pdf"; // estimating resolution works pretty well, however TODO cleanup doesn't handle all of page background
+		
+//		//	born-digital, problem with word spacing
+//		pdfName = "SystEnt_Yuri2015.pdf"; // reducing narrow space width seems to have fixed it
+		
+//		//	born-digital, problem with "cross" splits in pages 15 and 17
+//		pdfName = "ZJLS_Hertach2015.pdf"; // reducing narrow space width seems to have fixed it
+		
+//		//	anothe RSZ from Donat, problems with all-caps parts, and fonts not getting embedded properly, plus some mask image inversion
+//		pdfName = "RSZ_Tanasevitch2014.pdf"; // ==> sanitizing to-Unicode mapping based on conflicts seems to do the trick
+		
+		//	more oddjobs from Donat
+//		pdfName = "27978.pdf"; // sans-serif font without Unicode mapping on page 7 ==> solved
+//		pdfName = "rebel_1931_trichoptilus_subtilis.pdf"; // scanned, pretty pale after background elimination, focus-based rotation detection fails on page 0 ==> fixed via detecting PDF internal figure rotation right from transformation matrix
+//		pdfName = "s10.pdf"; // born-digital, very narrow block and column gaps from page 1 onward ==> fixed, cross-split prevention was wrecking havoc
+//		pdfName = "Bannikov_Carnevale_2009.pdf"; // born-digital, block/column structure blown on page 0 ==> fixed, cross-split prevention was wrecking havoc
+//		pdfName = "Plas_1972.pdf"; // scanned, image of page 1 comes up strange ==> two parts included at _different_ resolutions (shakin head in disbelief) ... scaling page image parts individually now
+//		pdfName = "RSZ_Eguchi2006_115-131.pdf"; // born-digital, figure in page 2 mis-decoded ==> now successfully following reference chain alon _several_ XObject references, but somehow ImageMagick cannot seem to decode the final JPX
+//		pdfName = "27998.pdf"; // born-digital, char+accent don't combine in pages 0 and 13 ==> now also considering accent might come _before_ base character
+//		pdfName = "ZM1967042005.pdf"; // scanned, and loads OK, but "unknown compression method" error when loading as generic
+//		pdfName = "Kullander_ramirezi_1980.pdf"; // contains XObject _forms_ which need to be filtered out
+//		pdfName = "Myers and Harry 1948 Apistogramma ramirezi.pdf"; // scanned, pages come up very small
+//		pdfName = "Moluccas049-060_Loebl.pdf"; // born-digital, male and female symbols (e.g. page 1) not decoded properly, 'artsy' line around pages hampering structure detection
+//		pdfName = "11331_Azarkina_&_Logunov_2010_Afr_51_163-182.pdf"; // born-digital, 'fi' ligature problem (CIDFontFile) ==> solved with newly built TrueType font handler
+		
+//		//	figure extraction test cases
+//		pdfName = "Moluccas049-060_Loebl.pdf"; // mask images with [1,0] decode (page 1, page 3) that require black background, masks flipped upside down
+//		pdfName = "RSZ_Tanasevitch2014.pdf"; // image with additive 'Separation' color space (page 2), need to invert images
+//		pdfName = "Ono2009c.pdf"; // mask image with [0,1] decode in 1200 DPI (page 2) that requires black background 
+//		pdfName = "dikow_2012.test.pdf"; // grayscale images wit ICCBased color space (page 5, page 9) come up inverted
+//		pdfName = "dikow_2012.test.pdf"; // mask image with [0,1] decoder (page 16) that requires black background
+		
+//		//	test file from Torsten
+//		pdfName = "hesse_1974.pdf"; // scanned, image cleanup destroys some parts of title on page 0 ==> try and prevent this !!! ==> increase contrast treshold for background elimination, as words were blurred into darkish page edge
+		
+		//	files from Jeremy
+//		pdfName = "11331_Azarkina_&_Logunov_2010_Afr_51_163-182.pdf"; // born-digital, TODOne male and female symbols mis-recognized
+//		pdfName = "11350_Cala_Riquelme_2010_Nov_3_85-86.pdf"; // born-digital, TODOne uses CIDFontType0, which isn't implemented thus far
+//		pdfName = "11633_Edwards_&_Jennings_2010_Pec_86.1_1-2.pdf"; // born-digital, TODOne some characters mis-decoded due to CIDs off by one in TrueType file after some range ==> fixed by now interpreting cmap table as well
+//		pdfName = "11404_Guo_&_Zhu_2010_Jou_30_93-96.pdf"; // scanned, loads OK
+//		pdfName = "11429_Jastrzebski_2010_Gen_21_115-120.pdf"; // born-digital, TODOne some characters mis-decoded due to CIDs off by one in TrueType file after some range ==> maybe try chars to left and right in TrueType decoding
+//		pdfName = "11430_Jastrzebski_2010_Gen_21_319-323.pdf"; // born-digital, small-caps problems
+//		pdfName = "11437_Kaldari_2010_Pec_82.1_1-4.pdf"; // born-digital, TODOne char rendering instructions in plain font (CIDs) off by 1 above 57 (???) ==> fixed by now interpreting cmap table as well
+//		pdfName = "11468_Logunov_2010_Bul_15_85-90.pdf"; // born-digital, TODOne fonts not stored completely
+//		pdfName = "11471_Logunov_&_Deza_2010_Act_59_21-23.pdf"; // born-digital, TODOne whitespace filled with some obscure blank chars, clogging column gap --> chars found to be extremely wide (1000) according to font, effectively bringing along an implicit space after them ==> implemented implicit space detection
+		pdfName = "11471_Logunov_&_Deza_2010_Act_59_21-23.pdf"; // born-digital, TODO multiple font styles mixed up in single font, requires either splitting up font, or char-wise style handling
+//		pdfName = "11532_Richardson_2010_Zoo_2418_1-49.pdf"; // born-digital, memory issues, likely due to image supplements (==> TODOne move PDF decoding to sub-JVM), some minor symbol issues with male, female, and degree
+//		pdfName = "11617_Yamasaki_2010_Act_59_63-66.pdf"; // born-digital, encrypted, with password, fonts heavily obfuscated
+//		pdfName = "12775_Ikeda_2010_Kis_98_21_32.pdf"; // born-digital, mostly Chinese fonts make font decoder labour forever TODO add isChinese flag for font decoding
+		
+		//	another one from Donat
+//		pdfName = "perrichot_2015_cretaceous_research_french_amber_baikuris_maximus.pdf"; // born-digital, TODOne page 4 is landscape
+//		pdfName = "Sennikov2014.pdf"; // born-digital, mysterious image in page 3
+		
+		//	Heraklion Workshop June 2015
+//		pdfName = "Cumacea_Puritan expedition.pdf"; // scanned (BHL excerpt) with meta page
+//		pdfName = "ZK_article_1928.pdf"; // born-digital, memory issues
+//		pdfName = "Lopez_et_al.pdf"; // born-digital, really badass embedded fonts (decoding with multiple errors), plus word spacing problems
+		
+		//	encrypted PDFs
+//		pdfName = "zt00109.pdf"; // TODO_ne
+//		pdfName = "zt00619.pdf"; // TODO_ne
+//		pdfName = "ZC_v27n2a17.pdf"; // TODO_ne
+//		pdfName = "59_1.pdf"; // TODO_ne
+//		pdfName = "11617_Yamasaki_2010_Act_59_63-66.pdf"; // TODO_ne
+		
+		//	some figures not extracted properly
+		pdfName = "Moore & Gosliner 2014.pdf";
+		
+		//	font char width problem on page 8
+		pdfName = "zt00872.pdf";
 		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
-		aimAtPage = 25; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
+		aimAtPage = 8; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
 		//	TODO try pages 12, 13, 16, 17, and 21 of Prasse 1979
 		System.out.println("Aiming at page " + aimAtPage);
+		final PdfExtractor pdfExtractor = new PdfExtractor(pdfDataPath, pis, true);
 		
 		if (false) {
 			File pdfFile = new File(pdfDataPath, pdfName);
@@ -413,9 +486,9 @@ public class PdfExtractorTest implements ImagingConstants {
 			pdm.setLocationRelativeTo(null);
 			pdm.popUp(false);
 			
-//			doc = pdfExtractor.loadImagePdf(doc, pdfDoc, bytes, scaleFactor, null);
+//			doc = pdfExtractor.loadImagePdf(doc, pdfDoc, bytes, true, scaleFactor, null);
 //			doc = pdfExtractor.loadImagePdfBlocks(doc, pdfDoc, bytes, scaleFactor, null);
-//			doc = pdfExtractor.loadImagePdfPages(doc, pdfDoc, bytes, scaleFactor, null);
+//			doc = pdfExtractor.loadImagePdfPages(doc, pdfDoc, bytes, true, scaleFactor, null);
 			doc = pdfExtractor.loadTextPdf(doc, pdfDoc, bytes, pdm);
 //			doc = pdfExtractor.loadGenericPdf(doc, pdfDoc, bytes, scaleFactor, null);
 			
@@ -455,7 +528,7 @@ public class PdfExtractorTest implements ImagingConstants {
 		ImPage[] pages = doc.getPages();
 		final ImageDisplayDialog dialog = new ImageDisplayDialog(pdfName);
 		for (int p = 0; p < pages.length; p++) {
-			if ((aimAtPage != -1) && (p != aimAtPage))
+			if ((aimAtPage != -1) && (pages[p].pageId != aimAtPage))
 				continue;
 			PageImage pi = pages[p].getImage();
 //			if ("P".equals(pages[p].firstValue())) {
@@ -511,12 +584,12 @@ public class PdfExtractorTest implements ImagingConstants {
 			ImRegion[] columns = pages[p].getRegions(COLUMN_ANNOTATION_TYPE);
 			for (int c = 0; c < columns.length; c++)
 				paintBox(bi, scaleDown, columns[c], Color.DARK_GRAY.getRGB(), imageMargin, 5);
+//			
+//			ImRegion[] regions = pages[p].getRegions(REGION_ANNOTATION_TYPE);
+//			for (int r = 0; r < regions.length; r++)
+//				paintBox(bi, scaleDown, regions[r], Color.GRAY.getRGB(), imageMargin, 5);
 			
-			ImRegion[] regions = pages[p].getRegions(REGION_ANNOTATION_TYPE);
-			for (int r = 0; r < regions.length; r++)
-				paintBox(bi, scaleDown, regions[r], Color.GRAY.getRGB(), imageMargin, 5);
-			
-			dialog.addImage(bi, ("Page " + p));
+			dialog.addImage(bi, ("Page " + pages[p].pageId));
 		}
 		
 		System.out.println("Document done in " + ((System.currentTimeMillis() - start) / 1000) + " seconds");

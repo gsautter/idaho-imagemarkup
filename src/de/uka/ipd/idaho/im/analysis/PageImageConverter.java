@@ -32,8 +32,6 @@ import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Iterator;
 
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.constants.TableConstants;
@@ -103,7 +101,6 @@ public class PageImageConverter implements ImagingConstants, TableConstants {
 			}
 			
 			//	analyze page structure
-//			int wordCount = fillInPageRegions(pages[p], pageImage, pageImageDpi, psm);
 			int wordCount = fillInPageRegions(pages[p], pageImage.image, pageImage.currentDpi, psm);
 			psm.setInfo(" --> got " + wordCount + " words in total");
 			
@@ -497,14 +494,14 @@ public class PageImageConverter implements ImagingConstants, TableConstants {
 		if ((blocks.length == 0) && (tables.length == 0)) {
 			psm.setInfo(" - no blocks found, analyzing page structure");
 			Region thePage = PageImageAnalysis.getPageRegion(ai, analysisDpi, true, psm);
-			wordCount = appendRegionStructure(page, thePage, analysisDpi, imageDpi, psm, false, existingWords);
+			wordCount = appendRegionStructure(page, thePage, analysisDpi, imageDpi, psm, existingWords);
 		}
 		
 		//	analyze structure of individual blocks
 		else for (int b = 0; b < blocks.length; b++) {
 			psm.setInfo(" - got " + blocks.length + " blocks");
 			psm.setInfo(" - doing block " + (b+1));
-			wordCount += fillInTextBlockStructure(blocks[b], ai, analysisDpi, imageDpi, psm, false, existingWords);
+			wordCount += fillInTextBlockStructure(blocks[b], ai, analysisDpi, imageDpi, psm, existingWords);
 		}
 		
 		psm.setInfo(" --> got " + wordCount + " words in total");
@@ -520,7 +517,7 @@ public class PageImageConverter implements ImagingConstants, TableConstants {
 		return wordCount;
 	}
 	
-	private static int appendRegionStructure(ImRegion region, Region theRegion, int analysisDpi, int imageDpi, ProgressMonitor psm, boolean analyzeLineWordMetrics, BoundingBox[] existingWords) {
+	private static int appendRegionStructure(ImRegion region, Region theRegion, int analysisDpi, int imageDpi, ProgressMonitor psm, BoundingBox[] existingWords) {
 		
 		//	mark block
 		ImRegion block = new ImRegion(region.getPage(), theRegion.getBoundingBox(imageDpi / analysisDpi));
@@ -535,19 +532,6 @@ public class PageImageConverter implements ImagingConstants, TableConstants {
 			//	set block type
 			block.setType(theBlock.isTable() ? TABLE_ANNOTATION_TYPE : BLOCK_ANNOTATION_TYPE);
 			
-			//	analyze line and word metrics if required
-			if (analyzeLineWordMetrics) {
-				
-				//	compute line baselines
-				PageImageAnalysis.computeLineBaselines(theBlock, analysisDpi);
-				
-				//	correct words that extend below baseline more than average descending words (might have caught a stain)
-				PageImageAnalysis.checkWordDescents(theBlock, analysisDpi);
-				
-				//	compute remaining line metrics
-				PageImageAnalysis.computeFontMetrics(theBlock, analysisDpi);
-			}
-			
 			//	mark block content
 			return addTextBlockStructure(region, theBlock, analysisDpi, imageDpi, psm);
 		}
@@ -558,7 +542,7 @@ public class PageImageConverter implements ImagingConstants, TableConstants {
 		//	recurse to child regions
 		int wordCount = 0;
 		for (int s = 0; s < theRegion.getSubRegionCount(); s++)
-			wordCount += appendRegionStructure(region, theRegion.getSubRegion(s), analysisDpi, imageDpi, psm, analyzeLineWordMetrics, existingWords);
+			wordCount += appendRegionStructure(region, theRegion.getSubRegion(s), analysisDpi, imageDpi, psm, existingWords);
 		
 		//	finally ...
 		return wordCount;
@@ -925,9 +909,9 @@ public class PageImageConverter implements ImagingConstants, TableConstants {
 		
 		//	correct words that extend below baseline more than average descending words (might have caught a stain)
 		PageImageAnalysis.checkWordDescents(theBlock, analysisDpi);
-		
-		//	compute remaining line metrics, omitting font style though
-		PageImageAnalysis.computeFontMetrics(theBlock, analysisDpi, true);
+//		
+//		//	compute remaining line metrics, omitting font style though
+//		PageImageAnalysis.computeFontMetrics(theBlock, analysisDpi, true);
 		
 		//	annotate lines and add bounding box attributes
 		addTextBlockStructure(block, theBlock, analysisDpi, imageDpi, psm);
@@ -1008,11 +992,11 @@ Times New Roman at 400 DPI (417%):
 		}
 		
 		//	find text lines and words
-		return fillInTextBlockStructure(block, ai, analysisDpi, imageDpi, psm, false, existingWords);
+		return fillInTextBlockStructure(block, ai, analysisDpi, imageDpi, psm, existingWords);
 	}
 	
 	//	called only if block already existed in input document page
-	private static int fillInTextBlockStructure(ImRegion block, AnalysisImage analysisImage, int analysisDpi, int imageDpi, ProgressMonitor psm, boolean analyzeLineWordMetrics, BoundingBox[] existingWords) {
+	private static int fillInTextBlockStructure(ImRegion block, AnalysisImage analysisImage, int analysisDpi, int imageDpi, ProgressMonitor psm, BoundingBox[] existingWords) {
 		
 		//	catch blocks filled in before
 		if (block.getWords().length != 0)
@@ -1023,19 +1007,6 @@ Times New Roman at 400 DPI (417%):
 		
 		//	find text lines and words
 		PageImageAnalysis.getBlockStructure(theBlock, analysisDpi, existingWords, psm);
-		
-		//	analyze line and word metrics if required
-		if (analyzeLineWordMetrics) {
-			
-			//	compute line baselines
-			PageImageAnalysis.computeLineBaselines(theBlock, analysisDpi);
-			
-			//	correct words that extend below baseline more than average descending words (might have caught a stain)
-			PageImageAnalysis.checkWordDescents(theBlock, analysisDpi);
-			
-			//	compute remaining line metrics
-			PageImageAnalysis.computeFontMetrics(theBlock, analysisDpi);
-		}
 		
 		//	adjust type
 		if (theBlock.isTable())
@@ -1135,275 +1106,6 @@ Times New Roman at 400 DPI (417%):
 				if (0 < fontSize)
 					line.setAttribute(FONT_SIZE_ATTRIBUTE, ("" + fontSize));
 			}
-		}
-	}
-	
-	/**
-	 * Analyze font metrics in the lines and words of pages. This method expects
-	 * page images to be available from the argument provider. The analysis
-	 * results are stored in attributes of the line and word annotations of the
-	 * argument document.
-	 * @param doc the document to analyze
-	 * @param psm a monitor object for reporting progress, e.g. to a UI
-	 * @throws IOException
-	 */
-	public static void analyzeLineWordMetrics(ImDocument doc, ProgressMonitor psm) throws IOException {
-		if (psm == null)
-			psm = ProgressMonitor.dummy;
-		
-		//	analyze pages
-		ImPage[] pages = doc.getPages();
-		for (int p = 0; p < pages.length; p++) {
-			psm.setStep("Analyzing page " + (p+1) + " of " + pages.length);
-			psm.setProgress((100 * p) / pages.length);
-			
-			//	clean up from previous round (references are void only now)
-			if (p != 0)
-				System.gc();
-			
-			//	analyze current page
-			analyzeLineWordMetrics(pages[p], psm);
-			
-			//	finally ...
-			psm.setInfo(" - page done");
-		}
-		
-		//	clean up one last time
-		System.gc();
-		
-		//	finally ...
-		psm.setProgress(100);
-	}
-	
-	/**
-	 * Analyze font metrics in the lines and words of a single page. This method
-	 * expects page images to be available from the argument provider. The
-	 * analysis results are stored in attributes of the line and word
-	 * annotations of the argument document.
-	 * @param page the page to analyze
-	 * @param psm a monitor object for reporting progress, e.g. to a UI
-	 * @throws IOException
-	 */
-	public static void analyzeLineWordMetrics(ImPage page, ProgressMonitor psm) throws IOException {
-		String pageImageName = ((String) page.getAttribute(IMAGE_NAME_ATTRIBUTE));
-		PageImage pageImage = ((pageImageName == null) ? null : PageImage.getPageImage(pageImageName));
-		if (pageImage == null) {
-			((psm == null) ? ProgressMonitor.dummy : psm).setInfo(" --> page image not found");
-			return;
-		}
-		analyzeLineWordMetrics(page, psm, pageImage);
-	}
-	
-	/**
-	 * Analyze font metrics in the lines and words of a single page. This method
-	 * expects page images to be available from the argument provider. The
-	 * analysis results are stored in attributes of the line and word
-	 * annotations of the argument document.
-	 * @param page the page to analyze
-	 * @param psm a monitor object for reporting progress, e.g. to a UI
-	 * @param pageImage the image of the page
-	 * @throws IOException
-	 */
-	public static void analyzeLineWordMetrics(ImPage page, ProgressMonitor psm, PageImage pageImage) throws IOException {
-		analyzeLineWordMetrics(page, psm, pageImage.image, pageImage.currentDpi);
-	}
-	
-	/**
-	 * Analyze font metrics in the lines and words of a single page. This method
-	 * expects page images to be available from the argument provider. The
-	 * analysis results are stored in attributes of the line and word
-	 * annotations of the argument document. All images wrapped for analysis via
-	 * the Imaging.wrapImage() method are cached as with the key
-	 * '&lt;imageHashCode&gt;-&lt;imageDpi&gt;'.
-	 * @param page the page to analyze
-	 * @param psm a monitor object for reporting progress, e.g. to a UI
-	 * @param pageImage the image of the page
-	 * @param imageDpi the resolution of the page image
-	 * @throws IOException
-	 */
-	public static void analyzeLineWordMetrics(ImPage page, ProgressMonitor psm, BufferedImage pageImage, int imageDpi) throws IOException {
-		if (psm == null)
-			psm = ProgressMonitor.dummy;
-		
-		//	scale down image for structure analysis if necessary
-		AnalysisImage ai = Imaging.wrapImage(pageImage, (pageImage.hashCode() + "-" + imageDpi));
-		int analysisDpi = imageDpi;
-		while (analysisDpi > maxAnalysisDpi)
-			analysisDpi /= 2;
-		if (analysisDpi != imageDpi) {
-			BufferedImage bi = ai.getImage();
-			BufferedImage sbi = new BufferedImage(((bi.getWidth() * analysisDpi) / imageDpi), ((bi.getHeight() * analysisDpi) / imageDpi), ((bi.getType() == BufferedImage.TYPE_CUSTOM) ? BufferedImage.TYPE_BYTE_GRAY : bi.getType()));
-			sbi.getGraphics().setColor(Color.WHITE);
-			sbi.getGraphics().fillRect(0, 0, sbi.getWidth(), sbi.getHeight());
-			sbi.getGraphics().drawImage(bi, 0, 0, sbi.getWidth(), sbi.getHeight(), null);
-			ai = Imaging.wrapImage(sbi, (pageImage.hashCode() + "-" + analysisDpi));
-			Imaging.whitenWhite(ai);
-			psm.setInfo(" - image scaled to " + analysisDpi + " for structural analysis");
-		}
-		
-		//	do analysis
-		analyzeLineWordMetrics(page, psm, ai, imageDpi, analysisDpi);
-	}
-	
-	private static void analyzeLineWordMetrics(ImPage page, ProgressMonitor psm, AnalysisImage ai, int imageDpi, int analysisDpi) throws IOException {
-		
-		//	get blocks
-		ImRegion[] blocks = page.getRegions(BLOCK_ANNOTATION_TYPE);
-		ImRegion[] tables = page.getRegions(TABLE_ANNOTATION_TYPE);
-		
-		//	no blocks marked so far, analyze page structure first
-		if ((blocks.length == 0) && (tables.length == 0)) {
-			Region thePage = PageImageAnalysis.getPageRegion(ai, analysisDpi, true, psm);
-			appendRegionStructure(page, thePage, analysisDpi, imageDpi, psm, true, null);
-		}
-		
-		//	analyze structure of individual blocks
-		else {
-			
-			//	do blocks (might still be filled with placeholder)
-			for (int b = 0; b < blocks.length; b++) {
-				
-				//	no words as yet, analyze block structure first
-				if (blocks[b].getWords().length == 0)
-					fillInTextBlockStructure(blocks[b], ai, analysisDpi, imageDpi, psm, true, null);
-				
-				//	only line and word metrics left to analyze
-				else analyzeLineWordMetrics(blocks[b], ai, analysisDpi, imageDpi, psm);
-			}
-			
-			//	do tables (if we know they are tables, their structure has been analyzed before)
-			for (int t = 0; t < tables.length; t++) {
-				
-				//	get table cells
-				ImRegion[] cells = tables[t].getRegions(TABLE_CELL_ANNOTATION_TYPE);
-				for (int c = 0; c < cells.length; c++)
-					analyzeLineWordMetrics(cells[c], ai, analysisDpi, imageDpi, psm);
-			}
-		}
-		
-		//	... finally
-		psm.setInfo(" - page done");
-		
-		//	clean up one last time
-		System.gc();
-		
-		//	finally ...
-		psm.setProgress(100);
-	}
-	
-	/**
-	 * Analyze font metrics in the lines and words of a single text block. The
-	 * analysis results are stored in attributes of the line and word
-	 * annotations of the argument document.
-	 * @param block the block to analyze
-	 * @param pageImage the image of the page the block is on
-	 * @param psm a monitor object for reporting progress, e.g. to a UI
-	 * @throws IOException
-	 */
-	public static void analyzeLineWordMetrics(ImRegion block, PageImage pageImage, ProgressMonitor psm) throws IOException {
-		analyzeLineWordMetrics(block, pageImage.image, pageImage.currentDpi, psm);
-	}
-	
-	/**
-	 * Analyze font metrics in the lines and words of a single text block. The
-	 * analysis results are stored in attributes of the line and word
-	 * annotations of the argument document. All images wrapped for analysis via
-	 * the Imaging.wrapImage() method are cached as with the key
-	 * '&lt;imageHashCode&gt;-&lt;imageDpi&gt;'.
-	 * @param block the block to analyze
-	 * @param pageImage the image of the page the block is on
-	 * @param imageDpi the resolution of the page image
-	 * @param psm a monitor object for reporting progress, e.g. to a UI
-	 * @throws IOException
-	 */
-	public static void analyzeLineWordMetrics(ImRegion block, BufferedImage pageImage, int imageDpi, ProgressMonitor psm) throws IOException {
-		if (psm == null)
-			psm = ProgressMonitor.dummy;
-		
-		//	scale down image for structure analysis if necessary
-		AnalysisImage ai = Imaging.wrapImage(pageImage, (pageImage.hashCode() + "-" + imageDpi));
-		int analysisDpi = imageDpi;
-		while (analysisDpi > maxAnalysisDpi)
-			analysisDpi /= 2;
-		if (analysisDpi != imageDpi) {
-			BufferedImage bi = ai.getImage();
-			BufferedImage sbi = new BufferedImage(((bi.getWidth() * analysisDpi) / imageDpi), ((bi.getHeight() * analysisDpi) / imageDpi), bi.getType());
-			sbi.getGraphics().setColor(Color.WHITE);
-			sbi.getGraphics().fillRect(0, 0, sbi.getWidth(), sbi.getHeight());
-			sbi.getGraphics().drawImage(bi, 0, 0, sbi.getWidth(), sbi.getHeight(), null);
-			ai = Imaging.wrapImage(sbi, (pageImage.hashCode() + "-" + analysisDpi));
-			Imaging.whitenWhite(ai);
-			psm.setInfo(" - image scaled to " + analysisDpi + " for structural analysis");
-		}
-		
-		//	no words as yet, analyze block structure first
-		if (block.getWords().length == 0)
-			fillInTextBlockStructure(block, ai, analysisDpi, imageDpi, psm, true, null);
-		
-		//	only line and word metrics left to analyze
-		else analyzeLineWordMetrics(block, ai, analysisDpi, imageDpi, psm);
-	}
-	
-	private static void analyzeLineWordMetrics(ImRegion block, AnalysisImage analysisImage, int analysisDpi, int imageDpi, ProgressMonitor psm) throws IOException {
-		
-		//	prepare block
-		Block theBlock = new Block(getBounds(block, analysisImage, imageDpi, analysisDpi));
-		
-		//	index words for font metrics transfer
-		HashMap wordsToAnnotations = new HashMap();
-		
-		//	add lines to block
-		ImRegion[] lines = block.getRegions(LINE_ANNOTATION_TYPE);
-		for (int l = 0; l < lines.length; l++) {
-			
-			//	prepare line
-			Line theLine = new Line(getBounds(lines[l], analysisImage, imageDpi, analysisDpi));
-			
-			//	add words to line
-			ImWord[] words = lines[l].getWords();
-			for (int w = 0; w < words.length; w++) {
-				
-				//	prepare word
-				Word theWord = new Word(getBounds(words[w], analysisImage, imageDpi, analysisDpi));
-				
-				//	add word to line
-				theLine.addWord(theWord);
-				
-				//	index word for font metrics transfer
-				wordsToAnnotations.put(theWord, words[w]);
-			}
-			
-			//	add line to block
-			if (theLine.words.size() != 0)
-				theBlock.addLine(theLine);
-		}
-		
-		//	catch empty block
-		if (theBlock.isEmpty())
-			return;
-		
-		//	compute line baselines
-		PageImageAnalysis.computeLineBaselines(theBlock, analysisDpi);
-		
-		//	correct words that extend below baseline more than average descending words (might have caught a stain)
-		PageImageAnalysis.checkWordDescents(theBlock, analysisDpi);
-		
-		//	compute remaining line metrics
-		PageImageAnalysis.computeFontMetrics(theBlock, analysisDpi);
-		
-		//	add font metrics attributes
-		for (Iterator wit = wordsToAnnotations.keySet().iterator(); wit.hasNext();) {
-			Word theWord = ((Word) wit.next());
-			ImWord wordAnnot = ((ImWord) wordsToAnnotations.get(theWord));
-			if (wordAnnot == null)
-				continue;
-			int baseline = theWord.getBaseline();
-			if (0 < baseline)
-				wordAnnot.setAttribute(BASELINE_ATTRIBUTE, ("" + (baseline * (imageDpi / analysisDpi))));
-			if (theWord.isBold())
-				wordAnnot.setAttribute(BOLD_ATTRIBUTE, "true");
-			if (theWord.isItalics())
-				wordAnnot.setAttribute(ITALICS_ATTRIBUTE, "true");
 		}
 	}
 	

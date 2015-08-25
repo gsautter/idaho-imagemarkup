@@ -34,7 +34,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Iterator;
-import java.util.TreeMap;
 import java.util.TreeSet;
 
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
@@ -100,6 +99,12 @@ public class PageImageAnalysis implements ImagingConstants {
 		}
 		public Region getSubRegion(int index) {
 			return ((Region) this.subRegions.get(index));
+		}
+		void removeSubRegion(int index) {
+			this.subRegions.remove(index);
+		}
+		void setSubRegion(int index, Region subRegion) {
+			this.subRegions.set(index, subRegion);
 		}
 		public boolean isAtomic() {
 			return this.isAtomic;
@@ -299,8 +304,6 @@ public class PageImageAnalysis implements ImagingConstants {
 		}
 	}
 	
-	//	TODO add method signature with arguments for individual margins (to allow for configuring structural analysis for specific layouts)
-	
 	/* TODO when doing blocks:
 	 * - do approximate line chopping (margin 1, but no skew)
 	 *   - estimate line height if chopping fails for skew
@@ -334,6 +337,30 @@ public class PageImageAnalysis implements ImagingConstants {
 //		int minHorizontalBlockMargin = (dpi / 8); // TODO find out if this makes sense (will turn out in the long haul only, though)
 //		int minVerticalBlockMargin = (dpi / 15); // TODO find out if this makes sense (will turn out in the long haul only, though)
 		int minVerticalBlockMargin = (dpi / 10); // TODO find out if this makes sense (will turn out in the long haul only, though)
+		return getPageRegion(pageBounds, minHorizontalBlockMargin, minVerticalBlockMargin, dpi, filterImageBlocks, psm);
+	}
+	
+	/**
+	 * Analyze the structure of a document page, i.e., chop it into sub regions
+	 * and text blocks. The argument minimum margins are used as they are, i.e.,
+	 * as absolute values without further scaling. It is the responsibility of
+	 * client code to specify values appropriate for the given DPI number.
+	 * @param ai the page image to analyze
+	 * @param dpi the resolution of the underlying page image
+	 * @param minHorizontalBlockMargin the minimum number of white pixels to
+	 *            the left and right of a text block (the margin between two
+	 *            text columns)
+	 * @param minVerticalBlockMargin the minimum number of white pixels above
+	 *            and below a text block (the margin between two text blocks in
+	 *            the same column)
+	 * @param filterImageBlocks filter out blocks that are likely to be images
+	 *            rather than text? (safe to switch off for born-digital page
+	 *            images)
+	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 * @return the root region, representing the whole page
+	 */
+	public static Region getPageRegion(AnalysisImage ai, int dpi, int minHorizontalBlockMargin, int minVerticalBlockMargin, boolean filterImageBlocks, ProgressMonitor psm) {
+		ImagePartRectangle pageBounds = Imaging.getContentBox(ai);
 		return getPageRegion(pageBounds, minHorizontalBlockMargin, minVerticalBlockMargin, dpi, filterImageBlocks, psm);
 	}
 	
@@ -482,6 +509,74 @@ public class PageImageAnalysis implements ImagingConstants {
 				subRegions[s] = region.getSubRegion(s).bounds;
 			Imaging.copyBounds(Imaging.getHull(subRegions), region.bounds);
 		}
+		
+		//	repair columns that have fallen victim to "cross" splits (only possible from two levels up the region tree though, as we need to go through the individual blocks)
+		if (region.isColumn && (region.getSubRegionCount() > 1) && (minHorizontalBlockMargin > 1)) {
+			for (int r = 0; r < (region.getSubRegionCount() - 1); r++) {
+				Region topSubRegion = region.getSubRegion(r);
+				Region bottomSubRegion = region.getSubRegion(r+1);
+				
+				//	do we have same >1 number of columns in each of the two blocks?
+				if ((topSubRegion.getSubRegionCount() < 2) || (bottomSubRegion.getSubRegionCount() < 2))
+					continue;
+				if (topSubRegion.getSubRegionCount() != bottomSubRegion.getSubRegionCount())
+					continue;
+				
+				//	are the blocks aligned?
+				if (!areTopBottom(topSubRegion, bottomSubRegion))
+					continue;
+				
+				//	are the columns within the blocks aligned?
+				boolean subSubRegionMismatch = false;
+				for (int s = 0; s < Math.min(topSubRegion.getSubRegionCount(), bottomSubRegion.getSubRegionCount()); s++) {
+					Region topSubSubRegion = topSubRegion.getSubRegion(s);
+					Region bottomSubSubRegion = bottomSubRegion.getSubRegion(s);
+					if (!areTopBottom(topSubSubRegion, bottomSubSubRegion)) {
+						subSubRegionMismatch = true;
+						break;
+					}
+				}
+				if (subSubRegionMismatch)
+					continue;
+				
+				//	merge blocks
+				ImagePartRectangle[] subRegionBounds = {topSubRegion.bounds, bottomSubRegion.bounds};
+				Region mergedSubRegion = new Region(Imaging.getHull(subRegionBounds), !region.isColumn, region);
+				
+				//	re-get sub structure (easier than copying)
+				fillInSubRegions(mergedSubRegion, minHorizontalBlockMargin, minVerticalBlockMargin, dpi, filterImageBlocks, psm);
+				
+				//	does the merged sub region have as many columns as the original sub regions?
+				if (mergedSubRegion.getSubRegionCount() < topSubRegion.getSubRegionCount())
+					continue;
+				
+				//	replace merged blocks in parent column, compensating for loop increment
+				region.removeSubRegion(r);
+				region.setSubRegion(r--, mergedSubRegion);
+			}
+		}
+	}
+	
+	private static boolean areTopBottom(Region topRegion, Region bottomRegion) {
+		
+		//	regions off to left or right of one another
+		if (topRegion.bounds.rightCol <= bottomRegion.bounds.leftCol)
+			return false;
+		if (bottomRegion.bounds.rightCol <= topRegion.bounds.leftCol)
+			return false;
+		
+		//	columns of one region fully inside the other region
+		if ((topRegion.bounds.leftCol <= bottomRegion.bounds.leftCol) && (bottomRegion.bounds.rightCol <= topRegion.bounds.rightCol))
+			return true;
+		if ((bottomRegion.bounds.leftCol <= topRegion.bounds.leftCol) && (topRegion.bounds.rightCol <= bottomRegion.bounds.rightCol))
+			return true;
+		
+		//	compute overlap
+		int overlapWidth = (Math.min(topRegion.bounds.rightCol, bottomRegion.bounds.rightCol) - Math.max(topRegion.bounds.leftCol, bottomRegion.bounds.leftCol));
+		int minWidth = Math.min(topRegion.bounds.getWidth(), bottomRegion.bounds.getWidth());
+		
+		//	do w have at least 90% overlap?
+		return ((overlapWidth * 10) >= (minWidth * 9));
 	}
 	
 	/**
@@ -513,10 +608,24 @@ public class PageImageAnalysis implements ImagingConstants {
 		int minLineMargin = (dpi / 40); // TODO find out if this makes sense (will turn out in the long haul only, though)
 		
 		//	find text lines
-		getBlockLines(block, minVerticalBlockMargin, minLineMargin, dpi, psm);
+		getBlockLines(block, dpi, minVerticalBlockMargin, minLineMargin, psm);
 	}
 	
-	private static void getBlockLines(Block block, int minVerticalBlockMargin, int minLineMargin, int dpi, ProgressMonitor psm) {
+	/**
+	 * Analyze the inner structure of a single text block to individual lines,
+	 * but not words. The argument minimum margins are used as they are, i.e.,
+	 * as absolute values without further scaling. It is the responsibility of
+	 * client code to specify values appropriate for the given DPI number.
+	 * @param block the text block to analyze
+	 * @param dpi the resolution of the underlying page image
+	 * @param minVerticalBlockMargin the minimum number of white pixels above
+	 *            and below a text block (the margin between two text blocks in
+	 *            the same column)
+	 * @param minLineMargin the minimum number of white pixels rows between two
+	 *            lines of text
+	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 */
+	public static void getBlockLines(Block block, int dpi, int minVerticalBlockMargin, int minLineMargin, ProgressMonitor psm) {
 		psm.setInfo("   - doing block " + block.getBoundingBox().toString());
 		
 		double maxSplitSlopeAngle;
@@ -659,7 +768,45 @@ public class PageImageAnalysis implements ImagingConstants {
 		
 		//	find text lines and words
 		if (existingWords == null)
-			getBlockStructure(block, minVerticalBlockMargin, minLineMargin, minWordMargin, dpi, psm);
+			getBlockStructure(block, dpi, minVerticalBlockMargin, minLineMargin, minWordMargin, psm);
+		else getBlockStructure(block, existingWords, psm);
+		
+		//	catch empty blocks larger than half an inch in both dimensions, might be (to-parse) table 
+		if (block.isEmpty() && (dpi < ((block.bounds.rightCol - block.bounds.leftCol) * 2)) && (dpi < ((block.bounds.bottomRow - block.bounds.topRow) * 2)))
+			analyzeTable(block, dpi, existingWords, psm);
+	}
+	
+	
+	/**
+	 * Analyze the inner structure of a single text block to individual lines,
+	 * but not words. The argument minimum margins are used as they are, i.e.,
+	 * as absolute values without further scaling. It is the responsibility of
+	 * client code to specify values appropriate for the given DPI number.
+	 * @param block the text block to analyze
+	 * @param dpi the resolution of the underlying page image
+	/**
+	 * Analyze the inner structure of a single text block. The argument minimum
+	 * margins are used as they are, i.e., as absolute values without further
+	 * scaling. It is the responsibility of client code to specify values
+	 * appropriate for the given DPI number.
+	 * @param block the text block to analyze
+	 * @param dpi the resolution of the underlying page image
+	 * @param minVerticalBlockMargin the minimum number of white pixels above
+	 *            and below a text block (the margin between two text blocks in
+	 *            the same column)
+	 * @param minLineMargin the minimum number of white pixels rows between two
+	 *            lines of text
+	 * @param minWordMargin the minimum number of white pixels columns between
+	 *            two adjacent words
+	 * @param existingWords bounding boxes of words already known to be in the
+	 *            block
+	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 */
+	public static void getBlockStructure(Block block, int dpi, int minVerticalBlockMargin, int minLineMargin, int minWordMargin, BoundingBox[] existingWords, ProgressMonitor psm) {
+		
+		//	find text lines and words
+		if (existingWords == null)
+			getBlockStructure(block, dpi, minVerticalBlockMargin, minLineMargin, minWordMargin, psm);
 		else getBlockStructure(block, existingWords, psm);
 		
 		//	catch empty blocks larger than half an inch in both dimensions, might be (to-parse) table 
@@ -700,7 +847,6 @@ public class PageImageAnalysis implements ImagingConstants {
 		
 		//	paint copied image white where original has black stripes
 		byte[][] brightness = block.bounds.analysisImage.getBrightness();
-		int white = Color.WHITE.getRGB();
 		
 		//	collect grid line bounds for later cell merging
 		ArrayList gridLines = new ArrayList();
@@ -737,7 +883,7 @@ public class PageImageAnalysis implements ImagingConstants {
 				
 				if ((ec - c) >= minHorizontalPartLength) {
 					for (int w = c; w < ec; w++)
-						blockImage.setRGB((w - block.bounds.leftCol), (r - block.bounds.topRow), white);
+						blockImage.setRGB((w - block.bounds.leftCol), (r - block.bounds.topRow), whiteRgb);
 					hMatchRows.add(new Integer(r));
 					gridLines.add(block.bounds.getSubRectangle(c, ec, r, (r+1)));
 				}
@@ -778,7 +924,7 @@ public class PageImageAnalysis implements ImagingConstants {
 				
 				if ((er - r) >= minVerticalPartLength) {
 					for (int w = r; w < er; w++)
-						blockImage.setRGB((c - block.bounds.leftCol), (w - block.bounds.topRow), white);
+						blockImage.setRGB((c - block.bounds.leftCol), (w - block.bounds.topRow), whiteRgb);
 					vMatchCols.add(new Integer(c));
 					gridLines.add(block.bounds.getSubRectangle(c, (c+1), r, er));
 				}
@@ -842,7 +988,7 @@ public class PageImageAnalysis implements ImagingConstants {
 					clean = (clean && (brightness[c][r] < 127));
 				if (clean) {
 					for (int r = top; clean && (r < bottom); r++)
-						blockImage.setRGB((c - block.bounds.leftCol), (r - block.bounds.topRow), white);
+						blockImage.setRGB((c - block.bounds.leftCol), (r - block.bounds.topRow), whiteRgb);
 				}
 			}
 		}
@@ -878,7 +1024,7 @@ public class PageImageAnalysis implements ImagingConstants {
 		int minWordMargin = (dpi / 30); // TODOne_above find out if this makes sense (will turn out in the long haul only, though)
 		int minVerticalBlockMargin = minWordMargin; // using same as word margin here, as we already know we have a coherent table
 		if (existingWords == null)
-			getBlockStructure(tBlock, minVerticalBlockMargin, 1, minWordMargin, dpi, psm);
+			getBlockStructure(tBlock, dpi, minVerticalBlockMargin, 1, minWordMargin, psm);
 		else getBlockStructure(tBlock, existingWords, psm);
 		
 		//	adjust table content back to original table block boundaries, and wrap lines in cells
@@ -996,8 +1142,6 @@ public class PageImageAnalysis implements ImagingConstants {
 		boolean gridIncomplete = false;
 		//	this definition should catch the desired tables, as an incomplete grid gets more and more unlikely with more inner grid lines painted
 		gridIncomplete = (((minRowCentroidDistance * hInnerCentroids) < maxRowCentroidDistance) || ((minColCentroidDistance * vInnerCentroids) < maxColCentroidDistance));
-		
-		//	TODO figure out how to handle tables that have a partially full grid, e.g. only every third row boundary drawn
 		
 		//	grid might be incomplete ==> be careful with merging cells
 		if (gridIncomplete) {
@@ -1261,7 +1405,9 @@ public class PageImageAnalysis implements ImagingConstants {
 		}
 	}
 	
-	private static void getBlockStructure(Block block, int minVerticalBlockMargin, int minLineMargin, int minWordMargin, int dpi, ProgressMonitor psm) {
+	private static final int whiteRgb = Color.WHITE.getRGB();
+	
+	private static void getBlockStructure(Block block, int dpi, int minVerticalBlockMargin, int minLineMargin, int minWordMargin, ProgressMonitor psm) {
 		psm.setInfo("   - doing block " + block.getBoundingBox().toString());
 		
 		double maxSplitSlopeAngle;
@@ -1487,9 +1633,6 @@ public class PageImageAnalysis implements ImagingConstants {
 				return (((BoundingBox) o1).left - ((BoundingBox) o2).left);
 			}
 		});
-//		
-//		//	TODO identify lines by counting number of word box pixels for each pixel row in block
-//		//	==> more reliable than current approach with small superscripts and subscripts
 //		
 //		//	count number of word-occupied columns for each row in block, and compute average word height
 //		int avgWordHeight = 0;
@@ -1980,18 +2123,20 @@ Times New Roman at 400 DPI (417%):
 ==> (4 * dpi * font size) / (5 * 400) --> still too small
 ==> (5 * dpi * font size) / (6 * 400) --> still too unreliable
  	 */
-	
-	private static final double italicShearDeg = 15;
-	
-	/**
-	 * Compute font metrics in a text block.
-	 * @param block the block to analyze
-	 * @param dpi the resolution of the backing image
-	 */
-	public static void computeFontMetrics(Block block, int dpi) {
-		computeFontMetrics(block, dpi, true);
-	}
-	
+//	
+//	private static final double italicShearDeg = 15;
+//	
+//	private static final boolean DEBUG_COMPUTE_FONT_METRICS = true;
+//	
+//	/**
+//	 * Compute font metrics in a text block.
+//	 * @param block the block to analyze
+//	 * @param dpi the resolution of the backing image
+//	 */
+//	public static void computeFontMetrics(Block block, int dpi) {
+//		computeFontMetrics(block, dpi, true);
+//	}
+//	
 //	private static class LineFontData {
 //		Word[] words;
 //		ImagePartRectangle[][] wordChars;
@@ -2006,668 +2151,39 @@ Times New Roman at 400 DPI (417%):
 //			this.wordIsBaselinePunctuation = new boolean[this.words.length];
 //		}
 //	}
-//	TODO figure out if this container class is really better than the arrays in the code below
 //	
-	/**
-	 * Compute font metrics in a text block. If analyzeFontStyle is set to
-	 * false, this method does not analyze if a word is in bold face or in
-	 * italics.
-	 * @param block the block to analyze
-	 * @param dpi the resolution of the backing image
-	 * @param analyzeFontStyle analyze font style as well?
+	/*
+Read several research papers on the topic, and especially for bold, well, it works on lines as a whole ... not exactly what we need ...
+Surprisingly (not !!!), accuracy is much higher the longer words get ... sure, but we need to recognize that single-letter abbreviated genus as being in italics as well.
+
+Font size:
+- create brightness histogram over pixel rows (pretty much what we already have for scan skew detection)
+- try and use histogram peaks for font size computation (of sorts already in place, but use for whole line, now that lines are reliably horizontal) ...
+- ... as well as baseline detection (kind of already in place with "where it suddenly gets dark", but might benefit from refinement, epecially now that even slight scan skews are also detected and corrected)
+- average font size out across blocks, except for top and bottom lines (maybe only after paragraph splitting)
+
+Literature idea for italics:
+- create brightness histograms over word pixel columns ...
+- for original word as well as for word sheared left by some 15°
+--> histogram contrast sharper (higher) for original in plain text ...
+--> ... and for sheared word in italics text
+- pretty much what we already have with stroke counting in 0° and 15°, which works just as reliable ...
+- ... but might be worth testing
+- observe / assess dependency on font size
+
+Literature ideas for bold:
+- few, except for whole lines (nice for headings, but not in-text) ...
+- try using OCR result for assistance:
+  - render OCR result over words, both in bold and in plain (observe italics in the process, which identify a LOT more reliably based on page image alone)
+  - compute matched, spurious, and missed pixels for all words (like already in use in glyph decoding ==> make that computation an independent method, maybe in Imaging, adding distance, etc., either by a flag or on demand) 
+  - average gives general tendency for whole document (or better page, as scans might vary across pages) towards lighter or heavier fonts
+  - considerable deviations from average should pretty reliably identify bold words
+  --> compute distance from matching to bold as well as distance from matching to plain for each word ...
+  --> ... and use that for bold-or-not decision
+==> figures in stem width and black-desity differences between individual characters (even independent of OCR errors on similar looking characters like 'l', 'I', and '1', as they should match similarly)
+==> a lot better than current approach (hopefully ...)
+==> in document structure detector, do font style re-assessment first thing for scanned documents
 	 */
-	public static void computeFontMetrics(Block block, int dpi, boolean analyzeFontStyle) {
-		System.out.println("Computing font metrics for block " + block.bounds.getId());
-		Line[] lines = block.getLines();
-		if (lines.length == 0) {
-			System.out.println(" ==> no lines, nothing to compute metrics with");
-			return;
-		}
-		
-		//	first, collect block words and data for all lines
-		ArrayList blockWords = new ArrayList();
-		Word[][] lineWords = new Word[lines.length][];
-		ImagePartRectangle[][][] lineWordChars = new ImagePartRectangle[lines.length][][];
-		boolean[][] lineWordIsBaselinePunctuation = new boolean[lines.length][];
-		
-		//	compute font size along the way ...
-		int[] lineCapNonCapCuts = new int[lines.length];
-		int[] lineNonCapPunctuationCuts = new int[lines.length];
-		int[] lineAvgCapHeights = new int[lines.length];
-		int[] lineAvgNonCapHeights = new int[lines.length];
-		
-		//	detect font size
-		for (int l = 0; l < lines.length; l++) {
-			System.out.println(" - computing font size for line " + lines[l].bounds.getId());
-			lineWords[l] = lines[l].getWords();
-			if (lineWords[l].length == 0) {
-				System.out.println("   ==> no words, nothing to compute metrics from");
-				continue;
-			}
-			
-			blockWords.addAll(Arrays.asList(lineWords[l]));
-			
-			//	collect word and character bounds
-			CountingSet charHeights = new CountingSet();
-			int maxCharHeight = 0;
-			CountingSet ascentHeights = new CountingSet();
-			int maxAscent = 0;
-			CountingSet descentHeights = new CountingSet();
-			int maxDescent = 0;
-			lineWordChars[l] = new ImagePartRectangle[lineWords[l].length][];
-			for (int w = 0; w < lineWords[l].length; w++) {
-				ImagePartRectangle[] wordChars = Imaging.splitIntoColumns(lineWords[l][w].bounds, 1);
-				for (int c = 0; c < wordChars.length; c++) {
-					wordChars[c] = Imaging.narrowTopAndBottom(wordChars[c]);
-					if (wordChars[c].isEmpty())
-						continue;
-					charHeights.add(wordChars[c].bottomRow - wordChars[c].topRow);
-					maxCharHeight = Math.max(maxCharHeight, (wordChars[c].bottomRow - wordChars[c].topRow));
-					ascentHeights.add(lineWords[l][w].baseline - wordChars[c].topRow);
-					maxAscent = Math.max(maxAscent, (lineWords[l][w].baseline - wordChars[c].topRow));
-					descentHeights.add(wordChars[c].bottomRow - lineWords[l][w].baseline);
-					maxDescent = Math.max(maxDescent, (wordChars[c].bottomRow - lineWords[l][w].baseline));
-				}
-				lineWordChars[l][w] = wordChars;
-			}
-//			System.out.println("Line " + lines[l].bounds.getId() + ": got " + lineChars.size() + " characters from " + words.length + " words, max height is " + maxCharHeight + ", max ascent " + maxAscent + ", max descent " + maxDescent);
-//			System.out.println(" - char heights:");
-//			for (CountingSet.IntIterator iit = charHeights.iterator(); iit.hasNext();) {
-//				int ch = iit.next();
-//				System.out.println("   - " + ch + ": " + charHeights.getCount(ch));
-//			}
-//			System.out.println(" - ascent heights:");
-//			for (CountingSet.IntIterator iit = ascentHeights.iterator(); iit.hasNext();) {
-//				int ah = iit.next();
-//				System.out.println("   - " + ah + ": " + ascentHeights.getCount(ah));
-//			}
-//			System.out.println(" - descent heights:");
-//			for (CountingSet.IntIterator iit = descentHeights.iterator(); iit.hasNext();) {
-//				int dh = iit.next();
-//				System.out.println("   - " + dh + ": " + descentHeights.getCount(dh));
-//			}
-			
-			//	alleviate baseline underruns
-			int descentCut = (dpi / 100); // descents of less than a third of a millimeter are probably not actual descents
-			int baselineUnderrunSum = 0;
-			int baselineUnderrunCount = 0;
-			for (CountingSet.IntIterator iit = descentHeights.iterator(); iit.hasNext();) {
-				int dh = iit.next();
-				if ((dh < 0) || (descentCut < dh))
-					continue;
-				int dhc = descentHeights.getCount(dh);
-				baselineUnderrunSum += (dh * dhc);
-				baselineUnderrunCount += dhc;
-			}
-			int avgBaselineUnderrun = ((baselineUnderrunCount == 0) ? 0 : (baselineUnderrunSum / baselineUnderrunCount));
-			
-			//	compute font size statistics
-			lineCapNonCapCuts[l] = ((maxAscent * 8) / 10); // in most fonts, lower case letters without ascent will not exceed 80% of cap height
-			lineNonCapPunctuationCuts[l] = ((maxAscent * 4) / 10); // in most fonts, lower case letters will not be lower than 40% of cap height
-			int capAscentSum = 0;
-			int capAscentCount = 0;
-			int nonCapAscentSum = 0;
-			int nonCapAscentCount = 0;
-			for (CountingSet.IntIterator iit = ascentHeights.iterator(); iit.hasNext();) {
-				int ah = iit.next();
-				if ((ah + avgBaselineUnderrun) <= lineNonCapPunctuationCuts[l])
-					continue;
-				int ahc = ascentHeights.getCount(ah);
-				if ((ah + avgBaselineUnderrun) <= lineCapNonCapCuts[l]) {
-					nonCapAscentSum += ((ah + avgBaselineUnderrun) * ahc);
-					nonCapAscentCount += ahc;
-				}
-				else {
-					capAscentSum += ((ah + avgBaselineUnderrun) * ahc);
-					capAscentCount += ahc;
-				}
-			}
-			
-			//	compute font size proper
-			lineAvgCapHeights[l] = ((capAscentCount == 0) ? -1 : (capAscentSum / capAscentCount));
-			lineAvgNonCapHeights[l] = ((nonCapAscentCount == 0) ? -1 : (nonCapAscentSum / nonCapAscentCount));
-			int capFontSize = ((lineAvgCapHeights[l] == -1) ? -1 : (((lineAvgCapHeights[l] * 107) + (dpi / 2)) / dpi));
-			int nonCapFontSize = ((lineAvgNonCapHeights[l] == -1) ? -1 : (((lineAvgNonCapHeights[l] * 155) + (dpi / 2)) / dpi));
-			
-			//	use avearge of capital and non-capital characters if possible
-			if ((capFontSize != -1) && (nonCapFontSize != -1))
-				lines[l].fontSize = (((lineAvgCapHeights[l] * 107) + (lineAvgNonCapHeights[l] * 155) + dpi) / (2 * dpi));
-			
-			//	use capital letters
-			else if (capFontSize != -1)
-				lines[l].fontSize = capFontSize;
-			
-			//	use non-capital letters
-			else if (nonCapFontSize != -1)
-				lines[l].fontSize = nonCapFontSize;
-			
-			System.out.println(" --> font size is " + lines[l].fontSize);
-			
-			//	nothing to work with
-			if (lines[l].fontSize == -1)
-				continue;
-		}
-		
-		//	correct font size in very short lines (one third of block width) if lower than in longer lines above and below
-		//	==> aleviates font size underestimation due to absence for capital letters
-		for (int l = 1; l < lines.length; l++) {
-			
-			//	this one's wide enough for us to assume it does contain capital letters
-			if ((block.bounds.rightCol - block.bounds.leftCol) < ((lines[l].bounds.rightCol - lines[l].bounds.leftCol) * 3))
-				continue;
-			
-			//	this font size seems OK
-			if (lines[l-1].fontSize <= lines[l].fontSize)
-				continue;
-			if (((l+1) < lines.length) && (lines[l+1].fontSize <= lines[l].fontSize))
-				continue;
-			
-			//	correct to average font size of adjacent lines
-			int fontSizeAbove = lines[l-1].fontSize;
-			int fontSizeBelow = (((l+1) == lines.length) ? fontSizeAbove : lines[l+1].fontSize);
-			lines[l].fontSize = ((fontSizeAbove + fontSizeBelow + 1) / 2);
-			System.out.println(" --> font size for line " + lines[l].bounds.getId() + " corrected to " + lines[l].fontSize);
-		}
-		
-		//	find punctuation marks (get code from old bold identifier below)
-		for (int l = 0; l < lines.length; l++) {
-//			System.out.println(" - detecting baseline punctuation in line " + lines[l].bounds.getId());
-			lineWordIsBaselinePunctuation[l] = new boolean[lineWords[l].length];
-			
-			//	can we do anything about this one?
-			if (lineAvgNonCapHeights[l] == -1) {
-				Arrays.fill(lineWordIsBaselinePunctuation[l], false);
-				continue;
-			}
-			
-			//	classify line words (regard anything lower than average x-height as baseline punctuation)
-			for (int w = 0; w < lineWords[l].length; w++) {
-				lineWordIsBaselinePunctuation[l][w] = true;
-				for (int c = 0; c < lineWordChars[l][w].length; c++)
-					if (lineAvgNonCapHeights[l] < ((lineWords[l][w].baseline - lineWordChars[l][w][c].topRow) * 2)) {
-						lineWordIsBaselinePunctuation[l][w] = false;
-						break;
-					}
-//				if (lineWordIsBaselinePunctuation[l][w])
-//					System.out.println(" - " + lineWords[l][w].bounds.getId() + " is baseline punctuation mark");
-//				else System.out.println(" - " + lineWords[l][w].bounds.getId() + " is regular word");
-			}
-		}
-		
-		//	detect italics
-		for (int l = 0; l < lines.length; l++) {
-			
-			//	cannot do font style detection without font size
-			if (lines[l].fontSize < 1)
-				continue;
-			
-			//	skip font style detection if ordered so
-			if (!analyzeFontStyle)
-				continue;
-			
-			//	detect italics by detecting both upright and forward-leaning lines of lenght avgNonCapHeight and then comparing
-			int analysisHeight = ((lineAvgNonCapHeights[l] < 1) ? lineAvgCapHeights[l] : lineAvgNonCapHeights[l]);
-			Word italicCandidate = null;
-			for (int w = 0; w < lineWords[l].length; w++) {
-				
-				//	this word is only a baseline punctuation mark, skip it for now
-				if (lineWordIsBaselinePunctuation[l][w])
-					continue;
-				
-				//	measure word
-				int nonItalicStrokes = countStrokes(lineWords[l][w].bounds, (analysisHeight / 2), 0, true);
-				int italicStrokes = countStrokes(lineWords[l][w].bounds, (analysisHeight / 2), italicShearDeg, true);
-				int nonItalicGaps = countStrokes(lineWords[l][w].bounds, Math.min(analysisHeight, (lineWords[l][w].bounds.bottomRow - lineWords[l][w].bounds.topRow)), 0, false);
-				int italicGaps = countStrokes(lineWords[l][w].bounds, Math.min(analysisHeight, (lineWords[l][w].bounds.bottomRow - lineWords[l][w].bounds.topRow)), italicShearDeg, false);
-				
-				//	this word surely looks like italics
-				if ((italicStrokes + (italicGaps / 2)) > (nonItalicStrokes + (nonItalicGaps / 2))) {
-					lineWords[l][w].italics = true;
-					if ((italicCandidate != null) && (((italicCandidate.bounds.rightCol - italicCandidate.bounds.leftCol) * 3) < (lineWords[l][w].bounds.rightCol - lineWords[l][w].bounds.leftCol)))
-						italicCandidate.italics = true;
-					italicCandidate = null;
-				}
-				
-				//	this word might be in italics, but we cannot be sure as yet
-				else if ((italicStrokes > nonItalicStrokes) || (italicGaps > nonItalicGaps))
-					italicCandidate = lineWords[l][w];
-				
-				//	this word surely isn't in italics, remove candidate as well
-				else italicCandidate = null;
-			}
-			
-			//	set baseline punctuation marks to italics if both adjacent words are in italics
-			for (int w = 1; w < lineWords[l].length; w++) {
-				
-				//	this word has been inspected before
-				if (!lineWordIsBaselinePunctuation[l][w])
-					continue;
-				
-				//	test adjacent words
-				boolean italicsBefore = lineWords[l][w-1].italics;
-				boolean italicsAfter = ((((w+1) == lineWords[l].length) || lineWordIsBaselinePunctuation[l][w+1]) ? true : lineWords[l][w+1].italics);
-				
-				//	carry over italics
-				lineWords[l][w].italics = (italicsBefore && italicsAfter);
-			}
-		}
-		
-		//	count number of words for each maximum word char stem width
-//		TreeMap fontSizeCharBlockSizes = new TreeMap();
-//		TreeMap fontSizeCharDotSizes = new TreeMap();
-		for (int l = 0; l < lines.length; l++) {
-			
-			//	cannot do font style detection without font size
-			if (lines[l].fontSize < 1)
-				continue;
-			
-			//	skip font style detection if ordered so
-			if (!analyzeFontStyle)
-				continue;
-			
-			//	compute char stem widths for each word
-			int analysisHeight = ((lineAvgNonCapHeights[l] < 1) ? lineAvgCapHeights[l] : lineAvgNonCapHeights[l]);
-//			CountingSet charBlockSizes = ((CountingSet) fontSizeCharBlockSizes.get(new Integer(lines[l].fontSize)));
-//			if (charBlockSizes == null) {
-//				charBlockSizes = new CountingSet();
-//				fontSizeCharBlockSizes.put(new Integer(lines[l].fontSize), charBlockSizes);
-//			}
-//			CountingSet charDotSizes = ((CountingSet) fontSizeCharDotSizes.get(new Integer(lines[l].fontSize)));
-//			if (charDotSizes == null) {
-//				charDotSizes = new CountingSet();
-//				fontSizeCharDotSizes.put(new Integer(lines[l].fontSize), charDotSizes);
-//			}
-			for (int w = 0; w < lineWords[l].length; w++) {
-				
-				//	this word is only a baseline punctuation mark, skip it for now
-				if (lineWordIsBaselinePunctuation[l][w]) {
-//					System.out.println(lineWords[l][w].bounds.getId() + ";unmeasured");
-					continue;
-				}
-				
-				//	make sure if word has any content at all
-				ImagePartRectangle wordMiddlePart = lineWords[l][w].bounds.getSubRectangle(lineWords[l][w].bounds.leftCol, lineWords[l][w].bounds.rightCol, (lineWords[l][w].getBaseline() - analysisHeight), lineWords[l][w].getBaseline());
-				wordMiddlePart = Imaging.narrowLeftAndRight(wordMiddlePart);
-				wordMiddlePart = Imaging.narrowTopAndBottom(wordMiddlePart);
-				if (wordMiddlePart.isEmpty())
-					continue;
-				
-				//	analyze chars
-				int charBlockSizeSum = 0;
-//				int charBlockScoreSum = 0;
-//				int charDotSizeSum = 0;
-//				int charDotScoreSum = 0;
-				int measuredCharCount = 0;
-				for (int c = 0; c < lineWordChars[l][w].length; c++) {
-					if ((lineWords[l][w].baseline - lineWordChars[l][w][c].topRow) < lineNonCapPunctuationCuts[l])
-						continue;
-					measuredCharCount++;
-					for (int blockSize = 0;; blockSize++) {
-						int charBlocks = countBlocks(lineWordChars[l][w][c], (blockSize + 1), (lineWords[l][w].italics ? italicShearDeg : 0));
-						if (charBlocks == 0) {
-//							charBlockSizes.add(blockSize); // store what we've found
-							charBlockSizeSum += blockSize;
-							break; // we're done
-						}
-//						else charBlockScoreSum += (charBlocks * (blockSize + 1) * (blockSize + 1));
-					}
-//					for (int dotSize = 0;; dotSize++) {
-//						int charDots = countDots(lineWordChars[l][w][c], (dotSize + 1));
-//						if (charDots == 0) {
-////							charDotSizes.add(dotSize); // store what we've found
-//							charDotSizeSum += dotSize;
-//							break; // we're done
-//						}
-//						else charDotScoreSum += (charDots * (dotSize + 1) * (dotSize + 1));
-//					}
-				}
-				
-				//	count non-white pixels in various word-wide areas
-				byte[][] brightness = block.bounds.analysisImage.getBrightness();
-//				int nonWhiteCountLineHight = 0;
-//				int nonWhiteCountLineTop = 0;
-				int nonWhiteCountLineCenter = 0;
-				for (int c = lineWords[l][w].bounds.leftCol; c < lineWords[l][w].bounds.rightCol; c++) {
-//					for (int r = lines[l].bounds.topRow; r < lines[l].bounds.bottomRow; r++) {
-//						if (brightness[c][r] < 127)
-//							nonWhiteCountLineHight++;
-//					}
-//					for (int r = lines[l].bounds.topRow; r < lineWords[l][w].getBaseline(); r++) {
-//						if (brightness[c][r] < 127)
-//							nonWhiteCountLineTop++;
-//					}
-					for (int r = Math.max(0, (lineWords[l][w].getBaseline() - analysisHeight)); r < lineWords[l][w].getBaseline(); r++) {
-						if (brightness[c][r] < 127)
-							nonWhiteCountLineCenter++;
-					}
-				}
-//				
-//				if (measuredCharCount == 0)
-//					System.out.println(lineWords[l][w].bounds.getId() + ";unmeasured");
-//				else System.out.println(lineWords[l][w].bounds.getId() +
-//						//	raw sizes
-//						";" + (((float) charBlockSizeSum) / measuredCharCount) + 
-//						";" + (((float) charDotSizeSum) / measuredCharCount) +
-//						//	normalized by font size
-//						";" + (((float) charBlockSizeSum) / (measuredCharCount * lines[l].fontSize)) + 
-//						";" + (((float) charDotSizeSum) / (measuredCharCount * lines[l].fontSize)) + 
-//						//	raw scores
-//						";" + (((float) charBlockScoreSum) / measuredCharCount) + 
-//						";" + (((float) charDotScoreSum) / measuredCharCount) +
-//						//	normalized by font size
-//						";" + (((float) charBlockScoreSum) / (measuredCharCount * lines[l].fontSize)) + 
-//						";" + (((float) charDotScoreSum) / (measuredCharCount * lines[l].fontSize)) +
-//						//	normalized by font size square
-//						";" + (((float) charBlockScoreSum) / (measuredCharCount * lines[l].fontSize * lines[l].fontSize)) + 
-//						";" + (((float) charDotScoreSum) / (measuredCharCount * lines[l].fontSize * lines[l].fontSize)) +
-//						//	normalized by font size cube
-//						";" + (((float) charBlockScoreSum) / (measuredCharCount * lines[l].fontSize * lines[l].fontSize * lines[l].fontSize)) + 
-//						";" + (((float) charDotScoreSum) / (measuredCharCount * lines[l].fontSize * lines[l].fontSize * lines[l].fontSize)) +
-//						//	normalized by font size double square
-//						";" + (((float) charBlockScoreSum) / (measuredCharCount * lines[l].fontSize * lines[l].fontSize * lines[l].fontSize * lines[l].fontSize)) + 
-//						";" + (((float) charDotScoreSum) / (measuredCharCount * lines[l].fontSize * lines[l].fontSize * lines[l].fontSize * lines[l].fontSize)) +
-//						//	raw sizes
-//						";" + (((float) nonWhiteCountLineHight) / ((lineWords[l][w].bounds.rightCol - lineWords[l][w].bounds.leftCol) * (lines[l].bounds.bottomRow - lines[l].bounds.topRow))) + 
-//						";" + (((float) nonWhiteCountLineTop) / ((lineWords[l][w].bounds.rightCol - lineWords[l][w].bounds.leftCol) * (lineWords[l][w].getBaseline() - lines[l].bounds.topRow))) +
-//						";" + (((float) nonWhiteCountLineCenter) / ((lineWords[l][w].bounds.rightCol - lineWords[l][w].bounds.leftCol) * analysisHeight)) +
-//					"");
-//				/* RESULT OF INSPCTION AT 500 DPI:
-//				 * - normalized block size appears to be best indicator of bold face
-//				 * - at 500 DPI, 0.75 looks good for a threshold
-//				 *   ==> at 300 DPI, use 0.45
-//				 * - word center darkness also looks good ...
-//				 * - ... but has problems with 'stem heavy' plain face words like 'it' or 'il', which consist of little else but thick stems
-//				 *   ==> try hybridizing normalized block size and word center darkness
-//				 */
-				
-				//	check if we have a bold word
-				if (measuredCharCount != 0) {
-					
-					//	compute word average char block size (stem width)
-					float normCharBlockSize = (((float) charBlockSizeSum) / (measuredCharCount * lines[l].fontSize));
-					float normCharBlockSize500 = ((normCharBlockSize * 500) / dpi);
-					
-					//	this one's just too thin
-					if (normCharBlockSize500 < 0.66)
-						continue;
-					
-					//	compute word darkness in addition
-					float wordCenterDarkness = (((float) nonWhiteCountLineCenter) / ((lineWords[l][w].bounds.rightCol - lineWords[l][w].bounds.leftCol) * analysisHeight));
-					
-					//	this one's just too light
-					if (wordCenterDarkness < 0.35)
-						continue;
-					
-					//	this one's thick enough to likely be sure now
-					if (0.8 <= normCharBlockSize500) {
-						lineWords[l][w].bold = true;
-						continue;
-					}
-					
-					//	this one's dark enough to likely be sure now
-					if (0.4 < wordCenterDarkness)
-						lineWords[l][w].bold = true;
-					
-					/* while this current approach to bold face detection does
-					 * produce a few occasional false positives, this is likely
-					 * as good as it gets with acceptable effort ... */
-				}
-			}
-			
-			//	set baseline punctuation marks to bold if both adjacent words are bold
-			for (int w = 1; w < lineWords[l].length; w++) {
-				
-				//	this word has been inspected before
-				if (!lineWordIsBaselinePunctuation[l][w])
-					continue;
-				
-				//	test adjacent words
-				boolean boldBefore = lineWords[l][w-1].bold;
-//				boolean boldAfter = ((((w+1) == lineWords[l].length) || lineWordIsBaselinePunctuation[l][w+1]) ? true : lineWords[l][w+1].bold);
-				boolean boldAfter = (((w+1) == lineWords[l].length) ? true : lineWords[l][w+1].bold);
-				
-				//	carry over bold
-				lineWords[l][w].bold = (boldBefore && boldAfter);
-			}
-		}
-		
-//		for (Iterator fsit = fontSizeCharBlockSizes.keySet().iterator(); fsit.hasNext();) {
-//			Integer fs = ((Integer) fsit.next());
-//			System.out.println("Font size " + fs.intValue() + ":");
-//			CountingSet charStemWidths = ((CountingSet) fontSizeCharBlockSizes.get(fs));
-//			for (CountingSet.IntIterator wswit = charStemWidths.iterator(); wswit.hasNext();) {
-//				int csw = wswit.next();
-//				System.out.println(" - stem width " + csw + " in " + charStemWidths.getCount(csw) + " chars");
-//			}
-//		}
-//		for (Iterator fsit = fontSizeCharDotSizes.keySet().iterator(); fsit.hasNext();) {
-//			Integer fs = ((Integer) fsit.next());
-//			System.out.println("Font size " + fs.intValue() + ":");
-//			CountingSet charDotSizes = ((CountingSet) fontSizeCharDotSizes.get(fs));
-//			for (CountingSet.IntIterator wswit = charDotSizes.iterator(); wswit.hasNext();) {
-//				int csw = wswit.next();
-//				System.out.println(" - dot size " + csw + " in " + charDotSizes.getCount(csw) + " chars");
-//			}
-//		}
-//		
-//		//	average font weight coefficient across all lines
-//		CountingSet fontWeightCoefficients = new CountingSet();
-//		float fontWeightCoefficientSum = 0;
-//		int fontWeightCoefficientCount = 0;
-//		for (int l = 0; l < lines.length; l++) {
-//			
-//			//	cannot do font style detection without font size
-//			if (lines[l].fontSize < 1)
-//				continue;
-//			
-//			//	skip font style detection if ordered so
-//			if (!analyzeFontStyle)
-//				continue;
-//			
-//			//	sum it up
-//			for (int w = 0; w < lineWords[l].length; w++) {
-//				float fwc = lineWords[l][w].getFontWeightCoefficient300();
-//				if (fwc != 0) {
-//					fontWeightCoefficients.add((int) (fwc * 100));
-//					fontWeightCoefficientSum += fwc;
-//					fontWeightCoefficientCount++;
-//				}
-//			}
-//		}
-//		float avgFontWeightCoefficient = ((fontWeightCoefficientCount == 0) ? 1 : (fontWeightCoefficientSum / fontWeightCoefficientCount));
-//		
-//		for (CountingSet.IntIterator fwcit = fontWeightCoefficients.iterator(); fwcit.hasNext();) {
-//			int fwc = fwcit.next();
-//			System.out.println(" - coefficient " + fwc + "/100 found in " + fontWeightCoefficients.getCount(fwc) + " words");
-//		}
-		
-		//	set above-average words to bold
-		for (int l = 0; l < lines.length; l++) {
-			
-			//	no use doing majority vote with less than two words
-			if (lineWords[l].length < 2)
-				continue;
-			
-			//	check if line is majorly bold
-			int wordWidthSum = 0;
-			int boldWordWidthSum = 0;
-			int boldWordCount = 0;
-			for (int w = 0; w < lineWords[l].length; w++) {
-				wordWidthSum += (lineWords[l][w].bounds.rightCol - lineWords[l][w].bounds.leftCol);
-				if (lineWords[l][w].bold) {
-					boldWordWidthSum += (lineWords[l][w].bounds.rightCol - lineWords[l][w].bounds.leftCol);
-					boldWordCount++;
-				}
-			}
-			boolean boldLine = ((boldWordCount != 0) && (wordWidthSum < (boldWordWidthSum * 2)));
-			
-			//	make shorter-than-average words bold in lines that are majorly bold (helps with stop words in headings, etc)
-			int avgWordWidth = ((wordWidthSum + (lineWords[l].length / 2)) / lineWords[l].length);
-			for (int w = 0; w < lineWords[l].length; w++) {
-				if (lineWords[l][w].bold || (avgWordWidth < (lineWords[l][w].bounds.rightCol - lineWords[l][w].bounds.leftCol)))
-					continue;
-				boolean narrowWord = (((lineWords[l][w].bounds.rightCol - lineWords[l][w].bounds.leftCol) * 2) < (lineWords[l][w].bounds.bottomRow - lineWords[l][w].bounds.topRow));
-				if (!boldLine && !narrowWord)
-					continue;
-				boolean boldLeft = ((w == 0) ? true : lineWords[l][w-1].bold);
-				boolean boldRight = ((((w+1) == lineWords[l].length) || ((w != 0) && narrowWord && lineWordIsBaselinePunctuation[l][w+1])) ? true : lineWords[l][w+1].bold);
-				lineWords[l][w].bold = (boldLeft && boldRight);
-			}
-		}
-		
-		//	if word is less than twice as wide as high, keep bold and italics only if neighboring word bold or in italics as well (helps with numbers, etc.)
-		if (analyzeFontStyle)
-			for (int w = 0; w < blockWords.size(); w++) {
-				Word word = ((Word) blockWords.get(w));
-				if ((word.bounds.rightCol - word.bounds.leftCol) > ((word.bounds.bottomRow - word.bounds.topRow) * 2))
-					continue;
-				if (word.italics) {
-					boolean italicsLeft = ((w == 0) ? false : ((Word) blockWords.get(w-1)).italics);
-					boolean italicsRight = (((w+1) == blockWords.size()) ? false : ((Word) blockWords.get(w+1)).italics);
-					word.italics = (italicsLeft || italicsRight);
-				}
-				if (word.bold) {
-					boolean boldLeft = ((w == 0) ? false : ((Word) blockWords.get(w-1)).bold);
-					boolean boldRight = (((w+1) == blockWords.size()) ? false : ((Word) blockWords.get(w+1)).bold);
-					word.bold = (boldLeft || boldRight);
-				}
-			}
-	}
-	
-	private static class CountingSet {
-		private static class Counter {
-			int c = 0;
-		}
-		private static class IntIterator {
-			Iterator iter;
-			IntIterator(Iterator iter) {
-				this.iter = iter;
-			}
-			boolean hasNext() {
-				return this.iter.hasNext();
-			}
-			int next() {
-				return ((Integer) this.iter.next()).intValue();
-			}
-		}
-		private TreeMap content = new TreeMap();
-		void add(int i) {
-			Integer key = new Integer(i);
-			Counter cnt = ((Counter) this.content.get(key));
-			if (cnt == null) {
-				cnt = new Counter();
-				this.content.put(key, cnt);
-			}
-			cnt.c++;
-		}
-		int getCount(int i) {
-			Integer key = new Integer(i);
-			Counter cnt = ((Counter) this.content.get(key));
-			return ((cnt == null) ? 0 : cnt.c);
-		}
-		IntIterator iterator() {
-			return new IntIterator(this.content.keySet().iterator());
-		}
-	}
-	
-	private static int countBlocks(ImagePartRectangle wordChar, int size, double angle) {
-		int hSize = size;
-		int vSize = size;
-		int blockShear = ((int) Math.round(((double) vSize) * Math.tan((Math.PI / 180) * angle)));
-		if (blockShear != 0)
-			hSize--;
-		int count = 0;
-		boolean found;
-		byte[][] brightness = wordChar.analysisImage.getBrightness();
-		for (int c = (wordChar.leftCol + blockShear); c < (wordChar.rightCol - hSize); c++)
-			for (int r = wordChar.topRow; r < (wordChar.bottomRow - vSize); r++) {
-				found = true;
-				for (int l = 0; found && (l < size); l++) {
-					int s = ((((blockShear * l) + (vSize / 2)) / vSize));
-					found = (found
-							&&
-							((l < hSize) ? (brightness[c+l][r] < 127) : true)
-							&&
-							(brightness[c+l-blockShear][r+vSize-1] < 127)
-							&&
-							(brightness[c-s][r+l] < 127)
-							&&
-							(brightness[c+hSize-1-s][r+l] < 127)
-							);
-				}
-				if (found)
-					count++;
-			}
-		return count;
-	}
-	
-	private static int countDots(ImagePartRectangle wordChar, int diameter) {
-		boolean[][] pattern = getDotPattern(diameter);
-		int count = 0;
-		boolean found;
-		byte[][] brightness = wordChar.analysisImage.getBrightness();
-		for (int c = wordChar.leftCol; c < (wordChar.rightCol - diameter); c++)
-			for (int r = wordChar.topRow; r < (wordChar.bottomRow - diameter); r++) {
-				found = true;
-				for (int pc = 0; found && (pc < diameter); pc++)
-					for (int pr = 0; found && (pr < diameter); pr++) {
-						if (pattern[pc][pr])
-							found = (found && brightness[c + pc][r + pr] < 127);
-					}
-				if (found)
-					count++;
-			}
-		return count;
-	}
-	private static ArrayList dotPatterns = new ArrayList();
-	private static boolean[][] getDotPattern(int diameter) {
-		synchronized (dotPatterns) {
-			while (dotPatterns.size() <= diameter)
-				dotPatterns.add(buildDotPattern(dotPatterns.size()));
-			return ((boolean[][]) dotPatterns.get(diameter));
-		}
-	}
-	private static boolean[][] buildDotPattern(int diameter) {
-		float radius = (((float) diameter) / 2);
-		boolean[][] pattern = new boolean[diameter][diameter];
-		for (int c = 0; c < diameter; c++)
-			for (int r = 0; r < diameter; r++) {
-				float x = (c + 0.5f - radius);
-				float y = (r + 0.5f - radius);
-				pattern[c][r] = (((x * x) + (y * y)) < (radius * radius));
-			}
-		System.out.println("Built dot pattern for diameter " + diameter + ":");
-		for (int c = 0; c < diameter; c++) {
-			for (int r = 0; r < diameter; r++)
-				System.out.print(pattern[c][r] ? "X" : " ");
-			System.out.println();
-		}
-		return pattern;
-	}
-	
-	private static int countStrokes(ImagePartRectangle word, int length, double angle, boolean black) {
-		int wordShear = ((int) Math.round(((double) length) * Math.tan((Math.PI / 180) * angle)));
-		int count = 0;
-		boolean found;
-		byte[][] brightness = word.analysisImage.getBrightness();
-		for (int c = word.leftCol; c < (word.rightCol - (wordShear / 2)); c++) {
-			for (int r = (word.topRow + length - 1); r < word.bottomRow; r++) {
-				found = true;
-				for (int l = 0; found && (l < length); l++) {
-					int lc = (c + (((wordShear * l) + (length / 2)) / length));
-					boolean isWhite = ((lc < word.rightCol) ? (brightness[lc][r-l] == 127) : true);
-					found = (found
-							&&
-//							(black ? !isWhite : isWhite)
-							(black != isWhite)
-							);
-				}
-				if (found)
-					count++;
-			}
-		}
-		return count;
-	}
 	
 	/**
 	 * Compute the baselines of the lines in a text block.

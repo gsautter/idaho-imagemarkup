@@ -30,6 +30,8 @@ package de.uka.ipd.idaho.im;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedList;
@@ -62,12 +64,7 @@ public class ImPage extends ImRegion {
 		private WordIndexRegion[][] wirs;
 		WordIndex(int width, int height) {
 			this.step = Math.min((width / 8), (height / 11)); // one by one inch on an A4 page
-			this.wirs = new WordIndexRegion[(width + this.step - 1) / this.step][];
-			for (int c = 0; c < this.wirs.length; c++) {
-				this.wirs[c] = new WordIndexRegion[(height + this.step - 1) / this.step];
-				for (int r = 0; r < this.wirs[c].length; r++)
-					this.wirs[c][r] = new WordIndexRegion();
-			}
+			this.wirs = new WordIndexRegion[(width + this.step - 1) / this.step][(height + this.step - 1) / this.step];
 		}
 		void addWord(ImWord imw) {
 			for (int x = imw.bounds.left; x < imw.bounds.right; x += this.step) {
@@ -79,7 +76,7 @@ public class ImPage extends ImRegion {
 			this.addWordForPoint(imw, (imw.bounds.right-1), (imw.bounds.bottom-1));
 		}
 		private void addWordForPoint(ImWord imw, int x, int y) {
-			WordIndexRegion wir = this.getRegionAt(x, y);
+			WordIndexRegion wir = this.getRegionAt(x, y, true);
 			if (wir != null)
 				wir.addWord(imw);
 		}
@@ -93,19 +90,23 @@ public class ImPage extends ImRegion {
 			this.removeWordForPoint(imw, (imw.bounds.right-1), (imw.bounds.bottom-1));
 		}
 		private void removeWordForPoint(ImWord imw, int x, int y) {
-			this.getRegionAt(x, y).removeWord(imw);
+			WordIndexRegion wir = this.getRegionAt(x, y, false);
+			if (wir != null)
+				wir.removeWord(imw);
 		}
-		private WordIndexRegion getRegionAt(int x, int y) {
+		private WordIndexRegion getRegionAt(int x, int y, boolean create) {
 			int xi = (x / this.step);
 			if ((xi < 0) || (this.wirs.length <= xi))
 				return null;
 			int yi = (y / this.step);
 			if ((yi < 0) || (this.wirs[xi].length <= yi))
 				return null;
+			if ((this.wirs[xi][yi] == null) && create)
+				this.wirs[xi][yi] = new WordIndexRegion();
 			return this.wirs[xi][yi];
 		}
 		ImWord getWordAt(int x, int y) {
-			WordIndexRegion wir = this.getRegionAt(x, y);
+			WordIndexRegion wir = this.getRegionAt(x, y, false);
 			if (wir == null)
 				return null;
 			for (Iterator wit = wir.iterator(); wit.hasNext();) {
@@ -126,10 +127,47 @@ public class ImPage extends ImRegion {
 		}
 	}
 	
-	private final TreeSet words;
+	/* sort regions by area, as this
+	 * (a) reflects region nesting and
+	 * (b) gives a total order independent of position for disjoint or intersecting regions
+	 */
+	private static final Comparator sizeRegionOrder = new Comparator() {
+		public int compare(Object obj1, Object obj2) {
+			ImRegion reg1 = ((ImRegion) obj1);
+			ImRegion reg2 = ((ImRegion) obj2);
+			return (getSize(reg2.bounds) - getSize(reg1.bounds));
+		}
+	};
+	
+	private static final int getSize(BoundingBox bb) {
+		return ((bb.right - bb.left) * (bb.bottom - bb.top));
+	}
+	
+	/* TODO keep regions sorted according to document reading order contract
+	 * This might not even be possible with wildly intersecting and overlapping
+	 * regions, however, as a total ordering as required by sort routines in
+	 * such cases might be impossible to define even theoretically.
+	 */
+//	private static final Comparator leftRightRegionOrder = new Comparator() {
+//		public int compare(Object obj1, Object obj2) {
+//			return 0;
+//		}
+//	};
+//	
+//	private static final Comparator rightLeftRegionOrder = new Comparator() {
+//		public int compare(Object obj1, Object obj2) {
+//			return 0;
+//		}
+//	};
+	
+	private TreeSet words;
 	private HashMap wordsByBounds = new HashMap();
 	private WordIndex wordsByPoints;
-	private final ArrayList regions = new ArrayList();
+	
+	private ArrayList regions = new ArrayList();
+	private Comparator regionOrder;
+	
+	private int imageDpi = -1;
 	
 	/** Constructor (automatically adds the page to the argument document)
 	 * @param doc the document the page belongs to
@@ -138,9 +176,11 @@ public class ImPage extends ImRegion {
 	 */
 	public ImPage(ImDocument doc, int pageId, BoundingBox bounds) {
 		super(doc, pageId, bounds, PAGE_TYPE);
-		super.setType(PAGE_TYPE);
+//		super.setType(PAGE_TYPE);
 		this.words = new TreeSet(ImWord.getComparator(doc.orientation));
 		this.wordsByPoints = new WordIndex((this.bounds.right - this.bounds.left), (this.bounds.bottom - this.bounds.top));
+//		this.regionOrder = ((doc.orientation == ComponentOrientation.RIGHT_TO_LEFT) ? rightLeftRegionOrder : leftRightRegionOrder);
+		this.regionOrder = sizeRegionOrder;
 		doc.addPage(this);
 	}
 	
@@ -212,7 +252,15 @@ public class ImPage extends ImRegion {
 	 * @see de.uka.ipd.idaho.im.ImLayoutObject#getImage()
 	 */
 	public PageImage getImage() {
-		return this.getPageImage();
+		PageImage pi;
+		try {
+			pi = this.getDocument().getPageImage(this.pageId);
+		}
+		catch (Exception e) {
+			pi = super.getPageImage();
+		}
+		this.imageDpi = pi.currentDpi;
+		return pi;
 	}
 	
 	/**
@@ -224,7 +272,8 @@ public class ImPage extends ImRegion {
 	public boolean setImage(PageImage pi) {
 		try {
 			PageImage opi = this.getPageImage();
-			PageImage.storePageImage(this.getDocument().docId, this.pageId, pi);
+			this.getDocument().storePageImage(pi, this.pageId);
+			this.imageDpi = pi.currentDpi;
 			this.getDocument().notifyAttributeChanged(this, PAGE_IMAGE_ATTRIBUTE, opi);
 			return true;
 		}
@@ -232,6 +281,28 @@ public class ImPage extends ImRegion {
 			ioe.printStackTrace(System.out);
 			return false;
 		}
+	}
+	
+	/**
+	 * Retrieve the resolution of the page image. This method exists to allow
+	 * IO facilities to implement it more efficiently than by loading the page
+	 * image for merely accessing its DPI property.
+	 * @return the resolution of the page image
+	 */
+	public int getImageDPI() {
+		if (this.imageDpi < 0)
+			this.imageDpi = this.getImage().currentDpi;
+		return this.imageDpi;
+	}
+	
+	/**
+	 * Set the resolution of the page image. This method exists to allow IO
+	 * facilities to inject the resolution without having to load the page
+	 * image proper.
+	 * @param imageDpi the resolution of the page image
+	 */
+	public void setImageDPI(int imageDpi) {
+		this.imageDpi = imageDpi;
 	}
 	
 	/**
@@ -354,11 +425,11 @@ public class ImPage extends ImRegion {
 	 * @return an array holding the words lying inside the argument box
 	 */
 	public ImWord[] getWordsInside(BoundingBox box) {
-		LinkedList wi = new LinkedList();
+		ArrayList wi = new ArrayList();
 		for (Iterator wit = this.words.iterator(); wit.hasNext();) {
 			ImWord imw = ((ImWord) wit.next());
 			if ((imw.centerX >= box.left) && (imw.centerX < box.right) && (imw.centerY >= box.top) && (imw.centerY < box.bottom))
-				wi.addLast(imw);
+				wi.add(imw);
 		}
 		return ((ImWord[]) wi.toArray(new ImWord[wi.size()]));
 	}
@@ -370,11 +441,11 @@ public class ImPage extends ImRegion {
 	 * @return an array holding the text stream heads
 	 */
 	public ImWord[] getTextStreamHeads() {
-		LinkedList tshs = new LinkedList();
+		ArrayList tshs = new ArrayList();
 		for (Iterator wit = this.words.iterator(); wit.hasNext();) {
 			ImWord imw = ((ImWord) wit.next());
 			if ((imw.getPreviousWord() == null) || (imw.getPreviousWord().pageId != imw.pageId))
-				tshs.addLast(imw);
+				tshs.add(imw);
 		}
 		return ((ImWord[]) tshs.toArray(new ImWord[tshs.size()]));
 	}
@@ -397,6 +468,7 @@ public class ImPage extends ImRegion {
 		else {
 			synchronized (this.regions) {
 				this.regions.add(region);
+				Collections.sort(this.regions, this.regionOrder);
 			}
 			region.setPage(this);
 			this.getDocument().notifyRegionAdded(region);
@@ -426,9 +498,7 @@ public class ImPage extends ImRegion {
 	/**
 	 * Retrieve the regions (e.g. columns and blocks) that include a given
 	 * bounding box. Regions higher up in the hierarchy appear before the ones
-	 * nested in them in the returned array. In addition, they are sorted
-	 * according to the orientation of the document, e.g. left to right and top
-	 * to bottom for text in Latin scripts. If <code>fuzzy</code> is set to
+	 * nested in them in the returned array. If <code>fuzzy</code> is set to
 	 * <code>true</code>, the result also includes all regions that contain the
 	 * center point of the argument box, even if they do not fully include the
 	 * argument box.
@@ -437,11 +507,13 @@ public class ImPage extends ImRegion {
 	 * @return an array holding the regions that include the argument box
 	 */
 	public ImRegion[] getRegionsIncluding(BoundingBox box, boolean fuzzy) {
-		LinkedList rs = new LinkedList();
+		ArrayList rs = new ArrayList();
 		for (Iterator rit = this.regions.iterator(); rit.hasNext();) {
 			ImRegion imr = ((ImRegion) rit.next());
 			if (imr.bounds.includes(box, fuzzy))
 				rs.add(imr);
+			if (!fuzzy && (getSize(imr.bounds) < getSize(box)))
+				break; // all to come is smaller than argument box, so we can stop right here if full inclusion required
 		}
 		return ((ImRegion[]) rs.toArray(new ImRegion[rs.size()]));
 	}
@@ -449,9 +521,7 @@ public class ImPage extends ImRegion {
 	/**
 	 * Retrieve the regions (e.g. columns and blocks) that lie inside a given
 	 * bounding box. Regions higher up in the hierarchy appear before the ones
-	 * nested in them in the returned array. In addition, they are sorted
-	 * according to the orientation of the document, e.g. left to right and top
-	 * to bottom for text in Latin scripts. If <code>fuzzy</code> is set to
+	 * nested in them in the returned array. If <code>fuzzy</code> is set to
 	 * <code>true</code>, the result also includes all regions whose center
 	 * point lies inside the argument box, even if they do not fully inside the
 	 * argument box.
@@ -460,7 +530,7 @@ public class ImPage extends ImRegion {
 	 * @return an array holding the regions that lie inside the argument box
 	 */
 	public ImRegion[] getRegionsInside(BoundingBox box, boolean fuzzy) {
-		LinkedList rs = new LinkedList();
+		ArrayList rs = new ArrayList();
 		for (Iterator rit = this.regions.iterator(); rit.hasNext();) {
 			ImRegion imr = ((ImRegion) rit.next());
 			if (box.includes(imr.bounds, fuzzy))
@@ -473,9 +543,7 @@ public class ImPage extends ImRegion {
 	 * Retrieve the regions (e.g. columns and blocks) representing the layout
 	 * of the page. This method returns all regions, regardless of nesting.
 	 * However, regions higher up in the hierarchy appear before the ones
-	 * nested in them in the returned array. In addition, they are sorted
-	 * according to the orientation of the document, e.g. left to right and top
-	 * to bottom for text in Latin scripts.
+	 * nested in them in the returned array.
 	 * @return an array holding the regions representing the layout of the page
 	 */
 	public ImRegion[] getRegions() {
@@ -486,9 +554,7 @@ public class ImPage extends ImRegion {
 	 * Retrieve the regions (e.g. columns or blocks) representing some level of
 	 * the layout of the page. This method returns all regions of the argument
 	 * type, regardless of nesting. However, regions higher up in the hierarchy
-	 * appear before the ones nested in them in the returned array. In
-	 * addition, they are sorted according to the orientation of the document,
-	 * e.g. left to right and top to bottom for text in Latin scripts.
+	 * appear before the ones nested in them in the returned array.
 	 * @param type the type of regions to return
 	 * @return an array holding the regions representing the layout of the page
 	 */
@@ -500,9 +566,10 @@ public class ImPage extends ImRegion {
 			regions = this.words;
 		else {
 			regions = new ArrayList();
-			for (int r = 0; r < this.regions.size(); r++) {
-				if (type.equals(((ImRegion) this.regions.get(r)).getType()))
-					regions.add(this.regions.get(r));
+			for (Iterator rit = this.regions.iterator(); rit.hasNext();) {
+				ImRegion imr = ((ImRegion) rit.next());
+				if (type.equals(imr.getType()))
+					regions.add(imr);
 			}
 		}
 		return ((ImRegion[]) regions.toArray(new ImRegion[regions.size()]));

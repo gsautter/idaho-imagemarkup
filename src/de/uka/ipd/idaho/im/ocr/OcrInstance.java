@@ -80,6 +80,8 @@ public class OcrInstance {
 			return "streamtess-windows.exe";
 		else if (osName.matches(".*Linux.*"))
 			return "streamtess-linux";
+		else if (osName.matches("Mac.*"))
+			return "streamtess-mac";
 		else {
 			System.out.println("OcrEngin: unknown OS name: " + osName);
 			return null;
@@ -193,6 +195,10 @@ public class OcrInstance {
 	
 	private boolean install(String fileName) {
 		System.out.println("OCR Instance: installing file '" + fileName + "'");
+		if (fileName == null) {
+			System.out.println(" ==> source name not found");
+			return false;
+		}
 		File file = new File(this.tessPath, fileName);
 		if (file.exists()) {
 			System.out.println(" ==> already installed");

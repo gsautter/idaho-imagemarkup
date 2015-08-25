@@ -365,7 +365,7 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	 * @param bounds the bounding box enclosing the word on the underlying page image
 	 */
 	public ImWord(ImPage page, BoundingBox bounds) {
-		this(page, bounds, null);
+		this(page, bounds, "");
 	}
 	
 	/** Constructor (automatically adds the word to the argument page; if this
@@ -386,7 +386,7 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	 * @param bounds the bounding box enclosing the word on the underlying page image
 	 */
 	public ImWord(ImDocument doc, int pageId, BoundingBox bounds) {
-		this(doc, pageId, bounds, null);
+		this(doc, pageId, bounds, "");
 	}
 	
 	/** Constructor
@@ -461,6 +461,14 @@ public class ImWord extends ImRegion implements ImAnnotation {
 		return this.bounds;
 	}
 	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.im.ImRegion#getWords()
+	 */
+	public ImWord[] getWords() {
+		ImWord[] imws = {this};
+		return imws;
+	}
+	
 	/**
 	 * Retrieve the string value of the image word, e.g. the result of an OCR
 	 * pass over the underlying page image or a user-corrected version of the
@@ -478,7 +486,6 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	public void setString(String string) {
 		String oldString = this.string;
 		this.string = string;
-//		this.notifyListeners(STRING_ATTRIBUTE, oldString);
 		if (this.getPage() != null)
 			this.getDocument().notifyAttributeChanged(this, STRING_ATTRIBUTE, oldString);
 	}
@@ -510,11 +517,11 @@ public class ImWord extends ImRegion implements ImAnnotation {
 		if (prevWord == this.prevWord)
 			return;
 		if (prevWord == this)
-			throw new IllegalArgumentException("Cannot set predecessor to self.");
+			throw new IllegalArgumentException("Cannot set predecessor of '" + this.getString() + "' (page " + this.pageId + ") to self.");
 		else if ((prevWord != null) && (prevWord.textStreamId.equals(this.textStreamId)) && (this.pageId == prevWord.pageId) && (this.textStreamPos < prevWord.textStreamPos))
-			throw new IllegalArgumentException("Cannot set predecessor to successor.");
-		ImWord oldPrev = this.prevWord;
-		ImWord prevOldNext = ((prevWord == null) ? null : prevWord.nextWord);
+			throw new IllegalArgumentException("Cannot set predecessor of '" + this.getString() + "' (page " + this.pageId + " at " + this.bounds + ") to successor '" + prevWord.getString() + "' (page " + prevWord.pageId + " at " + prevWord.bounds + ").");
+		final ImWord oldPrev = this.prevWord;
+		final ImWord prevOldNext = ((prevWord == null) ? null : prevWord.nextWord);
 		this.prevWord = prevWord;
 		if (this.prevWord != null)
 			this.prevWord.nextWord = this;
@@ -587,11 +594,11 @@ public class ImWord extends ImRegion implements ImAnnotation {
 		if (nextWord == this.nextWord)
 			return;
 		if (nextWord == this)
-			throw new IllegalArgumentException("Cannot set successor to self.");
+			throw new IllegalArgumentException("Cannot set successor of '" + this.getString() + "' (page " + this.pageId + ") to self.");
 		else if ((nextWord != null) && (nextWord.textStreamId.equals(this.textStreamId)) && (this.pageId == nextWord.pageId) && (nextWord.textStreamPos < this.textStreamPos))
-			throw new IllegalArgumentException("Cannot set successor to predecessor.");
-		ImWord oldNext = this.nextWord;
-		ImWord nextOldPrev = ((nextWord == null) ? null : nextWord.prevWord);
+			throw new IllegalArgumentException("Cannot set successor of '" + this.getString() + "' (page " + this.pageId + " at " + this.bounds + ") to predecessor '" + nextWord.getString() + "' (page " + nextWord.pageId + " at " + nextWord.bounds + ").");
+		final ImWord oldNext = this.nextWord;
+		final ImWord nextOldPrev = ((nextWord == null) ? null : nextWord.prevWord);
 		this.nextWord = nextWord;
 		if (this.nextWord != null)
 			this.nextWord.prevWord = this;

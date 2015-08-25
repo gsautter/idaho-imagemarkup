@@ -73,6 +73,13 @@ public class PdfCharDecoder {
 	
 	//	TODO also try using Tesseract on char images
 	
+	/* TODO use glyph outlines in char signatures:
+	 * - record number and direction of Bezier curves and lines during rendering
+	 * - also record number of jumps after rendering first path part
+	 * - learn numbers for individual characters across fonts from many PDFs
+	 * - include in char signatures 
+	 */
+	
 	private static final int SERIF = 4;
 	private static final boolean SERIF_IS_STYLE = false;
 	
@@ -666,7 +673,7 @@ public class PdfCharDecoder {
 	
 	private static final boolean DEBUG_CHAR_PROG_DECODING = true;
 	
-	static char getChar(PdfFont pFont, PStream charProg, int charCode, String charName, Map objects, Font[] serifFonts, Font[] sansFonts, HashMap cache) throws IOException {
+	static char getChar(PdfFont pFont, PStream charProg, int charCode, String charName, Map objects, Font[] serifFonts, Font[] sansFonts, HashMap cache, boolean debug) throws IOException {
 		byte[] cpBytes;
 		try {
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -802,8 +809,8 @@ public class PdfCharDecoder {
 			if ((bestCim == null) || (cim.sim > bestCim.sim)) {
 				bestCim = cim;
 				System.out.println("   ==> new best match '" + scs.cs.ch + "' (" + ((int) scs.cs.ch) + ", " + StringUtils.getCharName((char) scs.cs.ch) + "), similarity is " + cim.sim);
-//				//	TODO remove this after tests
-//				displayCharMatch(bestCim.match, bestCim, "New best punctuation match");
+				if (debug)
+					displayCharMatch(bestCim, "New best punctuation match");
 			}
 		}
 		
@@ -811,14 +818,14 @@ public class PdfCharDecoder {
 		return ((bestCim == null) ? 0 : bestCim.match.ch);
 	}
 	
+	private static final int blackRgb = Color.BLACK.getRGB();
 	private static BufferedImage createImageMask(int width, int height, byte[] bits) {
-		BufferedImage bi = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_GRAY);
+		BufferedImage bi = new BufferedImage((width + 2), (height + 2), BufferedImage.TYPE_BYTE_GRAY);
 		Graphics g = bi.getGraphics();
 		g.setColor(Color.WHITE);
 		g.fillRect(0, 0, bi.getWidth(), bi.getHeight());
-		g.setColor(Color.BLACK);
 		int rw = (((width % 8) == 0) ? width : (((width / 8) + 1) * 8));
-		for (int r = 0; r < height; r++) {
+		for (int r = 0; r < height; r++)
 			for (int c = 0; c < width; c++) {
 				int bitOffset = (rw * r) + c;
 				int byteIndex = (bitOffset / 8);
@@ -828,10 +835,9 @@ public class PdfCharDecoder {
 					int btMask = 1 << (7 - byteOffset);
 					boolean bit = ((bt & btMask) == 0);
 					if (bit)
-						g.drawLine(c, r, c, r);
+						bi.setRGB((c+1), (r+1), blackRgb);
 				}
 			}
-		}
 		return bi;
 	}
 	
@@ -861,14 +867,14 @@ public class PdfCharDecoder {
 	}
 	
 	static CharImageMatch matchChar(CharImage charImage, char ch, Font font, HashMap cache, boolean isVerificationMatch, boolean debug) {
-		CharImage matchImage = createCharImage(ch, font, cache);
+		CharImage matchImage = createCharImage(ch, font, cache, debug);
 		if (matchImage == null)
 			return null;
 		if ((charImage.box.getBottomRow() <= charImage.baseline) && (matchImage.baseline <= matchImage.box.getTopRow()))
 			return null;
 		if ((0 < charImage.baseline) && (charImage.baseline <= charImage.box.getTopRow()) && (matchImage.box.getBottomRow() <= matchImage.baseline))
 			return null;
-		return matchCharImage(charImage, matchImage, (charImage.baseline < 1), isVerificationMatch, debug);
+		return matchCharImage(charImage, matchImage, font.getName(), (charImage.baseline < 1), isVerificationMatch, debug);
 	}
 	
 	static class CharMatchResult {
@@ -880,22 +886,26 @@ public class PdfCharDecoder {
 	
 	static CharMatchResult matchChar(CharImage charImage, char ch, boolean allowCaps, Font[] serifFonts, Font[] sansFonts, HashMap cache, boolean isVerificationMatch, boolean debug) {
 		CharMatchResult matchResult = new CharMatchResult();
+		
+		//	anything to match against?
+		if (ch <= ' ')
+			return matchResult;
+		
+		//	assess char position and extent
 		boolean charAboveBaseline = (charImage.box.getBottomRow() <= charImage.baseline);
 		boolean charBelowBaseline = ((0 < charImage.baseline) && (charImage.baseline <= charImage.box.getTopRow()));
 		
-		boolean useCharBoxMatch;// = (charImage.baseline < 1);
+		//	char box match or font box match?
+		boolean useCharBoxMatch;
 		if (charImage.baseline < 1)
 			useCharBoxMatch = true;
 		else if (((charImage.box.getWidth() * 2) > charImage.img.getWidth()) && ((charImage.box.getHeight() * 2) > charImage.img.getHeight()))
 			useCharBoxMatch = true;
 		else useCharBoxMatch = false;
-		//	TODO use char box match also if
-		//	TODO - char box proportion difference less than 1
-		//	TODO - char box fills at least half of font box in both dimensions
 		
-		//	try named char match first (render known chars to fill whole image)
+		//	match argument char in different serif fonts
 		for (int s = 0; s < serifFonts.length; s++) {
-			CharImage matchImage = createCharImage(ch, serifFonts[s], cache);
+			CharImage matchImage = createCharImage(ch, serifFonts[s], cache, debug);
 			if (matchImage == null)
 				continue;
 			if (charAboveBaseline && (matchImage.baseline <= matchImage.box.getTopRow()))
@@ -908,9 +918,9 @@ public class PdfCharDecoder {
 				if (charBoxProportionDistance < 1)
 					doUseCharBoxMatch = true;
 			}
-			matchResult.serifStyleCims[s] = matchCharImage(charImage, matchImage, doUseCharBoxMatch, isVerificationMatch, debug);
+			matchResult.serifStyleCims[s] = matchCharImage(charImage, matchImage, serifFonts[s].getName(), doUseCharBoxMatch, isVerificationMatch, debug);
 			if (allowCaps && (ch != Character.toUpperCase(ch))) {
-				CharImage capMatchImage = createCharImage(Character.toUpperCase(ch), serifFonts[s], cache);
+				CharImage capMatchImage = createCharImage(Character.toUpperCase(ch), serifFonts[s], cache, debug);
 				if (capMatchImage != null) {
 					doUseCharBoxMatch = (charImage.baseline < 1);
 					if (useCharBoxMatch != doUseCharBoxMatch) {
@@ -918,7 +928,7 @@ public class PdfCharDecoder {
 						if (charBoxProportionDistance < 1)
 							doUseCharBoxMatch = true;
 					}
-					CharImageMatch capCim = matchCharImage(charImage, capMatchImage, doUseCharBoxMatch, isVerificationMatch, debug);
+					CharImageMatch capCim = matchCharImage(charImage, capMatchImage, serifFonts[s].getName(), doUseCharBoxMatch, isVerificationMatch, debug);
 					if ((capCim != null) && ((matchResult.serifStyleCims[s] == null) || (matchResult.serifStyleCims[s].sim < capCim.sim)))
 						matchResult.serifStyleCims[s] = capCim;
 				}
@@ -926,8 +936,10 @@ public class PdfCharDecoder {
 			if (matchResult.serifStyleCims[s] != null)
 				matchResult.rendered = true;
 		}
+		
+		//	match argument char in different sans-serif fonts
 		for (int s = 0; s < sansFonts.length; s++) {
-			CharImage matchImage = createCharImage(ch, sansFonts[s], cache);
+			CharImage matchImage = createCharImage(ch, sansFonts[s], cache, debug);
 			if (matchImage == null)
 				continue;
 			if (charAboveBaseline && (matchImage.baseline <= matchImage.box.getTopRow()))
@@ -940,9 +952,9 @@ public class PdfCharDecoder {
 				if (charBoxProportionDistance < 1)
 					doUseCharBoxMatch = true;
 			}
-			matchResult.sansStyleCims[s] = matchCharImage(charImage, matchImage, doUseCharBoxMatch, isVerificationMatch, debug);
+			matchResult.sansStyleCims[s] = matchCharImage(charImage, matchImage, sansFonts[s].getName(), doUseCharBoxMatch, isVerificationMatch, debug);
 			if (allowCaps && (ch != Character.toUpperCase(ch))) {
-				CharImage capMatchImage = createCharImage(Character.toUpperCase(ch), sansFonts[s], cache);
+				CharImage capMatchImage = createCharImage(Character.toUpperCase(ch), sansFonts[s], cache, debug);
 				if (capMatchImage != null) {
 					doUseCharBoxMatch = (charImage.baseline < 1);
 					if (useCharBoxMatch != doUseCharBoxMatch) {
@@ -950,7 +962,7 @@ public class PdfCharDecoder {
 						if (charBoxProportionDistance < 1)
 							doUseCharBoxMatch = true;
 					}
-					CharImageMatch capCim = matchCharImage(charImage, capMatchImage, useCharBoxMatch, isVerificationMatch, debug);
+					CharImageMatch capCim = matchCharImage(charImage, capMatchImage, sansFonts[s].getName(), useCharBoxMatch, isVerificationMatch, debug);
 					if ((capCim != null) && ((matchResult.sansStyleCims[s] == null) || (matchResult.sansStyleCims[s].sim < capCim.sim)))
 						matchResult.sansStyleCims[s] = capCim;
 				}
@@ -959,6 +971,7 @@ public class PdfCharDecoder {
 				matchResult.rendered = true;
 		}
 		
+		//	finally
 		return matchResult;
 	}
 	
@@ -970,7 +983,7 @@ public class PdfCharDecoder {
 	
 	private static final char DEBUG_MATCH_TARGET_CHAR = ((char) 0);
 	
-	private static CharImageMatch matchCharImage(CharImage charImage, CharImage match, boolean charBoxMatch, boolean isVerificationMatch, boolean debug) {
+	private static CharImageMatch matchCharImage(CharImage charImage, CharImage match, String fontName, boolean charBoxMatch, boolean isVerificationMatch, boolean debug) {
 //		if ((charImage == null) || (match == null))
 //			return null;
 //		
@@ -1065,7 +1078,7 @@ public class PdfCharDecoder {
 		if (debug) {
 			fillDistData(ciDistData);
 			fillDistData(mDistData);
-			System.out.println((charBoxMatch ? "Char" : "Font") + " box match stats:");
+			System.out.println((charBoxMatch ? "Char" : "Font") + " box match stats for " + fontName + ":");
 			double ciAreaProportion = Math.log(((double) charImage.box.getWidth()) / charImage.box.getHeight());
 			double mAreaProportion = Math.log(((double) match.box.getWidth()) / match.box.getHeight());
 			System.out.println(" - area proportion distance is " + Math.abs(ciAreaProportion - mAreaProportion));
@@ -1073,7 +1086,7 @@ public class PdfCharDecoder {
 			System.out.println(" - spurious " + spurious + ", surface " + getSurface(cimData, CIM_SPURIOUS) + ", avg distance " + getAvgDist(cimData, CIM_SPURIOUS, mDistData));
 			System.out.println(" - missed " + missed + ", surface " + getSurface(cimData, CIM_MISSED) + ", avg distance " + getAvgDist(cimData, CIM_MISSED, ciDistData));
 //			if (cim.sim > 0.4)
-//				displayCharMatch(charImage, cim, ((charBoxMatch ? "Char" : "Font") + " box match"));
+				displayCharMatch(cim, ((charBoxMatch ? "Char" : "Font") + " box match"));
 		}
 		return cim;
 	}
@@ -1081,6 +1094,7 @@ public class PdfCharDecoder {
 	private static void fillDistData(byte[][] distData) {
 		for (boolean unmatchedRemains = true; unmatchedRemains;) {
 			unmatchedRemains = false;
+			boolean newMatch = false;
 			for (int x = 0; x < distData.length; x++)
 				for (int y = 0; y < distData[x].length; y++) {
 					if (distData[x][y] != 0)
@@ -1094,10 +1108,22 @@ public class PdfCharDecoder {
 						dist = ((byte) Math.min((distData[x+1][y] + 1), dist));
 					if (((y+1) < distData[x].length) && (distData[x][y+1] != 0))
 						dist = ((byte) Math.min((distData[x][y+1] + 1), dist));
-					if (dist < Byte.MAX_VALUE)
+					if (dist < Byte.MAX_VALUE) {
 						distData[x][y] = dist;
+						newMatch = true;
+					}
 					else unmatchedRemains = true;
 				}
+			
+			if (newMatch)
+				continue;
+			
+			for (int x = 0; x < distData.length; x++)
+				for (int y = 0; y < distData[x].length; y++) {
+					if (distData[x][y] == 0)
+						distData[x][y] = Byte.MAX_VALUE;
+				}
+			break;
 		}
 	}
 	
@@ -1147,27 +1173,27 @@ public class PdfCharDecoder {
 		return tSurface;
 	}
 	
-	static BufferedImage getCharMatchImage(CharImage charImage, CharImageMatch cim) {
+	static BufferedImage getCharMatchImage(CharImageMatch cim) {
 		BufferedImage bi = new BufferedImage(
-				(charImage.img.getWidth() + 1 + cim.match.img.getWidth() + 1 + Math.max(charImage.img.getWidth(), cim.match.img.getWidth())),
-				Math.max(charImage.img.getHeight(), cim.match.img.getHeight()),
+				(cim.charImage.img.getWidth() + 1 + cim.match.img.getWidth() + 1 + Math.max(cim.charImage.img.getWidth(), cim.match.img.getWidth())),
+				Math.max(cim.charImage.img.getHeight(), cim.match.img.getHeight()),
 				BufferedImage.TYPE_INT_RGB
 			);
 		Graphics g = bi.getGraphics();
 		g.setColor(Color.WHITE);
 		g.fillRect(0, 0, bi.getWidth(), bi.getHeight());
-		g.drawImage(charImage.img, 0, 0, null);
-		g.drawImage(cim.match.img, (charImage.img.getWidth() + 1), 0, null);
+		g.drawImage(cim.charImage.img, 0, 0, null);
+		g.drawImage(cim.match.img, (cim.charImage.img.getWidth() + 1), 0, null);
 		g.setColor(Color.BLACK);
-		if (0 < charImage.baseline)
-			g.drawLine(0, charImage.baseline, charImage.img.getWidth(), charImage.baseline);
+		if (0 < cim.charImage.baseline)
+			g.drawLine(0, cim.charImage.baseline, cim.charImage.img.getWidth(), cim.charImage.baseline);
 		if (0 < cim.match.baseline)
-			g.drawLine((charImage.img.getWidth() + 1), cim.match.baseline, ((charImage.img.getWidth() + 1) + cim.match.img.getWidth()), cim.match.baseline);
+			g.drawLine((cim.charImage.img.getWidth() + 1), cim.match.baseline, ((cim.charImage.img.getWidth() + 1) + cim.match.img.getWidth()), cim.match.baseline);
 		
-		int ciLeft = charImage.box.getLeftCol();
-		int ciRight = charImage.box.getRightCol();
-		int ciTop = (cim.isCharBoxMatch ? charImage.box.getTopRow() : Math.min(charImage.baseline, charImage.box.getTopRow()));
-		int ciBottom = (cim.isCharBoxMatch ? charImage.box.getBottomRow() : Math.max(charImage.baseline, charImage.box.getBottomRow()));
+		int ciLeft = cim.charImage.box.getLeftCol();
+		int ciRight = cim.charImage.box.getRightCol();
+		int ciTop = (cim.isCharBoxMatch ? cim.charImage.box.getTopRow() : Math.min(cim.charImage.baseline, cim.charImage.box.getTopRow()));
+		int ciBottom = (cim.isCharBoxMatch ? cim.charImage.box.getBottomRow() : Math.max(cim.charImage.baseline, cim.charImage.box.getBottomRow()));
 		int mLeft = cim.match.box.getLeftCol();
 		int mRight = cim.match.box.getRightCol();
 		int mTop = (cim.isCharBoxMatch ? cim.match.box.getTopRow() : Math.min(cim.match.baseline, cim.match.box.getTopRow()));
@@ -1197,7 +1223,7 @@ public class PdfCharDecoder {
 				if (mBottom <= mRow)
 					break;
 				
-				byte cib = charImage.brightness[ciCol][ciRow];
+				byte cib = cim.charImage.brightness[ciCol][ciRow];
 				byte mb = cim.match.brightness[mCol][mRow];
 				Color c = null;
 				if ((cib < 80) && (mb < 80))
@@ -1208,7 +1234,7 @@ public class PdfCharDecoder {
 					c = Color.RED;
 				if (c != null)
 					bi.setRGB(
-							(charImage.img.getWidth() + 1 + cim.match.img.getWidth() + 1 + Math.min(ciLeft, mLeft) + Math.max((ciCol - ciLeft), (mCol - mLeft))),
+							(cim.charImage.img.getWidth() + 1 + cim.match.img.getWidth() + 1 + Math.min(ciLeft, mLeft) + Math.max((ciCol - ciLeft), (mCol - mLeft))),
 							(Math.min(ciTop, mTop) + Math.max((ciRow - ciTop), (mRow - mTop))),
 							c.getRGB()
 						);
@@ -1218,8 +1244,8 @@ public class PdfCharDecoder {
 		return bi;
 	}
 	
-	static void displayCharMatch(CharImage charImage, CharImageMatch cim, String message) {
-		JOptionPane.showMessageDialog(null, (message + ": '" + cim.match.ch + "', similarity is " + cim.sim + "\n" + cim.matched + "-" + cim.spurious + "-" + cim.missed), "Comparison Image", JOptionPane.PLAIN_MESSAGE, new ImageIcon(getCharMatchImage(charImage, cim)));
+	static void displayCharMatch(CharImageMatch cim, String message) {
+		JOptionPane.showMessageDialog(null, (message + ": '" + cim.match.ch + "', similarity is " + cim.sim + "\n" + cim.matched + "-" + cim.spurious + "-" + cim.missed), "Comparison Image", JOptionPane.PLAIN_MESSAGE, new ImageIcon(getCharMatchImage(cim)));
 	}
 	
 	private static final boolean useNonPostscriptChars = false;
@@ -1439,54 +1465,57 @@ public class PdfCharDecoder {
 	
 	static class CharImage {
 		final char ch;
+		final String fontName;
 		final int fontStyle;
 		final BufferedImage img;
 		final byte[][] brightness;
 		final ImagePartRectangle box;
 		final int baseline;
-		CharImage(char ch, int fontStyle, BufferedImage img, byte[][] brightness, ImagePartRectangle box, int baseline) {
-			this.ch = ch;
-			this.fontStyle = fontStyle;
-			this.img = img;
-			this.brightness = brightness;
-			this.box = box;
-			this.baseline = baseline;
-		}
 		CharImage(BufferedImage img, int baseline) {
-			this(((char) 0), -1, Imaging.wrapImage(img, null), baseline);
+			this(((char) 0), "", -1, Imaging.wrapImage(img, null), baseline);
 		}
-		CharImage(char ch, int fontStyle, BufferedImage img, int baseline) {
-			this(ch, fontStyle, Imaging.wrapImage(img, (ch + "-" + fontStyle)), baseline);
+		CharImage(char ch, String fontName, int fontStyle, BufferedImage img, int baseline) {
+			this(ch, fontName, fontStyle, Imaging.wrapImage(img, (ch + "-" + fontName + "-" + fontStyle)), baseline);
 		}
-		CharImage(char ch, int fontStyle, AnalysisImage ai, int baseline) {
+		CharImage(char ch, String fontName, int fontStyle, AnalysisImage ai, int baseline) {
 			this.ch = ch;
+			this.fontName = fontName;
 			this.fontStyle = fontStyle;
 			this.img = ai.getImage();
 			this.brightness = ai.getBrightness();
 			this.box = Imaging.getContentBox(ai);
 			this.baseline = baseline;
-//			System.out.println("CharImage created" + ((this.ch == 0) ? "" : (" for " + this.ch)) + ", image is " + this.img.getWidth() + "x" + this.img.getHeight() + ", char box is " + this.box.getId() + ", baseline at " + this.baseline);
 		}
 	}
 	
 	private static HashSet unrenderableChars = new HashSet();
 	
-	static CharImage createCharImage(char ch, Font font, HashMap cache) {
-		if (!font.canDisplay(ch))
+	static CharImage createCharImage(char ch, Font font, HashMap cache, boolean debug) {
+		if (debug) System.out.println("Rendering char '" + ch + "' in " + font.getName() + "-" + font.getStyle());
+		if (!font.canDisplay(ch)) {
+			if (debug) System.out.println(" ==> font cannot display char");
 			return null;
-		if (ch == 160)
+		}
+		if (ch == 160) {
+			if (debug) System.out.println(" ==> space, ignored");
 			return null;
+		}
 		String charKey = (ch + "-in-" + font.getName() + "-" + font.getStyle());
-		if (unrenderableChars.contains(charKey))
+		if (debug) System.out.println(" - char key is " + charKey);
+		if (unrenderableChars.contains(charKey)) {
+			if (debug) System.out.println(" ==> known as unrenderable");
 			return null;
+		}
 		
 		//	try cache lookup
 		String cacheKey = null;
 		if (cache != null) {
 			cacheKey = (ch + "-in-" + font.getName() + "-" + font.getStyle());
+			if (debug) System.out.println(" - cache key is " + cacheKey);
 			CharImage ci = ((CharImage) cache.get(cacheKey));
 			if (ci != null) {
 //				if (DEBUG_LOAD_FONTS) System.out.println(" - cache hit for " + cacheKey);
+				if (debug) System.out.println(" ==> cache hit");
 				return ci;
 			}
 		}
@@ -1495,19 +1524,25 @@ public class PdfCharDecoder {
 		if (font.getSize() != 48)
 			font = font.deriveFont(48.0f);
 		Rectangle2D fontBox = getFontBox(font);
+		if (debug) System.out.println(" - font box is " + fontBox);
 		
 		//	create char image
 		BufferedImage cbi = new BufferedImage(((int) Math.round(fontBox.getWidth() + 2)), ((int) Math.round(fontBox.getHeight() + 2)), BufferedImage.TYPE_INT_RGB);
+		if (debug) System.out.println(" - image size is " + cbi.getWidth() + "x" + cbi.getHeight());
 		Graphics2D cgr = cbi.createGraphics();
 		cgr.setColor(Color.WHITE);
 		cgr.fillRect(0, 0, cbi.getWidth(), cbi.getHeight());
 		cgr.setFont(font);
 		cgr.setColor(Color.BLACK);
+//		System.out.println("Drawing '" + ch + "' in " + font.getName() + "-" + font.getStyle());
 		TextLayout tl = new TextLayout(("" + ch), font, cgr.getFontRenderContext());
 		int cbl = Math.round(tl.getAscent() + 1);
+		if (debug) System.out.println(" - baseline is " + cbl);
 		cgr.drawString(("" + ch), ((int) (Math.round(fontBox.getWidth() - tl.getBounds().getWidth() + 1) / 2)), cbl);
 		cgr.dispose();
-		CharImage ci = new CharImage(ch, font.getStyle(), cbi, cbl);
+		if (debug) System.out.println(" - char image rendered");
+		CharImage ci = new CharImage(ch, font.getName(), font.getStyle(), cbi, cbl);
+		if (debug) JOptionPane.showMessageDialog(null, "", ("'" + ch + "' in " + font.getName() + "-" + font.getStyle()), JOptionPane.PLAIN_MESSAGE, new ImageIcon(cbi));
 		
 		//	cache image if possible and return it
 		if (cache != null)

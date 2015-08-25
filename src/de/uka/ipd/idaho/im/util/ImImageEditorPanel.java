@@ -50,7 +50,6 @@ import java.io.FileInputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedList;
 
@@ -58,13 +57,16 @@ import javax.swing.BorderFactory;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JFrame;
+import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.UIManager;
 
+import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImageInputStream;
 import de.uka.ipd.idaho.gamta.util.swing.DialogFactory;
+import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.ImPage;
 import de.uka.ipd.idaho.im.ImWord;
 import de.uka.ipd.idaho.im.analysis.Imaging;
@@ -80,14 +82,15 @@ public class ImImageEditorPanel extends JPanel {
 	private JPanel toolPanel;
 	private JPanel imagePanel;
 	
-	private ImImageEditToolButton activeToolButton = null;
-	private ImImageEditTool activeTool = null;
+	private DirectImageEditToolButton activeToolButton = null;
+	private DirectImageEditTool activeTool = null;
 	
 	private ImPage page;
 	private PageImage pageImage;
 	private BufferedImage image;
-	private ArrayList pageWords = null;
-	private HashSet pageWordIDs = null;
+	private int imageModCount = 0;
+	private ArrayList pageWords = new ArrayList();
+	private HashSet pageWordIDs = new HashSet();
 	
 	private Color wordBoxColor;
 	
@@ -107,16 +110,17 @@ public class ImImageEditorPanel extends JPanel {
 		this.image = new BufferedImage(this.pageImage.image.getWidth(), this.pageImage.image.getHeight(), BufferedImage.TYPE_4BYTE_ABGR);
 		this.image.createGraphics().drawImage(this.pageImage.image, 0, 0, this.image.getWidth(), this.image.getHeight(), null);
 		
-		this.page = page;
-		if (this.page != null) {
-			this.pageWords = new ArrayList();
-			this.pageWordIDs = new HashSet();
+		if (page == null)
+			this.page = new ImPage(new ImDocument("DUMMY"), -1, new BoundingBox(0, 0, this.pageImage.image.getWidth(), this.pageImage.image.getHeight()));
+		else {
+			this.page = page;
 			ImWord[] words = this.page.getWords();
 			for (int w = 0; w < words.length; w++) {
 				this.pageWords.add(words[w]);
 				this.pageWordIDs.add(words[w].getLocalID());
 			}
-			Collections.sort(this.pageWords, wordOrder);
+//			Collections.sort(this.pageWords, wordOrder);
+			Collections.sort(this.pageWords, ImUtils.textStreamOrder);
 		}
 		
 		this.wordBoxColor = wordBoxColor;
@@ -168,23 +172,51 @@ public class ImImageEditorPanel extends JPanel {
 		this.undoButton.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent ae) {
 				if (undoActions.size() != 0) {
-//					ImImageEditTool at = activeTool;
-//					activeTool = null;
 					ImImageEditUndoAction undoAction = ((ImImageEditUndoAction) undoActions.removeFirst());
 					undoAction.doUndo(ImImageEditorPanel.this);
 					wordImage = null;
 					imagePanel.repaint();
-//					activeTool = at;
 				}
 				undoButton.setEnabled(undoActions.size() != 0);
 			}
 		});
 		this.undoButton.setEnabled(false);
 		
+		//	sort tools into ones that work on whole page and ones that work selection based
+		ArrayList mietButtonList = new ArrayList();
+		ArrayList dietButtonList = new ArrayList();
+		for (int t = 0; t < tools.length; t++) {
+			if (tools[t] instanceof MenuImageEditTool)
+				mietButtonList.add(new MenuImageEditToolButton((MenuImageEditTool) tools[t]));
+			else if (tools[t] instanceof DirectImageEditTool)
+				dietButtonList.add(new DirectImageEditToolButton((DirectImageEditTool) tools[t]));
+		}
+		
 		this.toolPanel = new JPanel(new GridLayout(0, 1, 2, 2));
 		
-		for (int t = 0; t < tools.length; t++)
-			this.toolPanel.add(new ImImageEditToolButton(tools[t]));
+		//	add whole-page edit tools and a label (with explanatory tooltip)
+		if (mietButtonList.size() != 0) {
+			JLabel mietLabel = new JLabel("Whole-Image Tools");
+			mietLabel.setToolTipText("Below tools process the whole page (image and/or words) for a single click.");
+			this.toolPanel.add(mietLabel);
+			for (int b = 0; b < mietButtonList.size(); b++)
+				this.toolPanel.add((JButton) mietButtonList.get(b));
+			
+			//	add separator
+			this.toolPanel.add(new JLabel(" "));
+		}
+		
+		//	add selection based edit tools and a label (with explanatory tooltip)
+		if (dietButtonList.size() != 0) {
+			JLabel dietLabel = new JLabel("Selection Edit Tools");
+			dietLabel.setToolTipText("Below tools process a mouse-selected part of the page image and/or words (click to select).");
+			this.toolPanel.add(dietLabel);
+			for (int b = 0; b < dietButtonList.size(); b++)
+				this.toolPanel.add((JButton) dietButtonList.get(b));
+			
+			//	add separator
+			this.toolPanel.add(new JLabel(" "));
+		}
 		
 		this.toolPanel.add(this.undoButton);
 		
@@ -212,18 +244,43 @@ public class ImImageEditorPanel extends JPanel {
 	}
 	private BufferedImage wordImage = null;
 	
-	private static final Comparator wordOrder = new Comparator() {
-		public int compare(Object obj1, Object obj2) {
-			ImWord imw1 = ((ImWord) obj1);
-			ImWord imw2 = ((ImWord) obj2);
-			int c = imw1.getTextStreamId().compareTo(imw2.getTextStreamId());
-			return ((c == 0) ? (imw1.getTextStreamPos() - imw2.getTextStreamPos()) : c);
+//	private static final Comparator wordOrder = new Comparator() {
+//		public int compare(Object obj1, Object obj2) {
+//			ImWord imw1 = ((ImWord) obj1);
+//			ImWord imw2 = ((ImWord) obj2);
+//			int c = imw1.getTextStreamId().compareTo(imw2.getTextStreamId());
+//			return ((c == 0) ? (imw1.getTextStreamPos() - imw2.getTextStreamPos()) : c);
+//		}
+//	};
+//	
+	private class MenuImageEditToolButton extends JButton implements ActionListener {
+		MenuImageEditTool tool;
+		MenuImageEditToolButton(MenuImageEditTool tool) {
+			this.tool = tool;
+			
+			this.setText(this.tool.getLabel());
+			this.setToolTipText(this.tool.getTooltip());
+			if (this.tool.getIcon() != null)
+				this.setIcon(new ImageIcon(this.tool.getIcon()));
+			this.setBorder(BorderFactory.createRaisedBevelBorder());
+			
+			this.addActionListener(this);
 		}
-	};
+		public void actionPerformed(ActionEvent ae) {
+			if (activeToolButton != null)
+				activeToolButton.setBorder(BorderFactory.createRaisedBevelBorder());
+			activeToolButton = null;
+			activeTool = null;
+			//	TODO prepare for UNDO
+			//	TODO call tool
+			//	TODO store UNDO data if any changes occurred
+			imagePanel.setCursor(Cursor.getDefaultCursor());
+		}
+	}
 	
-	private class ImImageEditToolButton extends JButton implements ActionListener {
-		ImImageEditTool tool;
-		ImImageEditToolButton(ImImageEditTool tool) {
+	private class DirectImageEditToolButton extends JButton implements ActionListener {
+		DirectImageEditTool tool;
+		DirectImageEditToolButton(DirectImageEditTool tool) {
 			this.tool = tool;
 			
 			this.setText(this.tool.getLabel());
@@ -262,7 +319,7 @@ public class ImImageEditorPanel extends JPanel {
 		int yOff = 0;
 		while (comp != null) {
 			Point loc = comp.getLocation();
-			System.out.println("Component is " + comp.getClass().getName() + " at " + loc);
+//			System.out.println("Component is " + comp.getClass().getName() + " at " + loc);
 			if (comp == w)
 				break;
 			xOff += loc.x;
@@ -278,9 +335,25 @@ public class ImImageEditorPanel extends JPanel {
 			ewd = new EditWordDialog(((Dialog) w), word, wordBoxColor, true);
 		else return false;
 		ewd.setLocation((word.bounds.left + xOff + w.getLocation().x), (word.bounds.top + yOff + w.getLocation().y));
-		System.out.println("Showing word edit dialog at " + ewd.getLocation());
+//		System.out.println("Showing word edit dialog at " + ewd.getLocation());
 		ewd.setVisible(true);
-		return ewd.isCommitted();
+		if (ewd.isCommitted()) {
+			String str = ewd.getString();
+			if (!str.equals(word.getString()))
+				word.setString(str);
+			if (ewd.isBold() != word.hasAttribute(ImWord.BOLD_ATTRIBUTE)) {
+				if (ewd.isBold())
+					word.setAttribute(ImWord.BOLD_ATTRIBUTE);
+				else word.removeAttribute(ImWord.BOLD_ATTRIBUTE);
+			}
+			if (ewd.isItalics() != word.hasAttribute(ImWord.ITALICS_ATTRIBUTE)) {
+				if (ewd.isItalics())
+					word.setAttribute(ImWord.ITALICS_ATTRIBUTE);
+				else word.removeAttribute(ImWord.ITALICS_ATTRIBUTE);
+			}
+			return true;
+		}
+		else return false;
 	}
 	
 	/**
@@ -289,6 +362,14 @@ public class ImImageEditorPanel extends JPanel {
 	 */
 	public ImPage getPage() {
 		return this.page;
+	}
+	
+	/**
+	 * Test if the actual image has been modified.
+	 * @return true if the image has been modified, false otherwise
+	 */
+	public boolean isPageImageDirty() {
+		return (this.imageModCount > 0);
 	}
 	
 	/**
@@ -321,9 +402,10 @@ public class ImImageEditorPanel extends JPanel {
 	 * @param imw the word to add
 	 */
 	public void addWord(ImWord imw) {
-		if ((this.pageWords != null) && this.pageWordIDs.add(imw.getLocalID())) {
+		if (this.pageWordIDs.add(imw.getLocalID())) {
 			this.pageWords.add(imw);
-			Collections.sort(this.pageWords, wordOrder);
+//			Collections.sort(this.pageWords, wordOrder);
+			Collections.sort(this.pageWords, ImUtils.textStreamOrder);
 			this.wordImage = null;
 			if (this.activeTool != null)
 				this.activeTool.wordAdded(imw);
@@ -336,7 +418,7 @@ public class ImImageEditorPanel extends JPanel {
 	 * @param imw the word to remove
 	 */
 	public void removeWord(ImWord imw) {
-		if ((this.pageWords != null) && this.pageWordIDs.remove(imw.getLocalID()) && this.pageWords.remove(imw)) {
+		if (this.pageWordIDs.remove(imw.getLocalID()) && this.pageWords.remove(imw)) {
 			this.wordImage = null;
 			if (this.activeTool != null)
 				this.activeTool.wordRemoved(imw);
@@ -344,25 +426,21 @@ public class ImImageEditorPanel extends JPanel {
 	}
 	
 	/**
-	 * A tool that modifies an image in response to a mouse click. There is
-	 * always at most one tool selected in an image editor panel, and the panel
-	 * takes care of routing mouse clicks to the active tool. All that
-	 * instances of this class have to do is visualize what they are doing and
-	 * modify the image and the page words.
+	 * A tool that modifies a page image or words.
 	 * 
 	 * @author sautter
 	 */
 	public static abstract class ImImageEditTool {
-		private String label;
-		private String tooltip;
-		private BufferedImage icon;
+		protected String label;
+		protected String tooltip;
+		protected BufferedImage icon;
 		
 		/** Constructor
 		 * @param label the tool label
 		 * @param tooltip the tooltip explaining the tool
 		 * @param icon the icon for the tool
 		 */
-		public ImImageEditTool(String label, String tooltip, BufferedImage icon) {
+		protected ImImageEditTool(String label, String tooltip, BufferedImage icon) {
 			this.label = label;
 			this.tooltip = tooltip;
 			this.icon = icon;
@@ -392,6 +470,66 @@ public class ImImageEditorPanel extends JPanel {
 		 */
 		public BufferedImage getIcon() {
 			return this.icon;
+		}
+	}
+	
+	/**
+	 * An image edit tool that modifies an a whole page in response to a single
+	 * mouse click. All that instances of this class have to do is modify the
+	 * image and the page words.
+	 * 
+	 * @author sautter
+	 */
+	public static abstract class MenuImageEditTool extends ImImageEditTool {
+		
+		/** Constructor
+		 * @param label the tool label
+		 * @param tooltip the tooltip explaining the tool
+		 * @param icon the icon for the tool
+		 */
+		public MenuImageEditTool(String label, String tooltip, BufferedImage icon) {
+			super(label, tooltip, icon);
+		}
+		
+		//	TODO fill this class with functionality
+		
+		//	TODO force indication of changes to page image (flipping page, white balance, speckle cleanup, etc.)
+		
+		//	TODO force indication of changes to words (flipping page (left or right), re-running OCR)
+		
+		//	TODO store UNDO data based on these indications, not via notification to active tool
+		//	TODO on word addition/removal notification, check if active tool is null
+		
+		/* TODO
+	Create MenuImageEditTool subclass of new ImImageEditTool:
+	- edits whole page at once
+	- move to menu in "Edit Page Image & Words"
+
+	Create some MenuImageEditTools:
+	- for rotating or flipping page image
+	- for OCRing entire page image
+		 */
+	}
+	
+	/**
+	 * An image edit tool that modifies an image in response to a mouse click
+	 * or mouse dragged box selections. There is always at most one tool
+	 * selected in an image editor panel, and the panel takes care of routing
+	 * mouse clicks to the active tool. All that instances of this class have
+	 * to do is visualize what they are doing and modify the image and the page
+	 * words.
+	 * 
+	 * @author sautter
+	 */
+	public static abstract class DirectImageEditTool extends ImImageEditTool {
+		
+		/** Constructor
+		 * @param label the tool label
+		 * @param tooltip the tooltip explaining the tool
+		 * @param icon the icon for the tool
+		 */
+		public DirectImageEditTool(String label, String tooltip, BufferedImage icon) {
+			super(label, tooltip, icon);
 		}
 		
 		/**
@@ -445,22 +583,56 @@ public class ImImageEditorPanel extends JPanel {
 			
 			this.doMouseReleased(iiep, x, y);
 			
-			/* Compute dimensions of undo image, figuring in 16 pixels in each
-			 * direction to account for cursor dimensions. */
-			int ux = Math.max((this.undoMinX - 16), 0);
-			int uy = Math.max((this.undoMinY - 16), 0);
-			int uw = Math.min((this.undoMaxX - this.undoMinX + 16 + 16), (this.undoBeforeImage.getWidth() - ux));
-			int uh = Math.min((this.undoMaxY - this.undoMinY + 16 + 16), (this.undoBeforeImage.getHeight() - uy));
+			//	compute actual image changes
+			int icMinX = this.undoMaxX;
+			int icMaxX = this.undoMinX;
+			int icMinY = this.undoMaxY;
+			int icMaxY = this.undoMinY;
+			for (int icx = Math.max((this.undoMinX - 16), 0); icx < Math.min((this.undoMaxX + 16), this.undoBeforeImage.getWidth()); icx++)
+				for (int icy = Math.max((this.undoMinY - 16), 0); icy < Math.min((this.undoMaxY + 16), this.undoBeforeImage.getHeight()); icy++) {
+					if (iiep.image.getRGB(icx, icy) == this.undoBeforeImage.getRGB(icx, icy))
+						continue;
+					icMinX = Math.min(icMinX, icx);
+					icMaxX = Math.max(icMaxX, icx);
+					icMinY = Math.min(icMinY, icy);
+					icMaxY = Math.max(icMaxY, icy);
+				}
 			
-			/* If it is small (less than half of the main image) we copy the
-			 * relevant sub image to allow for whole image to be garbage
-			 * collected. */
-			BufferedImage ubi = this.undoBeforeImage;
-			if ((uw * uh * 2) < (this.undoBeforeImage.getWidth() * this.undoBeforeImage.getHeight())) {
-				ubi = new BufferedImage(uw, uh, this.undoBeforeImage.getType());
-				ubi.getGraphics().drawImage(this.undoBeforeImage.getSubimage(ux, uy, uw, uh), 0, 0, uw, uh, null);
+			//	did the image change?
+			int ux = -1;
+			int uy = -1;
+			BufferedImage ubi = null;
+			if ((icMinX <= icMaxX) && (icMinY <= icMaxY)) {
+//				System.out.println("Image modified in " + icMinX + "-" + icMaxX + " x " + icMinY + "-" + icMaxY);
+				ux = icMinX;
+				uy = icMinY;
+				int uw = (icMaxX - icMinX + 1);
+				int uh = (icMaxY - icMinY + 1);
+				ubi = this.undoBeforeImage;
+				if ((uw * uh * 2) < (this.undoBeforeImage.getWidth() * this.undoBeforeImage.getHeight())) {
+					ubi = new BufferedImage(uw, uh, this.undoBeforeImage.getType());
+					ubi.getGraphics().drawImage(this.undoBeforeImage.getSubimage(ux, uy, uw, uh), 0, 0, uw, uh, null);
+				}
+				iiep.imageModCount++;
 			}
+//			else System.out.println("Image unmodified");
 			
+//			/* Compute dimensions of undo image, figuring in 16 pixels in each
+//			 * direction to account for cursor dimensions. */
+//			int ux = Math.max((this.undoMinX - 16), 0);
+//			int uy = Math.max((this.undoMinY - 16), 0);
+//			int uw = Math.min((this.undoMaxX - this.undoMinX + 16 + 16), (this.undoBeforeImage.getWidth() - ux));
+//			int uh = Math.min((this.undoMaxY - this.undoMinY + 16 + 16), (this.undoBeforeImage.getHeight() - uy));
+//			
+//			/* If it is small (less than half of the main image) we copy the
+//			 * relevant sub image to allow for whole image to be garbage
+//			 * collected. */
+//			BufferedImage ubi = this.undoBeforeImage;
+//			if ((uw * uh * 2) < (this.undoBeforeImage.getWidth() * this.undoBeforeImage.getHeight())) {
+//				ubi = new BufferedImage(uw, uh, this.undoBeforeImage.getType());
+//				ubi.getGraphics().drawImage(this.undoBeforeImage.getSubimage(ux, uy, uw, uh), 0, 0, uw, uh, null);
+//			}
+//			
 			//	line up word edits
 			ImWordEditUndoAtom[] uwe = ((ImWordEditUndoAtom[]) this.undoWordEdits.toArray(new ImWordEditUndoAtom[this.undoWordEdits.size()]));
 			
@@ -532,8 +704,6 @@ public class ImImageEditorPanel extends JPanel {
 		 */
 		protected abstract void doMouseReleased(ImImageEditorPanel iiep, int x, int y);
 		
-		//	TODO figure out how to handle display vs. image resolution, first and foremost where to convert
-		
 		/**
 		 * Visualize the action. This method should only do something if the
 		 * <code>startEdit()</code> method has been called, but the edit has
@@ -563,7 +733,11 @@ public class ImImageEditorPanel extends JPanel {
 			this.wordEdits = wordEdits;
 		}
 		void doUndo(ImImageEditorPanel iiep) {
-			iiep.getImage().getGraphics().drawImage(this.beforeImage, this.x, this.y, this.beforeImage.getWidth(), this.beforeImage.getHeight(), null);
+			if (this.beforeImage != null) {
+				iiep.getImage().getGraphics().drawImage(this.beforeImage, this.x, this.y, this.beforeImage.getWidth(), this.beforeImage.getHeight(), null);
+				iiep.imageModCount--;
+			}
+//			iiep.getImage().getGraphics().drawImage(this.beforeImage, this.x, this.y, this.beforeImage.getWidth(), this.beforeImage.getHeight(), null);
 			for (int w = 0; w < this.wordEdits.length; w++) {
 				if (this.wordEdits[w].removed)
 					iiep.addWord(this.wordEdits[w].imw);
@@ -587,7 +761,7 @@ public class ImImageEditorPanel extends JPanel {
 	 * 
 	 * @author sautter
 	 */
-	public static class PatternOverpaintImageEditTool extends ImImageEditTool {
+	public static class PatternOverpaintImageEditTool extends DirectImageEditTool {
 		private boolean[][] pattern;
 		private int colorRgb;
 		
@@ -756,7 +930,7 @@ public class ImImageEditorPanel extends JPanel {
 	 * 
 	 * @author sautter
 	 */
-	public static abstract class SelectionImageEditTool extends ImImageEditTool {
+	public static abstract class SelectionImageEditTool extends DirectImageEditTool {
 		boolean isBoxSelection;
 
 		/** Constructor

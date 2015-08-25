@@ -20,6 +20,7 @@
 			<fileset dir="${src.home}" includes="**/idaho/im/analysis/*.java" />
 			<fileset dir="${src.home}" includes="**/idaho/im/gamta/*.java" />
 			<fileset dir="${src.home}" includes="**/idaho/im/util/*.java" />
+			<fileset dir="${src.home}" includes="**/idaho/im/util/*.png" />
 			<fileset dir="${src.home}" includes="**/idaho/im/utilities/*.java" />
 			<fileset dir="." includes="LICENSE.txt"/>
 		</jar>
@@ -44,7 +45,7 @@
 	
 	<target name="pdfjar">
 		<delete file="${jar.pdf}" />
-		<jar destfile="${jar.pdf}" >
+		<jar destfile="${jar.pdf}" manifest="${file.home}/MANIFEST.pdfExtractorTool.MF" >
 			<fileset dir="${build.home}/classes" includes="**/idaho/im/pdf/**" />
 			<fileset dir="${build.home}/classes" includes="**/idaho/im/pdf/test/**" />
 			<fileset dir="${src.home}" includes="**/idaho/im/pdf/**" excludes="**/idaho/im/pdf/**.zip" />

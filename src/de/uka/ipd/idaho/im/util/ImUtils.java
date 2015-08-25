@@ -40,6 +40,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.List;
+import java.util.ListIterator;
 import java.util.TreeSet;
 
 import javax.swing.DefaultComboBoxModel;
@@ -52,7 +54,6 @@ import de.uka.ipd.idaho.gamta.AnnotationUtils;
 import de.uka.ipd.idaho.gamta.Gamta;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
-import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
 import de.uka.ipd.idaho.gamta.util.swing.DialogFactory;
 import de.uka.ipd.idaho.im.ImAnnotation;
 import de.uka.ipd.idaho.im.ImDocument;
@@ -70,31 +71,38 @@ public class ImUtils implements ImagingConstants {
 	
 	/** Comparator sorting ImWords in layout order, i.e., top to bottom and
 	 * left to right. With arrays or collections whose content objects are NOT
-	 * ImWords, using this comparator results in ClassCastExceptions. */
+	 * ImWords, using this comparator results in ClassCastExceptions.<br>
+	 * Because <code>Arrays.sort()</code> and <code>Collections.sort()</code>
+	 * require a total order as of Java 1.7, this <code>Comparator</code> only
+	 * compares the center points of words. Where a more line oriented ordering
+	 * is required, use the <code>sortLeftRightTopDown()</code> method of this
+	 * class instead. If this <code>Comparator</code> is handed as an argument
+	 * to any method of this class, those methods defer to the aforementioned
+	 * one. */
 	public static Comparator leftRightTopDownOrder = new Comparator() {
 		public int compare(Object obj1, Object obj2) {
 			ImWord w1 = ((ImWord) obj1);
 			ImWord w2 = ((ImWord) obj2);
-			
-			//	check non-overlapping cases first
-			if (w1.bounds.bottom <= w2.bounds.top)
-				return -1;
-			if (w2.bounds.bottom <= w1.bounds.top)
-				return 1;
-			if (w1.bounds.right <= w2.bounds.left)
-				return -1;
-			if (w2.bounds.right <= w1.bounds.left)
-				return 1;
-			
-			//	now, we have overlap (more likely within lines than between)
-			if (w1.centerY <= w2.bounds.top)
-				return -1;
-			if (w2.centerY <= w1.bounds.top)
-				return 1;
-			if (w1.centerX <= w2.bounds.left)
-				return -1;
-			if (w2.centerX <= w1.bounds.left)
-				return 1;
+//			
+//			//	check non-overlapping cases first
+//			if (w1.bounds.bottom <= w2.bounds.top)
+//				return -1;
+//			if (w2.bounds.bottom <= w1.bounds.top)
+//				return 1;
+//			if (w1.bounds.right <= w2.bounds.left)
+//				return -1;
+//			if (w2.bounds.right <= w1.bounds.left)
+//				return 1;
+//			
+//			//	now, we have overlap (more likely within lines than between)
+//			if (w1.centerY <= w2.bounds.top)
+//				return -1;
+//			if (w2.centerY <= w1.bounds.top)
+//				return 1;
+//			if (w1.centerX <= w2.bounds.left)
+//				return -1;
+//			if (w2.centerX <= w1.bounds.left)
+//				return 1;
 			
 			//	now, either center lies in the other box (massive overlap, not peripheral)
 			return ((w1.centerY == w2.centerY) ? (w1.centerX - w2.centerX) : (w1.centerY - w2.centerY));
@@ -110,18 +118,39 @@ public class ImUtils implements ImagingConstants {
 			ImWord imw1 = ((ImWord) obj1);
 			ImWord imw2 = ((ImWord) obj2);
 			
-			//	check text stream IDs first
-			int c = imw1.getTextStreamId().compareTo(imw2.getTextStreamId());
-			if (c != 0)
-				return c;
+			//	quick check
+			if (imw1 == imw2)
+				return 0;
 			
-			//	check page IDs
-			c = (imw1.pageId - imw2.pageId);
-			if (c != 0)
-				return c;
+			//	same text stream, compare page ID and position
+			if (imw1.getTextStreamId().equals(imw2.getTextStreamId()))
+				return ((imw1.pageId == imw2.pageId) ? (imw1.getTextStreamPos() - imw2.getTextStreamPos()) : (imw1.pageId - imw2.pageId));
 			
-			//	check text stream position
-			return (imw1.getTextStreamPos() - imw2.getTextStreamPos());
+			//	parse page IDs off text stream IDs and compare them
+			String tsId1 = imw1.getTextStreamId();
+			int tshPid1 = Integer.parseInt(tsId1.substring(0, tsId1.indexOf('.')));
+			String tsId2 = imw2.getTextStreamId();
+			int tshPid2 = Integer.parseInt(tsId2.substring(0, tsId2.indexOf('.')));
+			if (tshPid1 != tshPid2)
+				return (tshPid1 - tshPid2);
+			
+			//	parse head bounding boxes off text stream IDs and compare left and top
+			BoundingBox tshBb1 = BoundingBox.parse(tsId1.substring(tsId1.indexOf('.') + ".".length()));
+			BoundingBox tshBb2 = BoundingBox.parse(tsId2.substring(tsId2.indexOf('.') + ".".length()));
+			return ((tshBb1.top == tshBb2.top) ? (tshBb1.left - tshBb2.left) : (tshBb1.top - tshBb2.top));
+//			
+//			//	check text stream IDs first
+//			int c = imw1.getTextStreamId().compareTo(imw2.getTextStreamId());
+//			if (c != 0)
+//				return c;
+//			
+//			//	check page IDs
+//			c = (imw1.pageId - imw2.pageId);
+//			if (c != 0)
+//				return c;
+//			
+//			//	check text stream position
+//			return (imw1.getTextStreamPos() - imw2.getTextStreamPos());
 		}
 	};
 	
@@ -146,6 +175,65 @@ public class ImUtils implements ImagingConstants {
 			return ((ilo1.bounds.top + ilo1.bounds.bottom) - (ilo2.bounds.top + ilo2.bounds.bottom));
 		}
 	};
+	
+	
+	/** Comparator sorting ImLayoutObjects in descending order by the area of
+	 * their bounding boxes. With arrays or collections whose content objects
+	 * are NOT ImLayoutObjects, using this comparator results in
+	 * ClassCastExceptions. */
+	public static final Comparator sizeOrder = new Comparator() {
+		public int compare(Object obj1, Object obj2) {
+			ImLayoutObject ilo1 = ((ImLayoutObject) obj1);
+			ImLayoutObject ilo2 = ((ImLayoutObject) obj2);
+			return (this.getSize(ilo2.bounds) - this.getSize(ilo1.bounds));
+		}
+		private final int getSize(BoundingBox bb) {
+			return ((bb.right - bb.left) * (bb.bottom - bb.top));
+		}
+	};
+	
+	/**
+	 * Sorts an array of words in left-right-top-down order, in two steps. This
+	 * facilitates use of this topological order without the need to define it
+	 * in a single <code>Comparator</code>, which is not generally possible in
+	 * all cases, thus violating the contracts of <code>Arrays.sort()</code>.
+	 * @param words the array of words to sort
+	 */
+	public static void sortLeftRightTopDown(ImWord[] words) {
+		
+		//	sort top-down first
+		Arrays.sort(words, topDownOrder);
+		
+		//	sort individual lines left to right
+		int lineStart = 0;
+		for (int w = 1; w < words.length; w++)
+			
+			//	this word starts a new line, sort previous one
+			if (words[w].centerY > words[lineStart].bounds.bottom) {
+				Arrays.sort(words, lineStart, w, leftRightOrder);
+				lineStart = w;
+			}
+		
+		//	sort last line
+		Arrays.sort(words, lineStart, words.length, leftRightOrder);
+	}
+	
+	/**
+	 * Sorts a list of words in left-right-top-down order, in two steps. This
+	 * facilitates use of this topological order without the need to define it
+	 * in a single <code>Comparator</code>, which is not generally possible in
+	 * all cases, thus violating the contracts of <code>Arrays.sort()</code>.
+	 * @param wordList the List of words to sort
+	 */
+	public static void sortLeftRightTopDown(List wordList) {
+		ImWord[] words = ((ImWord[]) wordList.toArray(new ImWord[wordList.size()]));
+		sortLeftRightTopDown(words);
+		ListIterator wli = wordList.listIterator();
+		for (int w = 0; w < words.length; w++) {
+		    wli.next();
+		    wli.set(words[w]);
+		}
+	}
 	
 	/**
 	 * Prompt the user for a type for an Image Markup object (usually an
@@ -390,13 +478,13 @@ public class ImUtils implements ImagingConstants {
 	}
 	
 	/**
-	 * Order a series of words a separate logical text stream. The words in the
-	 * argument array need not belong to an individual logical text stream, nor
-	 * need they be single chunks of the logical text streams involved. The
+	 * Order a series of words as a separate logical text stream. The words in
+	 * the argument array need not belong to an individual logical text stream,
+	 * nor need they be single chunks of the logical text streams involved. The
 	 * predecessor of the first word is set to the the last predecessor of any
-	 * word from the array that is not contained in the array itself, the
+	 * word from the array that is not contained in the array proper, the
 	 * successor of the last word is set to the first successor of any word
-	 * from the array that is not contained in the array itself.
+	 * from the array that is not contained in the array proper.
 	 * @param words the words to make a text stream
 	 * @param wordOrder the word order to apply
 	 */
@@ -406,8 +494,10 @@ public class ImUtils implements ImagingConstants {
 		if (words.length < 2)
 			return;
 		
-		//	order words
-		Arrays.sort(words, wordOrder);
+		//	order words (use dedicated sort method for left-right-top-down)
+		if (wordOrder == leftRightTopDownOrder)
+			sortLeftRightTopDown(words);
+		else Arrays.sort(words, wordOrder);
 		
 		//	index words from array
 		HashSet wordIDs = new HashSet();
@@ -419,11 +509,15 @@ public class ImUtils implements ImagingConstants {
 		ArrayList successors = new ArrayList();
 		for (int w = 0; w < words.length; w++) {
 			ImWord prev = words[w].getPreviousWord();
-			if ((prev != null) && !wordIDs.contains(prev.getLocalID()))
+			if ((prev != null) && !wordIDs.contains(prev.getLocalID())) {
+//				System.out.println("External predecessor '" + prev.getString() + "' (page " + prev.pageId + " at " + prev.bounds + ") from '" + words[w].getString() + "' (page " + words[w].pageId + " at " + words[w].bounds + ")");
 				predecessors.add(prev);
+			}
 			ImWord next = words[w].getNextWord();
-			if ((next != null) && !wordIDs.contains(next.getLocalID()))
+			if ((next != null) && !wordIDs.contains(next.getLocalID())) {
+//				System.out.println("External successor '" + next.getString() + "' (page " + next.pageId + " at " + next.bounds + ") from '" + words[w].getString() + "' (page " + words[w].pageId + " at " + words[w].bounds + ")");
 				successors.add(next);
+			}
 		}
 		
 		//	chain words together
@@ -454,14 +548,18 @@ public class ImUtils implements ImagingConstants {
 		Collections.sort(predecessors, Collections.reverseOrder(wordOrder));
 		if (predecessors.size() != 0) {
 			ImWord prev = (ImWord) predecessors.get(0);
-			if (words[0].getPreviousWord() != prev)
+			if (words[0].getPreviousWord() != prev) {
+//				System.out.println("Setting external predecessor '" + prev.getString() + "' (page " + prev.pageId + " at " + prev.bounds + ") for '" + words[0].getString() + "' (page " + words[0].pageId + " at " + words[0].bounds + ")");
 				words[0].setPreviousWord(prev);
+			}
 		}
 		Collections.sort(successors, wordOrder);
 		if (successors.size() != 0) {
 			ImWord next = ((ImWord) successors.get(0));
-			if (words[words.length-1].getNextWord() != next)
+			if (words[words.length-1].getNextWord() != next) {
+//				System.out.println("Setting external successor '" + next.getString() + "' (page " + next.pageId + " at " + next.bounds + ") for '" + words[words.length-1].getString() + "' (page " + words[words.length-1].pageId + " at " + words[words.length-1].bounds + ")");
 				words[words.length-1].setNextWord(next);
+			}
 		}
 	}
 	
@@ -593,6 +691,196 @@ public class ImUtils implements ImagingConstants {
 	}
 	
 	/**
+	 * Find potential captions for a given target area (the region marking what
+	 * a caption can refer to, e.g. a table of figure) in a page of an Image
+	 * Markup document. In particular, this method seeks caption annotations
+	 * above and/or below (depending on the respective arguments) the target
+	 * region within on inch distance. If target type matching is active, this
+	 * method only returns captions starting with 'Tab' if the target region is
+	 * a table, and exclude those captions if the target region is not a table. 
+	 * @param page the page to search captions in
+	 * @param target the caption target region
+	 * @param above search captions above the target region?
+	 * @param below search captions below the target region?
+	 * @param matchTargetType match caption type and target type?
+	 * @return an array holding potential captions for the argument target region
+	 * @see de.uka.ipd.idaho.im.util.ImUtils#isCaptionTargetMatch(BoundingBox, BoundingBox, int))
+	 */
+	public static ImAnnotation[] findCaptions(ImRegion target, boolean above, boolean below, boolean matchTargetType) {
+		
+		//	quick check alignment switches
+		if (!above && !below)
+			return new ImAnnotation[0];
+		
+		//	get page (might be null for regions not added to document)
+		ImPage page = target.getPage();
+		if (page == null)
+			return new ImAnnotation[0];
+		
+		//	seek captions through paragraphs
+		ArrayList captionList = new ArrayList();
+		ImRegion[] paragraphs = page.getRegions(ImRegion.PARAGRAPH_TYPE);
+		if (paragraphs.length == 0)
+			return new ImAnnotation[0];
+		int dpi = page.getImageDPI();
+		Arrays.sort(paragraphs, ImUtils.topDownOrder);
+		
+		//	add captions above target area (only the closest ones, though)
+		if (above) {
+			ImWord captionStartWord = null;
+			for (int p = 0; p < paragraphs.length; p++) {
+				
+				//	we're below the 'above' target paragraphs
+				if (paragraphs[p].bounds.bottom > target.bounds.top)
+					break;
+				
+				//	check spacial match
+				if (!isCaptionAboveTargetMatch(paragraphs[p].bounds, target.bounds, dpi))
+					continue;
+				
+				//	check words
+				ImWord[] paragraphWords = paragraphs[p].getWords();
+				if (paragraphWords.length == 0)
+					continue;
+				if (!ImWord.TEXT_STREAM_TYPE_CAPTION.equals(paragraphWords[0].getTextStreamType()))
+					continue;
+				Arrays.sort(paragraphWords, ImUtils.textStreamOrder);
+				if (paragraphWords[0].getString() == null)
+					continue;
+				if (matchTargetType && (ImRegion.TABLE_TYPE.equals(target.getType()) != paragraphWords[0].getString().toLowerCase().startsWith("tab")))
+					continue;
+				
+				//	keep start word for getting annotations
+				captionStartWord = paragraphWords[0];
+			}
+			
+			//	get annotations for caption start closest above target
+			if (captionStartWord != null) {
+				ImAnnotation[] captionAnnots = page.getDocument().getAnnotations(captionStartWord, null);
+				for (int a = 0; a < captionAnnots.length; a++) {
+					if (ImAnnotation.CAPTION_TYPE.equals(captionAnnots[a].getType()))
+						captionList.add(captionAnnots[a]);
+				}
+			}
+		}
+		
+		//	add captions below target area (only the closest ones, though)
+		if (below)
+			for (int p = 0; p < paragraphs.length; p++) {
+				
+				//	check distance (less than an inch)
+				if (dpi < (paragraphs[p].bounds.top - target.bounds.bottom))
+					break; // due to top-down sort order, we won't find any better from here onward
+				
+				//	check spacial match
+				if (!isCaptionBelowTargetMatch(paragraphs[p].bounds, target.bounds, dpi))
+					continue;
+				
+				//	check words
+				ImWord[] paragraphWords = paragraphs[p].getWords();
+				if (paragraphWords.length == 0)
+					continue;
+				if (!ImWord.TEXT_STREAM_TYPE_CAPTION.equals(paragraphWords[0].getTextStreamType()))
+					continue;
+				Arrays.sort(paragraphWords, ImUtils.textStreamOrder);
+				if (paragraphWords[0].getString() == null)
+					continue;
+				if (matchTargetType && (ImRegion.TABLE_TYPE.equals(target.getType()) != paragraphWords[0].getString().toLowerCase().startsWith("tab")))
+					continue;
+				
+				//	get annotations directly here
+				ImAnnotation[] captionAnnots = page.getDocument().getAnnotations(paragraphWords[0], null);
+				for (int a = 0; a < captionAnnots.length; a++) {
+					if (ImAnnotation.CAPTION_TYPE.equals(captionAnnots[a].getType()))
+						captionList.add(captionAnnots[a]);
+				}
+				
+				//	caption or not, we won't find any better-fitting caption
+				break;
+			}
+		
+		//	finally
+		return ((ImAnnotation[]) captionList.toArray(new ImAnnotation[captionList.size()]));
+	}
+	
+	/**
+	 * Compare the positions of a caption and a target area (the bounding box
+	 * of what the caption refers to) in a page. In particular, this method
+	 * checks if the caption is above above or below the target, with at most
+	 * one inch of vertical distance in between, and if the horizontal center
+	 * of each of the two arguments lies within the other one.
+	 * @param captionBox the caption bounding box
+	 * @param targetBox the target area bounding box
+	 * @param dpi the resolution of the underlying page image
+	 * @return true if caption and target match in terms of relative position
+	 * @see de.uka.ipd.idaho.im.util.ImUtils#isCaptionAboveTargetMatch(BoundingBox, BoundingBox, int))
+	 * @see de.uka.ipd.idaho.im.util.ImUtils#isCaptionBelowTargetMatch(BoundingBox, BoundingBox, int))
+	 */
+	public static boolean isCaptionTargetMatch(BoundingBox captionBox, BoundingBox targetBox, int dpi) {
+		return (isCaptionAboveTargetMatch(captionBox, targetBox, dpi) || isCaptionBelowTargetMatch(captionBox, targetBox, dpi));
+	}
+	
+	/**
+	 * Compare the positions of a caption and a target area (the bounding box
+	 * of what the caption refers to) in a page. In particular, this method
+	 * checks if the caption is above the target, with at most one inch of
+	 * vertical distance in between, and if the horizontal center of each of
+	 * the two arguments lies within the other one.
+	 * @param captionBox the caption bounding box
+	 * @param targetBox the target area bounding box
+	 * @param dpi the resolution of the underlying page image
+	 * @return true if caption and target match in terms of relative position
+	 */
+	public static boolean isCaptionAboveTargetMatch(BoundingBox captionBox, BoundingBox targetBox, int dpi) {
+		
+		//	check vertical alignment
+		if (targetBox.top < captionBox.bottom)
+			return false;
+		
+		//	compute widths and overlap
+		int captionBoxWidth = (captionBox.right - captionBox.left);
+		int targetBoxWidth = (targetBox.right - targetBox.left);
+		int overlapWidth = (Math.min(captionBox.right, targetBox.right) - Math.max(captionBox.left, targetBox.left));
+		
+		//	90% overlap of narrower in wider part should do
+		if ((overlapWidth * 10) < (Math.min(captionBoxWidth, targetBoxWidth) * 9))
+			return false;
+		
+		//	check distance (less than an inch)
+		return ((targetBox.top - captionBox.bottom) <= dpi);
+	}
+	
+	/**
+	 * Compare the positions of a caption and a target area (the bounding box
+	 * of what the caption refers to) in a page. In particular, this method
+	 * checks if the caption is below the target, with at most one inch of
+	 * vertical distance in between, and if the horizontal center of each of
+	 * the two arguments lies within the other one.
+	 * @param captionBox the caption bounding box
+	 * @param targetBox the target area bounding box
+	 * @param dpi the resolution of the underlying page image
+	 * @return true if caption and target match in terms of relative position
+	 */
+	public static boolean isCaptionBelowTargetMatch(BoundingBox captionBox, BoundingBox targetBox, int dpi) {
+		
+		//	check vertical alignment
+		if (captionBox.top < targetBox.bottom)
+			return false;
+		
+		//	compute widths and overlap
+		int captionBoxWidth = (captionBox.right - captionBox.left);
+		int targetBoxWidth = (targetBox.right - targetBox.left);
+		int overlapWidth = (Math.min(captionBox.right, targetBox.right) - Math.max(captionBox.left, targetBox.left));
+		
+		//	90% overlap of narrower in wider part should do
+		if ((overlapWidth * 10) < (Math.min(captionBoxWidth, targetBoxWidth) * 9))
+			return false;
+		
+		//	check distance (less than an inch)
+		return ((captionBox.top - targetBox.bottom) <= dpi);
+	}
+	
+	/**
 	 * Retrieve the rows of a table. If table rows are already marked, this
 	 * method simply returns them. If no rows are marked, this method tries to
 	 * generate them. If generation fails, e.g. if the argument region does not
@@ -614,9 +902,6 @@ public class ImUtils implements ImagingConstants {
 		//	generate rows if none exist
 		if (tableRows.length == 0) {
 			
-			//	get page image for resolution
-			PageImage pageImage = page.getPageImage();
-			
 			//	get words
 			ImWord[] tableWords = page.getWordsInside(table.bounds);
 			if (tableWords.length == 0)
@@ -633,7 +918,7 @@ public class ImUtils implements ImagingConstants {
 			//	collect row gaps
 			ArrayList rowGaps = new ArrayList();
 			TreeSet rowGapWidths = new TreeSet(Collections.reverseOrder());
-			collectGaps(rowGaps, rowGapWidths, rowWordCols, (pageImage.currentDpi / 50) /* about 0.5mm */);
+			collectGaps(rowGaps, rowGapWidths, rowWordCols, (page.getImageDPI() / 50) /* about 0.5mm */);
 			
 			//	do we have anything to work with?
 			if (rowGaps.isEmpty())
@@ -674,9 +959,6 @@ public class ImUtils implements ImagingConstants {
 		//	generate columns if none exist
 		if (tableCols.length == 0) {
 			
-			//	get page image for resolution
-			PageImage pageImage = page.getPageImage();
-			
 			//	get words
 			ImWord[] tableWords = page.getWordsInside(table.bounds);
 			if (tableWords.length == 0)
@@ -693,7 +975,7 @@ public class ImUtils implements ImagingConstants {
 			//	collect column gaps
 			ArrayList colGaps = new ArrayList();
 			TreeSet colGapWidths = new TreeSet(Collections.reverseOrder());
-			collectGaps(colGaps, colGapWidths, colWordRows, (pageImage.currentDpi / 30) /* less than 1mm */);
+			collectGaps(colGaps, colGapWidths, colWordRows, (page.getImageDPI() / 30) /* less than 1mm */);
 			
 			//	do we have anything to work with?
 			if (colGaps.isEmpty())
@@ -736,16 +1018,8 @@ public class ImUtils implements ImagingConstants {
 		}
 		
 		//	sort rows and columns
-		Arrays.sort(rows, new Comparator() {
-			public int compare(Object obj1, Object obj2) {
-				return (((ImRegion) obj1).bounds.top - ((ImRegion) obj2).bounds.top);
-			}
-		});
-		Arrays.sort(cols, new Comparator() {
-			public int compare(Object obj1, Object obj2) {
-				return (((ImRegion) obj1).bounds.left - ((ImRegion) obj2).bounds.left);
-			}
-		});
+		Arrays.sort(rows, topDownOrder);
+		Arrays.sort(cols, leftRightOrder);
 		
 		//	get page
 		ImPage page = table.getPage();
@@ -813,8 +1087,8 @@ public class ImUtils implements ImagingConstants {
 				ImWord[] cellWords = cells[r][c].getWords();
 				if (cellWords.length == 0)
 					continue;
-				ImUtils.makeStream(cellWords, null, null);
-				ImUtils.orderStream(cellWords, ImUtils.leftRightTopDownOrder);
+				makeStream(cellWords, null, null);
+				orderStream(cellWords, ImUtils.leftRightTopDownOrder);
 				Arrays.sort(cellWords, ImUtils.textStreamOrder);
 				if (lastCellEnd != null)
 					cellWords[0].setPreviousWord(lastCellEnd);
@@ -1050,17 +1324,9 @@ public class ImUtils implements ImagingConstants {
 		
 		//	get rows and columns
 		ImRegion[] rows = getRegionsInside(table.getPage(), table.bounds, ImRegion.TABLE_ROW_TYPE, false);
-		Arrays.sort(rows, new Comparator() {
-			public int compare(Object obj1, Object obj2) {
-				return (((ImRegion) obj1).bounds.top - ((ImRegion) obj2).bounds.top);
-			}
-		});
+		Arrays.sort(rows, topDownOrder);
 		ImRegion[] cols = getRegionsInside(table.getPage(), table.bounds, ImRegion.TABLE_COL_TYPE, false);
-		Arrays.sort(cols, new Comparator() {
-			public int compare(Object obj1, Object obj2) {
-				return (((ImRegion) obj1).bounds.left - ((ImRegion) obj2).bounds.left);
-			}
-		});
+		Arrays.sort(cols, leftRightOrder);
 		
 		//	write table data
 		StringBuffer tableData = new StringBuffer();

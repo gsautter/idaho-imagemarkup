@@ -52,6 +52,8 @@ public class PdfImageDecoder {
 			return "convert-windows.exe";
 		else if (osName.matches(".*Linux.*"))
 			return "convert-linux";
+		else if (osName.matches("Mac.*"))
+			return "convert-linux";
 		else {
 			System.out.println("OcrEngin: unknown OS name: " + osName);
 			return null;
@@ -73,6 +75,11 @@ public class PdfImageDecoder {
 	
 	private boolean install(String fileName) {
 		System.out.println("PDF Image Decoder: installing file '" + fileName + "'");
+		if (fileName == null) {
+			System.out.println(" ==> source name not found");
+			return false;
+		}
+		
 		File file = new File(this.imPath, fileName);
 		if (file.exists()) {
 			System.out.println(" ==> already installed");
@@ -115,21 +122,36 @@ public class PdfImageDecoder {
 	 */
 	public BufferedImage decodeImage(byte[] imageBytes, String imageFormat) throws IOException {
 		try {
+//			System.out.println("Image Magic: converting " + imageBytes.length + " bytes from " + imageFormat + " to PNG");
 			String[] command = {
 					(this.imPath.getAbsolutePath() + "/" + getConvertCommand()),
 					(imageFormat + ":-"),
 					("png:-"),
 			};
 			Process im = Runtime.getRuntime().exec(command, null, imPath.getAbsoluteFile());
+//			System.out.println(" - process created");
 			OutputStream imIn = im.getOutputStream();
+//			System.out.println(" - got output stream");
 			imIn.write(imageBytes);
 			imIn.flush();
 			imIn.close();
+//			System.out.println(" - image data sent");
 			BufferedImage image = ImageIO.read(im.getInputStream());
+			if (image == null) {
+				File imageData = new File(this.imPath, ("ImageData" + System.currentTimeMillis() + "." + imageFormat));
+				FileOutputStream imageDataOut = new FileOutputStream(imageData);
+				imageDataOut.write(imageBytes);
+				imageDataOut.flush();
+				imageDataOut.close();
+//				System.out.println(" - could not read back image, data in " + imageData.getAbsolutePath());
+			}
+//			else System.out.println(" - image read back");
 			im.waitFor();
+//			System.out.println(" - process terminated");
 			return image;
 		}
 		catch (InterruptedException ie) {
+//			System.out.println("Image Magic got interrupted");
 			return null;
 		}
 	}

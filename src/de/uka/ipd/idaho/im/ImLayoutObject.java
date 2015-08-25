@@ -27,6 +27,7 @@
  */
 package de.uka.ipd.idaho.im;
 
+import de.uka.ipd.idaho.gamta.Attributed;
 import de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
@@ -128,11 +129,17 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 	public abstract PageImage getImage();
 	
 	/**
-	 * Retrieve an image of the page this layout object lies upon.
-	 * @return an image of the page this layout object lies upon
+	 * Retrieve an image of the page this layout object lies in.
+	 * @return an image of the page this layout object lies in
 	 */
 	public PageImage getPageImage() {
-		return PageImage.getPageImage(this.getDocument().docId, this.pageId);
+		try {
+			return this.getDocument().getPageImage(this.pageId);
+		}
+		catch (Exception e) {
+			e.printStackTrace(System.out);
+			return PageImage.getPageImage(this.getDocument().docId, this.pageId);
+		}
 	}
 	
 	/* (non-Javadoc)
@@ -179,7 +186,45 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 	 */
 	public Object setAttribute(String name, Object value) {
 		Object oldValue = super.setAttribute(name, value);
-		if (this.getPage() != null)
+		if ((this.getPage() != null) && ((oldValue == null) ? (value != null) : !oldValue.equals(value)))
+			this.doc.notifyAttributeChanged(this, name, oldValue);
+		return oldValue;
+	}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed#clearAttributes()
+	 */
+	public void clearAttributes() {
+		if (this.getPage() == null) {
+			super.clearAttributes();
+			return;
+		}
+		String[] oldNames = this.getAttributeNames();
+		for (int n = 0; n < oldNames.length; n++)
+			this.removeAttribute(oldNames[n]);
+	}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed#copyAttributes(de.uka.ipd.idaho.gamta.Attributed)
+	 */
+	public void copyAttributes(Attributed source) {
+		if (source == null)
+			return;
+		if (this.getPage() == null) {
+			super.copyAttributes(source);
+			return;
+		}
+		String[] names = source.getAttributeNames();
+		for (int n = 0; n < names.length; n++)
+			this.setAttribute(names[n], source.getAttribute(names[n]));
+	}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed#removeAttribute(java.lang.String)
+	 */
+	public Object removeAttribute(String name) {
+		Object oldValue = super.removeAttribute(name);
+		if ((this.getPage() != null) && (oldValue != null))
 			this.doc.notifyAttributeChanged(this, name, oldValue);
 		return oldValue;
 	}

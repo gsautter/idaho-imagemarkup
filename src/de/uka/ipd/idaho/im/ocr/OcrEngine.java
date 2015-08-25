@@ -141,12 +141,16 @@ public class OcrEngine implements ImagingConstants {
 	private PooledOcrInstance getOcrInstance(long timeout) throws IOException {
 		
 		//	we're shutting down ...
-		if (this.maxInstances < 1)
+		if (this.maxInstances < 1) {
+			System.out.println("OCR Engine: returning null instance due to shutdown (1)");
 			return null;
+		}
 		
 		//	we're shutting down ...
-		if (this.instances == null)
+		if (this.instances == null) {
+			System.out.println("OCR Engine: returning null instance due to shutdown (1)");
 			return null;
+		}
 		
 		//	get instance from pool
 		synchronized (this.instances) {
@@ -157,7 +161,7 @@ public class OcrEngine implements ImagingConstants {
 			
 			//	we have more resources available, create additional instance
 			else if (this.allInstances.size() < this.maxInstances)
-				return this.produceOcrInstance(true);
+				return this.produceOcrInstance();
 			
 			//	no instances available right now
 			else {
@@ -169,20 +173,31 @@ public class OcrEngine implements ImagingConstants {
 				this.awaitingInstance.add(awaitingInstance);
 				try {
 					this.instances.wait(timeout);
-				} catch (InterruptedException e) {}
+				}
+				catch (InterruptedException ie) {
+					System.out.println("OCR Engine: waiting thread interrupted");
+				}
 				this.awaitingInstance.remove(awaitingInstance);
 				
 				//	we're shutting down ...
-				if (this.instances == null)
+				if (this.instances == null) {
+					System.out.println("OCR Engine: returning null instance due to shutdown (3)");
 					return null;
+				}
+				
+				//	timeout is up
+				else if (this.instances.size() == 0) {
+					System.out.println("OCR Engine: returning null instance after timeout of " + timeout);
+					return null;
+				}
 				
 				//	if we have an instance now, we can use it ... otherwise the timeout is up
-				else return ((this.instances.size() == 0) ? null : ((PooledOcrInstance) this.instances.removeFirst()));
+				else return ((PooledOcrInstance) this.instances.removeFirst());
 			}
 		}
 	}
 	
-	private PooledOcrInstance produceOcrInstance(boolean forPool) throws IOException {
+	private PooledOcrInstance produceOcrInstance() throws IOException {
 		PooledOcrInstance poi = new PooledOcrInstance(new OcrInstance(this.tessPath, this.getLangsString()));
 		this.allInstances.addLast(poi);
 		return poi;
@@ -228,6 +243,18 @@ public class OcrEngine implements ImagingConstants {
 	}
 	
 	/**
+	 * IOExceptions of this class indicate that in a parallel scenario, an OCR
+	 * instance did not become available within a specified timeout.
+	 * 
+	 * @author sautter
+	 */
+	public static class OcrInstanceUnavailableException extends IOException {
+		OcrInstanceUnavailableException(String message) {
+			super(message);
+		}
+	}
+	
+	/**
 	 * Shut down the OCR engine, in particular all OCR instances.
 	 * @throws IOException
 	 */
@@ -263,6 +290,7 @@ public class OcrEngine implements ImagingConstants {
 	 * any blocks that already contain words.
 	 * @param page the page to run Tesseract on
 	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 * @throws OcrInstanceUnavailableException
 	 * @throws IOException
 	 */
 	public void doBlockOcr(ImPage page, ProgressMonitor psm) throws IOException {
@@ -279,6 +307,7 @@ public class OcrEngine implements ImagingConstants {
 	 * @param psm a monitor object for reporting progress, e.g. to a UI
 	 * @param timeout the maximum time to wait for an OCR instance to become
 	 *            available (in milliseconds, relevant only in thread pool mode) 
+	 * @throws OcrInstanceUnavailableException
 	 * @throws IOException
 	 */
 	public void doBlockOcr(ImPage page, ProgressMonitor psm, long timeout) throws IOException {
@@ -297,6 +326,7 @@ public class OcrEngine implements ImagingConstants {
 	 * @param page the page to run Tesseract on
 	 * @param pageImage the image of the page
 	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 * @throws OcrInstanceUnavailableException
 	 * @throws IOException
 	 */
 	public void doBlockOcr(ImPage page, PageImage pageImage, ProgressMonitor psm) throws IOException {
@@ -314,6 +344,7 @@ public class OcrEngine implements ImagingConstants {
 	 * @param psm a monitor object for reporting progress, e.g. to a UI
 	 * @param timeout the maximum time to wait for an OCR instance to become
 	 *            available (in milliseconds, relevant only in thread pool mode) 
+	 * @throws OcrInstanceUnavailableException
 	 * @throws IOException
 	 */
 	public void doBlockOcr(ImPage page, PageImage pageImage, ProgressMonitor psm, long timeout) throws IOException {
@@ -373,6 +404,7 @@ public class OcrEngine implements ImagingConstants {
 	 * @param block the block to run Tesseract on
 	 * @param pageImage the image of the page
 	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 * @throws OcrInstanceUnavailableException
 	 * @throws IOException
 	 */
 	public void doBlockOcr(ImRegion block, PageImage pageImage, ProgressMonitor psm) throws IOException {
@@ -391,7 +423,8 @@ public class OcrEngine implements ImagingConstants {
 	 * @param pageImage the image of the page
 	 * @param psm a monitor object for reporting progress, e.g. to a UI
 	 * @param timeout the maximum time to wait for an OCR instance to become
-	 *            available (in milliseconds, relevant only in thread pool mode) 
+	 *            available (in milliseconds, relevant only in thread pool mode)
+	 * @throws OcrInstanceUnavailableException
 	 * @throws IOException
 	 */
 	public void doBlockOcr(ImRegion block, PageImage pageImage, ProgressMonitor psm, long timeout) throws IOException {
@@ -678,7 +711,7 @@ public class OcrEngine implements ImagingConstants {
 		
 		//	check timeout
 		if (poi == null)
-			throw new IOException("An OCR Instance is not available right now.");
+			throw new OcrInstanceUnavailableException("An OCR Instance is not available right now.");
 		
 		//	do OCR
 		OcrWord[] blockWords = poi.doBlockOcr(blockTextImage);
@@ -701,6 +734,7 @@ public class OcrEngine implements ImagingConstants {
 			blockWordList.add(new OcrWord(blockWords[w].str, new BoundingBox(left, Math.min(right, maxRight), top, Math.min(bottom, maxBottom))));
 		}
 		blockWords = ((OcrWord[]) blockWordList.toArray((blockWords.length == blockWordList.size()) ? blockWords : new OcrWord[blockWordList.size()]));
+		blockWordList.clear();
 		
 		//	catch empty blocks
 		if (blockWords.length == 0) {
@@ -752,29 +786,6 @@ public class OcrEngine implements ImagingConstants {
 			}
 		}
 		
-		//	sort detected words top to bottom and left to right
-		Arrays.sort(blockWords, new Comparator() {
-			public int compare(Object obj1, Object obj2) {
-				OcrWord w1 = ((OcrWord) obj1);
-				OcrWord w2 = ((OcrWord) obj2);
-				
-				//	top down
-				if (w1.box.bottom <= w2.box.top)
-					return -1;
-				if (w2.box.bottom <= w1.box.top)
-					return 1;
-				
-				//	left right
-				if (w1.box.right <= w2.box.left)
-					return -1;
-				if (w2.box.right <= w1.box.left)
-					return 1;
-				
-				//	overlap (can happen in images that OCR to weird patterns)
-				return 0;
-			}
-		});
-		
 		//	TODO also expand word bounds to cover full word
 		
 		//	TODO consider region coloring to achieve this
@@ -784,28 +795,60 @@ public class OcrEngine implements ImagingConstants {
 		 * - do region coloring
 		 *   - restricted to word bounds
 		 *   - for whole block image
-		 * - only even start expanding if char regions are
+		 * - only even start expanding if char regions
 		 *   - do not meet outside word bounds
-		 *   - at least half inside word bounds
+		 *   - are at least half inside word bounds
 		 */
 		
-		//	expand bounding boxes of dashes, etc. to full line height
-		for (int sw = 0; sw < blockWords.length; /* flexible increment in loop body */) {
+		//	sort words by height, descending, to move good line anchors to start of array
+		Arrays.sort(blockWords, new Comparator() {
+			public int compare(Object obj1, Object obj2) {
+				OcrWord w1 = ((OcrWord) obj1);
+				OcrWord w2 = ((OcrWord) obj2);
+				return ((w2.box.bottom - w2.box.top) - (w1.box.bottom - w1.box.top));
+			}
+		});
+		
+		//	keep going until all words are handled
+		while (blockWordList.size() < blockWords.length) {
 			
-			//	collect line words and compute average height
+			//	start line with first non-null word, collecting all vertically overlapping words
 			ArrayList lineWords = new ArrayList();
 			int lineWordHeightSum = 0;
-			OcrWord lastWord = blockWords[sw];
-			for (int w = sw; w < blockWords.length; w++) {
-				if (blockWords[w].box.left < lastWord.box.left)
-					break;
-				if (blockWords[w].box.top >= lastWord.box.bottom)
-					break;
-				lastWord = blockWords[w];
-				lineWords.add(lastWord);
-				lineWordHeightSum += (lastWord.box.bottom - lastWord.box.top);
+			OcrWord lineAnchor = null;
+			for (int w = 0; w < blockWords.length; w++) {
+				
+				//	handled before, in different line
+				if (blockWords[w] == null)
+					continue;
+				
+				//	we have a new line anchor
+				if (lineAnchor == null) {
+					lineAnchor = blockWords[w];
+					lineWords.add(blockWords[w]);
+					lineWordHeightSum += (blockWords[w].box.bottom - blockWords[w].box.top);
+					blockWords[w] = null; // mark as handled
+				}
+				
+				//	this one's inside the current line
+				else if ((lineAnchor.box.top < blockWords[w].box.bottom) && (blockWords[w].box.top < lineAnchor.box.bottom)) {
+					lineWords.add(blockWords[w]);
+					lineWordHeightSum += (blockWords[w].box.bottom - blockWords[w].box.top);
+					blockWords[w] = null; // mark as handled
+				}
 			}
+			
+			//	compute average word height
 			int avgLineWordHeight = (lineWordHeightSum / lineWords.size());
+			
+			//	sort line words left to right
+			Collections.sort(lineWords, new Comparator() {
+				public int compare(Object obj1, Object obj2) {
+					OcrWord w1 = ((OcrWord) obj1);
+					OcrWord w2 = ((OcrWord) obj2);
+					return (w1.box.left - w2.box.left);
+				}
+			});
 			
 			//	expand word bounding boxes lower than average height
 			for (int w = 0; w < lineWords.size(); w++) {
@@ -834,12 +877,103 @@ public class OcrEngine implements ImagingConstants {
 				BoundingBox eBox = new BoundingBox(word.box.left, word.box.right, (eTop / eAnchors), (eBottom / eAnchors));
 				OcrWord eWord = new OcrWord(word.str, eBox);
 				lineWords.set(w, eWord);
-				blockWords[sw + w] = eWord;
 			}
 			
-			//	jump to start of next line
-			sw += lineWords.size();
+			//	add current line words to whole
+			blockWordList.addAll(lineWords);
 		}
+		blockWords = ((OcrWord[]) blockWordList.toArray((blockWords.length == blockWordList.size()) ? blockWords : new OcrWord[blockWordList.size()]));
+		blockWordList.clear();
+		
+		/* We cannot use this, as top-down-left-right ordering is not a total
+		 * order in all cases (e.g. figures that OCR to weird patterns), but as
+		 * of Java 1.7, sorting routines require a total order. */
+//		//	sort detected words top to bottom and left to right
+//		Arrays.sort(blockWords, new Comparator() {
+//			public int compare(Object obj1, Object obj2) {
+//				OcrWord w1 = ((OcrWord) obj1);
+//				OcrWord w2 = ((OcrWord) obj2);
+//				
+//				//	top down
+//				if (w1.box.bottom <= w2.box.top)
+//					return -1;
+//				if (w2.box.bottom <= w1.box.top)
+//					return 1;
+//				
+//				//	left right
+//				if (w1.box.right <= w2.box.left)
+//					return -1;
+//				if (w2.box.right <= w1.box.left)
+//					return 1;
+//				
+//				//	overlapping top down (can happen in images that OCR to weird patterns)
+//				if (w1.box.top < w2.box.top)
+//					return -1;
+//				if (w2.box.bottom < w1.box.bottom)
+//					return 1;
+//				
+//				//	overlapping left right (can happen in images that OCR to weird patterns)
+//				if (w1.box.left < w2.box.left)
+//					return -1;
+//				if (w2.box.right < w1.box.right)
+//					return 1;
+//				
+//				//	these two are totally the same
+//				return 0;
+//			}
+//		});
+//		
+//		//	expand bounding boxes of dashes, etc. to full line height
+//		for (int sw = 0; sw < blockWords.length; /* flexible increment in loop body */) {
+//			
+//			//	collect line words and compute average height
+//			ArrayList lineWords = new ArrayList();
+//			int lineWordHeightSum = 0;
+//			OcrWord lastWord = blockWords[sw];
+//			for (int w = sw; w < blockWords.length; w++) {
+//				if (blockWords[w].box.left < lastWord.box.left)
+//					break;
+//				if (blockWords[w].box.top >= lastWord.box.bottom)
+//					break;
+//				lastWord = blockWords[w];
+//				lineWords.add(lastWord);
+//				lineWordHeightSum += (lastWord.box.bottom - lastWord.box.top);
+//			}
+//			int avgLineWordHeight = (lineWordHeightSum / lineWords.size());
+//			
+//			//	expand word bounding boxes lower than average height
+//			for (int w = 0; w < lineWords.size(); w++) {
+//				OcrWord word = ((OcrWord) lineWords.get(w));
+//				if ((avgLineWordHeight * 2) <= ((word.box.bottom - word.box.top) * 3))
+//					continue;
+//				
+//				int eTop = 0;
+//				int eBottom = 0;
+//				int eAnchors = 0;
+//				if (w > 0) {
+//					OcrWord pWord = ((OcrWord) lineWords.get(w-1));
+//					eTop += pWord.box.top;
+//					eBottom += pWord.box.bottom;
+//					eAnchors++;
+//				}
+//				if ((w+1) < lineWords.size()) {
+//					OcrWord fWord = ((OcrWord) lineWords.get(w+1));
+//					eTop += fWord.box.top;
+//					eBottom += fWord.box.bottom;
+//					eAnchors++;
+//				}
+//				if (eAnchors == 0)
+//					continue;
+//				
+//				BoundingBox eBox = new BoundingBox(word.box.left, word.box.right, (eTop / eAnchors), (eBottom / eAnchors));
+//				OcrWord eWord = new OcrWord(word.str, eBox);
+//				lineWords.set(w, eWord);
+//				blockWords[sw + w] = eWord;
+//			}
+//			
+//			//	jump to start of next line
+//			sw += lineWords.size();
+//		}
 		
 		//	return words
 		return blockWords;

@@ -103,11 +103,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		ImAnnotationBase(ImRegion rData, ImWord[] rDataWords) {
 			this.rData = rData;
 			this.rDataWords = rDataWords;
-			Arrays.sort(this.rDataWords, new Comparator() {
-				public int compare(Object obj1, Object obj2) {
-					return (((ImWord) obj1).getTextStreamPos() - ((ImWord) obj2).getTextStreamPos());
-				}
-			});
+			Arrays.sort(this.rDataWords, ImUtils.textStreamOrder);
 		}
 		ImAnnotationBase(ImToken tData) {
 			this.tData = tData;
@@ -205,8 +201,11 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 				this.aData.setType(type);
 			else if (this.rData != null)
 				this.rData.setType(type);
-			if (!oldType.equals(type))
+			if (!oldType.equals(type)) {
 				this.hashId = null;
+				if ((this.aData != null) || (this.rData != null))
+					annotationTypeChanged(this, oldType);
+			}
 			return oldType;
 		}
 		BoundingBox getBoundingBox() {
@@ -683,11 +682,24 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		}
 	}
 	
+	/** constant for specifying whether or not to filter out tables */
+	public static final int EXCLUDE_TABLES = 8;
+	
+	/** constant for specifying whether or not to filter out captions and footnotes */
+	public static final int EXCLUDE_CAPTIONS_AND_FOOTNOTES = 16;
+	
+	/** constant for specifying whether or not to include tables */
+	public static final int SHOW_TOKENS_AS_WORD_ANNOTATIONS = 32;
+	
+	/** constant for specifying whether or not to include tables */
+	public static final int USE_RANDOM_ANNOTATION_IDS = 64;
+	
 	private ImDocument doc;
 	
 	private ArrayList annotations = new ArrayList();
 	private TreeMap annotationsByType = new TreeMap();
 	private HashMap annotationBasesByAnnotations = new HashMap();
+	private HashMap annotationBasesByRegions = new HashMap();
 	private HashMap annotationViewsByBases = new HashMap();
 	
 	private String annotationNestingOrder;
@@ -701,17 +713,25 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	 * Constructor wrapping a whole Image Markup document, safe for deleted
 	 * logical text streams.
 	 * @param doc the document to wrap
-	 * @param normalizationLevel the normalization level specifying how to
-	 *            merge individual text streams
+	 * @param configFlags an integer bundling configuration flags, like the
+	 *            normalization level, which specifies how to merge individual
+	 *            text streams
 	 */
-	public ImDocumentRoot(ImDocument doc, int normalizationLevel) {
-		this(doc, getTextStreamHeads(doc, normalizationLevel), normalizationLevel);
+	public ImDocumentRoot(ImDocument doc, int configFlags) {
+		this(doc, getTextStreamHeads(doc, configFlags), configFlags);
 	}
-	private static final ImWord[] getTextStreamHeads(ImDocument doc, int normalizationLevel) {
+	private static final ImWord[] getTextStreamHeads(ImDocument doc, int configFlags) {
+		int normalizationLevel = (configFlags & NORMALIZATION_LEVEL_STREAMS);
+		boolean excludeTables = ((configFlags & EXCLUDE_TABLES) != 0);
+		boolean excludeCaptionsFootnotes = ((configFlags & EXCLUDE_CAPTIONS_AND_FOOTNOTES) != 0);
 		ImWord[] textStreamHeads = doc.getTextStreamHeads();
 		LinkedList nonDeletedTextStreamHeads = new LinkedList();
 		for (int h = 0; h < textStreamHeads.length; h++) {
 			if (ImWord.TEXT_STREAM_TYPE_DELETED.equals(textStreamHeads[h].getTextStreamType()))
+				continue;
+			if (excludeTables && ImWord.TEXT_STREAM_TYPE_TABLE.equals(textStreamHeads[h].getTextStreamType()))
+				continue;
+			if (excludeCaptionsFootnotes && (ImWord.TEXT_STREAM_TYPE_CAPTION.equals(textStreamHeads[h].getTextStreamType()) || ImWord.TEXT_STREAM_TYPE_FOOTNOTE.equals(textStreamHeads[h].getTextStreamType())))
 				continue;
 			if (((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS)) && (ImWord.TEXT_STREAM_TYPE_PAGE_TITLE.equals(textStreamHeads[h].getTextStreamType()) || ImWord.TEXT_STREAM_TYPE_ARTIFACT.equals(textStreamHeads[h].getTextStreamType())))
 				continue;
@@ -726,12 +746,16 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	 * @param doc the document to wrap
 	 * @param textStreamHeads the heads of the logical text streams to include
 	 *            in the wrapper token sequence 
-	 * @param normalizationLevel the normalization level specifying how to
-	 *            merge individual text streams
+	 * @param configFlags an integer bundling configuration flags, like the
+	 *            normalization level, which specifies how to merge individual
+	 *            text streams
 	 */
-	public ImDocumentRoot(ImDocument doc, ImWord[] textStreamHeads, int normalizationLevel) {
-		super(((Tokenizer) doc.getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER)), textStreamHeads, normalizationLevel);
+	public ImDocumentRoot(ImDocument doc, ImWord[] textStreamHeads, int configFlags) {
+		super(((Tokenizer) doc.getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER)), textStreamHeads, configFlags);
 		this.doc = doc;
+		
+		//	read normalization level
+		int normalizationLevel = (configFlags & NORMALIZATION_LEVEL_STREAMS);
 		
 		//	collect text stream IDs
 		HashSet textStreamIDs = new HashSet();
@@ -802,23 +826,32 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			}
 		}
 		
-		//	annotate tables
-		ImPage[] pages = this.doc.getPages();
-		for (int p = 0; p < pages.length; p++) {
-			ImRegion[] regions = pages[p].getRegions();
-			for (int r = 0; r < regions.length; r++) {
-				if (TABLE_ANNOTATION_TYPE.equals(regions[r].getType()))
-					this.annotateTableStructure(regions[r]);
+		//	annotate tables (if not filtered out)
+		if ((configFlags & EXCLUDE_TABLES) == 0) {
+			ImPage[] pages = this.doc.getPages();
+			for (int p = 0; p < pages.length; p++) {
+				ImRegion[] regions = pages[p].getRegions();
+				for (int r = 0; r < regions.length; r++) {
+					if (TABLE_ANNOTATION_TYPE.equals(regions[r].getType()))
+						this.annotateTableStructure(regions[r]);
+				}
 			}
 		}
+		
+		//	write through included configuration (annotating words makes sense only now)
+		this.setShowTokensAsWordsAnnotations((configFlags & SHOW_TOKENS_AS_WORD_ANNOTATIONS) != 0);
+		this.setUseRandomAnnotationIDs((configFlags & USE_RANDOM_ANNOTATION_IDS) != 0);
 	}
 	
 	/**
 	 * Constructor wrapping an individual annotation.
 	 * @param annotation the annotation to wrap
+	 * @param configFlags an integer bundling configuration flags, like the
+	 *            normalization level, which specifies how to merge individual
+	 *            text streams
 	 */
-	public ImDocumentRoot(ImAnnotation annotation, int normalizationLevel) {
-		this(annotation.getFirstWord(), annotation.getLastWord(), normalizationLevel);
+	public ImDocumentRoot(ImAnnotation annotation, int configFlags) {
+		this(annotation.getFirstWord(), annotation.getLastWord(), configFlags);
 	}
 	
 	/**
@@ -827,10 +860,16 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	 * meaningful behavior.
 	 * @param firstWord the first word to include in the wrapper token sequence
 	 * @param lastWord the last word to include in the wrapper token sequence
+	 * @param configFlags an integer bundling configuration flags, like the
+	 *            normalization level, which specifies how to merge individual
+	 *            text streams
 	 */
-	public ImDocumentRoot(ImWord firstWord, ImWord lastWord, int normalizationLevel) {
+	public ImDocumentRoot(ImWord firstWord, ImWord lastWord, int configFlags) {
 		super(((Tokenizer) firstWord.getDocument().getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER)), firstWord, lastWord);
 		this.doc = firstWord.getDocument();
+		
+		//	read normalization level
+		int normalizationLevel = (configFlags & NORMALIZATION_LEVEL_STREAMS);
 		
 		//	add annotation overlay for annotations
 		ImAnnotation[] annotations = this.doc.getAnnotations();
@@ -933,74 +972,90 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		}
 		
 		//	annotate tables
-		ImPage[] pages = this.doc.getPages();
-		for (int p = 0; p < pages.length; p++) {
-			
-			//	check if page within range
-			if (pages[p].pageId < firstWord.pageId)
-				continue;
-			if (lastWord.pageId < pages[p].pageId)
-				break;
-			
-			//	get page words
-			ImWord[] pageWords = pages[p].getWords();
-			ArrayList filteredPageWords = new ArrayList();
-			for (int w = 0; w < pageWords.length; w++) {
+		if ((configFlags & EXCLUDE_TABLES) == 0) {
+			ImPage[] pages = this.doc.getPages();
+			for (int p = 0; p < pages.length; p++) {
 				
-				//	check text stream ID
-				if (!firstWord.getTextStreamId().equals(pageWords[w].getTextStreamId()))
+				//	check if page within range
+				if (pages[p].pageId < firstWord.pageId)
 					continue;
+				if (lastWord.pageId < pages[p].pageId)
+					break;
 				
-				//	check if word in range
-				if (ImUtils.textStreamOrder.compare(pageWords[w], firstWord) < 0)
-					continue;
-				if (ImUtils.textStreamOrder.compare(lastWord, pageWords[w]) < 0)
-					continue;
-				
-				//	finally, we can include this one
-				filteredPageWords.add(pageWords[w]);
-			}
-			
-			//	nothing to work with in this page
-			if (filteredPageWords.isEmpty())
-				continue;
-			
-			//	finally ...
-			ImRegion[] regions = pages[p].getRegions();
-			for (int r = 0; r < regions.length; r++) {
-				if (!TABLE_ANNOTATION_TYPE.equals(regions[r].getType()))
-					continue;
-				
-				//	get table words
-				ArrayList filteredRegionWords = new ArrayList();
-				for (int w = 0; w < filteredPageWords.size(); w++) {
-					if (regions[r].bounds.includes(((ImWord) filteredPageWords.get(w)).bounds, true))
-						filteredRegionWords.add(filteredPageWords.get(w));
+				//	get page words
+				ImWord[] pageWords = pages[p].getWords();
+				ArrayList filteredPageWords = new ArrayList();
+				for (int w = 0; w < pageWords.length; w++) {
+					
+					//	check text stream ID
+					if (!firstWord.getTextStreamId().equals(pageWords[w].getTextStreamId()))
+						continue;
+					
+					//	check if word in range
+					if (ImUtils.textStreamOrder.compare(pageWords[w], firstWord) < 0)
+						continue;
+					if (ImUtils.textStreamOrder.compare(lastWord, pageWords[w]) < 0)
+						continue;
+					
+					//	finally, we can include this one
+					filteredPageWords.add(pageWords[w]);
 				}
 				
-				//	annotate table only if not empty
-				if (filteredRegionWords.size() != 0)
-					this.annotateTableStructure(regions[r]);
+				//	nothing to work with in this page
+				if (filteredPageWords.isEmpty())
+					continue;
+				
+				//	finally ...
+				ImRegion[] regions = pages[p].getRegions();
+				for (int r = 0; r < regions.length; r++) {
+					if (!TABLE_ANNOTATION_TYPE.equals(regions[r].getType()))
+						continue;
+					
+					//	get table words
+					ArrayList filteredRegionWords = new ArrayList();
+					for (int w = 0; w < filteredPageWords.size(); w++) {
+						if (regions[r].bounds.includes(((ImWord) filteredPageWords.get(w)).bounds, true))
+							filteredRegionWords.add(filteredPageWords.get(w));
+					}
+					
+					//	annotate table only if not empty
+					if (filteredRegionWords.size() != 0)
+						this.annotateTableStructure(regions[r]);
+				}
 			}
 		}
+		
+		//	write through included configuration (annotating words makes sense only now)
+		this.setShowTokensAsWordsAnnotations((configFlags & SHOW_TOKENS_AS_WORD_ANNOTATIONS) != 0);
+		this.setUseRandomAnnotationIDs((configFlags & USE_RANDOM_ANNOTATION_IDS) != 0);
 	}
 	
 	/**
 	 * Constructor wrapping an individual region or page of an Image Markup
 	 * document, safe for deleted logical text streams.
 	 * @param region the region to wrap
-	 * @param normalizationLevel the normalization level specifying how to
-	 *            merge individual text streams
+	 * @param configFlags an integer bundling configuration flags, like the
+	 *            normalization level, which specifies how to merge individual
+	 *            text streams
 	 */
-	public ImDocumentRoot(ImRegion region, int normalizationLevel) {
+	public ImDocumentRoot(ImRegion region, int configFlags) {
 		super(((Tokenizer) region.getDocument().getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER)));
 		this.doc = region.getDocument();
+		
+		//	read normalization level
+		int normalizationLevel = (configFlags & NORMALIZATION_LEVEL_STREAMS);
+		boolean excludeTables = ((configFlags & EXCLUDE_TABLES) != 0);
+		boolean excludeCaptionsFootnotes = ((configFlags & EXCLUDE_CAPTIONS_AND_FOOTNOTES) != 0);
 		
 		//	add words
 		ImWord[] regionWords = region.getWords();
 		HashSet textStreamIdSet = new LinkedHashSet();
 		for (int w = 0; w < regionWords.length; w++) {
 			if (ImWord.TEXT_STREAM_TYPE_DELETED.equals(regionWords[w].getTextStreamType()))
+				continue;
+			if (excludeTables && ImWord.TEXT_STREAM_TYPE_TABLE.equals(regionWords[w].getTextStreamType()))
+				continue;
+			if (excludeCaptionsFootnotes && (ImWord.TEXT_STREAM_TYPE_CAPTION.equals(regionWords[w].getTextStreamType()) || ImWord.TEXT_STREAM_TYPE_FOOTNOTE.equals(regionWords[w].getTextStreamType())))
 				continue;
 			if ((ImWord.TEXT_STREAM_TYPE_ARTIFACT.equals(regionWords[w].getTextStreamType()) || ImWord.TEXT_STREAM_TYPE_PAGE_TITLE.equals(regionWords[w].getTextStreamType())) && ((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS)))
 				continue;
@@ -1077,25 +1132,32 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		}
 		
 		//	annotate tables
-		ImRegion[] regions = region.getPage().getRegions();
-		for (int r = 0; r < regions.length; r++) {
-			if (!TABLE_ANNOTATION_TYPE.equals(regions[r].getType()))
-				continue;
-			
-			//	we already have this one
-			if (regions[r] == region)
-				continue;
-			
-			//	annotate table if it's within range
-			if (region.bounds.includes(regions[r].bounds, false))
-				this.annotateTableStructure(regions[r]);
+		if (!excludeTables) {
+			ImRegion[] regions = region.getPage().getRegions();
+			for (int r = 0; r < regions.length; r++) {
+				if (!TABLE_ANNOTATION_TYPE.equals(regions[r].getType()))
+					continue;
+				
+				//	we already have this one
+				if (regions[r] == region)
+					continue;
+				
+				//	annotate table if it's within range
+				if (region.bounds.includes(regions[r].bounds, false))
+					this.annotateTableStructure(regions[r]);
+			}
 		}
+		
+		//	write through included configuration (annotating words makes sense only now)
+		this.setShowTokensAsWordsAnnotations((configFlags & SHOW_TOKENS_AS_WORD_ANNOTATIONS) != 0);
+		this.setUseRandomAnnotationIDs((configFlags & USE_RANDOM_ANNOTATION_IDS) != 0);
 	}
 	
-	//	represent a table with annotations TODO figure out where to put these constants
+	//	represent a table with annotations
 	private void annotateTableStructure(ImRegion table) {
 		this.addAnnotation(table);
 		ImRegion[] rows = table.getRegions(ImRegion.TABLE_ROW_TYPE);
+		Arrays.sort(rows, ImUtils.topDownOrder);
 		for (int r = 0; r < rows.length; r++) {
 			ImWord[] rowWords = rows[r].getWords();
 			if (rowWords.length != 0) {
@@ -1103,6 +1165,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 				this.addAnnotation(rows[r], rowWords);
 			}
 			ImRegion[] rowCells = rows[r].getRegions(ImRegion.TABLE_CELL_TYPE);
+			Arrays.sort(rowCells, ImUtils.leftRightOrder);
 			for (int c = 0; c < rowCells.length; c++) {
 				ImWord[] cellWords = rowCells[c].getWords();
 				if (cellWords.length != 0) {
@@ -1112,45 +1175,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			}
 		}
 	}
-//	/**
-//	 * Test whether or not this wrapper is showing regions as annotations.
-//	 * @return true if tokens are shown as word annotations
-//	 */
-//	public boolean isShowingRegionsAsAnnotations() {
-//		return (this.regionAnnotationBaseAttic == null);
-//	}
-//	
-//	/**
-//	 * Switch showing regions as word annotations on or off.
-//	 * @param sraa show regions as annotations?
-//	 */
-//	public void setShowRegionsAsAnnotations(boolean sraa) {
-//		
-//		//	nothing to do
-//		if ((this.regionAnnotationBaseAttic == null) == sraa)
-//			return;
-//		
-//		//	integrate regions in annotation infrastructure, and clear attic
-//		if (sraa) {
-//			while (this.regionAnnotationBaseAttic.size() != 0)
-//				this.indexAnnotationBase((ImAnnotationBase) this.regionAnnotationBaseAttic.removeFirst());
-//			this.regionAnnotationBaseAttic = null;
-//		}
-//		
-//		//	remove regions from annotation infrastructure, and store them in attic
-//		else {
-//			this.regionAnnotationBaseAttic = new LinkedList();
-//			for (int a = (this.annotations.size()-1); -1 < a; a--) {
-//				ImAnnotationBase base = ((ImAnnotationBase) this.annotations.get(a));
-//				if (base.rData != null) {
-//					this.annotations.remove(a);
-//					unIndexAnnotationBase(((ArrayList) this.annotationsByType.get(base.getType())), base, annotationBaseOrder);
-//					this.regionAnnotationBaseAttic.addFirst(base);
-//				}
-//			}
-//		}
-//	}
-//	
+	
 	/**
 	 * Test whether or not this wrapper is showing tokens as word annotations.
 	 * @return true if tokens are shown as word annotations
@@ -1240,7 +1265,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	private void addAnnotation(ImRegion region, ImWord[] regionWords) {
 		if (regionWords.length == 0)
 			return;
-		this.indexAnnotationBase(new ImAnnotationBase(region, regionWords));
+		this.indexAnnotationBase(this.getAnnotationBase(region, regionWords));
 	}
 	private void indexAnnotationBase(ImAnnotationBase base) {
 		indexAnnotationBase(this.annotations, base, this.typedAnnotationBaseOrder);
@@ -1250,6 +1275,10 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			this.annotationsByType.put(base.getType(), typeAnnots);
 		}
 		indexAnnotationBase(typeAnnots, base, annotationBaseOrder);
+	}
+	private void annotationTypeChanged(ImAnnotationBase imab, String oldType) {
+		this.unIndexAnnotationBase(imab, oldType);
+		this.indexAnnotationBase(imab);
 	}
 	private static void indexAnnotationBase(ArrayList annotList, ImAnnotationBase base, Comparator annotBaseOrder) {
 		if (annotList.isEmpty()) {
@@ -1425,7 +1454,8 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	
 	public MutableAnnotation addAnnotation(Annotation annotation) {
 		MutableAnnotation annot = this.addAnnotation(annotation.getType(), annotation.getStartIndex(), annotation.size());
-		annot.copyAttributes(annotation);
+		if (annot != null) // can happen for attempts to annotate across two text streams
+			annot.copyAttributes(annotation);
 		return annot;
 	}
 	public MutableAnnotation addAnnotation(String type, int startIndex, int size) {
@@ -1442,9 +1472,22 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		//	get first and last words
 		ImWord firstWord = ((ImWord) firstToken.imWords.get(0));
 		ImWord lastWord = ((ImWord) lastToken.imWords.get(lastToken.imWords.size()-1));
+//		
+//		//	make sure to not add annotations that already exist from regions (client code working against interface cannot tell difference)
+//		String eImabID = (type + "@" + firstWord.getLocalID() + "-" + lastWord.getLocalID());
+//		if (this.emulatedAnnotationBasesByIDs.containsKey(eImabID)) {
+//			System.out.println("Not double-annotating emulated annotation " + eImabID);
+//			ImAnnotationBase eImab = ((ImAnnotationBase) this.emulatedAnnotationBasesByIDs.get(eImabID));
+//			return this.getAnnotationView(eImab, sourceBase);
+//		}
+//		System.out.println("Annotating " + eImabID);
+//		
+//		WAS SORTING PROBLEM IN DocumentEditor WRITE THROUGH, AS THIS WRAPPER DOESN'T SORT ANNOTATIONS JUST LIKE ORIGINAL DATA MODEL
 		
-		//	add annotation to backing document
+		//	add annotation to backing document (might go wrong if words belong to different logical text streams)
 		ImAnnotation ima = this.doc.addAnnotation(firstWord, lastWord, type);
+		if (ima == null)
+			return null;
 		
 		//	add annotation to wrapper registers
 		ImAnnotationBase imab = this.getAnnotationBase(ima);
@@ -1460,6 +1503,18 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			this.annotationBasesByAnnotations.put(ima, imab);
 		}
 		return imab;
+	}
+	private ImAnnotationBase getAnnotationBase(ImRegion imr, ImWord[] imrWords) {
+		String imrKey = this.getRegionKey(imr, null);
+		ImAnnotationBase imab = ((ImAnnotationBase) this.annotationBasesByAnnotations.get(imrKey));
+		if (imab == null) {
+			imab = new ImAnnotationBase(imr, imrWords);
+			this.annotationBasesByRegions.put(imrKey, imab);
+		}
+		return imab;
+	}
+	private String getRegionKey(ImRegion imr, String oldType) {
+		return (((oldType == null) ? imr.getType() : oldType) + "@" + imr.pageId + "." + imr.bounds);
 	}
 	private ImAnnotationView getAnnotationView(ImAnnotationBase base, ImAnnotationBase sourceBase) {
 		HashMap sourceBasedViews = ((HashMap) this.annotationViewsByBases.get(sourceBase));
@@ -1486,7 +1541,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		//	remove base from indexes
 		this.dropAnnotationView((ImAnnotationView) annotation);
 		this.dropAnnotationBase(base);
-		this.unIndexAnnotationBase(base);
+		this.unIndexAnnotationBase(base, null);
 		
 		//	remove annotation or region from wrapped document
 		if (base.aData != null)
@@ -1501,6 +1556,8 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	private void dropAnnotationBase(ImAnnotationBase imab) {
 		if (imab.aData != null)
 			this.annotationBasesByAnnotations.remove(imab.aData);
+		else if (imab.rData != null)
+			this.annotationBasesByRegions.remove(this.getRegionKey(imab.rData, null));
 		this.annotationViewsByBases.remove(imab);
 	}
 	private void dropAnnotationView(ImAnnotationView iav) {
@@ -1508,9 +1565,12 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		if (sourceBasedViews != null)
 			sourceBasedViews.remove(iav.base);
 	}
-	private void unIndexAnnotationBase(ImAnnotationBase base) {
+	private void unIndexAnnotationBase(ImAnnotationBase base, String oldType) {
 		unIndexAnnotationBase(this.annotations, base, this.typedAnnotationBaseOrder);
-		unIndexAnnotationBase(((ArrayList) this.annotationsByType.get(base.getType())), base, annotationBaseOrder);
+		ArrayList typeAnnots = ((ArrayList) this.annotationsByType.get((oldType == null) ? base.getType() : oldType));
+		unIndexAnnotationBase(typeAnnots, base, annotationBaseOrder);
+		if (typeAnnots.isEmpty())
+			this.annotationsByType.remove((oldType == null) ? base.getType() : oldType);
 	}
 	private static void unIndexAnnotationBase(ArrayList annotationList, ImAnnotationBase base, Comparator annotationBaseOrder) {
 		if ((annotationList == null) || annotationList.isEmpty())

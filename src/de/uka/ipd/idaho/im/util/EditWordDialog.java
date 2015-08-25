@@ -85,7 +85,6 @@ class EditWordDialog extends JDialog implements ImagingConstants {
 	private void init() {
 		this.setUndecorated(true);
 		Dimension size = new Dimension(Math.max((this.word.bounds.right - this.word.bounds.left), 50), ((this.word.bounds.bottom - this.word.bounds.top) + 65));
-		System.out.println("EditWordDialog size is " + size);
 		this.setSize(size);
 		this.getContentPane().setLayout(new BorderLayout());
 		
@@ -129,17 +128,6 @@ class EditWordDialog extends JDialog implements ImagingConstants {
 				if (ke.getKeyCode() == KeyEvent.VK_ESCAPE)
 					dispose();
 				else if (ke.getKeyCode() == KeyEvent.VK_ENTER) {
-					word.setString(wordString.getText().trim());
-					if (bold.isSelected() != word.hasAttribute(BOLD_ATTRIBUTE)) {
-						if (bold.isSelected())
-							word.setAttribute(BOLD_ATTRIBUTE);
-						else word.removeAttribute(BOLD_ATTRIBUTE);
-					}
-					if (italics.isSelected() != word.hasAttribute(ITALICS_ATTRIBUTE)) {
-						if (italics.isSelected())
-							word.setAttribute(ITALICS_ATTRIBUTE);
-						else word.removeAttribute(ITALICS_ATTRIBUTE);
-					}
 					committed = true;
 					dispose();
 				}
@@ -160,27 +148,27 @@ class EditWordDialog extends JDialog implements ImagingConstants {
 			public void actionPerformed(ActionEvent ae) {
 				if (symbolTable == null)
 					symbolTable = SymbolTable.getSharedSymbolTable();
-					symbolTable.setOwner(new SymbolTable.Owner() {
-						public void useSymbol(char symbol) {
-							StringBuffer sb = new StringBuffer(EditWordDialog.this.wordString.getText());
-							int cp = EditWordDialog.this.wordString.getCaretPosition();
-							sb.insert(cp, symbol);
-							EditWordDialog.this.wordString.setText(sb.toString());
-							EditWordDialog.this.wordString.setCaretPosition(++cp);
-						}
-						public void symbolTableClosed() {
-							symbolTable = null;
-						}
-						public Dimension getSize() {
-							return EditWordDialog.this.getSize();
-						}
-						public Point getLocation() {
-							return EditWordDialog.this.getLocation();
-						}
-						public Color getColor() {
-							return EditWordDialog.this.wordColor;
-						}
-					});
+				symbolTable.setOwner(new SymbolTable.Owner() {
+					public void useSymbol(char symbol) {
+						StringBuffer sb = new StringBuffer(EditWordDialog.this.wordString.getText());
+						int cp = EditWordDialog.this.wordString.getCaretPosition();
+						sb.insert(cp, symbol);
+						EditWordDialog.this.wordString.setText(sb.toString());
+						EditWordDialog.this.wordString.setCaretPosition(++cp);
+					}
+					public void symbolTableClosed() {
+						symbolTable = null;
+					}
+					public Dimension getSize() {
+						return EditWordDialog.this.getSize();
+					}
+					public Point getLocation() {
+						return EditWordDialog.this.getLocation();
+					}
+					public Color getColor() {
+						return EditWordDialog.this.wordColor;
+					}
+				});
 				symbolTable.open();
 			}
 		});
@@ -194,17 +182,17 @@ class EditWordDialog extends JDialog implements ImagingConstants {
 		ok.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(Color.WHITE, 2), BorderFactory.createLineBorder(this.wordColor, 1)));
 		ok.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent ae) {
-				word.setString(wordString.getText().trim());
-				if (bold.isSelected() != word.hasAttribute(BOLD_ATTRIBUTE)) {
-					if (bold.isSelected())
-						word.setAttribute(BOLD_ATTRIBUTE);
-					else word.removeAttribute(BOLD_ATTRIBUTE);
-				}
-				if (italics.isSelected() != word.hasAttribute(ITALICS_ATTRIBUTE)) {
-					if (italics.isSelected())
-						word.setAttribute(ITALICS_ATTRIBUTE);
-					else word.removeAttribute(ITALICS_ATTRIBUTE);
-				}
+//				word.setString(wordString.getText().trim());
+//				if (bold.isSelected() != word.hasAttribute(BOLD_ATTRIBUTE)) {
+//					if (bold.isSelected())
+//						word.setAttribute(BOLD_ATTRIBUTE);
+//					else word.removeAttribute(BOLD_ATTRIBUTE);
+//				}
+//				if (italics.isSelected() != word.hasAttribute(ITALICS_ATTRIBUTE)) {
+//					if (italics.isSelected())
+//						word.setAttribute(ITALICS_ATTRIBUTE);
+//					else word.removeAttribute(ITALICS_ATTRIBUTE);
+//				}
 				committed = true;
 				dispose();
 			}
@@ -228,6 +216,17 @@ class EditWordDialog extends JDialog implements ImagingConstants {
 		this.getContentPane().add(dp, BorderLayout.CENTER);
 		this.getContentPane().add(sbp, BorderLayout.SOUTH);
 	}
+	
+	String getString() {
+		return this.wordString.getText().trim();
+	}
+	boolean isBold() {
+		return this.bold.isSelected();
+	}
+	boolean isItalics() {
+		return this.italics.isSelected();
+	}
+	
 	public void dispose() {
 		if (this.symbolTable != null)
 			this.symbolTable.close();

@@ -5,7 +5,7 @@
 -->
 
 <project name="import">
-	<target name="fetch" depends="fetch-su,fetch-hxu,fetch-gamta,fetch-eio,fetch-iclibs,fetch-gia" />
+	<target name="fetch" depends="fetch-su,fetch-hxu,fetch-gamta,fetch-eio,fetch-iclibs,fetch-gia,fetch-ds" />
 	
 	
 	<target name="check-fetch-su" unless="su.exists">
@@ -41,6 +41,13 @@
 	</target>
 	<target name="fetch-gia" depends="check-fetch-gia" if="${gia.exists}">
     	<copy file="../idaho-extensions/dist/GamtaImagingAPI.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+	</target>
+	
+	<target name="check-fetch-ds" unless="ds.exists">
+		<available property="ds.exists" file="../idaho-extensions/dist/DocumentStyleUtils.jar"/>
+	</target>
+	<target name="fetch-ds" depends="check-fetch-ds" if="${ds.exists}">
+    	<copy file="../idaho-extensions/dist/DocumentStyleUtils.jar" todir="${lib.home}" overwrite="true" verbose="false" />
 	</target>
 	
 	<!--target name="check-fetch-bru" unless="bru.exists">

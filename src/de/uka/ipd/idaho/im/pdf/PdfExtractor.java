@@ -37,13 +37,12 @@ import java.awt.font.TextLayout;
 import java.awt.geom.AffineTransform;
 import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
+import java.awt.geom.Rectangle2D.Float;
 import java.awt.image.BufferedImage;
-import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
-import java.io.StringReader;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -56,6 +55,7 @@ import java.util.Hashtable;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.Map;
+import java.util.Set;
 import java.util.Vector;
 
 import org.icepdf.core.exceptions.PDFException;
@@ -72,6 +72,7 @@ import org.icepdf.core.pobjects.Stream;
 import org.icepdf.core.pobjects.filters.FlateDecode;
 import org.icepdf.core.pobjects.graphics.text.LineText;
 import org.icepdf.core.pobjects.graphics.text.PageText;
+import org.icepdf.core.pobjects.graphics.text.WordText;
 import org.icepdf.core.util.GraphicsRenderingHints;
 import org.icepdf.core.util.Library;
 import org.jpedal.jbig2.JBIG2Decoder;
@@ -82,9 +83,11 @@ import de.uka.ipd.idaho.gamta.Gamta;
 import de.uka.ipd.idaho.gamta.MutableAnnotation;
 import de.uka.ipd.idaho.gamta.TokenSequence;
 import de.uka.ipd.idaho.gamta.Tokenizer;
+import de.uka.ipd.idaho.gamta.defaultImplementation.RegExTokenizer;
 import de.uka.ipd.idaho.gamta.util.ParallelJobRunner;
 import de.uka.ipd.idaho.gamta.util.ParallelJobRunner.ParallelFor;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
+import de.uka.ipd.idaho.gamta.util.ProgressMonitor.CascadingProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor.SynchronizedProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.constants.TableConstants;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
@@ -100,9 +103,7 @@ import de.uka.ipd.idaho.im.ImSupplement;
 import de.uka.ipd.idaho.im.ImWord;
 import de.uka.ipd.idaho.im.analysis.Imaging;
 import de.uka.ipd.idaho.im.analysis.Imaging.AnalysisImage;
-import de.uka.ipd.idaho.im.analysis.Imaging.Complex;
 import de.uka.ipd.idaho.im.analysis.Imaging.ImagePartRectangle;
-import de.uka.ipd.idaho.im.analysis.Imaging.Peak;
 import de.uka.ipd.idaho.im.analysis.PageAnalysis;
 import de.uka.ipd.idaho.im.analysis.PageImageAnalysis;
 import de.uka.ipd.idaho.im.analysis.PageImageAnalysis.Block;
@@ -111,14 +112,16 @@ import de.uka.ipd.idaho.im.analysis.PageImageAnalysis.Region;
 import de.uka.ipd.idaho.im.analysis.PageImageAnalysis.TableCell;
 import de.uka.ipd.idaho.im.analysis.PageImageAnalysis.TableRow;
 import de.uka.ipd.idaho.im.analysis.PageImageAnalysis.Word;
+import de.uka.ipd.idaho.im.analysis.WordImageAnalysis;
 import de.uka.ipd.idaho.im.ocr.OcrEngine;
+import de.uka.ipd.idaho.im.ocr.OcrEngine.OcrInstanceUnavailableException;
 import de.uka.ipd.idaho.im.pdf.PdfParser.PFigure;
-import de.uka.ipd.idaho.im.pdf.PdfParser.PImage;
+import de.uka.ipd.idaho.im.pdf.PdfParser.PPageContent;
 import de.uka.ipd.idaho.im.pdf.PdfParser.PStream;
 import de.uka.ipd.idaho.im.pdf.PdfParser.PWord;
 import de.uka.ipd.idaho.im.pdf.test.PdfExtractorTest;
 import de.uka.ipd.idaho.im.utilities.ImageDisplayDialog;
-import de.uka.ipd.idaho.stringUtils.StringIndex;
+import de.uka.ipd.idaho.plugins.docStyle.DocumentStyle;
 
 /**
  * Utility for extracting page images and text from a PDF file.
@@ -297,7 +300,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		
 		//	check arguments
 		if (doc == null)
-			doc = new ImDocument(getChecksum(pdfBytes));
+			doc = this.doCreateDocument(getChecksum(pdfBytes));
 		if (pdfDoc == null) try {
 			pdfDoc = new Document();
 			pdfDoc.setInputStream(new ByteArrayInputStream(pdfBytes), "");
@@ -314,25 +317,424 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		//	preserve source PDF in supplement
 		ImSupplement.Source.createSource(doc, "application/pdf", pdfBytes);
 		
-		/*
-		 * try image loading first, and use text loading only if image loading
-		 * fails, as if both images and text are present, the text may well be
-		 * some crude OCR we do not want.
-		 */
-		try {
-			return this.loadImagePdf(doc, pdfDoc, pdfBytes, scaleFactor, pm);
+		//	finally ...
+		return this.doLoadGenericPdf(doc, pdfDoc, pdfBytes, scaleFactor, pm);
+//		
+//		/*
+//		 * try image loading first, and use text loading only if image loading
+//		 * fails, as if both images and text are present, the text may well be
+//		 * some crude OCR we do not want.
+//		 */
+//		try {
+//			return this.loadImagePdf(doc, pdfDoc, pdfBytes, true, scaleFactor, pm);
+//		}
+//		catch (IOException ioe) {
+//			ioe.printStackTrace(System.out);
+//			pm.setInfo("Could not find images for all pages, loading PDF as text");
+//			return this.loadTextPdf(doc, pdfDoc, pdfBytes, pm);
+//		}
+	}
+	
+	private ImDocument doLoadGenericPdf(final ImDocument doc, final Document pdfDoc, byte[] pdfBytes, int scaleFactor, ProgressMonitor pm) throws IOException {
+		
+		//	build progress monitor with synchronized methods instead of synchronizing in-code
+		SynchronizedProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? ((SynchronizedProgressMonitor) pm) : new SynchronizedProgressMonitor(pm));
+		
+		//	load document structure (IcePDF is better at that ...)
+		Catalog catalog = pdfDoc.getCatalog();
+		
+		//	parse PDF
+		HashMap objects = PdfParser.getObjects(pdfBytes);
+		
+		//	decrypt streams and strings
+		PdfParser.decryptObjects(objects, pdfDoc.getSecurityManager());
+		
+		//	get basic page data (takes progress to 30%)
+		PPageData[] pData = this.getPdfPageData(doc, true, catalog.getPageTree(), objects, spm);
+		
+		//	distinguish scanned from born-digital by number of figures and words per page ...
+		//	... and by percentage of words overlapping with figures
+		spm.setInfo("Assessing if scanned or born-digital");
+		int pageCount = 0;
+		int wordCount = 0;
+		int figureCount = 0;
+		int wordInFigureCount = 0;
+		for (int p = 0; p < pData.length; p++) {
+			
+			//	nothing to work with
+			if (pData[p] == null)
+				continue;
+			
+			//	count words and figures
+			pageCount++;
+			wordCount += pData[p].words.length;
+			figureCount += pData[p].figures.length;
+			
+			//	any use assessing overlap?
+			if ((pData[p].words.length * pData[p].figures.length) == 0)
+				continue;
+			
+			//	assess overlap of words with figures
+			for (int w = 0; w < pData[p].words.length; w++) {
+				for (int f = 0; f < pData[p].figures.length; f++)
+					if (overlapsConsiderably(pData[p].words[w].bounds, pData[p].figures[f].bounds)) {
+						wordInFigureCount++;
+						break;
+					}
+			}
 		}
-		catch (IOException ioe) {
-			ioe.printStackTrace(System.out);
-			pm.setInfo("Could not find images for all pages, loading PDF as text");
-			return this.loadTextPdf(doc, pdfDoc, pdfBytes, pm);
+		spm.setInfo(" - found " + wordCount + " words in " + pageCount + " pages");
+		spm.setInfo(" - found " + figureCount + " figures in " + pageCount + " pages");
+		spm.setInfo(" - found " + wordInFigureCount + " of " + wordCount + " words lying inside figures");
+		
+		//	do we have a text PDF or a scanned PDF?
+		boolean isTextPdf;
+		if (figureCount < pageCount)
+			isTextPdf = true;
+		else if (wordCount < (pageCount * 25))
+			isTextPdf = false;
+		else isTextPdf = ((2 * wordInFigureCount) < wordCount);
+		spm.setInfo(" ==> " + (isTextPdf ? "born-digital" : "scanned"));
+		
+		//	fill pages
+		if (isTextPdf)
+			this.addTextPdfPages(doc, pData, pdfDoc, objects, spm);
+		else this.addImagePdfPages(doc, pData, pdfDoc, catalog.getPageTree(), objects, true, scaleFactor, spm);
+		
+		//	finally ...
+		return doc;
+	}
+	
+	private static class PPageData {
+		final int p;
+		final Page pdfPage;
+		final Rectangle2D.Float pdfPageBox;
+		final int rotate;
+		final Hashtable pdfPageResources;
+		PWord[] words = null;
+		PFigure[] figures = null;
+		PPageData(int p, Page pdfPage, Float pdfPageBox, int rotate, Hashtable pdfPageResources, PWord[] words, PFigure[] figures) {
+			this.p = p;
+			this.pdfPage = pdfPage;
+			this.pdfPageBox = pdfPageBox;
+			this.rotate = rotate;
+			this.words = words;
+			this.figures = figures;
+			this.pdfPageResources = pdfPageResources;
 		}
+	}
+	
+	private PPageData[] getPdfPageData(final ImDocument doc, final boolean getWords, final PageTree pageTree, final Map objects, ProgressMonitor pm) throws IOException {
+		
+		//	build progress monitor with synchronized methods instead of synchronizing in-code
+		final ProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? pm : new SynchronizedProgressMonitor(pm));
+		
+		//	get tokenizer to check and split words with
+		final Tokenizer tokenizer = ((Tokenizer) doc.getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER));
+		
+		//	prepare working in parallel
+		ParallelFor pf;
+		
+		//	extract page objects
+		spm.setStep("Extracting page content");
+		spm.setBaseProgress(0);
+		spm.setProgress(0);
+		spm.setMaxProgress(5);
+		final Page[] pdfPages = new Page[pageTree.getNumberOfPages()];
+		final byte[][] pdfPageContents = new byte[pageTree.getNumberOfPages()][];
+		final Hashtable[] pdfPageResources = new Hashtable[pageTree.getNumberOfPages()];
+		pf = new ParallelFor() {
+			public void doFor(int p) throws Exception {
+				
+				//	update status display (might be inaccurate, but better than lock escalation)
+				spm.setInfo("Importing page " + p + " of " + pdfPages.length);
+				spm.setProgress((p * 100) / pdfPages.length);
+				
+				//	get page bounding box
+				pdfPages[p] = pageTree.getPage(p, "");
+				
+				//	extract page contents to recover layout information
+				System.out.println("Page entries are " + pdfPages[p].getEntries());
+				Object contentsObj = PdfParser.getObject(pdfPages[p].getEntries(), "Contents", objects);
+				if (contentsObj == null)
+					spm.setInfo(" --> content not found");
+				else {
+					spm.setInfo(" --> got content");
+					ByteArrayOutputStream baos = new ByteArrayOutputStream();
+					if (contentsObj instanceof PStream) {
+						Object filter = ((PStream) contentsObj).params.get("Filter");
+						spm.setInfo("   --> stream content, filter is " + filter + " (from " + ((PStream) contentsObj).params + ")");
+						PdfParser.decode(filter, ((PStream) contentsObj).bytes, ((PStream) contentsObj).params, baos, objects);
+					}
+					else if (contentsObj instanceof Vector) {
+						spm.setInfo("   --> array content");
+						for (Iterator cit = ((Vector) contentsObj).iterator(); cit.hasNext();) {
+							Object contentObj = PdfParser.dereference(cit.next(), objects);
+							if (contentObj instanceof PStream) {
+								Object filter = ((PStream) contentObj).params.get("Filter");
+								if (filter == null)
+									continue;
+								spm.setInfo("   --> stream content part, filter is " + filter + " (from " + ((PStream) contentObj).params + ")");
+								PdfParser.decode(filter, ((PStream) contentObj).bytes, ((PStream) contentObj).params, baos, objects);
+							}
+						}
+					}
+					pdfPageContents[p] = baos.toByteArray();
+					
+					Object resourcesObj = PdfParser.getObject(pdfPages[p].getEntries(), "Resources", objects);
+					if (resourcesObj == null)
+						spm.setInfo(" --> resources not found");
+					else {
+						resourcesObj = PdfParser.dereference(resourcesObj, objects);
+						spm.setInfo(" --> resources are " + resourcesObj);
+						pdfPageResources[p] = ((Hashtable) resourcesObj);
+					}
+				}
+			}
+		};
+		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pdfPages.length : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
+		spm.setProgress(100);
+		
+		//	check errors
+		this.checkException(pf);
+		
+		//	assess which chars in which fonts are actually used (no use decoding all the others, that do actually exist in some PDFs)
+		if (getWords) {
+			spm.setStep("Assessing font char usage");
+			spm.setBaseProgress(5);
+			spm.setProgress(0);
+			spm.setMaxProgress(10);
+			pf = new ParallelFor() {
+				public void doFor(int p) throws Exception {
+					
+					//	nothing to work with
+					if ((pdfPageContents[p] == null) || (pdfPageResources[p] == null))
+						return;
+					
+					//	update status display (might be inaccurate, but better than lock escalation)
+					spm.setInfo("Assessing font char usage in page " + p + " of " + pdfPages.length);
+					spm.setProgress((p * 100) / pdfPages.length);
+					
+					//	assess char usage
+					PdfParser.getPageWordChars(pdfPages[p].getEntries(), pdfPageContents[p], pdfPageResources[p], objects, spm);
+				}
+			};
+			ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pdfPages.length : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
+			spm.setProgress(100);
+			
+			//	check errors
+			this.checkException(pf);
+		}
+		
+		//	extract page objects
+		spm.setStep("Importing page words");
+		spm.setBaseProgress(10);
+		spm.setProgress(0);
+		spm.setMaxProgress(30);
+		final PPageData[] pData = new PPageData[pdfPages.length];
+		pf = new ParallelFor() {
+			public void doFor(int p) throws Exception {
+				
+				//	nothing to work with
+				if ((pdfPageContents[p] == null) || (pdfPageResources[p] == null))
+					return;
+				
+				//	update status display (might be inaccurate, but better than lock escalation)
+				spm.setInfo("Importing page " + p + " of " + pdfPages.length);
+				spm.setProgress((p * 100) / pdfPages.length);
+				
+				//	get page bounding box
+				Rectangle2D.Float pdfPageBox = pdfPages[p].getCropBox();
+				if (pdfPageBox == null)
+					pdfPageBox = pdfPages[p].getMediaBox();
+				
+				//	check rotation
+				Object rotateObj = PdfParser.dereference(pdfPages[p].getEntries().get("Rotate"), objects);
+				int rotate = ((rotateObj instanceof Number) ? ((Number) rotateObj).intValue() : 0);
+				spm.setInfo(" - page rotation is " + rotate);
+				if ((rotate == 90) || (rotate == -90) || (rotate == 270) || (rotate == -270))
+					pdfPageBox = new Rectangle2D.Float(0, 0, pdfPageBox.height, pdfPageBox.width);
+				
+				//	extract page contents (words only if required)
+				if (getWords) {
+					PPageContent pContent = PdfParser.getPageContent(pdfPages[p].getEntries(), pdfPageContents[p], pdfPageResources[p], objects, tokenizer, spm);
+					System.out.println(" --> extracted " + pContent.words.length + " words and " + pContent.figures.length + " figures");
+					for (int w = 0; w < pContent.words.length; w++)
+						System.out.println("   - " + pContent.words[w]);
+					for (int f = 0; f < pContent.figures.length; f++)
+						System.out.println("   - " + pContent.figures[f]);
+					spm.setInfo(" - got page content with " + pContent.words.length + " words and " + pContent.figures.length + " figures");
+					
+					//	store page content
+					pData[p] = new PPageData(p, pdfPages[p], pdfPageBox, rotate, pdfPageResources[p], pContent.words, pContent.figures);
+				}
+				else {
+					PFigure[] pFigures = PdfParser.getPageFigures(pdfPages[p].getEntries(), pdfPageContents[p], pdfPageResources[p], objects, spm);
+					System.out.println(" --> extracted " + pFigures.length + " figures");
+					for (int f = 0; f < pFigures.length; f++)
+						System.out.println("   - " + pFigures[f]);
+					spm.setInfo(" - got page content with " + pFigures.length + " figures");
+					
+					//	store page content
+					pData[p] = new PPageData(p, pdfPages[p], pdfPageBox, rotate, pdfPageResources[p], new PWord[0], pFigures);
+				}
+			}
+		};
+		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pdfPages.length : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
+		spm.setProgress(100);
+		
+		//	check errors
+		this.checkException(pf);
+		
+		//	finally ...
+		return pData;
+	}
+	
+	private BufferedImage getFigureImage(ImDocument doc, PFigure pFigure, Document pdfDoc, Page pdfPage, int p, Rectangle2D.Float pdfPageBox, Hashtable xObjects, Map objects, float magnification, ProgressMonitor spm) throws IOException {
+		
+		//	resolve image names against XObject dictionary
+		Object pFigureKey = xObjects.get(pFigure.name);
+		spm.setInfo("     - reference is " + pFigureKey);
+		
+		//	get actual image object
+		Object pFigureData = PdfParser.dereference(pFigureKey, objects);
+		spm.setInfo("     - figure data is " + pFigureData);
+		if (!(pFigureData instanceof PStream)) {
+			spm.setInfo("   --> strange figure data");
+			return null;
+		}
+		
+		//	decode PStream to image
+		BufferedImage pFigureImage = decodeImage(pdfPage, ((PStream) pFigureData).params, ((PStream) pFigureData).bytes, objects);
+		if (pFigureImage == null) {
+			spm.setInfo("   --> could not decode figure");
+			return null;
+		}
+		spm.setInfo("     - got figure sized " + pFigureImage.getWidth() + " x " + pFigureImage.getHeight() + ", type is " + pFigureImage.getType());
+		
+		//	check rotation
+		Object rotateObj = PdfParser.dereference(pdfPage.getEntries().get("Rotate"), objects);
+		int rotate = ((rotateObj instanceof Number) ? ((Number) rotateObj).intValue() : 0);
+		spm.setInfo("     - page rotation is " + rotate);
+		
+		//	catch large rotations (above some 15°) if countered by page rotation
+		if ((Math.abs(pFigure.rotation) > (Math.PI / 12)) && (Math.abs(((180.0 / Math.PI) * pFigure.rotation) + rotate) < 1))
+			spm.setInfo("     - figure not rotated by " + ((180.0 / Math.PI) * pFigure.rotation) + "°");
+		
+		//	interpret figure rotation (if above some 0.1°)
+		else if (Math.abs(pFigure.rotation) > 0.0005) {
+			pFigureImage = Imaging.rotateImage(pFigureImage, pFigure.rotation);
+			spm.setInfo("     - figure rotated by " + ((180.0 / Math.PI) * pFigure.rotation) + "°");
+		}
+		
+		//	correct right side left ...
+		else if (pFigure.rightSideLeft) {
+			BufferedImage fImage = new BufferedImage(pFigureImage.getWidth(), pFigureImage.getHeight(), BufferedImage.TYPE_INT_ARGB);
+			Graphics2D fImageGraphics = fImage.createGraphics();
+			fImageGraphics.setColor(Color.WHITE);
+			fImageGraphics.fillRect(0, 0, fImage.getWidth(), fImage.getHeight());
+			fImageGraphics.translate(fImage.getWidth(), 0);
+			fImageGraphics.scale(-1, 1);
+			fImageGraphics.drawRenderedImage(pFigureImage, null);
+			fImageGraphics.dispose();
+			pFigureImage = fImage;
+			spm.setInfo("     - right side left flip corrected");
+		}
+		
+		//	... or upside down
+		else if (pFigure.upsideDown) {
+			BufferedImage fImage = new BufferedImage(pFigureImage.getWidth(), pFigureImage.getHeight(), BufferedImage.TYPE_INT_ARGB);
+			Graphics2D fImageGraphics = fImage.createGraphics();
+			fImageGraphics.setColor(Color.WHITE);
+			fImageGraphics.fillRect(0, 0, fImage.getWidth(), fImage.getHeight());
+			fImageGraphics.translate(0, fImage.getHeight());
+			fImageGraphics.scale(1, -1);
+			fImageGraphics.drawRenderedImage(pFigureImage, null);
+			fImageGraphics.dispose();
+			pFigureImage = fImage;
+			spm.setInfo("     - upside down flip corrected");
+		}
+		
+		//	paint image on white canvas for normalization
+		else {
+			BufferedImage fImage = new BufferedImage(pFigureImage.getWidth(), pFigureImage.getHeight(), BufferedImage.TYPE_INT_ARGB);
+			Graphics2D fImageGraphics = fImage.createGraphics();
+			fImageGraphics.setColor(Color.WHITE);
+			fImageGraphics.fillRect(0, 0, fImage.getWidth(), fImage.getHeight());
+			fImageGraphics.drawRenderedImage(pFigureImage, null);
+			fImageGraphics.dispose();
+			pFigureImage = fImage;
+			spm.setInfo("     - image type corrected");
+		}
+		
+		//	compute figure resolution
+		float dpiRatio = ((float) ((((float) pFigureImage.getWidth()) / pFigure.bounds.getWidth()) + (((float) pFigureImage.getHeight()) / pFigure.bounds.getHeight())) / 2);
+		float rawDpi = dpiRatio * defaultDpi;
+		int pFigureDpi = (Math.round(rawDpi / 10) * 10);
+		spm.setInfo("     - resolution computed as " + pFigureDpi + " DPI (" + rawDpi + ")");
+		
+		//	TODO if we're above 600 DPI, scale down half, third, etc., until at most 600 DPI
+		
+		//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
+		BoundingBox pFigureBox = this.getBoundingBox(pFigure.bounds, pdfPageBox, magnification, rotate);
+		spm.setInfo("     - rendering bounds are " + pFigureBox);
+		
+		Object csObj = PdfParser.dereference(((PStream) pFigureData).params.get("ColorSpace"), objects);
+		if (csObj != null) {
+			spm.setInfo("     - color space is " + csObj.toString());
+			/* If color space is DeviceCMYK, render page image to figure
+			 * resolution and cut out image: images with color space
+			 * DeviceCMYK come out somewhat differently colored than in
+			 * Acrobat, but we cannot seem to do anything about this -
+			 * IcePDF distorts them as well, if more in single image
+			 * rendering than in the page images it generates. */
+			if ("DeviceCMYK".equals(csObj.toString())) {
+				pFigureImage = extractFigureFromPageImage(pdfDoc, p, pdfPageBox, rotate, pFigureDpi, pFigure.bounds);
+				spm.setInfo("     --> figure re-rendered as part of page image");
+			}
+			/* If color space is Separation, values represent color
+			 * intensity rather than brightness, which means 1.0 is
+			 * black and 0.0 is white. This means the have to invert
+			 * brightness to get the actual image. IcePDF gets this
+			 * wrong as well, with images coming out white on black
+			 * rather than the other way around, so we have to do the
+			 * correction ourselves. */
+			else if ((csObj instanceof Vector) && (((Vector) csObj).size() == 4) && ((Vector) csObj).get(0).equals("Separation")) {
+				invertFigureBrightness(pFigureImage);
+				spm.setInfo("     --> figure brightness inverted for additive 'Separation' color space");
+			}
+			/* If color space is Indexed, IcePDF seems to do a lot better
+			 * in page image rendering than in single-image rendering. */
+			else if ((csObj instanceof Vector) && (((Vector) csObj).size() == 4) && ((Vector) csObj).get(0).equals("Indexed")) {
+				pFigureImage = extractFigureFromPageImage(pdfDoc, p, pdfPageBox, rotate, pFigureDpi, pFigure.bounds);
+				spm.setInfo("     --> figure re-rendered as part of page image");
+			}
+		}
+		
+		//	if we're grayscale and extremely dark, invert white on black
+		this.correctInvertedGaryscale(pFigureImage);
+		
+		//	add figures as supplements to document if required (synchronized !!!)
+		if (doc != null) synchronized (doc) {
+			ImSupplement.Figure.createFigure(doc, p, pFigureDpi, pFigureImage, pFigureBox);
+		}
+		
+		//	finally ...
+		return pFigureImage;
 	}
 	
 	private static final int defaultDpi = 72; // default according to PDF specification
 	
-	private static final int defaultTextPdfPageImageDpi = 150; // looks a lot better
+	private static final int[] scaleUpDpi = {150, 200, 300, 400, 500, 600}; // steps for scaling up if scanned page images come out at 72 DPI
+	
+	/* using double screen DPI improves scaling behavior at common zoom levels */
+	private static final int defaultTextPdfPageImageDpi = (2 * 96); // looks a lot better
+//	private static final int defaultTextPdfPageImageDpi = 150; // looks a lot better
 	private static final int minAveragePageWords = 25; // this should be exceeded by every digital-born PDF
+	
+	//	A4 paper format in inches: 8.27 x 11.66
+	private static final float a4inchWidth = 8.27f;
+	private static final float a4inchHeigth = 11.66f;
 	
 	//	A5 paper format in inches: 5.83 × 8.27
 	private static final float a5inchWidth = 5.83f;
@@ -374,7 +776,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		
 		//	check arguments
 		if (doc == null)
-			doc = new ImDocument(getChecksum(pdfBytes));
+			doc = this.doCreateDocument(getChecksum(pdfBytes));
 		if (pdfDoc == null) try {
 			pdfDoc = new Document();
 			pdfDoc.setInputStream(new ByteArrayInputStream(pdfBytes), "");
@@ -395,21 +797,35 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		return this.doLoadTextPdf(doc, pdfDoc, pdfBytes, pm);
 	}
 	
-	private static final boolean DEBUG_EXTRACT_FIGURES = false;
+	private static final boolean DEBUG_EXTRACT_FIGURES = true;
+	private static final boolean DEBUG_MERGE_WORDS = false;
 	
 	private ImDocument doLoadTextPdf(final ImDocument doc, final Document pdfDoc, byte[] pdfBytes, ProgressMonitor pm) throws IOException {
 		
 		//	build progress monitor with synchronized methods instead of synchronizing in-code
-		final ProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? pm : new SynchronizedProgressMonitor(pm));
+		final SynchronizedProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? ((SynchronizedProgressMonitor) pm) : new SynchronizedProgressMonitor(pm));
 		
 		//	load document structure (IcePDF is better at that ...)
 		final Catalog catalog = pdfDoc.getCatalog();
-		final Library library = catalog.getLibrary();
-		final PageTree pageTree = catalog.getPageTree();
-		final float magnification = (((float) this.textPdfPageImageDpi) / defaultDpi);
 		
 		//	parse PDF
 		final HashMap objects = PdfParser.getObjects(pdfBytes);
+		
+		//	decrypt streams and strings
+		PdfParser.decryptObjects(objects, pdfDoc.getSecurityManager());
+		
+		//	get basic page data (takes progress to 30%)
+		final PPageData[] pData = this.getPdfPageData(doc, true, catalog.getPageTree(), objects, spm);
+		
+		//	fill pages
+		this.addTextPdfPages(doc, pData, pdfDoc, objects, spm);
+		
+		//	finally ...
+		return doc;
+	}
+	
+	private void addTextPdfPages(final ImDocument doc, final PPageData[] pData, final Document pdfDoc, final Map objects, final SynchronizedProgressMonitor spm) throws IOException {
+		final float magnification = (((float) this.textPdfPageImageDpi) / defaultDpi);
 		
 		//	get tokenizer to check and split words with
 		final Tokenizer tokenizer = ((Tokenizer) doc.getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER));
@@ -418,464 +834,34 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		ParallelFor pf;
 		
 		//	extract page objects
-		spm.setStep("Extracting page content");
-		spm.setBaseProgress(0);
+		spm.setStep("Sanitizing page words");
+		spm.setBaseProgress(30);
 		spm.setProgress(0);
-		spm.setMaxProgress(5);
-		final byte[][] pageContents = new byte[pageTree.getNumberOfPages()][];
-		final Hashtable[] pageResources = new Hashtable[pageTree.getNumberOfPages()];
+		spm.setMaxProgress(35);
 		pf = new ParallelFor() {
 			public void doFor(int p) throws Exception {
 				
+				//	nothing to work with
+				if ((pData[p] == null) || (pData[p].words == null) || (pData[p].words.length == 0))
+					return;
+				
 				//	update status display (might be inaccurate, but better than lock escalation)
-				spm.setInfo("Importing page " + p + " of " + pageTree.getNumberOfPages());
-				spm.setProgress((p * 100) / pageTree.getNumberOfPages());
+				spm.setProgress((p * 100) / pData.length);
 				
-				//	get page bounding box
-				Page page = pageTree.getPage(p, "");
-				
-				//	extract page contents to recover layout information
-				System.out.println("Page content is " + page.getEntries());
-				Object contentsObj = PdfParser.getObject(page.getEntries(), "Contents", objects);
-				if (contentsObj == null)
-					spm.setInfo(" --> content not found");
-				else {
-					spm.setInfo(" --> got content");
-					ByteArrayOutputStream baos = new ByteArrayOutputStream();
-					if (contentsObj instanceof PStream) {
-						Object filter = ((PStream) contentsObj).params.get("Filter");
-						spm.setInfo("   --> stream content, filter is " + filter + " (from " + ((PStream) contentsObj).params + ")");
-//						try {
-							PdfParser.decode(filter, ((PStream) contentsObj).bytes, ((PStream) contentsObj).params, baos, objects);
-//						} catch (Exception e) { pm.setInfo("   --> decoding failed: " + e.getMessage()); }
-					}
-					else if (contentsObj instanceof Vector) {
-						spm.setInfo("   --> array content");
-						for (Iterator cit = ((Vector) contentsObj).iterator(); cit.hasNext();) {
-							Object contentObj = PdfParser.dereference(cit.next(), objects);
-							if (contentObj instanceof PStream) {
-								Object filter = ((PStream) contentObj).params.get("Filter");
-								if (filter == null)
-									continue;
-								spm.setInfo("   --> stream content part, filter is " + filter + " (from " + ((PStream) contentObj).params + ")");
-//								try {
-									 PdfParser.decode(filter, ((PStream) contentObj).bytes, ((PStream) contentObj).params, baos, objects);
-//								} catch (Exception e) { pm.setInfo("   --> decoding failed: " + e.getMessage()); }
-							}
-						}
-					}
-					pageContents[p] = baos.toByteArray();
-					
-					Object resourcesObj = PdfParser.getObject(page.getEntries(), "Resources", objects);
-					if (resourcesObj == null)
-						spm.setInfo(" --> resources not found");
-					else {
-						resourcesObj = PdfParser.dereference(resourcesObj, objects);
-						spm.setInfo(" --> resources are " + resourcesObj);
-						pageResources[p] = ((Hashtable) resourcesObj);
-					}
+				//	sanitize words (if any)
+				if (pData[p].words.length != 0) {
+					spm.setInfo("Sanitizing words in page " + p + " of " + pData.length);
+					checkPageWords(pData[p], tokenizer, spm);
 				}
-			}
-		};
-		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pageTree.getNumberOfPages() : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
-		spm.setProgress(100);
-		
-		//	check errors
-		this.checkException(pf);
-		
-		//	extract page objects
-		spm.setStep("Assessing font char usage");
-		spm.setBaseProgress(5);
-		spm.setProgress(0);
-		spm.setMaxProgress(10);
-		pf = new ParallelFor() {
-			public void doFor(int p) throws Exception {
-				
-				//	nothing to work with
-				if ((pageContents[p] == null) || (pageResources[p] == null))
-					return;
-				
-				//	update status display (might be inaccurate, but better than lock escalation)
-				spm.setInfo("Assessing font char usage in page " + p + " of " + pageTree.getNumberOfPages());
-				spm.setProgress((p * 100) / pageTree.getNumberOfPages());
-				
-				//	get page bounding box
-				PdfParser.getPageWordChars(pageContents[p], pageResources[p], objects, spm);
-			}
-		};
-		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pageTree.getNumberOfPages() : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
-		spm.setProgress(100);
-		
-		//	check errors
-		this.checkException(pf);
-		
-		//	extract page objects
-		spm.setStep("Importing page words");
-		spm.setBaseProgress(10);
-		spm.setProgress(0);
-		spm.setMaxProgress(40);
-		final Rectangle2D.Float[] pageBoxes = new Rectangle2D.Float[pageTree.getNumberOfPages()];
-		final PWord[][] pWords = new PWord[pageTree.getNumberOfPages()][];
-		pf = new ParallelFor() {
-			public void doFor(int p) throws Exception {
-				
-				//	nothing to work with
-				if ((pageContents[p] == null) || (pageResources[p] == null))
-					return;
-				
-				//	update status display (might be inaccurate, but better than lock escalation)
-				spm.setInfo("Importing page " + p + " of " + pageTree.getNumberOfPages());
-				spm.setProgress((p * 100) / pageTree.getNumberOfPages());
-				
-				//	get page bounding box
-				Page page = pageTree.getPage(p, "");
-				pageBoxes[p] = page.getCropBox();
-				if (pageBoxes[p] == null)
-					pageBoxes[p] = page.getMediaBox();
-				
-				//	prepare collecting embedded figures
-				ArrayList pFigures = new ArrayList();
-				
-				//	extract page contents to recover layout information
-				pWords[p] = PdfParser.getPageWords(pageContents[p], pageResources[p], objects, pFigures, tokenizer, spm);
-				System.out.println(" --> extracted " + pWords[p].length + " words and " + pFigures.size() + " figures");
-				for (int w = 0; w < pWords[p].length; w++)
-					System.out.println("   - " + pWords[p][w]);
-				for (int f = 0; f < pFigures.size(); f++)
-					System.out.println("   - " + pFigures.get(f));
-				spm.setInfo(" - got page content with " + pWords[p].length + " words and " + pFigures.size() + " figures");
 				
 				//	preserve figures embedded in pages
-				if (pFigures.size() != 0) {
-					spm.setInfo(" - storing figures");
-					
-					//	display figures if testing
-					ImageDisplayDialog fdd = null;
-					if (DEBUG_EXTRACT_FIGURES && (PdfExtractorTest.aimAtPage >= 0))
-						fdd = new ImageDisplayDialog("Figures in Page " + p);
-					
-					//	get XObject dictionary from page resource dictionary
-					Object xObjectsObj = pageResources[p].get("XObject");
-					if (xObjectsObj instanceof Hashtable) {
-						Hashtable xObjects = ((Hashtable) xObjectsObj);
-						spm.setInfo("   - XObject dictionary is " + xObjects);
-						
-						//	store figures
-						for (int f = 0; f < pFigures.size(); f++) {
-							PFigure pFigure = ((PFigure) pFigures.get(f));
-							spm.setInfo("   - " + pFigure);
-							
-							//	resolve image names against XObject dictionary
-							Object pFigureKey = xObjects.get(pFigure.name);
-							spm.setInfo("     - reference is " + pFigureKey);
-							
-							//	get actual image object
-							Object pFigureData = PdfParser.dereference(pFigureKey, objects);
-							spm.setInfo("     - figure data is " + pFigureData);
-							if (!(pFigureData instanceof PStream)) {
-								spm.setInfo("   --> strange figure data");
-								continue;
-							}
-							
-							//	decode PStream to image
-							BufferedImage pFigureImage = decodeImage(((PStream) pFigureData).params, ((PStream) pFigureData).bytes, objects, library, page.getResources());
-							if (pFigureImage == null) {
-								spm.setInfo("   --> could not decode figure");
-								continue;
-							}
-							spm.setInfo("     - got figure sized " + pFigureImage.getWidth() + " x " + pFigureImage.getHeight());
-							
-							//	compute figure resolution
-							float dpiRatio = ((float) ((((float) pFigureImage.getWidth()) / pFigure.bounds.getWidth()) + (((float) pFigureImage.getHeight()) / pFigure.bounds.getHeight())) / 2);
-							float rawDpi = dpiRatio * defaultDpi;
-							int pFigureDpi = (Math.round(rawDpi / 10) * 10);
-							spm.setInfo("     - resolution computed as " + pFigureDpi + " DPI (" + rawDpi + ")");
-							
-							/* If color space is DeviceCMYK, render page image to figure
-							 * resolution and cut out image: images with color space
-							 * DeviceCMYK come out somewhat differently colored than in
-							 * Acrobat, but we cannot seem to do anything about this -
-							 * IcePDF distorts them as well, if more in single image
-							 * rendering than in the page images it generates. */
-							Object csObj = ((PStream) pFigureData).params.get("ColorSpace");
-							if (csObj != null) {
-								System.out.println("     - color space is " + csObj.toString());
-								if ("DeviceCMYK".equals(csObj.toString())) {
-									pFigureImage = extractFigureFromPageImage(pdfDoc, p, pageBoxes[p], pFigureDpi, pFigure.bounds);
-									System.out.println("     --> figure re-rendered as part of page image");
-								}
-							}
-							
-							//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
-							int left = Math.round(((float) (pFigure.bounds.getMinX() - pageBoxes[p].getMinX())) * magnification);
-							int right = Math.round(((float) (pFigure.bounds.getMaxX() - pageBoxes[p].getMinX()))  * magnification);
-							int top = Math.round((pageBoxes[p].height - ((float) (pFigure.bounds.getMaxY() - ((2 * pageBoxes[p].getMinY()) - pageBoxes[p].getMaxY())))) * magnification);
-							int bottom = Math.round((pageBoxes[p].height - ((float) (pFigure.bounds.getMinY() - ((2 * pageBoxes[p].getMinY()) - pageBoxes[p].getMaxY())))) * magnification);
-							BoundingBox pFigureBounds = new BoundingBox(left, right, top, bottom);
-							spm.setInfo("     - rendering bounds are " + pFigureBounds);
-							
-							//	add figures as supplements to document (synchronized !!!)
-							synchronized (doc) {
-								ImSupplement.Figure.createFigure(doc, p, pFigureDpi, pFigureImage, pFigureBounds);
-							}
-							
-							//	display figures if testing
-							if (fdd != null)
-								fdd.addImage(pFigureImage, pFigureBounds.toString());
-						}
-					}
-					
-					//	display figures if testing
-					if (fdd != null) {
-						fdd.setSize(600, 800);
-						fdd.setLocationRelativeTo(null);
-						fdd.setVisible(true);
-					}
+				if (pData[p].figures.length != 0) {
+					spm.setInfo("Storing figures in page " + p + " of " + pData.length);
+					storeFiguresAsSubblements(doc, pData[p], pdfDoc, objects, magnification, spm);
 				}
-				
-				if (pWords[p].length == 0) {
-					spm.setInfo(" --> empty page");
-					return;
-				}
-				
-				//	shrink word bounding boxes to actual word size
-				BufferedImage mbi = new BufferedImage(1, 1, BufferedImage.TYPE_BYTE_GRAY);
-				Graphics2D mg = mbi.createGraphics();
-				for (int w = 0; w < pWords[p].length; w++) {
-					if (pWords[p][w].str.trim().length() != 0)
-						pWords[p][w] = shrinkWordBounds(mg, pWords[p][w]);
-				}
-				
-				//	sort words left to right and top to bottom (for horizontal writing direction, for other writing directions accordingly)
-				Arrays.sort(pWords[p], new Comparator() {
-					public int compare(Object o1, Object o2) {
-						PWord pw1 = ((PWord) o1);
-						PWord pw2 = ((PWord) o2);
-						if (pw1.fontDirection != pw2.fontDirection)
-							return (pw1.fontDirection - pw2.fontDirection);
-						if (pw1.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) {
-							double m1 = ((pw1.bounds.getMinY() + pw1.bounds.getMaxY()) / 2);
-							double m2 = ((pw2.bounds.getMinY() + pw2.bounds.getMaxY()) / 2);
-							if ((m1 < pw2.bounds.getMaxY()) && (m1 > pw2.bounds.getMinY()))
-								return Double.compare(pw1.bounds.getMinX(), pw2.bounds.getMinX());
-							if ((m2 < pw1.bounds.getMaxY()) && (m2 > pw1.bounds.getMinY()))
-								return Double.compare(pw1.bounds.getMinX(), pw2.bounds.getMinX());
-							if (m1 > pw2.bounds.getMaxY())
-								return -1;
-							if (m1 < pw2.bounds.getMinY())
-								return 1;
-							if (m2 > pw1.bounds.getMaxY())
-								return 1;
-							if (m2 < pw1.bounds.getMinY())
-								return -1;
-						}
-						else if (pw1.fontDirection == PWord.BOTTOM_UP_FONT_DIRECTION) {
-							double m1 = ((pw1.bounds.getMinX() + pw1.bounds.getMaxX()) / 2);
-							double m2 = ((pw2.bounds.getMinX() + pw2.bounds.getMaxX()) / 2);
-							if ((m1 < pw2.bounds.getMaxX()) && (m1 > pw2.bounds.getMinX()))
-								return Double.compare(pw1.bounds.getMinY(), pw2.bounds.getMinY());
-							if ((m2 < pw1.bounds.getMaxX()) && (m2 > pw1.bounds.getMinX()))
-								return Double.compare(pw1.bounds.getMinY(), pw2.bounds.getMinY());
-							if (m1 > pw2.bounds.getMaxX())
-								return 1;
-							if (m1 < pw2.bounds.getMinX())
-								return -1;
-							if (m2 > pw1.bounds.getMaxX())
-								return -1;
-							if (m2 < pw1.bounds.getMinX())
-								return 1;
-						}
-						else if (pw1.fontDirection == PWord.TOP_DOWN_FONT_DIRECTION) {
-							double m1 = ((pw1.bounds.getMinX() + pw1.bounds.getMaxX()) / 2);
-							double m2 = ((pw2.bounds.getMinX() + pw2.bounds.getMaxX()) / 2);
-							if ((m1 < pw2.bounds.getMaxX()) && (m1 > pw2.bounds.getMinX()))
-								return Double.compare(pw2.bounds.getMinY(), pw1.bounds.getMinY());
-							if ((m2 < pw1.bounds.getMaxX()) && (m2 > pw1.bounds.getMinX()))
-								return Double.compare(pw2.bounds.getMinY(), pw1.bounds.getMinY());
-							if (m1 > pw2.bounds.getMaxX())
-								return -1;
-							if (m1 < pw2.bounds.getMinX())
-								return 1;
-							if (m2 > pw1.bounds.getMaxX())
-								return 1;
-							if (m2 < pw1.bounds.getMinX())
-								return -1;
-						}
-						return 0;
-					}
-				});
-				
-				//	merge subsequent words less than DPI/60 apart (likely separated due to font change)
-				//	however, do not merge words that tokenize apart,
-				//	nor ones that have mismatch in font style or size, as such differences usually bear some semantics
-				double maxMergeMargin = (((double) defaultDpi) / 60);
-				ArrayList pWordList = null;
-				PWord lpWord = null;
-				TokenSequence lpWordTokens = null;
-				System.out.println("Checking word mergers ...");
-				for (int w = 0; w < pWords[p].length; w++) {
-					
-					//	create token sequence
-					TokenSequence pWordTokens = tokenizer.tokenize(pWords[p][w].str);
-					
-					//	no word to compare to as yet
-					if ((lpWord == null) || (lpWordTokens == null)) {
-						lpWord = pWords[p][w];
-						lpWordTokens = pWordTokens;
-						continue;
-					}
-					System.out.println(" - checking words '" + lpWord.str + "'@" + lpWord.bounds + " and '" + pWords[p][w].str + "'@" + pWords[p][w].bounds);
-					
-					//	check if words mergeable
-					if (!areWordsMergeable(lpWord, lpWordTokens, pWords[p][w], pWordTokens, maxMergeMargin, tokenizer)) {
-						lpWord = pWords[p][w];
-						lpWordTokens = pWordTokens;
-						continue;
-					}
-					
-					//	figure out bold, italic, font size, etc. using weighted majority vote
-					PdfFont mpWordFont = ((lpWord.str.length() < pWords[p][w].str.length()) ? pWords[p][w].font : lpWord.font);
-					Rectangle2D.Float mpWordBounds;
-					if (lpWord.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) {
-						float top = ((float) Math.max(lpWord.bounds.getMaxY(), pWords[p][w].bounds.getMaxY()));
-						float bottom = ((float) Math.min(lpWord.bounds.getMinY(), pWords[p][w].bounds.getMinY()));
-						mpWordBounds = new Rectangle2D.Float(((float) lpWord.bounds.getMinX()), bottom, ((float) (pWords[p][w].bounds.getMaxX() - lpWord.bounds.getMinX())), (top - bottom));
-					}
-					else if (lpWord.fontDirection == PWord.BOTTOM_UP_FONT_DIRECTION) {
-						float top = ((float) Math.min(lpWord.bounds.getMinX(), pWords[p][w].bounds.getMinX()));
-						float bottom = ((float) Math.max(lpWord.bounds.getMaxX(), pWords[p][w].bounds.getMaxX()));
-						mpWordBounds = new Rectangle2D.Float(top, ((float) lpWord.bounds.getMinY()), (bottom - top), ((float) (pWords[p][w].bounds.getMaxY() - lpWord.bounds.getMinY())));
-					}
-					else if (lpWord.fontDirection == PWord.TOP_DOWN_FONT_DIRECTION) {
-						float top = ((float) Math.max(lpWord.bounds.getMaxX(), pWords[p][w].bounds.getMaxX()));
-						float bottom = ((float) Math.min(lpWord.bounds.getMinX(), pWords[p][w].bounds.getMinX()));
-						mpWordBounds = new Rectangle2D.Float(bottom, ((float) pWords[p][w].bounds.getMinY()), (top - bottom), ((float) (lpWord.bounds.getMaxY() - pWords[p][w].bounds.getMinY())));
-					}
-					else {
-						lpWord = pWords[p][w];
-						lpWordTokens = pWordTokens;
-						continue;
-					}
-					
-					//	create merged word
-					PWord mpWord = new PWord((lpWord.charCodes + pWords[p][w].charCodes), (lpWord.str + pWords[p][w].str), mpWordBounds, lpWord.fontSize, lpWord.fontDirection, mpWordFont);
-					System.out.println(" --> merged words " + lpWord.str + " and " + pWords[p][w].str + " to '" + mpWord.str + "'@" + mpWord.bounds);
-					
-					//	store merged word
-					pWords[p][w] = mpWord;
-					pWords[p][w-1] = null;
-					lpWord = mpWord;
-					lpWordTokens = tokenizer.tokenize(mpWord.str);
-					
-					//	remember merger
-					if (pWordList == null)
-						pWordList = new ArrayList();
-				}
-				
-				//	refresh PWord array
-				if (pWordList != null) {
-					for (int w = 0; w < pWords[p].length; w++) {
-						if (pWords[p][w] != null)
-							pWordList.add(pWords[p][w]);
-					}
-					pWords[p] = ((PWord[]) pWordList.toArray(new PWord[pWordList.size()]));
-					pWordList = null;
-				}
-				
-				//	split words that tokenize apart, splitting bounding box based on font measurement
-				pWordList = new ArrayList();
-				System.out.println("Checking word splits ...");
-				for (int w = 0; w < pWords[p].length; w++) {
-					
-					//	check tokenization
-					TokenSequence pWordTokens = tokenizer.tokenize(pWords[p][w].str);
-					if (pWordTokens.size() < 2) {
-						pWordList.add(pWords[p][w]);
-						continue;
-					}
-					System.out.println(" - splitting " + pWords[p][w].str);
-					
-					//	get width for each token at word font size
-					String[] splitCharCodes = new String[pWordTokens.size()];
-					String[] splitTokens = new String[pWordTokens.size()];
-					float[] splitTokenWidths = new float[pWordTokens.size()];
-					int fontStyle = Font.PLAIN;
-					if (pWords[p][w].bold)
-						fontStyle = (fontStyle | Font.BOLD);
-					if (pWords[p][w].italics)
-						fontStyle = (fontStyle | Font.ITALIC);
-					Font pWordFont = getFont(pWords[p][w].font.name, fontStyle, Math.round(((float) pWords[p][w].fontSize)));
-					float splitTokenWidthSum = 0;
-					int splitCharCodeStart = 0;
-					for (int s = 0; s < splitTokens.length; s++) {
-						splitTokens[s] = pWordTokens.valueAt(s);
-						splitCharCodes[s] = ""; // have to do it this way, as char code string might have different length than Unicode string
-						for (int splitCharCodeLength = 0; splitCharCodeLength < splitTokens[s].length();) {
-							char charCode = pWords[p][w].charCodes.charAt(splitCharCodeStart++);
-							splitCharCodes[s] += ("" + charCode);
-							splitCharCodeLength += (((int) charCode) / 256);
-						}
-						TextLayout tl = new TextLayout(splitTokens[s], pWordFont, new FontRenderContext(null, false, true));
-						splitTokenWidths[s] = ((float) tl.getBounds().getWidth());
-						splitTokenWidthSum += splitTokenWidths[s];
-					}
-					
-					//	left-right words
-					if (pWords[p][w].fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) {
-						
-						//	store split result, splitting word bounds accordingly
-						float pWordWidth = ((float) (pWords[p][w].bounds.getMaxX() - pWords[p][w].bounds.getMinX()));
-						float splitTokenLeft = ((float) pWords[p][w].bounds.getMinX());
-						for (int s = 0; s < splitTokens.length; s++) {
-							float splitTokenWidth = ((pWordWidth * splitTokenWidths[s]) / splitTokenWidthSum);
-							PWord spWord = new PWord(splitCharCodes[s], splitTokens[s], new Rectangle2D.Float(splitTokenLeft, ((float) pWords[p][w].bounds.getMinY()), splitTokenWidth, ((float) pWords[p][w].bounds.getHeight())), pWords[p][w].fontSize, pWords[p][w].fontDirection, pWords[p][w].font);
-							pWordList.add(spWord);
-							splitTokenLeft += splitTokenWidth;
-							System.out.println(" --> split word part " + spWord.str + ", bounds are " + spWord.bounds);
-						}
-					}
-					
-					//	bottom-up words
-					else if (pWords[p][w].fontDirection == PWord.BOTTOM_UP_FONT_DIRECTION) {
-						
-						//	store split result, splitting word bounds accordingly
-						float pWordWidth = ((float) (pWords[p][w].bounds.getMaxY() - pWords[p][w].bounds.getMinY()));
-						float splitTokenLeft = ((float) pWords[p][w].bounds.getMinY());
-						for (int s = 0; s < splitTokens.length; s++) {
-							float splitTokenWidth = ((pWordWidth * splitTokenWidths[s]) / splitTokenWidthSum);
-							PWord spWord = new PWord(splitCharCodes[s], splitTokens[s], new Rectangle2D.Float(((float) pWords[p][w].bounds.getMinX()), splitTokenLeft, ((float) pWords[p][w].bounds.getWidth()), splitTokenWidth), pWords[p][w].fontSize, pWords[p][w].fontDirection, pWords[p][w].font);
-							pWordList.add(spWord);
-							splitTokenLeft += splitTokenWidth;
-							System.out.println(" --> split word part " + spWord.str + ", bounds are " + spWord.bounds);
-						}
-					}
-					
-					//	top-down words
-					else if (pWords[p][w].fontDirection == PWord.TOP_DOWN_FONT_DIRECTION) {
-						
-						//	store split result, splitting word bounds accordingly
-						float pWordWidth = ((float) (pWords[p][w].bounds.getMaxY() - pWords[p][w].bounds.getMinY()));
-						float splitTokenLeft = ((float) pWords[p][w].bounds.getMaxY());
-						for (int s = 0; s < splitTokens.length; s++) {
-							float splitTokenWidth = ((pWordWidth * splitTokenWidths[s]) / splitTokenWidthSum);
-							PWord spWord = new PWord(splitCharCodes[s], splitTokens[s], new Rectangle2D.Float(((float) pWords[p][w].bounds.getMinX()), (splitTokenLeft - splitTokenWidth), ((float) pWords[p][w].bounds.getWidth()), splitTokenWidth), pWords[p][w].fontSize, pWords[p][w].fontDirection, pWords[p][w].font);
-							pWordList.add(spWord);
-							splitTokenLeft -= splitTokenWidth;
-							System.out.println(" --> split word part " + spWord.str + ", bounds are " + spWord.bounds);
-						}
-					}
-				}
-				
-				//	refresh PWord array
-				if (pWordList.size() != pWords[p].length)
-					pWords[p] = ((PWord[]) pWordList.toArray(new PWord[pWordList.size()]));
-				pWordList = null;
-				if (pWords[p].length == 0)
-					spm.setInfo(" --> empty page");
-				else spm.setInfo(" --> got " + pWords[p].length + " words in PDF");
 			}
 		};
-		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pageTree.getNumberOfPages() : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
+		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pData.length : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
 		spm.setProgress(100);
 		
 		//	check errors
@@ -884,10 +870,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		//	check plausibility
 		if (PdfExtractorTest.aimAtPage == -1) {
 			int docWordCount = 0;
-			for (int p = 0; p < pWords.length; p++)
-				docWordCount += pWords[p].length;
-			if ((docWordCount / pageTree.getNumberOfPages()) < minAveragePageWords)
-				throw new IOException("Too few words per page (" + docWordCount + " on " + pageTree.getNumberOfPages() + " pages, less than " + minAveragePageWords + ")");
+			for (int p = 0; p < pData.length; p++)
+				docWordCount += pData[p].words.length;
+			if ((docWordCount / pData.length) < minAveragePageWords)
+				throw new IOException("Too few words per page (" + docWordCount + " on " + pData.length + " pages, less than " + minAveragePageWords + ")");
 		}
 		
 		//	attach non-standard PDF fonts to document
@@ -904,12 +890,12 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				continue;
 			}
 			spm.setInfo(" - got " + charCodes.length + " characters");
-			ImFont imFont = new ImFont(doc, pFont.name, pFont.bold, pFont.italics, true); // TODO observe if serif or not
+			ImFont imFont = new ImFont(doc, pFont.name, pFont.bold, pFont.italics, pFont.serif);
 			for (int c = 0; c < charCodes.length; c++) {
 				String charStr = pFont.getUnicode(charCodes[c]);
 				BufferedImage charImage = pFont.getCharImage(charCodes[c]);
-				if (charImage != null)
-					imFont.addCharacter(charCodes[c], charStr, ImFont.scaleCharImage(charImage));
+				imFont.addCharacter(charCodes[c], charStr, ((charImage == null) ? null : ImFont.scaleCharImage(charImage)));
+				System.out.println("   - added char " + charCodes[c] + ": '" + charStr + "', image is " + charImage);
 			}
 			if (imFont.getCharacterCount() == 0)
 				spm.setInfo(" ==> no custom characters");
@@ -919,20 +905,198 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			}
 		}
 		
+		//	assess number punctuation
+		spm.setStep("Assessing number punctuation");
+		spm.setBaseProgress(35);
+		spm.setProgress(0);
+		spm.setMaxProgress(36);
+		int decimalDotCount = 0;
+		int decimalCommaCount = 0;
+		int thousandDotCount = 0;
+		int thousandCommaCount = 0;
+		for (int p = 0; p < pData.length; p++) {
+			
+			//	nothing to work with
+			if ((pData[p] == null) || (pData[p].words == null) || (pData[p].words.length == 0))
+				continue;
+			
+			//	check word by word
+			for (int w = 0; w < pData[p].words.length; w++) {
+				
+				//	skip over non-numbers
+				if (!Gamta.isNumber(pData[p].words[w].str))
+					continue;
+				
+				//	skip over numbers without punctuation
+				if (pData[p].words[w].str.matches("[0-9]+"))
+					continue;
+				
+				//	count thousand dots ...
+				if (pData[p].words[w].str.matches("[0-9]{1,3}(\\.[0-9]{3})+\\,[0-9]+")) {
+					thousandDotCount++;
+					decimalCommaCount++;
+				}
+				
+				//	as well as thousand commas ...
+				else if (pData[p].words[w].str.matches("[0-9]{1,3}(\\,[0-9]{3})+\\.[0-9]+")) {
+					thousandCommaCount++;
+					decimalDotCount++;
+				}
+				
+				//	count decimal dots ...
+				else if (pData[p].words[w].str.matches(".*[0-9]\\.[0-9]+"))
+					decimalDotCount++;
+				
+				//	as well as decimal commas ...
+				else if (pData[p].words[w].str.matches(".*[0-9]\\,[0-9]+"))
+					decimalCommaCount++;
+			}
+		}
+		spm.setInfo("Found " + decimalDotCount + " decimal dots and " + decimalCommaCount + " decimal commas");
+		spm.setInfo("Found " + thousandDotCount + " thousand dots and " + thousandCommaCount + " thousand commas");
+		
+		//	split words only now
+		spm.setStep("Splitting page words");
+		spm.setBaseProgress(36);
+		spm.setProgress(0);
+		spm.setMaxProgress(40);
+		final Tokenizer numberTokenizer;
+		if ((decimalDotCount > thousandDotCount) && (decimalDotCount > decimalCommaCount)) {
+			if (thousandCommaCount == 0)
+				numberTokenizer = new RegExTokenizer("((([1-9][0-9]*)|0)(\\.[0-9]+)?)|\\,|\\.");
+			else numberTokenizer = new RegExTokenizer("((([1-9][0-9\\,]*)|0)(\\.[0-9]+)?)|\\,|\\.");
+		}
+		else if ((decimalCommaCount > thousandCommaCount) && (decimalCommaCount > decimalDotCount)) {
+			if (thousandDotCount == 0)
+				numberTokenizer = new RegExTokenizer("((([1-9][0-9]*)|0)(\\,[0-9]+)?)|\\.|\\,");
+			else numberTokenizer = new RegExTokenizer("((([1-9][0-9\\.]*)|0)(\\,[0-9]+)?)|\\.|\\,");
+		}
+		else numberTokenizer = tokenizer;
+		pf = new ParallelFor() {
+			public void doFor(int p) throws Exception {
+				
+				//	nothing to work with
+				if ((pData[p] == null) || (pData[p].words == null) || (pData[p].words.length == 0))
+					return;
+				
+				//	update status display (might be inaccurate, but better than lock escalation)
+				spm.setInfo("Splitting words in page " + p + " of " + pData.length);
+				spm.setProgress((p * 100) / pData.length);
+				
+				//	split words that tokenize apart, splitting bounding box based on font measurement
+				ArrayList pWordList = new ArrayList();
+				for (int w = 0; w < pData[p].words.length; w++) {
+					
+					//	check tokenization
+					TokenSequence pWordTokens = (Gamta.isNumber(pData[p].words[w].str) ? numberTokenizer.tokenize(pData[p].words[w].str) : tokenizer.tokenize(pData[p].words[w].str));
+					if (pWordTokens.size() < 2) {
+						pWordList.add(pData[p].words[w]);
+						continue;
+					}
+					System.out.println(" - splitting " + pData[p].words[w].str);
+					
+					//	get width for each token at word font size
+					String[] splitCharCodes = new String[pWordTokens.size()];
+					String[] splitTokens = new String[pWordTokens.size()];
+					float[] splitTokenWidths = new float[pWordTokens.size()];
+					int fontStyle = Font.PLAIN;
+					if (pData[p].words[w].bold)
+						fontStyle = (fontStyle | Font.BOLD);
+					if (pData[p].words[w].italics)
+						fontStyle = (fontStyle | Font.ITALIC);
+					Font pWordFont = getFont(pData[p].words[w].font.name, fontStyle, pData[p].words[w].serif, Math.round(((float) pData[p].words[w].fontSize)));
+					float splitTokenWidthSum = 0;
+					int splitCharCodeStart = 0;
+					for (int s = 0; s < splitTokens.length; s++) {
+						splitTokens[s] = pWordTokens.valueAt(s);
+						splitCharCodes[s] = ""; // have to do it this way, as char code string might have different length than Unicode string
+						for (int splitCharCodeLength = 0; splitCharCodeLength < splitTokens[s].length();) {
+							char charCode = pData[p].words[w].charCodes.charAt(splitCharCodeStart++);
+							splitCharCodes[s] += ("" + charCode);
+							splitCharCodeLength += (((int) charCode) / 256);
+						}
+						TextLayout tl = new TextLayout(splitTokens[s], pWordFont, new FontRenderContext(null, false, true));
+						splitTokenWidths[s] = ((float) tl.getBounds().getWidth());
+						splitTokenWidthSum += splitTokenWidths[s];
+					}
+					
+					//	left-right words
+					if (pData[p].words[w].fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) {
+						
+						//	store split result, splitting word bounds accordingly
+						float pWordWidth = ((float) (pData[p].words[w].bounds.getMaxX() - pData[p].words[w].bounds.getMinX()));
+						float splitTokenLeft = ((float) pData[p].words[w].bounds.getMinX());
+						for (int s = 0; s < splitTokens.length; s++) {
+							float splitTokenWidth = ((pWordWidth * splitTokenWidths[s]) / splitTokenWidthSum);
+							PWord spWord = new PWord(splitCharCodes[s], splitTokens[s], new Rectangle2D.Float(splitTokenLeft, ((float) pData[p].words[w].bounds.getMinY()), splitTokenWidth, ((float) pData[p].words[w].bounds.getHeight())), pData[p].words[w].fontSize, pData[p].words[w].fontDirection, pData[p].words[w].font);
+							pWordList.add(spWord);
+							splitTokenLeft += splitTokenWidth;
+							System.out.println(" --> split word part " + spWord.str + ", bounds are " + spWord.bounds);
+						}
+					}
+					
+					//	bottom-up words
+					else if (pData[p].words[w].fontDirection == PWord.BOTTOM_UP_FONT_DIRECTION) {
+						
+						//	store split result, splitting word bounds accordingly
+						float pWordWidth = ((float) (pData[p].words[w].bounds.getMaxY() - pData[p].words[w].bounds.getMinY()));
+						float splitTokenLeft = ((float) pData[p].words[w].bounds.getMinY());
+						for (int s = 0; s < splitTokens.length; s++) {
+							float splitTokenWidth = ((pWordWidth * splitTokenWidths[s]) / splitTokenWidthSum);
+							PWord spWord = new PWord(splitCharCodes[s], splitTokens[s], new Rectangle2D.Float(((float) pData[p].words[w].bounds.getMinX()), splitTokenLeft, ((float) pData[p].words[w].bounds.getWidth()), splitTokenWidth), pData[p].words[w].fontSize, pData[p].words[w].fontDirection, pData[p].words[w].font);
+							pWordList.add(spWord);
+							splitTokenLeft += splitTokenWidth;
+							System.out.println(" --> split word part " + spWord.str + ", bounds are " + spWord.bounds);
+						}
+					}
+					
+					//	top-down words
+					else if (pData[p].words[w].fontDirection == PWord.TOP_DOWN_FONT_DIRECTION) {
+						
+						//	store split result, splitting word bounds accordingly
+						float pWordWidth = ((float) (pData[p].words[w].bounds.getMaxY() - pData[p].words[w].bounds.getMinY()));
+						float splitTokenLeft = ((float) pData[p].words[w].bounds.getMaxY());
+						for (int s = 0; s < splitTokens.length; s++) {
+							float splitTokenWidth = ((pWordWidth * splitTokenWidths[s]) / splitTokenWidthSum);
+							PWord spWord = new PWord(splitCharCodes[s], splitTokens[s], new Rectangle2D.Float(((float) pData[p].words[w].bounds.getMinX()), (splitTokenLeft - splitTokenWidth), ((float) pData[p].words[w].bounds.getWidth()), splitTokenWidth), pData[p].words[w].fontSize, pData[p].words[w].fontDirection, pData[p].words[w].font);
+							pWordList.add(spWord);
+							splitTokenLeft -= splitTokenWidth;
+							System.out.println(" --> split word part " + spWord.str + ", bounds are " + spWord.bounds);
+						}
+					}
+				}
+				
+				//	refresh PWord array
+				if (pWordList.size() != pData[p].words.length)
+					pData[p].words = ((PWord[]) pWordList.toArray(new PWord[pWordList.size()]));
+				pWordList = null;
+				if (pData[p].words.length == 0)
+					spm.setInfo(" --> empty page");
+				else spm.setInfo(" --> got " + pData[p].words.length + " words in PDF");
+			}
+		};
+		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pData.length : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
+		spm.setProgress(100);
+		
 		//	put PDF words into images
 		spm.setStep("Generating page images");
 		spm.setBaseProgress(40);
 		spm.setProgress(0);
 		spm.setMaxProgress(70);
-		final BufferedImage[] pageImages = new BufferedImage[pageTree.getNumberOfPages()];
-		final String[] imageNames = new String[pageTree.getNumberOfPages()];
-		final int[] imageDPIs = new int[pageTree.getNumberOfPages()];
+		final BufferedImage[] pageImages = new BufferedImage[pData.length];
+		final String[] imageNames = new String[pData.length];
+		final int[] imageDPIs = new int[pData.length];
+		final BoundingBox[] pageBounds = new BoundingBox[pData.length];
 		pf = new ParallelFor() {
 			public void doFor(int p) throws Exception {
 				
+				//	nothing to work with
+				if ((pData[p] == null) || (pData[p].words == null) || (pData[p].words.length == 0))
+					return;
+				
 				//	update status display (might be inaccurate, but better than lock escalation)
-				spm.setInfo("Extracting image of page " + p + " of " + pageTree.getNumberOfPages());
-				spm.setProgress((p * 100) / pageTree.getNumberOfPages());
+				spm.setInfo("Extracting image of page " + p + " of " + pData.length);
+				spm.setProgress((p * 100) / pData.length);
 				
 				//	test if we have non-horizontal blocks, and measure their size
 				int bubLeft = Integer.MAX_VALUE;
@@ -947,82 +1111,86 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				HashSet tdWords = new HashSet(); 
 				
 				//	clean all own words
-				for (int w = 0; w < pWords[p].length; w++) {
-					Rectangle2D wb = pWords[p][w].bounds;
+				for (int w = 0; w < pData[p].words.length; w++) {
 					
 					//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
-					int left = Math.round(((float) (wb.getMinX() - pageBoxes[p].getMinX())) * magnification);
-					int right = Math.round(((float) (wb.getMaxX() - pageBoxes[p].getMinX()))  * magnification);
-					int top = Math.round((pageBoxes[p].height - ((float) (wb.getMaxY() - ((2 * pageBoxes[p].getMinY()) - pageBoxes[p].getMaxY())))) * magnification);
-					int bottom = Math.round((pageBoxes[p].height - ((float) (wb.getMinY() - ((2 * pageBoxes[p].getMinY()) - pageBoxes[p].getMaxY())))) * magnification);
+					BoundingBox wb = getBoundingBox(pData[p].words[w].bounds, pData[p].pdfPageBox, magnification, pData[p].rotate);
 					
 					//	test for vertical words
-					if (pWords[p][w].fontDirection == PWord.BOTTOM_UP_FONT_DIRECTION) {
-						bubLeft = Math.min(bubLeft, left);
-						bubRight = Math.max(bubRight, right);
-						bubTop = Math.min(bubTop, top);
-						bubBottom = Math.max(bubBottom, bottom);
-						buWords.add(pWords[p][w]);
+					if (pData[p].words[w].fontDirection == PWord.BOTTOM_UP_FONT_DIRECTION) {
+						bubLeft = Math.min(bubLeft, wb.left);
+						bubRight = Math.max(bubRight, wb.right);
+						bubTop = Math.min(bubTop, wb.top);
+						bubBottom = Math.max(bubBottom, wb.bottom);
+						buWords.add(pData[p].words[w]);
 					}
-					else if (pWords[p][w].fontDirection == PWord.TOP_DOWN_FONT_DIRECTION) {
-						tdbLeft = Math.min(tdbLeft, left);
-						tdbRight = Math.max(tdbRight, right);
-						tdbTop = Math.min(tdbTop, top);
-						tdbBottom = Math.max(tdbBottom, bottom);
-						tdWords.add(pWords[p][w]);
+					else if (pData[p].words[w].fontDirection == PWord.TOP_DOWN_FONT_DIRECTION) {
+						tdbLeft = Math.min(tdbLeft, wb.left);
+						tdbRight = Math.max(tdbRight, wb.right);
+						tdbTop = Math.min(tdbTop, wb.top);
+						tdbBottom = Math.max(tdbBottom, wb.bottom);
+						tdWords.add(pData[p].words[w]);
 					}
 				}
 				
 				//	page image generated before
 				if (imageStore.isPageImageAvailable(doc.docId, p)) {
 					PageImage pi = imageStore.getPageImage(doc.docId, p);
-					pageImages[p] = pi.image;
-					imageNames[p] = PageImage.getPageImageName(doc.docId, p);
-					imageDPIs[p] = pi.currentDpi;
-					spm.setInfo(" --> loaded page image generated earlier, sized " + pageImages[p].getWidth() + " x " + pageImages[p].getHeight());
-					
-					//	we do have a significant bottom-up block, flip its words (image is already extended here, so test against scales page bounds)
-					if ((bubLeft < bubRight) && (bubTop < bubBottom) && (bubLeft < ((pageBoxes[p].getWidth() * magnification) / 3)) && (bubRight > ((pageBoxes[p].getWidth() * magnification * 2) / 3)) && (bubTop < ((pageBoxes[p].getHeight() * magnification) / 3)) && (bubBottom > ((pageBoxes[p].getHeight() * magnification * 2) / 3))) {
-						System.out.println("Got bottom-up block with " + buWords.size() + " words to flip");
-						flipBlockWords(pageBoxes[p], pWords[p], buWords, PWord.BOTTOM_UP_FONT_DIRECTION);
+					if (pi.currentDpi == defaultTextPdfPageImageDpi) {
+						pageImages[p] = pi.image;
+						imageNames[p] = PageImage.getPageImageName(doc.docId, p);
+						imageDPIs[p] = pi.currentDpi;
+						pageBounds[p] = new BoundingBox(0, pageImages[p].getWidth(), 0, pageImages[p].getHeight());
+						spm.setInfo(" --> loaded page image generated earlier, sized " + pageImages[p].getWidth() + " x " + pageImages[p].getHeight() + " at " + pi.currentDpi + " DPI");
+						
+						//	we do have a significant bottom-up block, flip its words (image is already extended here, so test against scaled page bounds)
+						if ((bubLeft < bubRight) && (bubTop < bubBottom) && (bubLeft < ((pData[p].pdfPageBox.getWidth() * magnification) / 3)) && (bubRight > ((pData[p].pdfPageBox.getWidth() * magnification * 2) / 3)) && (bubTop < ((pData[p].pdfPageBox.getHeight() * magnification) / 3)) && (bubBottom > ((pData[p].pdfPageBox.getHeight() * magnification * 2) / 3))) {
+							spm.setInfo("Got bottom-up block with " + buWords.size() + " words to flip");
+							flipBlockWords(pData[p].pdfPageBox, pData[p].words, buWords, PWord.BOTTOM_UP_FONT_DIRECTION);
+						}
+						
+						//	we do have a significant top-down block, flip its words (image is already extended here, so test against scaled page bounds)
+						else if ((tdbLeft < tdbRight) && (tdbTop < tdbBottom) && (tdbLeft < ((pData[p].pdfPageBox.getWidth() * magnification) / 3)) && (tdbRight > ((pData[p].pdfPageBox.getWidth() * magnification * 2) / 3)) && (tdbTop < ((pData[p].pdfPageBox.getHeight() * magnification) / 3)) && (tdbBottom > ((pData[p].pdfPageBox.getHeight() * magnification * 2) / 3))) {
+							spm.setInfo("Got top-down block with " + tdWords.size() + " words to flip");
+							flipBlockWords(pData[p].pdfPageBox, pData[p].words, tdWords, PWord.TOP_DOWN_FONT_DIRECTION);
+						}
 					}
-					
-					//	we do have a significant top-down block, flip its words (image is already extended here, so test against scales page bounds)
-					else if ((tdbLeft < tdbRight) && (tdbTop < tdbBottom) && (tdbLeft < ((pageBoxes[p].getWidth() * magnification) / 3)) && (tdbRight > ((pageBoxes[p].getWidth() * magnification * 2) / 3)) && (tdbTop < ((pageBoxes[p].getHeight() * magnification) / 3)) && (tdbBottom > ((pageBoxes[p].getHeight() * magnification * 2) / 3))) {
-						System.out.println("Got top-down block with " + tdWords.size() + " words to flip");
-						flipBlockWords(pageBoxes[p], pWords[p], tdWords, PWord.TOP_DOWN_FONT_DIRECTION);
-					}
+					else spm.setInfo(" --> could not use page image generated earlier, resolution mismatch at " + pi.currentDpi + " DPI");
 				}
 				
 				//	generate page image
-				else {
+				if (pageImages[p] == null) {
 					spm.setInfo(" - generating page image");
 					synchronized (pdfDoc) {
 						pageImages[p] = ((BufferedImage) pdfDoc.getPageImage(p, GraphicsRenderingHints.SCREEN, Page.BOUNDARY_CROPBOX, 0, magnification));
 					}
 					if (pageImages[p] == null) {
 						spm.setInfo(" --> page image generation failed");
-						throw new RuntimeException("Could not generate image for page " + p);
+						throw new IOException("Could not generate image for page " + p);
 					}
 					spm.setInfo(" - got page image sized " + pageImages[p].getWidth() + " x " + pageImages[p].getHeight());
 					
 					//	erase words from IcePDF (can have faulty bounding boxes ...), and paint our own words onto the image
 					int cleaningTolerance = (textPdfPageImageDpi / 25); // somewhat less than one mm ... 
-					Page page = pageTree.getPage(p, "");
-					PageText rpt = page.getText();
-					ArrayList rpLines = rpt.getPageLines();
+					PageText pdfPageText = pData[p].pdfPage.getText();
+					ArrayList pdfPageLines = pdfPageText.getPageLines();
 					Graphics2D rg = pageImages[p].createGraphics();
 					rg.setColor(Color.WHITE);
-					for (int l = 0; l < rpLines.size(); l++) {
-						LineText lt = ((LineText) rpLines.get(l));
-						Rectangle2D.Float wb = lt.getBounds();
-						
-						//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
-						int left = Math.round((wb.x - pageBoxes[p].x) * magnification);
-						int right = Math.round(((wb.x - pageBoxes[p].x) + wb.width)  * magnification);
-						int top = Math.round((pageBoxes[p].height - ((wb.y - (pageBoxes[p].y - pageBoxes[p].height)) + wb.height)) * magnification);
-						int bottom = Math.round((pageBoxes[p].height - (wb.y - (pageBoxes[p].y - pageBoxes[p].height))) * magnification);
-						rg.fillRect((left - (cleaningTolerance / 2)), (top - (cleaningTolerance / 2)), (right - left + cleaningTolerance), (bottom - top + cleaningTolerance));
+					for (int l = 0; l < pdfPageLines.size(); l++) {
+						LineText pdfLineText = ((LineText) pdfPageLines.get(l));
+						ArrayList pdfLineWords = pdfLineText.getWords();
+						for (int w = 0; w < pdfLineWords.size(); w++) {
+							WordText pdfWordText = ((WordText) pdfLineWords.get(w));
+							
+							//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
+							BoundingBox wb = getBoundingBox(pdfWordText.getBounds(), pData[p].pdfPageBox, magnification, 0);
+							rg.fillRect((wb.left - (cleaningTolerance / 2)), (wb.top - (cleaningTolerance / 2)), (wb.right - wb.left + cleaningTolerance), (wb.bottom - wb.top + cleaningTolerance));
+						}
+					}
+					
+					//	clean IcePDF cache (only now, after cleaning up words)
+					synchronized (pdfDoc) {
+						pdfDoc.getPageTree().getPage(p, "").reduceMemory();
 					}
 					
 					//	clean up black page margins (outmost two pixels)
@@ -1032,65 +1200,63 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					rg.fillRect((pageImages[p].getWidth() - 2), 0, 2, pageImages[p].getHeight());
 					
 					//	clean all own words
-					for (int w = 0; w < pWords[p].length; w++) {
-						Rectangle2D wb = pWords[p][w].bounds;
+					for (int w = 0; w < pData[p].words.length; w++) {
 						
 						//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
-						int left = Math.round(((float) (wb.getMinX() - pageBoxes[p].getMinX())) * magnification);
-						int right = Math.round(((float) (wb.getMaxX() - pageBoxes[p].getMinX()))  * magnification);
-						int top = Math.round((pageBoxes[p].height - ((float) (wb.getMaxY() - ((2 * pageBoxes[p].getMinY()) - pageBoxes[p].getMaxY())))) * magnification);
-						int bottom = Math.round((pageBoxes[p].height - ((float) (wb.getMinY() - ((2 * pageBoxes[p].getMinY()) - pageBoxes[p].getMaxY())))) * magnification);
+						BoundingBox wb = getBoundingBox(pData[p].words[w].bounds, pData[p].pdfPageBox, magnification, pData[p].rotate);
+						System.out.println("Word '" + pData[p].words[w].str + "' @ " + wb);
 						
 						//	clean background
 						rg.setColor(Color.WHITE);
-						rg.fillRect(left, top, (right - left + 1), (bottom - top));
+						rg.fillRect(wb.left, wb.top, (wb.right - wb.left + 1), (wb.bottom - wb.top));
 					}
 					
 					//	we do have a significant bottom-up block, flip it
 					if ((bubLeft < bubRight) && (bubTop < bubBottom) && (bubLeft < (pageImages[p].getWidth() / 3)) && (bubRight > ((pageImages[p].getWidth() * 2) / 3)) && (bubTop < (pageImages[p].getHeight() / 3)) && (bubBottom > ((pageImages[p].getHeight() * 2) / 3))) {
-						System.out.println("Got bottom-up block with " + buWords.size() + " words to flip");
-						pageImages[p] = flipBlockImage(pageImages[p], pageBoxes[p], bubLeft, bubRight, bubTop, bubBottom, pWords[p], PWord.BOTTOM_UP_FONT_DIRECTION, magnification);
+						spm.setInfo("Got bottom-up block with " + buWords.size() + " words to flip");
+						pageImages[p] = flipBlockImage(pageImages[p], pData[p].pdfPageBox, bubLeft, bubRight, bubTop, bubBottom, pData[p].words, PWord.BOTTOM_UP_FONT_DIRECTION, magnification);
 						rg = pageImages[p].createGraphics();
-						flipBlockWords(pageBoxes[p], pWords[p], buWords, PWord.BOTTOM_UP_FONT_DIRECTION);
+						flipBlockWords(pData[p].pdfPageBox, pData[p].words, buWords, PWord.BOTTOM_UP_FONT_DIRECTION);
 					}
 					
 					//	we do have a significant top-down block, flip it
 					else if ((tdbLeft < tdbRight) && (tdbTop < tdbBottom) && (tdbLeft < (pageImages[p].getWidth() / 3)) && (tdbRight > ((pageImages[p].getWidth() * 2) / 3)) && (tdbTop < (pageImages[p].getHeight() / 3)) && (tdbBottom > ((pageImages[p].getHeight() * 2) / 3))) {
-						System.out.println("Got top-down block with " + tdWords.size() + " words to flip");
-						pageImages[p] = flipBlockImage(pageImages[p], pageBoxes[p], tdbLeft, tdbRight, tdbTop, tdbBottom, pWords[p], PWord.TOP_DOWN_FONT_DIRECTION, magnification);
+						spm.setInfo("Got top-down block with " + tdWords.size() + " words to flip");
+						pageImages[p] = flipBlockImage(pageImages[p], pData[p].pdfPageBox, tdbLeft, tdbRight, tdbTop, tdbBottom, pData[p].words, PWord.TOP_DOWN_FONT_DIRECTION, magnification);
 						rg = pageImages[p].createGraphics();
-						flipBlockWords(pageBoxes[p], pWords[p], buWords, PWord.TOP_DOWN_FONT_DIRECTION);
+						flipBlockWords(pData[p].pdfPageBox, pData[p].words, buWords, PWord.TOP_DOWN_FONT_DIRECTION);
 					}
 					
 					//	paint own words
-					for (int w = 0; w < pWords[p].length; w++) {
-						Rectangle2D wb = pWords[p][w].bounds;
+					for (int w = 0; w < pData[p].words.length; w++) {
 						
 						//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
-						int left = Math.round(((float) (wb.getMinX() - pageBoxes[p].getMinX())) * magnification);
-						int right = Math.round(((float) (wb.getMaxX() - pageBoxes[p].getMinX()))  * magnification);
-//						int top = Math.round((pageBox.height - ((float) (wb.getMaxY() - ((2 * pageBox.getMinY()) - pageBox.getMaxY())))) * magnification);
-						int bottom = Math.round((pageBoxes[p].height - ((float) (wb.getMinY() - ((2 * pageBoxes[p].getMinY()) - pageBoxes[p].getMaxY())))) * magnification);
+						BoundingBox wb = getBoundingBox(pData[p].words[w].bounds, pData[p].pdfPageBox, magnification, pData[p].rotate);
 						
 						//	prepare font
 						rg.setColor(Color.BLACK);
 						int fontStyle = Font.PLAIN;
-						if (pWords[p][w].bold)
+						if (pData[p].words[w].bold)
 							fontStyle = (fontStyle | Font.BOLD);
-						if (pWords[p][w].italics)
+						if (pData[p].words[w].italics)
 							fontStyle = (fontStyle | Font.ITALIC);
-						Font rf = getFont(pWords[p][w].font.name, fontStyle, Math.round(((float) pWords[p][w].fontSize) * magnification));
+						Font rf = getFont(pData[p].words[w].font.name, fontStyle, pData[p].words[w].serif, Math.round(((float) pData[p].words[w].fontSize) * magnification));
 						rg.setFont(rf);
 						
 						//	adjust word size and vertical position
-						LineMetrics wlm = rf.getLineMetrics(pWords[p][w].str, rg.getFontRenderContext());
-						TextLayout wtl = new TextLayout(pWords[p][w].str, rf, rg.getFontRenderContext());
-						double hScale = (((double) (right - left)) / wtl.getBounds().getWidth());
+						LineMetrics wlm = rf.getLineMetrics(pData[p].words[w].str, rg.getFontRenderContext());
+						TextLayout wtl = new TextLayout(pData[p].words[w].str, rf, rg.getFontRenderContext());
+						double hScale = (((double) (wb.right - wb.left)) / wtl.getBounds().getWidth());
 						AffineTransform at = rg.getTransform();
-						rg.translate(left, 0);
+						rg.translate(wb.left, 0);
+						float leftShift = ((float) -wtl.getBounds().getMinX());
 						if (hScale < 1)
 							rg.scale(hScale, 1);
-						rg.drawString(pWords[p][w].str, ((float) - wtl.getBounds().getMinX()), (bottom - (pWords[p][w].font.hasDescent ? Math.round(wlm.getDescent()) : 0)));
+						else leftShift += (((wb.right - wb.left) - wtl.getBounds().getWidth()) / 2);
+						System.out.println("Rendering " + pData[p].words[w].str + ((pData[p].words[w].str.length() == 1) ? (" " + Integer.toString(((int) pData[p].words[w].str.charAt(0)), 16)) : ""));
+						try {
+							rg.drawString(pData[p].words[w].str, leftShift, (wb.bottom - (pData[p].words[w].font.hasDescent ? Math.round(wlm.getDescent()) : 0)));
+						} catch (InternalError ie) {}
 						rg.setTransform(at);
 					}
 					
@@ -1100,102 +1266,295 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					}
 					if (imageNames[p] == null) {
 						spm.setInfo(" --> page image storage failed");
-						throw new RuntimeException("Could not store image of page " + p);
+						throw new IOException("Could not store image of page " + p);
 					}
 					else {
 						spm.setInfo(" --> page image stored");
 						imageDPIs[p] = textPdfPageImageDpi;
+						pageBounds[p] = new BoundingBox(0, pageImages[p].getWidth(), 0, pageImages[p].getHeight());
 					}
 				}
+				
+				//	if we have more pages than we can process in parallel, set array element to null to allow garbage collection
+				if (pageImages.length > Runtime.getRuntime().availableProcessors())
+					pageImages[p] = null;
 			}
 		};
-		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pageTree.getNumberOfPages() : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
+		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pData.length : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
 		spm.setProgress(100);
 		
 		//	check errors
 		this.checkException(pf);
 		
-		//	analyze page structure
-		spm.setStep("Analyzing page structure");
+		//	garbage collect page images in large document
+		if (pageImages.length > Runtime.getRuntime().availableProcessors())
+			System.gc();
+		
+		//	create pages and add words
+		spm.setStep("Generating pages");
 		spm.setBaseProgress(70);
 		spm.setProgress(0);
-		spm.setMaxProgress(98);
-		final ImPage[] pages = new ImPage[pageTree.getNumberOfPages()];
+		spm.setMaxProgress(75);
+		final ImPage[] pages = new ImPage[pData.length];
 		if (PdfExtractorTest.aimAtPage != -1) {
 			for (int p = 0; p < pages.length; p++)
 				if (p != PdfExtractorTest.aimAtPage) {
-					BoundingBox pageBounds = new BoundingBox(0, 32, 0, 44); // have to use these numbers to prevent 0 or 1 step in page word index
-					ImPage page = new ImPage(doc, p, pageBounds);
+					BoundingBox pageBox = new BoundingBox(0, 32, 0, 44); // have to use these numbers to prevent 0 or 1 step in page word index
+					ImPage page = new ImPage(doc, p, pageBox);
 				}
 		}
 		pf = new ParallelFor() {
 			public void doFor(int p) throws Exception {
 				
+				//	nothing to work with
+				if ((pData[p] == null) || (pData[p].words == null) || (pData[p].words.length == 0))
+					return;
+				spm.setInfo("Generating page " + p + " of " + pData.length);
+				spm.setProgress((p * 100) / pData.length);
+				
 				//	generate page (we have to synchronize this, as it adds to main document)
 				synchronized (doc) {
-					pages[p] = new ImPage(doc, p, new BoundingBox(0, pageImages[p].getWidth(), 0, pageImages[p].getHeight()));
+					pages[p] = new ImPage(doc, p, pageBounds[p]);
 				}
 				
-				spm.setInfo("Analyzing structure of page " + p + " of " + pageTree.getNumberOfPages());
-				spm.setProgress((p * 100) / pageTree.getNumberOfPages());
-				
-				//	add words to page, and index them by bounding boxes
-				HashMap wordsByBoxes = new HashMap();
-				for (int w = 0; w < pWords[p].length; w++) {
-					Rectangle2D wb = pWords[p][w].bounds;
+				//	add words to page
+				for (int w = 0; w < pData[p].words.length; w++) {
 					
-					//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
-					int left = Math.round(((float) (wb.getMinX() - pageBoxes[p].getMinX())) * magnification);
-					int right = Math.round(((float) (wb.getMaxX() - pageBoxes[p].getMinX()))  * magnification);
-					if ((right - left) < 4)
-						right = (left + 4);
-					int top = Math.round((pageBoxes[p].height - ((float) (wb.getMaxY() - ((2 * pageBoxes[p].getMinY()) - pageBoxes[p].getMaxY())))) * magnification);
-					int bottom = Math.round((pageBoxes[p].height - ((float) (wb.getMinY() - ((2 * pageBoxes[p].getMinY()) - pageBoxes[p].getMaxY())))) * magnification);
+					//	make sure word has some minimum width
+					BoundingBox wb = getBoundingBox(pData[p].words[w].bounds, pData[p].pdfPageBox, magnification, pData[p].rotate);
+					if ((wb.right - wb.left) < 4)
+						wb = new BoundingBox(wb.left, (wb.left + 4), wb.top, wb.bottom);
 					
 					//	add word to page
-					ImWord word = new ImWord(pages[p], new BoundingBox(left, right, top, bottom), pWords[p][w].str);
+					ImWord word = new ImWord(pages[p], wb, pData[p].words[w].str);
 					
 					//	set layout attributes
-					if ((pWords[p][w].font != null) && (pWords[p][w].font.name != null))
-						word.setAttribute(FONT_NAME_ATTRIBUTE, pWords[p][w].font.name);
-					if (pWords[p][w].fontSize != -1)
-						word.setAttribute(FONT_SIZE_ATTRIBUTE, ("" + pWords[p][w].fontSize));
-					if (pWords[p][w].bold)
+					if ((pData[p].words[w].font != null) && (pData[p].words[w].font.name != null))
+						word.setAttribute(FONT_NAME_ATTRIBUTE, pData[p].words[w].font.name);
+					if (pData[p].words[w].fontSize != -1)
+						word.setAttribute(FONT_SIZE_ATTRIBUTE, ("" + pData[p].words[w].fontSize));
+					if (pData[p].words[w].bold)
 						word.setAttribute(BOLD_ATTRIBUTE);
-					if (pWords[p][w].italics)
+					if (pData[p].words[w].italics)
 						word.setAttribute(ITALICS_ATTRIBUTE);
 					
 					//	add font char ID string
 					StringBuffer charCodesHex = new StringBuffer();
-					for (int c = 0; c < pWords[p][w].charCodes.length(); c++) {
-						String charCodeHex = Integer.toString((((int) pWords[p][w].charCodes.charAt(c)) & 255), 16).toUpperCase();
+					for (int c = 0; c < pData[p].words[w].charCodes.length(); c++) {
+						String charCodeHex = Integer.toString((((int) pData[p].words[w].charCodes.charAt(c)) & 255), 16).toUpperCase();
 						if (charCodeHex.length() < 2)
 							charCodesHex.append("0");
 						charCodesHex.append(charCodeHex);
 					}
 					word.setAttribute(ImFont.CHARACTER_CODE_STRING_ATTRIBUTE, charCodesHex.toString());
-					
-					//	index word
-					wordsByBoxes.put(word.bounds, word);
+				}
+			}
+		};
+		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pData.length : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
+		spm.setProgress(100);
+		
+		//	check errors
+		this.checkException(pf);
+		
+		//	now that we have words, we can get a document style and use it for page structure analysis
+		DocumentStyle docStyle = DocumentStyle.getStyleFor(doc);
+		final DocumentStyle docLayout = docStyle.getSubset("layout");
+		
+		//	analyze page structure
+		spm.setStep("Analyzing page structure");
+		spm.setBaseProgress(75);
+		spm.setProgress(0);
+		spm.setMaxProgress(98);
+		pf = new ParallelFor() {
+			public void doFor(int p) throws Exception {
+				
+				//	nothing to work with
+				if ((pData[p] == null) || (pData[p].words == null) || (pData[p].words.length == 0))
+					return;
+				spm.setInfo("Analyzing structure of page " + p + " of " + pData.length);
+				spm.setProgress((p * 100) / pData.length);
+				
+				//	make sure page image is loaded (might have been discarded to save memory in large document)
+				BufferedImage pageImage = pageImages[p];
+				if (pageImage == null) {
+					PageImage pi = imageStore.getPageImage(doc.docId, p);
+					pageImage = pi.image;
 				}
 				
-				//	prepare page image for structure analysis (we can modify it freely now, as it's not stored afterward)
-				Graphics2D pageImageGraphics = pageImages[p].createGraphics();
-				pageImageGraphics.setColor(Color.BLACK);
-				for (Iterator wbbit = wordsByBoxes.keySet().iterator(); wbbit.hasNext();) {
-					BoundingBox wbb = ((BoundingBox) wbbit.next());
-					pageImageGraphics.fillRect(wbb.left, wbb.top, (wbb.right - wbb.left), (wbb.bottom - wbb.top));
+				//	get layout hints (defaulting to kind of universal ball park figures)
+				BoundingBox contentArea = docLayout.getBoxProperty("contentArea", pages[p].bounds, imageDPIs[p]);
+				int columnCount = docLayout.getIntProperty("columnCount", -1);
+				int minColumnMargin = ((columnCount == 1) ? (pages[p].bounds.right - pages[p].bounds.left) : docLayout.getIntProperty("minColumnMargin", (imageDPIs[p] / 10), imageDPIs[p]));
+				int minBlockMargin = docLayout.getIntProperty("minBlockMargin", (imageDPIs[p] / 10), imageDPIs[p]);
+				
+				//	index words by bounding boxes, and determine page content bounds
+				ImWord[] pWords = pages[p].getWords();
+				HashMap wordsByBoxes = new HashMap();
+				int pContentLeft = Integer.MAX_VALUE;
+				int pContentRight = 0;
+				int pContentTop = Integer.MAX_VALUE;
+				int pContentBottom = 0;
+				for (int w = 0; w < pWords.length; w++) {
+					
+					//	ignore word if outside content area, and mark as artifact
+					if ((pWords[w].centerX < contentArea.left) || (pWords[w].centerX > contentArea.right) || (pWords[w].centerY < contentArea.top) || (pWords[w].centerY > contentArea.bottom)) {
+						pWords[w].setTextStreamType(ImWord.TEXT_STREAM_TYPE_ARTIFACT);
+						continue;
+					}
+					
+					//	update content bounds
+					pContentLeft = Math.min(pContentLeft, pWords[w].bounds.left);
+					pContentRight = Math.max(pContentRight, pWords[w].bounds.right);
+					pContentTop = Math.min(pContentTop, pWords[w].bounds.top);
+					pContentBottom = Math.max(pContentBottom, pWords[w].bounds.bottom);
+					
+					//	index word
+					wordsByBoxes.put(pWords[w].bounds, pWords[w]);
+				}
+				
+				//	also observe figures in page content
+				for (int f = 0; f < pData[p].figures.length; f++) {
+					BoundingBox fbb = getBoundingBox(pData[p].figures[f].bounds, pData[p].pdfPageBox, magnification, pData[p].rotate);
+					pContentLeft = Math.min(pContentLeft, fbb.left);
+					pContentRight = Math.max(pContentRight, fbb.right);
+					pContentTop = Math.min(pContentTop, fbb.top);
+					pContentBottom = Math.max(pContentBottom, fbb.bottom);
 				}
 				
 				//	wrap image for structure analysis
-				AnalysisImage api = Imaging.wrapImage(pageImages[p], (imageNames[p] + imageDPIs[p]));
+				AnalysisImage api = Imaging.wrapImage(pageImage, null);
 				Imaging.whitenWhite(api);
 				
+				//	get page brightness
+				byte[][] apiBrightness = api.getBrightness();
+				
+				//	wipe page completely if number of columns known (no lines or anything required for keeping blocks from being chunked into multiple columns)
+				if (columnCount != -1) {
+					for (int c = 0; c < apiBrightness.length; c++)
+						Arrays.fill(apiBrightness[c], ((byte) 127));
+				}
+				
+				//	whiten out figures so they don't get in the way
+				for (int f = 0; f < pData[p].figures.length; f++) {
+					BoundingBox fbb = getBoundingBox(pData[p].figures[f].bounds, pData[p].pdfPageBox, magnification, pData[p].rotate);
+					for (int c = fbb.left; c < fbb.right; c++) {
+						for (int r = fbb.top; r < fbb.bottom; r++)
+							apiBrightness[c][r] = ((byte) 127);
+					}
+				}
+				
+				//	mark words a solid black boxes
+				System.out.println("Page image size is " + pageImage.getWidth() + "x" + pageImage.getHeight());
+				for (Iterator wbbit = wordsByBoxes.keySet().iterator(); wbbit.hasNext();) {
+					BoundingBox wbb = ((BoundingBox) wbbit.next());
+					System.out.println("Marking word " + wbb);
+					for (int c = wbb.left; c < wbb.right; c++) {
+						for (int r = wbb.top; r < wbb.bottom; r++)
+							apiBrightness[c][r] = ((byte) 0);
+					}
+				}
+				
+				//	eliminate everything outside page content bounds
+				for (int c = 0; c < apiBrightness.length; c++)
+					for (int r = 0; r < apiBrightness[c].length; r++) {
+						if ((c < pContentLeft) || (c >= pContentRight) || (r < pContentTop) || (r >= pContentBottom))
+							apiBrightness[c][r] = ((byte) 127);
+					}
+				
+				/* TODO also use minColumnWidth and maxColumnWidth (later, with multi-column test cases)
+				 * - on a column split, keep merging neighboring columns narrower than min width
+				 *   ==> should prevent enumeration bulletins from being split off their text
+				 * - or even use BoundingBox[] columnAreas, marking where text columns are ...
+				 * - ... and merge column split results narrower than threshold that lie within same column area
+				 */
+				
 				//	obtain visual page structure
-				Region pageRootRegion = PageImageAnalysis.getPageRegion(api, imageDPIs[p], false, spm);
+//				Region pageRootRegion = PageImageAnalysis.getPageRegion(api, imageDPIs[p], false, spm);
+				Region pageRootRegion = PageImageAnalysis.getPageRegion(api, imageDPIs[p], minColumnMargin, minBlockMargin, false, spm);
 				
 				//	add page content to document
 				addRegionStructure(pages[p], null, pageRootRegion, imageDPIs[p], wordsByBoxes, spm);
+				
+				//	add any figures
+				if (pData[p].figures.length != 0) {
+					
+					//	re-wrap page image, so brightness is re-computed
+					api = Imaging.wrapImage(pageImage, null);
+					Imaging.whitenWhite(api);
+					
+					//	get page brightness
+					apiBrightness = api.getBrightness();
+					
+					//	whiten out words so they don't get in the way (and add some margin to compensate for IcePDF leftovers)
+					final int wordSafetyMargin = (imageDPIs[p] / 30);
+					for (Iterator wbbit = wordsByBoxes.keySet().iterator(); wbbit.hasNext();) {
+						final BoundingBox wbb = ((BoundingBox) wbbit.next());
+						for (int c = Math.max(0, (wbb.left - wordSafetyMargin)); c < Math.min(apiBrightness.length, (wbb.right + wordSafetyMargin)); c++) {
+							for (int r = Math.max(0, (wbb.top - wordSafetyMargin)); r < Math.min(apiBrightness[c].length, (wbb.bottom + wordSafetyMargin)); r++)
+								apiBrightness[c][r] = ((byte) 127);
+						}
+					}
+					
+					//	eliminate everything outside page content bounds
+					for (int c = 0; c < apiBrightness.length; c++)
+						for (int r = 0; r < apiBrightness[c].length; r++) {
+							if ((c < pContentLeft) || (c >= pContentRight) || (r < pContentTop) || (r >= pContentBottom))
+								apiBrightness[c][r] = ((byte) 127);
+						}
+					
+					//	add image regions only now
+					for (int f = 0; f < pData[p].figures.length; f++) {
+						BoundingBox fbb = getBoundingBox(pData[p].figures[f].bounds, pData[p].pdfPageBox, magnification, pData[p].rotate);
+						int fLeft = fbb.left;
+						int fRight = fbb.right;
+						int fTop = fbb.top;
+						int fBottom = fbb.bottom;
+						
+						//	narrow left and right
+						while (fLeft < fRight) {
+							boolean leftVoid = true;
+							boolean rightVoid = true;
+							for (int r = fTop; r < fBottom; r++) {
+								if (apiBrightness[fLeft][r] < 127)
+									leftVoid = false;
+								if (apiBrightness[fRight-1][r] < 127)
+									rightVoid = false;
+								if (!leftVoid && !rightVoid)
+									break;
+							}
+							if (leftVoid)
+								fLeft++;
+							if (rightVoid)
+								fRight--;
+							if (!leftVoid && !rightVoid)
+								break;
+						}
+						
+						//	narrow top and bottom
+						while (fTop < fBottom) {
+							boolean topVoid = true;
+							boolean bottomVoid = true;
+							for (int c = fLeft; c < fRight; c++) {
+								if (apiBrightness[c][fTop] < 127)
+									topVoid = false;
+								if (apiBrightness[c][fBottom-1] < 127)
+									bottomVoid = false;
+								if (!topVoid && !bottomVoid)
+									break;
+							}
+							if (topVoid)
+								fTop++;
+							if (bottomVoid)
+								fBottom--;
+							if (!topVoid && !bottomVoid)
+								break;
+						}
+						
+						//	add image region
+						if ((fLeft < fRight) && (fTop < fBottom))
+							new ImRegion(pages[p], new BoundingBox(fLeft, fRight, fTop, fBottom), ImRegion.IMAGE_TYPE);
+					}
+				}
 				
 				//	catch empty page
 				if (pages[p].getWords().length == 0)
@@ -1218,8 +1577,11 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					}
 				}
 				
+				//	get factor expressing maximum line margin as multiple of line height
+				float maxLineMarginFactor = docLayout.getFloatProperty("maxLineMarginFactor", 0);
+				
 				//	do structure analysis
-				PageAnalysis.splitIntoParagraphs(pages[p].getRegions(BLOCK_ANNOTATION_TYPE), imageDPIs[p], null);
+				PageAnalysis.splitIntoParagraphs(pages[p].getRegions(BLOCK_ANNOTATION_TYPE), imageDPIs[p], maxLineMarginFactor, null);
 				spm.setInfo(" - paragraphs done");
 				PageAnalysis.computeColumnLayout(pages[p].getRegions(COLUMN_ANNOTATION_TYPE), imageDPIs[p]);
 				spm.setInfo(" - layout analysis done");
@@ -1231,8 +1593,11 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				spm.setInfo(" - page done");
 			}
 		};
-		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pageTree.getNumberOfPages() : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
+		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pData.length : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
 		spm.setProgress(100);
+		
+		//	garbage collect all the brightness arrays
+		System.gc();
 		
 		//	check errors
 		this.checkException(pf);
@@ -1245,36 +1610,199 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		ImWord lastWord = null;
 		for (int p = 0; p < pages.length; p++) {
 			spm.setProgress((p * 100) / pages.length);
-			if ((PdfExtractorTest.aimAtPage == -1) || (p == PdfExtractorTest.aimAtPage))
+			if ((pages[p] != null) && ((PdfExtractorTest.aimAtPage == -1) || (p == PdfExtractorTest.aimAtPage)))
 				lastWord = this.addTextStreamStructure(pages[p], lastWord);
 		}
 		spm.setProgress(100);
 		spm.setInfo(" - word sequence analysis done");
-		
-		//	finally ...
-		return doc;
 	}
 	
-	private static boolean areWordsMergeable(PWord lpWord, TokenSequence lpWordTokens, PWord pWord, TokenSequence pWordTokens, double maxMergeMargin, Tokenizer tokenizer) {
+	private void checkPageWords(PPageData pData, Tokenizer tokenizer, ProgressMonitor spm) {
+		
+		//	shrink word bounding boxes to actual word size
+		BufferedImage mbi = new BufferedImage(1, 1, BufferedImage.TYPE_BYTE_GRAY);
+		Graphics2D mg = mbi.createGraphics();
+		for (int w = 0; w < pData.words.length; w++) {
+			if (pData.words[w].str.trim().length() != 0)
+				pData.words[w] = shrinkWordBounds(mg, pData.words[w]);
+		}
+		
+		//	sort words left to right and top to bottom (for horizontal writing direction, for other writing directions accordingly)
+		//	TODO make sure this is a total ordering
+		Arrays.sort(pData.words, new Comparator() {
+			public int compare(Object o1, Object o2) {
+				PWord pw1 = ((PWord) o1);
+				PWord pw2 = ((PWord) o2);
+				if (pw1.fontDirection != pw2.fontDirection)
+					return (pw1.fontDirection - pw2.fontDirection);
+				if (pw1.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) {
+					double m1 = ((pw1.bounds.getMinY() + pw1.bounds.getMaxY()) / 2);
+					double m2 = ((pw2.bounds.getMinY() + pw2.bounds.getMaxY()) / 2);
+					if ((m1 < pw2.bounds.getMaxY()) && (m1 > pw2.bounds.getMinY()))
+						return Double.compare(pw1.bounds.getMinX(), pw2.bounds.getMinX());
+					if ((m2 < pw1.bounds.getMaxY()) && (m2 > pw1.bounds.getMinY()))
+						return Double.compare(pw1.bounds.getMinX(), pw2.bounds.getMinX());
+					if (m1 > pw2.bounds.getMaxY())
+						return -1;
+					if (m1 < pw2.bounds.getMinY())
+						return 1;
+					if (m2 > pw1.bounds.getMaxY())
+						return 1;
+					if (m2 < pw1.bounds.getMinY())
+						return -1;
+				}
+				else if (pw1.fontDirection == PWord.BOTTOM_UP_FONT_DIRECTION) {
+					double m1 = ((pw1.bounds.getMinX() + pw1.bounds.getMaxX()) / 2);
+					double m2 = ((pw2.bounds.getMinX() + pw2.bounds.getMaxX()) / 2);
+					if ((m1 < pw2.bounds.getMaxX()) && (m1 > pw2.bounds.getMinX()))
+						return Double.compare(pw1.bounds.getMinY(), pw2.bounds.getMinY());
+					if ((m2 < pw1.bounds.getMaxX()) && (m2 > pw1.bounds.getMinX()))
+						return Double.compare(pw1.bounds.getMinY(), pw2.bounds.getMinY());
+					if (m1 > pw2.bounds.getMaxX())
+						return 1;
+					if (m1 < pw2.bounds.getMinX())
+						return -1;
+					if (m2 > pw1.bounds.getMaxX())
+						return -1;
+					if (m2 < pw1.bounds.getMinX())
+						return 1;
+				}
+				else if (pw1.fontDirection == PWord.TOP_DOWN_FONT_DIRECTION) {
+					double m1 = ((pw1.bounds.getMinX() + pw1.bounds.getMaxX()) / 2);
+					double m2 = ((pw2.bounds.getMinX() + pw2.bounds.getMaxX()) / 2);
+					if ((m1 < pw2.bounds.getMaxX()) && (m1 > pw2.bounds.getMinX()))
+						return Double.compare(pw2.bounds.getMinY(), pw1.bounds.getMinY());
+					if ((m2 < pw1.bounds.getMaxX()) && (m2 > pw1.bounds.getMinX()))
+						return Double.compare(pw2.bounds.getMinY(), pw1.bounds.getMinY());
+					if (m1 > pw2.bounds.getMaxX())
+						return -1;
+					if (m1 < pw2.bounds.getMinX())
+						return 1;
+					if (m2 > pw1.bounds.getMaxX())
+						return 1;
+					if (m2 < pw1.bounds.getMinX())
+						return -1;
+				}
+				return 0;
+			}
+		});
+		
+		//	merge subsequent words less than DPI/60 apart (likely separated due to font change)
+		//	at 10 pt, that is ... have to use lower threshold for smaller font sizes
+		//	however, do not merge words that tokenize apart,
+		//	nor ones that have mismatch in font style or size, as such differences usually bear some semantics
+		double maxMergeMargin10pt = (((double) defaultDpi) / 60);
+		ArrayList pWordList = null;
+		PWord lpWord = null;
+		TokenSequence lpWordTokens = null;
+		spm.setInfo("Checking word mergers ...");
+		for (int w = 0; w < pData.words.length; w++) {
+			
+			//	create token sequence
+			TokenSequence pWordTokens = tokenizer.tokenize(pData.words[w].str);
+			
+			//	no word to compare to as yet
+			if ((lpWord == null) || (lpWordTokens == null)) {
+				lpWord = pData.words[w];
+				lpWordTokens = pWordTokens;
+				continue;
+			}
+			if (DEBUG_MERGE_WORDS) System.out.println(" - checking words '" + lpWord.str + "'@" + lpWord.bounds + " and '" + pData.words[w].str + "'@" + pData.words[w].bounds);
+			
+			//	check if words mergeable
+			if (!areWordsMergeable(lpWord, lpWordTokens, pData.words[w], pWordTokens, maxMergeMargin10pt, tokenizer)) {
+				lpWord = pData.words[w];
+				lpWordTokens = pWordTokens;
+				continue;
+			}
+			
+			//	figure out bold, italic, font size, etc. using weighted majority vote
+			PdfFont mpWordFont = ((lpWord.str.length() < pData.words[w].str.length()) ? pData.words[w].font : lpWord.font);
+			Rectangle2D.Float mpWordBounds;
+			if (lpWord.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) {
+				float top = ((float) Math.max(lpWord.bounds.getMaxY(), pData.words[w].bounds.getMaxY()));
+				float bottom = ((float) Math.min(lpWord.bounds.getMinY(), pData.words[w].bounds.getMinY()));
+				mpWordBounds = new Rectangle2D.Float(((float) lpWord.bounds.getMinX()), bottom, ((float) (pData.words[w].bounds.getMaxX() - lpWord.bounds.getMinX())), (top - bottom));
+			}
+			else if (lpWord.fontDirection == PWord.BOTTOM_UP_FONT_DIRECTION) {
+				float top = ((float) Math.min(lpWord.bounds.getMinX(), pData.words[w].bounds.getMinX()));
+				float bottom = ((float) Math.max(lpWord.bounds.getMaxX(), pData.words[w].bounds.getMaxX()));
+				mpWordBounds = new Rectangle2D.Float(top, ((float) lpWord.bounds.getMinY()), (bottom - top), ((float) (pData.words[w].bounds.getMaxY() - lpWord.bounds.getMinY())));
+			}
+			else if (lpWord.fontDirection == PWord.TOP_DOWN_FONT_DIRECTION) {
+				float top = ((float) Math.max(lpWord.bounds.getMaxX(), pData.words[w].bounds.getMaxX()));
+				float bottom = ((float) Math.min(lpWord.bounds.getMinX(), pData.words[w].bounds.getMinX()));
+				mpWordBounds = new Rectangle2D.Float(bottom, ((float) pData.words[w].bounds.getMinY()), (top - bottom), ((float) (lpWord.bounds.getMaxY() - pData.words[w].bounds.getMinY())));
+			}
+			else {
+				lpWord = pData.words[w];
+				lpWordTokens = pWordTokens;
+				continue;
+			}
+			
+			//	create merged word
+			PWord mpWord = new PWord((lpWord.charCodes + pData.words[w].charCodes), (lpWord.str + pData.words[w].str), mpWordBounds, lpWord.fontSize, lpWord.fontDirection, mpWordFont);
+			spm.setInfo(" --> merged words " + lpWord.str + " and " + pData.words[w].str + " to '" + mpWord.str + "'@" + mpWord.bounds);
+			
+			//	store merged word
+			pData.words[w] = mpWord;
+			pData.words[w-1] = null;
+			lpWord = mpWord;
+			lpWordTokens = tokenizer.tokenize(mpWord.str);
+			
+			//	remember merger
+			if (pWordList == null)
+				pWordList = new ArrayList();
+		}
+		
+		//	refresh PWord array
+		if (pWordList != null) {
+			for (int w = 0; w < pData.words.length; w++) {
+				if (pData.words[w] != null)
+					pWordList.add(pData.words[w]);
+			}
+			pData.words = ((PWord[]) pWordList.toArray(new PWord[pWordList.size()]));
+			pWordList = null;
+		}
+		
+		//	report what we got
+		if (pData.words.length == 0)
+			spm.setInfo(" --> empty page");
+		else spm.setInfo(" --> got " + pData.words.length + " words in PDF");
+	}
+	
+	private static boolean areWordsMergeable(PWord lpWord, TokenSequence lpWordTokens, PWord pWord, TokenSequence pWordTokens, double maxMergeMargin10pt, Tokenizer tokenizer) {
 		
 		//	do not join words with altering bold/italic properties or font sizes, they differ for a reason
 		if ((lpWord.bold != pWord.bold) || (lpWord.italics != pWord.italics) || (lpWord.fontSize != pWord.fontSize) || (lpWord.fontDirection != pWord.fontDirection)) {
-			System.out.println(" --> font size, direction, or style mismatch");
+			if (DEBUG_MERGE_WORDS) System.out.println(" --> font size, direction, or style mismatch");
 			return false;
 		}
+		
+		//	compute maximum margin based on font size
+		double maxMergeMargin = ((maxMergeMargin10pt * Math.min(pWord.fontSize, 10)) / 10);
 		
 		//	left-right words
 		if (pWord.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) {
 			
 			//	not in same line
 			if ((pWord.bounds.getMaxY() <= lpWord.bounds.getMinY()) || (lpWord.bounds.getMaxY() <= pWord.bounds.getMinY())) {
-				System.out.println(" --> different lines");
+				if (DEBUG_MERGE_WORDS) System.out.println(" --> different lines");
 				return false;
 			}
 			
 			//	too far a gap
 			if ((pWord.bounds.getMinX() < lpWord.bounds.getMinX()) || ((pWord.bounds.getMinX() - lpWord.bounds.getMaxX()) > maxMergeMargin)) {
-				System.out.println(" --> too far apart");
+				if (DEBUG_MERGE_WORDS) System.out.println(" --> too far apart");
+				return false;
+			}
+			
+			//	require 80% overlap
+			double pWordHeight = Math.abs(pWord.bounds.getMaxY() - pWord.bounds.getMinY());
+			double lpWordHeight = Math.abs(lpWord.bounds.getMaxY() - lpWord.bounds.getMinY());
+			double overlapHeight = (Math.min(pWord.bounds.getMaxY(), lpWord.bounds.getMaxY()) - Math.max(pWord.bounds.getMinY(), lpWord.bounds.getMinY()));
+			if ((overlapHeight * 5) < (Math.min(pWordHeight, lpWordHeight) * 4)) {
+				if (DEBUG_MERGE_WORDS) System.out.println(" --> different (if overlapping) lines");
 				return false;
 			}
 		}
@@ -1284,13 +1812,22 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			
 			//	not in same line
 			if ((pWord.bounds.getMinX() >= lpWord.bounds.getMaxX()) || (lpWord.bounds.getMinX() >= pWord.bounds.getMaxX())) {
-				System.out.println(" --> different lines");
+				if (DEBUG_MERGE_WORDS) System.out.println(" --> different lines");
 				return false;
 			}
 			
 			//	too far a gap
 			if ((pWord.bounds.getMinY() < lpWord.bounds.getMinY()) || ((pWord.bounds.getMinY() - lpWord.bounds.getMaxY()) > maxMergeMargin)) {
-				System.out.println(" --> too far apart");
+				if (DEBUG_MERGE_WORDS) System.out.println(" --> too far apart");
+				return false;
+			}
+			
+			//	require 80% overlap
+			double pWordHeight = Math.abs(pWord.bounds.getMaxX() - pWord.bounds.getMinX());
+			double lpWordHeight = Math.abs(lpWord.bounds.getMaxX() - lpWord.bounds.getMinX());
+			double overlapHeight = (Math.min(pWord.bounds.getMaxX(), lpWord.bounds.getMaxX()) - Math.max(pWord.bounds.getMinX(), lpWord.bounds.getMinX()));
+			if ((overlapHeight * 5) < (Math.min(pWordHeight, lpWordHeight) * 4)) {
+				if (DEBUG_MERGE_WORDS) System.out.println(" --> different (if overlapping) lines");
 				return false;
 			}
 		}
@@ -1300,13 +1837,22 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			
 			//	not in same line
 			if ((pWord.bounds.getMaxX() <= lpWord.bounds.getMinX()) || (lpWord.bounds.getMaxX() <= pWord.bounds.getMinX())) {
-				System.out.println(" --> different lines");
+				if (DEBUG_MERGE_WORDS) System.out.println(" --> different lines");
 				return false;
 			}
 			
 			//	too far a gap
 			if ((pWord.bounds.getMaxY() > lpWord.bounds.getMaxY()) || ((lpWord.bounds.getMinY() - pWord.bounds.getMaxY()) > maxMergeMargin)) {
-				System.out.println(" --> too far apart");
+				if (DEBUG_MERGE_WORDS) System.out.println(" --> too far apart");
+				return false;
+			}
+			
+			//	require 80% overlap
+			double pWordHeight = Math.abs(pWord.bounds.getMaxX() - pWord.bounds.getMinX());
+			double lpWordHeight = Math.abs(lpWord.bounds.getMaxX() - lpWord.bounds.getMinX());
+			double overlapHeight = (Math.min(pWord.bounds.getMaxX(), lpWord.bounds.getMaxX()) - Math.max(pWord.bounds.getMinX(), lpWord.bounds.getMinX()));
+			if ((overlapHeight * 5) < (Math.min(pWordHeight, lpWordHeight) * 4)) {
+				if (DEBUG_MERGE_WORDS) System.out.println(" --> different (if overlapping) lines");
 				return false;
 			}
 		}
@@ -1314,12 +1860,52 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		//	do NOT merge words that tokenize apart
 		TokenSequence mpWordTokens = tokenizer.tokenize(lpWord.str + pWord.str);
 		if ((lpWordTokens.size() + pWordTokens.size()) <= mpWordTokens.size()) {
-			System.out.println(" --> tokenization mismatch");
+			if (DEBUG_MERGE_WORDS) System.out.println(" --> tokenization mismatch");
 			return false;
 		}
 		
-		//	not counter indications found
+		//	no counter indications found
 		return true;
+	}
+	
+	private void storeFiguresAsSubblements(ImDocument doc, PPageData pData, Document pdfDoc, Map objects, float magnification, ProgressMonitor spm) throws IOException {
+		spm.setInfo(" - storing figures");
+		
+		//	display figures if testing
+		ImageDisplayDialog fdd = null;
+		if (DEBUG_EXTRACT_FIGURES && (PdfExtractorTest.aimAtPage >= 0))
+			fdd = new ImageDisplayDialog("Figures in Page " + pData.p);
+		
+		//	get XObject dictionary from page resource dictionary
+		Object xObjectsObj = PdfParser.dereference(pData.pdfPageResources.get("XObject"), objects);
+		if (xObjectsObj instanceof Hashtable) {
+			Hashtable xObjects = ((Hashtable) xObjectsObj);
+			spm.setInfo("   - XObject dictionary is " + xObjects);
+			
+			//	store figures
+			for (int f = 0; f < pData.figures.length; f++) {
+				PFigure pFigure = pData.figures[f];
+				spm.setInfo("   - " + pFigure);
+				
+				//	get image
+				BufferedImage pFigureImage = this.getFigureImage(doc, pFigure, pdfDoc, pData.pdfPage, pData.p, pData.pdfPageBox, xObjects, objects, magnification, spm);
+				
+				//	display figures if testing
+				if ((fdd != null) && (pFigureImage != null)) {
+					BoundingBox pFigureBox = this.getBoundingBox(pFigure.bounds, pData.pdfPageBox, magnification, pData.rotate);
+					spm.setInfo("     - rendering bounds are " + pFigureBox);
+					fdd.addImage(pFigureImage, pFigureBox.toString());
+				}
+			}
+		}
+		else spm.setInfo("   - strange XObject dictionary: " + xObjectsObj);
+		
+		//	display figures if testing
+		if (fdd != null) {
+			fdd.setSize(600, 800);
+			fdd.setLocationRelativeTo(null);
+			fdd.setVisible(true);
+		}
 	}
 	
 	private static BufferedImage flipBlockImage(BufferedImage pageImage, Rectangle2D.Float pageBox, int fbLeft, int fbRight, int fbTop, int fbBottom, PWord[] pWords, int fbWordFontDirection, float magnification) {
@@ -1483,7 +2069,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				fontStyle = (fontStyle | Font.BOLD);
 			if (pWord.italics)
 				fontStyle = (fontStyle | Font.ITALIC);
-			Font mf = getFont(pWord.font.name, fontStyle, Math.round(((float) pWord.fontSize) * 1));
+			Font mf = getFont(pWord.font.name, fontStyle, pWord.serif, Math.round(((float) pWord.fontSize) * 1));
 			mg.setFont(mf);
 			
 			//	adjust word size and vertical position
@@ -1524,7 +2110,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				fontStyle = (fontStyle | Font.BOLD);
 			if (pWord.italics)
 				fontStyle = (fontStyle | Font.ITALIC);
-			Font mf = getFont(pWord.font.name, fontStyle, Math.round(((float) pWord.fontSize) * 1));
+			Font mf = getFont(pWord.font.name, fontStyle, pWord.serif, Math.round(((float) pWord.fontSize) * 1));
 			mg.setFont(mf);
 			
 			//	adjust word size and vertical position
@@ -1565,7 +2151,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				fontStyle = (fontStyle | Font.BOLD);
 			if (pWord.italics)
 				fontStyle = (fontStyle | Font.ITALIC);
-			Font mf = getFont(pWord.font.name, fontStyle, Math.round(((float) pWord.fontSize) * 1));
+			Font mf = getFont(pWord.font.name, fontStyle, pWord.serif, Math.round(((float) pWord.fontSize) * 1));
 			mg.setFont(mf);
 			
 			//	adjust word size and vertical position
@@ -1592,8 +2178,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	}
 	
 	private static HashMap fontCache = new HashMap(5);
-	private static Font getFont(String name, int style, int size) {
-		String fontKey = (name + " " + style + " " + size);
+	private static Font getFont(String name, int style, boolean serif, int size) {
+		String fontKey = (name + " " + style + " " + (serif ? "serif" : "sans") + " " + size);
 		System.out.println("Getting font " + fontKey);
 		Font font = ((Font) fontCache.get(fontKey));
 		if (font != null) {
@@ -1623,7 +2209,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		
 		if (font == null) {
 			System.out.println("==> base font not found, using Serif fallback");
-			return new Font("Serif", style, size);
+			return new Font((serif ? "Serif" : "SansSerif"), style, size);
 		}
 		fontCache.put(fontKey, font);
 		System.out.println("==> font created");
@@ -2041,16 +2627,49 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	}
 	
 	private ImWord addTextStreamStructure(ImPage page, ImWord lastWord) {
+		System.out.println("Analyzing text stream structure in page " + page.pageId);
 		
 		//	get paragraphs
 		ImRegion[] paragraphs = page.getRegions(MutableAnnotation.PARAGRAPH_TYPE);
+		System.out.println(" - got " + paragraphs.length + " paragraphs");
 		if (paragraphs.length == 0)
 			return lastWord;
 		
-		//	get text stream heads (can only be one here)
+		//	get main text stream head (can only be one here, theoretically, but artifacts _can_ wreck havoc)
 		ImWord[] textStreamHeads = page.getTextStreamHeads();
-		if (textStreamHeads.length != 1)
+		System.out.println(" - got " + textStreamHeads.length + " text stream heads");
+		if (textStreamHeads.length == 0)
 			return lastWord;
+		ImWord textStreamHead = textStreamHeads[0];
+		
+		//	if we have multiple text stream heads, find and use the longest / largest one
+		if (textStreamHeads.length > 1) {
+			int maxTextStreamArea = 0;
+			for (int h = 0; h < textStreamHeads.length; h++) {
+				
+				//	skip over words known to be artifacts
+				if (ImWord.TEXT_STREAM_TYPE_ARTIFACT.equals(textStreamHeads[h].getTextStreamType()))
+					continue;
+				
+				//	compute text stream size
+				int textStreamArea = 0;
+				for (ImWord imw = textStreamHeads[h]; imw != null; imw = imw.getNextWord()) {
+					
+					//	we're leaving the page (can hardly happen processing pages front to back, but better make sure)
+					if (imw.pageId != textStreamHeads[h].pageId)
+						break;
+					
+					//	count in this word
+					textStreamArea += ((imw.bounds.right - imw.bounds.left) * (imw.bounds.bottom - imw.bounds.top));
+				}
+				
+				//	do we have a new front runner?
+				if (textStreamArea > maxTextStreamArea) {
+					maxTextStreamArea = textStreamArea;
+					textStreamHead = textStreamHeads[h];
+				}
+			}
+		}
 		
 		//	index words by paragraph
 		HashMap wordParagraphs = new HashMap();
@@ -2059,10 +2678,11 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			for (int w = 0; w < words.length; w++)
 				wordParagraphs.put(words[w], paragraphs[p]);
 		}
+		System.out.println(" - paragraphs indexed by words");
 		
 		//	add text stream structure
 		ImRegion lastWordPargarph = null;
-		for (ImWord imw = textStreamHeads[0]; imw != null; imw = imw.getNextWord()) {
+		for (ImWord imw = textStreamHead; imw != null; imw = imw.getNextWord()) {
 			
 			//	we just don't have any predecessor
 			if (lastWord == null) {
@@ -2222,7 +2842,23 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdf(byte[] pdfBytes, ProgressMonitor pm) throws IOException {
-		return this.loadImagePdf(null, null, pdfBytes, 1, pm);
+		return this.loadImagePdf(null, null, pdfBytes, false, 1, pm);
+	}
+	
+	/**
+	 * Load a document from an OCR PDF. Page images are stored in the page image
+	 * store handed to the constructor. The document structure is stored in the
+	 * returned image markup document, including word bounding boxes.
+	 * @param doc the document to store the structural information in
+	 * @param pdfDoc the PDF document to parse
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param metaPages expect born-digital meta pages at start of end of PDF?
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadImagePdf(byte[] pdfBytes, boolean metaPages, ProgressMonitor pm) throws IOException {
+		return this.loadImagePdf(null, null, pdfBytes, metaPages, 1, pm);
 	}
 	
 	/**
@@ -2239,7 +2875,25 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdf(ImDocument doc, Document pdfDoc, byte[] pdfBytes, ProgressMonitor pm) throws IOException {
-		return this.loadImagePdf(doc, pdfDoc, pdfBytes, 1, pm);
+		return this.loadImagePdf(doc, pdfDoc, pdfBytes, false, 1, pm);
+	}
+	
+	/**
+	 * Load a document from an OCR PDF. Page images are stored in the page image
+	 * store handed to the constructor. The document structure is stored in the
+	 * argument image markup document, including word bounding boxes. If the
+	 * argument ImDocument is null, this method creates a new one with the MD5
+	 * checksum of the argument PDF bytes as the ID.
+	 * @param doc the document to store the structural information in
+	 * @param pdfDoc the PDF document to parse
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param metaPages expect born-digital meta pages at start of end of PDF?
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the argument image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadImagePdf(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, ProgressMonitor pm) throws IOException {
+		return this.loadImagePdf(doc, pdfDoc, pdfBytes, metaPages, 1, pm);
 	}
 	
 	/**
@@ -2263,10 +2917,35 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdf(ImDocument doc, Document pdfDoc, byte[] pdfBytes, int scaleFactor, ProgressMonitor pm) throws IOException {
+		return this.loadImagePdf(doc, pdfDoc, pdfBytes, false, scaleFactor, pm);
+	}
+	
+	/**
+	 * Load a document from an OCR PDF. Page images are stored in the page image
+	 * store handed to the constructor. The document structure is stored in the
+	 * argument image markup document, including word bounding boxes. The scale
+	 * factor helps with PDFs whose page boundaries (media boxes) are set too
+	 * small. This can be recognized in any PDF viewer by the fact that the
+	 * document is tiny and the writing very small at 100% size display. It can
+	 * also be detected automatically, e.g. by means of examining the average
+	 * height of lines in comparison to the DPI number. If the argument
+	 * ImDocument is null, this method creates a new one with the MD5 checksum
+	 * of the argument PDF bytes as the ID.
+	 * @param doc the document to store the structural information in
+	 * @param pdfDoc the PDF document to parse
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param metaPages expect born-digital meta pages at start of end of PDF?
+	 * @param scaleFactor the scale factor for image PDFs, to correct PDFs that
+	 *            are set too small (DPI number is divided by this factor)
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the argument image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadImagePdf(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, int scaleFactor, ProgressMonitor pm) throws IOException {
 		
 		//	check arguments
 		if (doc == null)
-			doc = new ImDocument(getChecksum(pdfBytes));
+			doc = this.doCreateDocument(getChecksum(pdfBytes));
 		if (pdfDoc == null) try {
 			pdfDoc = new Document();
 			pdfDoc.setInputStream(new ByteArrayInputStream(pdfBytes), "");
@@ -2280,78 +2959,126 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		if (pm == null)
 			pm = ProgressMonitor.dummy;
 		
+		//	preserve source PDF in supplement
+		ImSupplement.Source.createSource(doc, "application/pdf", pdfBytes);
+		
+		//	load PDF
+		return this.doLoadImagePdf(doc, pdfDoc, pdfBytes, metaPages, scaleFactor, pm);
+	}
+	
+	private ImDocument doLoadImagePdf(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, int scaleFactor, ProgressMonitor pm) throws IOException {
+		
 		//	test if we can OCR
 		if (this.ocrEngine == null)
 			throw new RuntimeException("OCR Engine unavailable, check startup log.");
 		
+		//	build progress monitor with synchronized methods instead of synchronizing in-code
+		SynchronizedProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? ((SynchronizedProgressMonitor) pm) : new SynchronizedProgressMonitor(pm));
+		
+		//	load document structure (IcePDF is better at that ...)
+		Catalog catalog = pdfDoc.getCatalog();
+		PageTree pageTree = catalog.getPageTree();
+		
+		//	parse PDF
+		HashMap objects = PdfParser.getObjects(pdfBytes);
+		
+		//	decrypt streams and strings
+		PdfParser.decryptObjects(objects, pdfDoc.getSecurityManager());
+		
+		//	get basic page data (takes progress to 30%)
+		PPageData[] pData = this.getPdfPageData(doc, false, pageTree, objects, spm);
+		
+		//	add page content
+		this.addImagePdfPages(doc, pData, pdfDoc, pageTree, objects, metaPages, scaleFactor, spm);
+		
+		//	finally ...
+		return doc;
+	}
+	
+	private void addImagePdfPages(ImDocument doc, PPageData[] pData, Document pdfDoc, PageTree pageTree, Map objects, boolean metaPages, int scaleFactor, SynchronizedProgressMonitor spm) throws IOException {
+		
+		//	test if we can OCR
+		if (this.ocrEngine == null)
+			throw new RuntimeException("OCR Engine unavailable, check startup log.");
+		
+		//	more pages than we can process in parallel, don't cache at all to save memory
+		Map pageImageCache;
+		if (pdfDoc.getPageTree().getNumberOfPages() > Runtime.getRuntime().availableProcessors())
+			pageImageCache = null;
+		
 		//	cache page images (only binary and gray scale, and only up to 300 DPI, as memory consumption gets too high beyond that)
-		HashMap pageImageCache = new HashMap() {
-			public Object put(Object cacheKey, Object gapeImage) {
-				if (gapeImage instanceof PageImage) {
-					PageImage pi = ((PageImage) gapeImage);
+		else pageImageCache = Collections.synchronizedMap(new HashMap() {
+			public Object put(Object cacheKey, Object pageImage) {
+				if (pageImage instanceof PageImage) {
+					PageImage pi = ((PageImage) pageImage);
 					if (pi.currentDpi > 300)
 						return null;
 					if ((pi.image.getType() != BufferedImage.TYPE_BYTE_BINARY) && (pi.image.getType() != BufferedImage.TYPE_BYTE_GRAY))
 						return null;
 				}
-				return super.put(cacheKey, gapeImage);
+				return super.put(cacheKey, pageImage);
 			}
-		};
+		});
 		
 		//	load pages
-		pm.setStep("Loading document page images");
-		pm.setBaseProgress(0);
-		pm.setProgress(0);
-		pm.setMaxProgress(30);
-		this.addImagePdfPages(doc, pdfDoc, pdfBytes, scaleFactor, pm, pageImageCache);
-		
-		//	preserve source PDF in supplement
-		ImSupplement.Source.createSource(doc, "application/pdf", pdfBytes);
+		spm.setStep("Loading document page images");
+		spm.setBaseProgress(0);
+		spm.setProgress(0);
+		spm.setMaxProgress(30);
+		this.addImagePdfPages(doc, pData, pdfDoc, pageTree, objects, metaPages, scaleFactor, spm, pageImageCache);
 		
 		//	cache higher level page structure as well
 		Map pageRegionCache = Collections.synchronizedMap(new HashMap());
 		
 		//	fill in blocks and do OCR
-		pm.setStep("Extracting blocks & doing OCR");
-		pm.setBaseProgress(40);
-		pm.setProgress(0);
-		pm.setMaxProgress(70);
-		this.addImagePdfPageBlocks(doc, pm, pageImageCache, pageRegionCache);
+		spm.setStep("Extracting blocks & doing OCR");
+		spm.setBaseProgress(40);
+		spm.setProgress(0);
+		spm.setMaxProgress(70);
+		this.addImagePdfPageBlocks(doc, spm, pageImageCache, pageRegionCache);
 		
 		//	analyze block structure and layout
-		pm.setStep("Analyzing page text structure");
-		pm.setBaseProgress(70);
-		pm.setProgress(0);
-		pm.setMaxProgress(100);
-		this.addImagePdfPageLayout(doc, pm, pageImageCache, pageRegionCache);
+		spm.setStep("Analyzing page text structure");
+		spm.setBaseProgress(70);
+		spm.setProgress(0);
+		spm.setMaxProgress(90);
+		this.addImagePdfPageLayout(doc, spm, pageImageCache, pageRegionCache);
 		
-		//	finally
-		return doc;
+		//	analyze font metrics across whole document
+		spm.setStep("Analyzing font metrics");
+		spm.setBaseProgress(90);
+		spm.setProgress(0);
+		spm.setMaxProgress(100);
+		WordImageAnalysis.analyzeFontMetrics(doc, new CascadingProgressMonitor(spm));
 	}
 	
 	private void addImagePdfPageLayout(final ImDocument doc, ProgressMonitor pm, final Map pageImageCache, final Map pageRegionCache) throws IOException {
 		
 		//	build progress monitor with synchronized methods instead of synchronizing in-code
-		final ProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? pm : new SynchronizedProgressMonitor(pm));
+		final SynchronizedProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? ((SynchronizedProgressMonitor) pm) : new SynchronizedProgressMonitor(pm));
 		
 		//	get document pages
 		final ImPage[] pages = doc.getPages();
 		
 		//	analyze page text layout
+		spm.setBaseProgress(0);
+		spm.setMaxProgress(50);
 		ParallelFor pf = new ParallelFor() {
 			public void doFor(int p) throws Exception {
 				
 				//	update status display (might be inaccurate, but better than lock escalation)
-				spm.setInfo("Doing OCR for page " + p + " of " + pages.length);
+				spm.setInfo("Analyzing layout of page " + p + " of " + pages.length);
 				spm.setProgress((100 * p) / pages.length);
 				
 				//	get page image
-				PageImage pi = ((PageImage) pageImageCache.get(new Integer(p)));
+				PageImage pi = null;
+				if (pageImageCache != null)
+					pi = ((PageImage) pageImageCache.get(new Integer(pages[p].pageId)));
 				if (pi == null)
-					pi = PageImage.getPageImage(doc.docId, p);
+					pi = pages[p].getPageImage();
 				if (pi == null) {
 					spm.setInfo(" - page image not found");
-					throw new RuntimeException("Could not find image for page " + p);
+					throw new IOException("Could not find image for page " + pages[p].pageId);
 				}
 				
 				//	index words by bounding boxes
@@ -2374,7 +3101,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				//	do structure analysis
 				PageAnalysis.splitIntoParagraphs(pages[p].getRegions(BLOCK_ANNOTATION_TYPE), pi.currentDpi, null);
 				spm.setInfo(" - paragraphs done");
-			
+				
 				PageAnalysis.computeColumnLayout(pages[p].getRegions(COLUMN_ANNOTATION_TYPE), pi.currentDpi);
 				spm.setInfo(" - layout analysis done");
 				
@@ -2388,7 +3115,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				Imaging.cleanUpCache(pi.image.hashCode() + "-");
 			}
 		};
-		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pages.length : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
+		ParallelJobRunner.runParallelFor(pf, 0, pages.length, (this.useMultipleCores ? -1 : 1));
 		spm.setProgress(100);
 		
 		//	check errors
@@ -2414,9 +3141,9 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			
 			//	compute line baselines
 			PageImageAnalysis.computeLineBaselines(theBlock, dpi);
-			
-			//	compute remaining line metrics
-			PageImageAnalysis.computeFontMetrics(theBlock, dpi);
+//			
+//			//	compute remaining line metrics
+//			PageImageAnalysis.computeFontMetrics(theBlock, dpi);
 			
 			//	append block content
 			return this.addTextBlockStructure(page, lastWord, theBlock, dpi, wordsByBoxes, pm);
@@ -2441,7 +3168,22 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdfBlocks(byte[] pdfBytes, ProgressMonitor pm) throws IOException {
-		return this.loadImagePdfBlocks(null, null, pdfBytes, 1, pm);
+		return this.loadImagePdfBlocks(null, null, pdfBytes, false, 1, pm);
+	}
+	
+	/**
+	 * Load the pages of a document from an OCR PDF, including their block
+	 * structure. Page images are stored in the page image store handed to the
+	 * constructor. The document structure is analyzed and represented to the
+	 * text block level, but not below. 
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param metaPages expect born-digital meta pages at start of end of PDF?
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadImagePdfBlocks(byte[] pdfBytes, boolean metaPages, ProgressMonitor pm) throws IOException {
+		return this.loadImagePdfBlocks(null, null, pdfBytes, metaPages, 1, pm);
 	}
 	
 	/**
@@ -2459,7 +3201,26 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdfBlocks(ImDocument doc, Document pdfDoc, byte[] pdfBytes, ProgressMonitor pm) throws IOException {
-		return this.loadImagePdfBlocks(doc, pdfDoc, pdfBytes, 1, pm);
+		return this.loadImagePdfBlocks(doc, pdfDoc, pdfBytes, false, 1, pm);
+	}
+	
+	/**
+	 * Load the pages of a document from an OCR PDF, including their block
+	 * structure. Page images are stored in the page image store handed to the
+	 * constructor. The document structure is analyzed and represented to the
+	 * text block level, but not below.  If the argument ImDocument is null,
+	 * this method creates a new one with the MD5 checksum of the argument PDF
+	 * bytes as the ID.
+	 * @param doc the document to store the structural information in
+	 * @param pdfDoc the PDF document to parse
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param metaPages expect born-digital meta pages at start of end of PDF?
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the argument image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadImagePdfBlocks(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, ProgressMonitor pm) throws IOException {
+		return this.loadImagePdfBlocks(doc, pdfDoc, pdfBytes, metaPages, 1, pm);
 	}
 	
 	/**
@@ -2483,10 +3244,35 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdfBlocks(ImDocument doc, Document pdfDoc, byte[] pdfBytes, int scaleFactor, ProgressMonitor pm) throws IOException {
+		return this.loadImagePdfBlocks(doc, pdfDoc, pdfBytes, false,scaleFactor, pm);
+	}
+	
+	/**
+	 * Load the pages of a document from an OCR PDF, including their block
+	 * structure. Page images are stored in the page image store handed to the
+	 * constructor. The document structure is analyzed and represented to the
+	 * text block level, but not below. The scale factor helps with PDFs whose
+	 * page boundaries (media boxes) are set too small. This can be recognized
+	 * in any PDF viewer by the fact that the document is tiny and the writing
+	 * very small at 100% size display. It can also be detected automatically,
+	 * e.g. by means of examining the average height of lines in comparison to
+	 * the DPI number. If the argument ImDocument is null, this method creates
+	 * a new one with the MD5 checksum of the argument PDF bytes as the ID.
+	 * @param doc the document to store the structural information in
+	 * @param pdfDoc the PDF document to parse
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param metaPages expect born-digital meta pages at start of end of PDF?
+	 * @param scaleFactor the scale factor for image PDFs, to correct PDFs that
+	 *            are set too small (DPI number is divided by this factor)
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the argument image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadImagePdfBlocks(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, int scaleFactor, ProgressMonitor pm) throws IOException {
 		
 		//	check arguments
 		if (doc == null)
-			doc = new ImDocument(getChecksum(pdfBytes));
+			doc = this.doCreateDocument(getChecksum(pdfBytes));
 		if (pdfDoc == null) try {
 			pdfDoc = new Document();
 			pdfDoc.setInputStream(new ByteArrayInputStream(pdfBytes), "");
@@ -2504,8 +3290,13 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		if (this.ocrEngine == null)
 			throw new RuntimeException("OCR Engine unavailable, check startup log.");
 		
+		//	more pages than we can process in parallel, don't cache at all to save memory
+		Map pageImageCache;
+		if (pdfDoc.getPageTree().getNumberOfPages() > Runtime.getRuntime().availableProcessors())
+			pageImageCache = null;
+		
 		//	cache page images (only binary and gray scale, and only up to 300 DPI, as memory consumption gets too high beyond that)
-		Map pageImageCache = Collections.synchronizedMap(new HashMap() {
+		else pageImageCache = Collections.synchronizedMap(new HashMap() {
 			public Object put(Object cacheKey, Object pageImage) {
 				if (pageImage instanceof PageImage) {
 					PageImage pi = ((PageImage) pageImage);
@@ -2523,7 +3314,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		pm.setBaseProgress(0);
 		pm.setProgress(0);
 		pm.setMaxProgress(40);
-		this.addImagePdfPages(doc, pdfDoc, pdfBytes, scaleFactor, pm, pageImageCache);
+		this.addImagePdfPages(doc, pdfDoc, pdfBytes, metaPages, scaleFactor, pm, pageImageCache);
 		
 		//	preserve source PDF in supplement
 		ImSupplement.Source.createSource(doc, "application/pdf", pdfBytes);
@@ -2539,7 +3330,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		return doc;
 	}
 	
-	private ImDocument addImagePdfPageBlocks(final ImDocument doc, ProgressMonitor pm, final Map pageImageCache, final Map pageRegionCache) throws IOException {
+	private void addImagePdfPageBlocks(final ImDocument doc, ProgressMonitor pm, final Map pageImageCache, final Map pageRegionCache) throws IOException {
 		
 		//	build progress monitor with synchronized methods instead of synchronizing in-code
 		final ProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? pm : new SynchronizedProgressMonitor(pm));
@@ -2556,12 +3347,14 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				spm.setProgress((100 * p) / pages.length);
 				
 				//	get page image
-				PageImage pi = ((PageImage) pageImageCache.get(new Integer(p)));
+				PageImage pi = null;
+				if (pageImageCache != null)
+					pi = ((PageImage) pageImageCache.get(new Integer(pages[p].pageId)));
 				if (pi == null)
-					pi = PageImage.getPageImage(doc.docId, p);
+					pi = pages[p].getPageImage();
 				if (pi == null) {
 					spm.setInfo(" - page image not found");
-					throw new RuntimeException("Could not find image for page " + p);
+					throw new IOException("Could not find image for page " + pages[p].pageId);
 				}
 				
 				//	obtain higher level page structure
@@ -2573,9 +3366,15 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						pageRegionCache.put(pages[p], pageRootRegion);
 					}
 				
-				//	do OCR
+				//	do OCR (might have to try multiple times if for some reason OCR instance pool is smaller than number of parallel threads trying to use it)
 				spm.setInfo(" - doing OCR");
-				ocrEngine.doBlockOcr(pages[p], pi, spm);
+				for (int attempts = 0; attempts < 16; attempts++) try {
+					ocrEngine.doBlockOcr(pages[p], pi, new CascadingProgressMonitor(spm));
+					break;
+				}
+				catch (OcrInstanceUnavailableException oiue) {
+					spm.setInfo(" - re-attempting (" + (attempts+1) + ") OCR for page " + p);
+				}
 				spm.setInfo(" - OCR done");
 				
 				//	clean up regions and mark images
@@ -2585,14 +3384,11 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				Imaging.cleanUpCache(pi.image.hashCode() + "-");
 			}
 		};
-		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pages.length : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
+		ParallelJobRunner.runParallelFor(pf, 0, pages.length, (this.useMultipleCores ? -1 : 1));
 		spm.setProgress(100);
 		
 		//	check errors
 		this.checkException(pf);
-		
-		//	... finally
-		return doc;
 	}
 	
 	private void addRegionBlocks(ImPage page, Region theRegion, int dpi, ProgressMonitor pm) {
@@ -2626,14 +3422,31 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * automatically, e.g. by means of examining the average height of lines in
 	 * comparison to the DPI number.
 	 * @param pdfBytes the raw binary data the the PDF document was parsed from
-	 * @param scaleFactor the scale factor for image PDFs, to correct PDFs that
-	 *            are set too small (DPI number is divided by this factor)
 	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 * @return the image markup document
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdfPages(byte[] pdfBytes, ProgressMonitor pm) throws IOException {
-		return this.loadImagePdfPages(null, null, pdfBytes, 1, pm);
+		return this.loadImagePdfPages(null, null, pdfBytes, false, 1, pm);
+	}
+	
+	/**
+	 * Load the pages of a document from an OCR PDF. Page images are stored in
+	 * the page image store handed to the constructor. The document structure is
+	 * not analyzed or represented beyond the page level. The scale factor helps
+	 * with PDFs whose page boundaries (media boxes) are set too small. This can
+	 * be recognized in any PDF viewer by the fact that the document is tiny and
+	 * the writing very small at 100% size display. It can also be detected
+	 * automatically, e.g. by means of examining the average height of lines in
+	 * comparison to the DPI number.
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param metaPages expect born-digital meta pages at start of end of PDF?
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadImagePdfPages(byte[] pdfBytes, boolean metaPages, ProgressMonitor pm) throws IOException {
+		return this.loadImagePdfPages(null, null, pdfBytes, metaPages, 1, pm);
 	}
 	
 	/**
@@ -2650,14 +3463,35 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @param doc the document to store the structural information in
 	 * @param pdfDoc the PDF document to parse
 	 * @param pdfBytes the raw binary data the the PDF document was parsed from
-	 * @param scaleFactor the scale factor for image PDFs, to correct PDFs that
-	 *            are set too small (DPI number is divided by this factor)
 	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 * @return the argument image markup document
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdfPages(ImDocument doc, Document pdfDoc, byte[] pdfBytes, ProgressMonitor pm) throws IOException {
-		return this.loadImagePdfPages(doc, pdfDoc, pdfBytes, 1, pm);
+		return this.loadImagePdfPages(doc, pdfDoc, pdfBytes, false, 1, pm);
+	}
+	
+	/**
+	 * Load the pages of a document from an OCR PDF. Page images are stored in
+	 * the page image store handed to the constructor. The document structure is
+	 * not analyzed or represented beyond the page level. The scale factor helps
+	 * with PDFs whose page boundaries (media boxes) are set too small. This can
+	 * be recognized in any PDF viewer by the fact that the document is tiny and
+	 * the writing very small at 100% size display. It can also be detected
+	 * automatically, e.g. by means of examining the average height of lines in
+	 * comparison to the DPI number. If the argument ImDocument is null, this
+	 * method creates a new one with the MD5 checksum of the argument PDF bytes
+	 * as the ID.
+	 * @param doc the document to store the structural information in
+	 * @param pdfDoc the PDF document to parse
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param metaPages expect born-digital meta pages at start of end of PDF?
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the argument image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadImagePdfPages(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, ProgressMonitor pm) throws IOException {
+		return this.loadImagePdfPages(doc, pdfDoc, pdfBytes, metaPages, 1, pm);
 	}
 	
 	/**
@@ -2681,10 +3515,35 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdfPages(ImDocument doc, Document pdfDoc, byte[] pdfBytes, int scaleFactor, ProgressMonitor pm) throws IOException {
+		return this.loadImagePdfPages(doc, pdfDoc, pdfBytes, false, scaleFactor, pm);
+	}
+	
+	/**
+	 * Load the pages of a document from an OCR PDF. Page images are stored in
+	 * the page image store handed to the constructor. The document structure is
+	 * not analyzed or represented beyond the page level. The scale factor helps
+	 * with PDFs whose page boundaries (media boxes) are set too small. This can
+	 * be recognized in any PDF viewer by the fact that the document is tiny and
+	 * the writing very small at 100% size display. It can also be detected
+	 * automatically, e.g. by means of examining the average height of lines in
+	 * comparison to the DPI number. If the argument ImDocument is null, this
+	 * method creates a new one with the MD5 checksum of the argument PDF bytes
+	 * as the ID.
+	 * @param doc the document to store the structural information in
+	 * @param pdfDoc the PDF document to parse
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param metaPages expect born-digital meta pages at start of end of PDF?
+	 * @param scaleFactor the scale factor for image PDFs, to correct PDFs that
+	 *            are set too small (DPI number is divided by this factor)
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the argument image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadImagePdfPages(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, int scaleFactor, ProgressMonitor pm) throws IOException {
 		
 		//	check arguments
 		if (doc == null)
-			doc = new ImDocument(getChecksum(pdfBytes));
+			doc = this.doCreateDocument(getChecksum(pdfBytes));
 		if (pdfDoc == null) try {
 			pdfDoc = new Document();
 			pdfDoc.setInputStream(new ByteArrayInputStream(pdfBytes), "");
@@ -2703,7 +3562,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		pm.setBaseProgress(0);
 		pm.setProgress(0);
 		pm.setMaxProgress(100);
-		this.addImagePdfPages(doc, pdfDoc, pdfBytes, scaleFactor, pm, null);
+		this.addImagePdfPages(doc, pdfDoc, pdfBytes, metaPages, scaleFactor, pm, null);
 		
 		//	preserve source PDF in supplement
 		ImSupplement.Source.createSource(doc, "application/pdf", pdfBytes);
@@ -2712,537 +3571,752 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		return doc;
 	}
 	
-	private void addImagePdfPages(final ImDocument doc, final Document pdfDoc, final byte[] pdfBytes, final int scaleFactor, ProgressMonitor pm, Map pageImageCache) throws IOException {
+	private static class PImagePart {
+		final int pageId;
+		final String name;
+		final Rectangle2D pdfBounds;
+		final double pdfRotation;
+		final PStream data;
+		final int dpi;
+		final BoundingBox bounds;
+		PImagePart(int pageId, String name, Rectangle2D pdfBounds, double pdfRotation, PStream data, int dpi, BoundingBox bounds) {
+			this.pageId = pageId;
+			this.name = name;
+			this.pdfBounds = pdfBounds;
+			this.pdfRotation = pdfRotation;
+			this.data = data;
+			this.dpi = dpi;
+			this.bounds = bounds;
+		}
+	}
+	
+	private void addImagePdfPages(final ImDocument doc, final Document pdfDoc, final byte[] pdfBytes, final boolean metaPages, final int scaleFactor, ProgressMonitor pm, Map pageImageCache) throws IOException {
 		
 		//	build progress monitor with synchronized methods instead of synchronizing in-code
-		final ProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? pm : new SynchronizedProgressMonitor(pm));
+		SynchronizedProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? ((SynchronizedProgressMonitor) pm) : new SynchronizedProgressMonitor(pm));
 		
 		//	load document structure (IcePDF is better at that ...)
-		final Catalog catalog = pdfDoc.getCatalog();
-		final Library library = catalog.getLibrary();
-		final PageTree pageTree = catalog.getPageTree();
+		Catalog catalog = pdfDoc.getCatalog();
+		PageTree pageTree = catalog.getPageTree();
 		
-//		//	we're testing, and the test page image has already been found
-//		//	WE CANNOT DO THIS RIGHT HERE, AS THIS ALSO APPLIES TO A BORN-DIGITAL PDF WHEN NOT LOADED FOR THE FIRST TIME
-//		if ((PdfExtractorTest.aimAtPage != -1) && this.imageStore.isPageImageAvailable(doc.docId, PdfExtractorTest.aimAtPage)) {
-//			for (int p = 0; p < pageTree.getNumberOfPages(); p++) {
-//				BoundingBox pageBounds;
-//				if (p == PdfExtractorTest.aimAtPage) {
-//					PageImageInputStream piis = this.imageStore.getPageImageAsStream(doc.docId, p);
-//					piis.close();
-//					pageBounds = new BoundingBox(0, ((piis.originalWidth * piis.currentDpi) / piis.originalDpi), 0, ((piis.originalHeight * piis.currentDpi) / piis.originalDpi));
-//				}
-//				else pageBounds = new BoundingBox(0, 32, 0, 44); // have to use these numbers to prevent 0 or 1 step in page word index
-//				ImPage page = new ImPage(doc, p, pageBounds);
-//			}
-//			return;
-//		}
-//		
+		//	parse PDF
+		HashMap objects = PdfParser.getObjects(pdfBytes);
+		
+		//	decrypt streams and strings
+		PdfParser.decryptObjects(objects, pdfDoc.getSecurityManager());
+		
+		//	get basic page data (takes progress to 30%)
+		PPageData[] pData = this.getPdfPageData(doc, false, pageTree, objects, spm);
+		
+		//	add page images
+		this.addImagePdfPages(doc, pData, pdfDoc, pageTree, objects, metaPages, scaleFactor, spm, pageImageCache);
+	}
+	
+	private void addImagePdfPages(final ImDocument doc, final PPageData[] pData, final Document pdfDoc, final PageTree pageTree, final Map objects, final boolean metaPages, final int scaleFactor, final SynchronizedProgressMonitor spm, Map pageImageCache) throws IOException {
+		
 		//	extract page objects
 		spm.setInfo("Getting page objects");
 		final Page[] pdfPages = new Page[pageTree.getNumberOfPages()];
-		final Hashtable[] pages = new Hashtable[pageTree.getNumberOfPages()];
-		for (int p = 0; p < pageTree.getNumberOfPages(); p++) {
+		for (int p = 0; p < pageTree.getNumberOfPages(); p++)
 			pdfPages[p] = pageTree.getPage(p, "");
-			if (pdfPages[p] == null)
-				pages[p] = new Hashtable();
-			else pages[p] = pdfPages[p].getEntries();
-		}
 		spm.setInfo(" --> got " + pageTree.getNumberOfPages() + " page objects");
-		spm.setProgress(2);
 		
-//		//	test if we have to extract any page images at all
-//		//	WE CANNOT DO THIS RIGHT HERE, AS THIS ALSO APPLIES TO A BORN-DIGITAL PDF WHEN NOT LOADED FOR THE FIRST TIME
-//		boolean gotAllPageImages = true;
-//		pm.setInfo("Checking if page images to extract");
-//		for (int p = 0; p < pages.length; p++) {
-//			if ((PdfExtractorTest.aimAtPage != -1) && (PdfExtractorTest.aimAtPage != p))
-//				continue;
-//			if (!this.imageStore.isPageImageAvailable(doc.docId, p)) {
-//				gotAllPageImages = false;
-//				break;
-//			}
-//		}
-//		
-//		//	we already have all page images in cache, save the hassle
-//		//	WE CANNOT DO THIS RIGHT HERE, AS THIS ALSO APPLIES TO A BORN-DIGITAL PDF WHEN NOT LOADED FOR THE FIRST TIME (GENERIC LOAD OF BORN-DIGITAL PDF TRIGGERS MISTAKING IT AS SCANNED !!!)
-//		if (gotAllPageImages) {
-//			pm.setInfo(" --> all page images extracted before, loading from cache");
-//			for (int p = 0; p < pageTree.getNumberOfPages(); p++) {
-//				pm.setProgress(2 + ((p * 98) / pages.length));
-//				PageImageInputStream piis = this.imageStore.getPageImageAsStream(doc.docId, p);
-//				piis.close();
-//				BoundingBox pageBounds = new BoundingBox(0, ((piis.originalWidth * piis.currentDpi) / piis.originalDpi), 0, ((piis.originalHeight * piis.currentDpi) / piis.originalDpi));
-//				ImPage page = new ImPage(doc, p, pageBounds);
-//			}
-//			pm.setProgress(100);
-//			return;
-//		}
-//		
-		//	read objects
-		spm.setInfo("Getting remaining objects");
-		final Map objects = PdfParser.getObjects(pdfBytes);
-		spm.setInfo(" --> done");
-		spm.setProgress(10);
+		//	prepare working in parallel
+		ParallelFor pf;
 		
-		//	extract page image objects
-		spm.setInfo("Getting page image objects");
-		final HashMap[] pageImages = new HashMap[pages.length];
-		final int[] minPageImages = {Integer.MAX_VALUE};
-		final int[] maxPageImages = {0};
-		final int[] sumPageImages = {0};
-		ParallelFor pf = new ParallelFor() {
+		//	extract page objects
+		spm.setStep("Extracting page figures");
+		spm.setBaseProgress(5);
+		spm.setProgress(0);
+		spm.setMaxProgress(15);
+		final ArrayList[] pageImageParts = new ArrayList[pageTree.getNumberOfPages()];
+		pf = new ParallelFor() {
 			public void doFor(int p) throws Exception {
 				
-				//	any use going on?
-				synchronized (minPageImages) {
-					if (minPageImages[0] == 0)
-						return;
-				}
+				//	nothing to work with
+				if (pData[p] == null)
+					return;
 				
-				//	initialize next page
-				pageImages[p] = new HashMap(2);
+				//	update status display (might be inaccurate, but better than lock escalation)
+				spm.setInfo("Importing page " + p + " of " + pData.length);
+				spm.setProgress((p * 100) / pData.length);
 				
-				//	check contents (not whole resource dictionary might be rendered in every page)
-				HashMap contentsImgResKeyPos = new HashMap();
-				Object contentsObj = PdfParser.getObject(pages[p], "Contents", objects);
-				if (contentsObj == null)
-					spm.setInfo(" --> content not found");
-				else {
-					spm.setInfo(" --> got content");
-					ByteArrayOutputStream baos = new ByteArrayOutputStream();
-					if (contentsObj instanceof PStream) {
-						Object filter = ((PStream) contentsObj).params.get("Filter");
-						spm.setInfo("   --> stream content, filter is " + filter + " (from " + ((PStream) contentsObj).params + ")");
-//						try {
-							PdfParser.decode(filter, ((PStream) contentsObj).bytes, ((PStream) contentsObj).params, baos, objects);
-//						} catch (Exception e) { pm.setInfo("   --> decoding failed: " + e.getMessage()); }
-					}
-					else if (contentsObj instanceof Vector) {
-						spm.setInfo("   --> array content");
-						for (Iterator cit = ((Vector) contentsObj).iterator(); cit.hasNext();) {
-							Object contentObj = PdfParser.dereference(cit.next(), objects);
-							if (contentObj instanceof PStream) {
-								Object filter = ((PStream) contentObj).params.get("Filter");
-								if (filter == null)
-									continue;
-								spm.setInfo("   --> stream content part, filter is " + filter + " (from " + ((PStream) contentObj).params + ")");
-//								try {
-									 PdfParser.decode(filter, ((PStream) contentObj).bytes, ((PStream) contentObj).params, baos, objects);
-//								} catch (Exception e) { pm.setInfo("   --> decoding failed: " + e.getMessage()); }
-							}
-						}
-					}
-					System.out.println(" --> content decoded: " + new String(baos.toByteArray()));
-					BufferedReader baosBr = new BufferedReader(new StringReader(new String(baos.toByteArray())));
-					int imgCount = 0;
-					for (String contentsLine; (contentsLine = baosBr.readLine()) != null;) {
-						if (!contentsLine.matches("\\/[\\u0021-\\u007E]+\\s+Do"))
-							continue;
-						String imgResKey = contentsLine.substring("/".length());
-						imgResKey = imgResKey.substring(0, (imgResKey.length() - " Do".length())).trim();
-						contentsImgResKeyPos.put(imgResKey, new Integer(imgCount++));
-					}
-				}
-				
-				//	get resources
-				Object resourcesObj = PdfParser.getObject(pages[p], "Resources", objects);
-				if ((resourcesObj == null) || !(resourcesObj instanceof Hashtable)) {
-					spm.setInfo(" --> resource map not found");
-					synchronized (minPageImages) {
-						minPageImages[0] = 0;
-					}
+				//	nothing we can do here
+				if (pData[p].figures.length == 0) {
+					spm.setInfo(" ==> page image not found");
 					return;
 				}
 				
-				//	map IDs to all images in page
-				int imgCount = 0;
-				for (Iterator rit = getSortedKeyIterator((Hashtable) resourcesObj); rit.hasNext();) {
-					Object resKey = rit.next();
-					Object resObj = PdfParser.dereference(((Hashtable) resourcesObj).get(resKey), objects);
-					if (resObj == null)
-						continue;
-					if (resObj instanceof PStream) {
-						pageImages[p].put(("i" + imgCount), new PImage((PStream) resObj));
-						PImage mImg = PdfParser.getMaskImage(((PStream) resObj), objects);
-						if (mImg != null)
-							pageImages[p].put(("m" + imgCount), mImg);
-						imgCount++;
+				//	get XObject dictionary from page resource dictionary
+				Object xObjectsObj = PdfParser.dereference(pData[p].pdfPageResources.get("XObject"), objects);
+				if (xObjectsObj instanceof Hashtable) {
+					Hashtable xObjects = ((Hashtable) xObjectsObj);
+					spm.setInfo("   - XObject dictionary is " + xObjects);
+					
+					//	collect all page figures
+					pageImageParts[p] = new ArrayList();
+					
+					//	store figures / figure parts
+					for (int f = 0; f < pData[p].figures.length; f++) {
+						spm.setInfo("   - " + pData[p].figures[f]);
+						this.addPImagePart(p, xObjects, pData[p].pdfPageBox, pData[p].rotate, pData[p].figures[f], pageImageParts[p], spm);
 					}
-					else if ("XObject".equalsIgnoreCase(resKey.toString()) && (resObj instanceof Hashtable)) {
-						for (Iterator xrit = getSortedKeyIterator((Hashtable) resObj); xrit.hasNext();) {
-							Object xResKey = xrit.next();
-							Object xResObj = PdfParser.dereference(((Hashtable) resObj).get(xResKey), objects);
-							if (xResObj == null)
-								continue;
-							if ((contentsImgResKeyPos.size() != 0) && !contentsImgResKeyPos.containsKey(xResKey.toString()))
-								continue;
-							if (xResObj instanceof PStream) {
-								if (contentsImgResKeyPos.isEmpty())
-									pageImages[p].put(("i" + imgCount), new PImage((PStream) xResObj));
-								else pageImages[p].put(("i" + contentsImgResKeyPos.get(xResKey.toString())), new PImage((PStream) xResObj));
-								PImage mImg = PdfParser.getMaskImage(((PStream) xResObj), objects);
-								if (mImg != null) {
-									if (contentsImgResKeyPos.isEmpty())
-										pageImages[p].put(("m" + imgCount), mImg);
-									else pageImages[p].put(("m" + contentsImgResKeyPos.get(xResKey.toString())), new PImage((PStream) xResObj));
-								}
-								imgCount++;
-							}
-						}
+					
+					//	assess extent and area of page image parts
+					float pipMinX = ((float) pData[p].pdfPageBox.getMaxX());
+					float pipMaxX = 0;
+					float pipMinY = ((float) pData[p].pdfPageBox.getMaxY());
+					float pipMaxY = 0;
+					float pipAreaSum = 0;
+					for (int i = 0; i < pageImageParts[p].size(); i++) {
+						PImagePart pip = ((PImagePart) pageImageParts[p].get(i));
+						pipMinX = Math.min(pipMinX, ((float) pip.pdfBounds.getMinX()));
+						pipMaxX = Math.max(pipMaxX, ((float) pip.pdfBounds.getMaxX()));
+						pipMinY = Math.min(pipMinY, ((float) pip.pdfBounds.getMinY()));
+						pipMaxY = Math.max(pipMaxY, ((float) pip.pdfBounds.getMaxY()));
+						pipAreaSum += ((float) Math.abs(pip.pdfBounds.getWidth() * pip.pdfBounds.getHeight()));
 					}
+					
+					//	combined width of images in page less than 90% of page width, too little for a scan
+					if ((Math.abs(pipMaxX - pipMinX) * 10) < (Math.abs(pData[p].pdfPageBox.getWidth()) * 9))
+						pageImageParts[p] = null;
+					
+					//	combined height of images in page less than 90% of page height, too little for a scan
+					else if ((Math.abs(pipMaxY - pipMinY) * 10) < (Math.abs(pData[p].pdfPageBox.getHeight()) * 9))
+						pageImageParts[p] = null;
+					
+					//	combined area of images in page less than 90% of page area, too little for a scan
+					else if ((Math.abs(pipAreaSum) * 10) < (Math.abs(pData[p].pdfPageBox.getWidth() * pData[p].pdfPageBox.getHeight()) * 9))
+						pageImageParts[p] = null;
+				}
+				else spm.setInfo(" ==> XObject dictionary not found, cannot decode images");
+			}
+			
+			private void addPImagePart(int pageId, Hashtable xObjects, Rectangle2D.Float pageBounds, int rotate, PFigure pFigure, ArrayList pImageParts, ProgressMonitor pm) throws IOException {
+				
+				//	resolve image names against XObject dictionary
+				Object pFigureKey = xObjects.get(pFigure.name);
+				pm.setInfo("     - reference is " + pFigureKey);
+				
+				//	get actual image object
+				Object pFigureDataObj = PdfParser.dereference(pFigureKey, objects);
+				pm.setInfo("     - figure data is " + pFigureDataObj);
+				if (!(pFigureDataObj instanceof PStream)) {
+					pm.setInfo("   --> strange figure data");
+					return;
+				}
+				PStream pFigureData = ((PStream) pFigureDataObj);
+				
+				//	catch forms, which also come as XObject
+				if ((pFigureData.params.get("Subtype") != null) && !"Image".equals(pFigureData.params.get("Subtype").toString())){
+					pm.setInfo("   --> not an image");
+					return;
 				}
 				
-				//	update registers
-				synchronized (minPageImages) {
-					minPageImages[0] = Math.min(minPageImages[0], pageImages[p].size());
+				//	compute image resolution
+				int width = ((Number) pFigureData.params.get("Width")).intValue();
+				int height = ((Number) pFigureData.params.get("Height")).intValue();
+				float dpiRatio = ((float) ((((float) width) / pFigure.bounds.getWidth()) + (((float) height) / pFigure.bounds.getHeight())) / 2);
+				float rawDpi = dpiRatio * defaultDpi;
+				int pFigureDpi = (Math.round(rawDpi / 10) * 10);
+				pm.setInfo("     - resolution computed as " + pFigureDpi + " DPI (" + rawDpi + ")");
+				
+				//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
+				BoundingBox pFigureBounds = getBoundingBox(pFigure.bounds, pageBounds, dpiRatio, rotate);
+				
+				//	store figure for selection and further processing
+				pImageParts.add(new PImagePart(pageId, pFigure.name, pFigure.bounds, pFigure.rotation, pFigureData, pFigureDpi, pFigureBounds));
+				
+				//	get mask images as well if given (simply recurse)
+				if (pFigureData.params.containsKey("Mask")) {
+					String pMaskFigureName = (pFigure.name + "_mask");
+					xObjects.put(pMaskFigureName, pFigureData.params.get("Mask"));
+					pm.setInfo("   - adding mask figure");
+					this.addPImagePart(pageId, xObjects, pageBounds, rotate, new PFigure(pMaskFigureName, pFigure.bounds, pFigure.rotation, pFigure.rightSideLeft, pFigure.upsideDown), pImageParts, pm);
 				}
-				synchronized (maxPageImages) {
-					maxPageImages[0] = Math.max(maxPageImages[0], pageImages[p].size());
-				}
-				synchronized (sumPageImages) {
-					sumPageImages[0] += pageImages[p].size();
+				if (pFigureData.params.containsKey("SMask")) {
+					String pMaskFigureName = (pFigure.name + "_smask");
+					xObjects.put(pMaskFigureName, pFigureData.params.get("SMask"));
+					pm.setInfo("   - adding smask figure");
+					this.addPImagePart(pageId, xObjects, pageBounds, rotate, new PFigure(pMaskFigureName, pFigure.bounds, pFigure.rotation, pFigure.rightSideLeft, pFigure.upsideDown), pImageParts, pm);
 				}
 			}
 		};
 		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pageTree.getNumberOfPages() : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
-		spm.setInfo(" --> got at least " + minPageImages[0] + ", at most " + maxPageImages[0] + " images per page, " + sumPageImages[0] + " in total");
-		spm.setProgress(20);
+		spm.setProgress(100);
 		
 		//	check errors
 		this.checkException(pf);
 		
+		//	assess result
+		int minPageImages = Integer.MAX_VALUE;
+		int maxPageImages = 0;
+		int pageImageCount = 0;
+		HashSet noImagePageIDs = new HashSet();
+		for (int p = 0; p < pdfPages.length; p++) {
+			if ((PdfExtractorTest.aimAtPage != -1) && (PdfExtractorTest.aimAtPage != p))
+				continue;
+			if (pageImageParts[p] == null) {
+				noImagePageIDs.add(new Integer(p));
+				if (!metaPages || ((p >= 2) && (p < (pageImageParts.length - 2))))
+					minPageImages = 0;
+			}
+			else {
+				minPageImages = Math.min(minPageImages, pageImageParts[p].size());
+				maxPageImages = Math.max(maxPageImages, pageImageParts[p].size());
+				pageImageCount += pageImageParts[p].size();
+			}
+		}
+		spm.setInfo(" --> got at least " + minPageImages + ", at most " + maxPageImages + " images per page, " + pageImageCount + " in total");
+		
 		//	check consistency
-		if (minPageImages[0] == 0)
+		if (minPageImages == 0)
 			throw new IOException("Unable to find images for all pages");
+		if (noImagePageIDs.size() != 0) {
+			
+			//	too many meta pages
+			if (noImagePageIDs.size() > 2)
+				throw new IOException("Unable to find images for all pages");
+			else if (metaPages) {
+				
+				//	one or two leading meta pages
+				if (noImagePageIDs.contains(new Integer(0)) && ((noImagePageIDs.size() == 1) || noImagePageIDs.contains(new Integer(1))))
+					spm.setInfo(" --> ignoring " + noImagePageIDs.size() + " leading meta pages");
+				
+				//	one or two tailing meta pages
+				else if (noImagePageIDs.contains(new Integer(pageImageParts.length - 1)) && ((noImagePageIDs.size() == 1) || noImagePageIDs.contains(new Integer(pageImageParts.length - 2))))
+					spm.setInfo(" --> ignoring " + noImagePageIDs.size() + " tailing meta pages");
+				
+				//	something else, something weird
+				else throw new IOException("Unable to find images for all pages");
+			}
+			
+			//	no meta pages expected
+			else throw new IOException("Unable to find images for all pages");
+		}
+		
 		
 		//	extract page bounds and assess format
 		spm.setInfo("Determining page proportions");
-		Rectangle2D.Float[] pageBoxes = new Rectangle2D.Float[pages.length];
+		Rectangle2D.Float[] pdfPageBoxes = new Rectangle2D.Float[pData.length];
+		Rectangle2D.Float[] sPdfPageBoxes = new Rectangle2D.Float[pData.length];
 		int portraitPageCount = 0;
 		int landscapePageCount = 0;
+		int overA4widthPageCount = 0;
+		int overA4heightPageCount = 0;
 		for (int p = 0; p < pageTree.getNumberOfPages(); p++) {
-			pageBoxes[p] = pageTree.getPage(p, "").getMediaBox();
-			if ((pageBoxes[p].getWidth() * 5) < (pageBoxes[p].getHeight() * 4))
+			pdfPageBoxes[p] = ((pData[p] == null) ? pageTree.getPage(p, "").getMediaBox() : pData[p].pdfPageBox);
+			if (noImagePageIDs.contains(new Integer(p)))
+				continue;
+			if ((pdfPageBoxes[p].getWidth() * 5) < (pdfPageBoxes[p].getHeight() * 4)) {
 				portraitPageCount++;
-			else if ((pageBoxes[p].getHeight() * 5) < (pageBoxes[p].getWidth() * 4))
+				if (pdfPageBoxes[p].width > (a4inchWidth * defaultDpi))
+					overA4widthPageCount++;
+				if (pdfPageBoxes[p].height > (a4inchHeigth * defaultDpi))
+					overA4heightPageCount++;
+			}
+			else if ((pdfPageBoxes[p].getHeight() * 5) < (pdfPageBoxes[p].getWidth() * 4)) {
 				landscapePageCount++;
+				if (pdfPageBoxes[p].width > (a4inchWidth * 2 * defaultDpi))
+					overA4widthPageCount++;
+				if (pdfPageBoxes[p].width > (a4inchHeigth * defaultDpi))
+					overA4heightPageCount++;
+			}
 		}
 		if (portraitPageCount < landscapePageCount)
 			spm.setInfo(" ==> pages are landscape, likely double pages");
 		else spm.setInfo(" ==> pages are portrait, likely single pages");
-		
-		//	find out which page image holds the text
-		spm.setInfo("Determining text image ID");
-		final String textImageId = this.findTextImageId(pageImages, pageTree, objects, (portraitPageCount < landscapePageCount), library);
-		if (textImageId == null)
-			throw new IOException("Unable to find images for all pages");
-		spm.setInfo(" ==> text page image id is " + textImageId);
-		spm.setProgress(30);
+		if (((overA4widthPageCount * 2) > pdfPageBoxes.length) && ((overA4heightPageCount * 2) > pdfPageBoxes.length)) {
+			spm.setInfo("Page boxes seem to be out of bounds, scaling");
+			int maxOverA5dpi = Integer.MAX_VALUE;
+			for (int p = 0; p < pageTree.getNumberOfPages(); p++) {
+				if (noImagePageIDs.contains(new Integer(p)))
+					continue;
+				for (int s = (scaleUpDpi.length - 1); s >= 0; s--) {
+					if ((pdfPageBoxes[p].height) > (a5inchHeigth * scaleUpDpi[s])) {
+						maxOverA5dpi = Math.min(maxOverA5dpi, scaleUpDpi[s]);
+						break;
+					}
+					else if ((pdfPageBoxes[p].width) > (a5inchWidth * ((portraitPageCount < landscapePageCount) ? 2 : 1) * scaleUpDpi[s])) {
+						maxOverA5dpi = Math.min(maxOverA5dpi, scaleUpDpi[s]);
+						break;
+					}
+				}
+			}
+			if (maxOverA5dpi == Integer.MAX_VALUE)
+				spm.setInfo(" ==> page boxes seem to be OK after all");
+			else {
+				spm.setInfo(" ==> maximum DPI over A5 page size is " + maxOverA5dpi);
+				for (int p = 0; p < pageTree.getNumberOfPages(); p++) {
+					if (noImagePageIDs.contains(new Integer(p)))
+						continue;
+					sPdfPageBoxes[p] = new Rectangle2D.Float(((pdfPageBoxes[p].x * defaultDpi) / maxOverA5dpi), ((pdfPageBoxes[p].y * defaultDpi) / maxOverA5dpi), ((pdfPageBoxes[p].width * defaultDpi) / maxOverA5dpi), ((pdfPageBoxes[p].height * defaultDpi) / maxOverA5dpi));
+					spm.setInfo(" - " + pdfPageBoxes[p] + " scaled to " + sPdfPageBoxes[p]);
+				}
+			}
+		}
 		
 		//	extract & save page images
 		if (portraitPageCount < landscapePageCount)
-			this.addImagePdfPagesDouble(doc, scaleFactor, pages, pdfPages, pageBoxes, pageImages, textImageId, objects, pageImageCache, spm, library);
-		else this.addImagePdfPagesSingle(doc, scaleFactor, pages, pdfPages, pageBoxes, pageImages, textImageId, objects, pageImageCache, spm, library);
+			this.addImagePdfPagesDouble(doc, scaleFactor, pdfDoc, pdfPages, pdfPageBoxes, sPdfPageBoxes, pageImageParts, noImagePageIDs, objects, pageImageCache, spm);
+		else this.addImagePdfPagesSingle(doc, scaleFactor, pdfDoc, pdfPages, pdfPageBoxes, sPdfPageBoxes, pageImageParts, noImagePageIDs, objects, pageImageCache, spm);
+		
+		//	check errors
+		this.checkException(pf);
+		
+		//	garbage collect page images
+		System.gc();
 	}
 	
-	private void addImagePdfPagesSingle(final ImDocument doc, final int scaleFactor, final Hashtable[] pages, final Page[] pdfPages, final Rectangle2D.Float[] pageBoxes, final HashMap[] pageImages, final String textImageId, final Map objects, final Map pageImageCache, ProgressMonitor pm, final Library library) throws IOException {
-		
-		//	build progress monitor with synchronized methods instead of synchronizing in-code
-		final ProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? pm : new SynchronizedProgressMonitor(pm));
+	private void addImagePdfPagesSingle(final ImDocument doc, final int scaleFactor, final Document pdfDoc, final Page[] pdfPages, final Rectangle2D.Float[] pdfPageBoxes, final Rectangle2D.Float[] sPdfPageBoxes, final ArrayList[] pageImageParts, final Set noImagePageIDs, final Map objects, final Map pageImageCache, final SynchronizedProgressMonitor spm) throws IOException {
 		
 		//	extract & save page images
-		final BoundingBox[] pageBounds = new BoundingBox[pages.length];
+		final BoundingBox[] pageBoxes = new BoundingBox[pdfPages.length];
 		ParallelFor pf = new ParallelFor() {
 			public void doFor(int p) throws Exception {
 				
+				//	nothing to work with
+				if (pageImageParts[p] == null)
+					return;
+				
 				//	update status display (might be inaccurate, but better than lock escalation)
-				spm.setStep("Importing page " + p + " of " + pages.length);
-				spm.setProgress(30 + ((p * 70) / pages.length));
+				spm.setStep("Importing page " + p + " of " + pdfPages.length);
+				spm.setProgress(30 + ((p * 70) / pdfPages.length));
 				spm.setInfo(" - getting page image");
 				
+				//	adjust to ignore meta pages
+				if (noImagePageIDs.contains(new Integer(p)))
+					return;
+				int pDelta = (noImagePageIDs.contains(new Integer(0)) ? noImagePageIDs.size() : 0);
+				
 				//	image already extracted
-				if (imageStore.isPageImageAvailable(doc.docId, p)) {
+				if (imageStore.isPageImageAvailable(doc.docId, (p - pDelta))) {
 					spm.setInfo(" --> image already extracted");
 					spm.setInfo(" - getting image data ...");
-					PageImageInputStream piis = imageStore.getPageImageAsStream(doc.docId, p);
+					PageImageInputStream piis = imageStore.getPageImageAsStream(doc.docId, (p - pDelta));
 					piis.close();
 					int dpi = piis.currentDpi;
-					pageBounds[p] = new BoundingBox(0, ((piis.originalWidth * piis.currentDpi) / piis.originalDpi), 0, ((piis.originalHeight * piis.currentDpi) / piis.originalDpi));
-					spm.setInfo(" - resolution is " + dpi + " DPI, page bounds are " + pageBounds[p].toString());
+					pageBoxes[p] = new BoundingBox(0, ((piis.originalWidth * piis.currentDpi) / piis.originalDpi), 0, ((piis.originalHeight * piis.currentDpi) / piis.originalDpi));
+					spm.setInfo(" - resolution is " + dpi + " DPI, page bounds are " + pageBoxes[p].toString());
+					return;
 				}
 				
-				//	image not extracted as yet, do it now
-				else {
-					
-					//	get compressed image
-					PImage imageObject = ((PImage) pageImages[p].get(textImageId));
-					if (imageObject == null) {
-						spm.setInfo(" --> image not found");
-						throw new RuntimeException("Could not find image object for page " + p);
-					}
-					spm.setInfo(" --> image not rendered yet");
-					spm.setInfo(" - rendering image ...");
-					
-					//	get raw image
-					BufferedImage pageImage = getImage(imageObject, objects, library, pdfPages[p].getResources());
-					if (pageImage == null) {
-						spm.setInfo(" --> page image generation failed");
-						throw new RuntimeException("Could not generate image for page " + p);
-					}
-					spm.setInfo(" - got page image sized " + pageImage.getWidth() + " x " + pageImage.getHeight());
-					
-					//	compute DPI
-					int dpiScaleFactor = scaleFactor;
-					float dpiRatio = ((((float) pageImage.getWidth()) / pageBoxes[p].width) + (((float) pageImage.getHeight()) / pageBoxes[p].height)) / 2;
-					float rawDpi = dpiRatio * defaultDpi;
-					int dpi = ((Math.round(rawDpi / 10) * 10) / dpiScaleFactor);
-					spm.setInfo(" - resolution computed as " + dpi + " DPI");
-					
-					//	guess DPI based on page size (minimum page size for (very most) publications should be A5 or so)
-					float a5distWidth = Math.abs((pageBoxes[p].width / defaultDpi) - a5inchWidth);
-					float a5distHeigth = Math.abs((pageBoxes[p].height / defaultDpi) - a5inchHeigth);
-					float a7distWidth = Math.abs((pageBoxes[p].width / defaultDpi) - (a5inchWidth / 2));
-					float a7distHeigth = Math.abs((pageBoxes[p].height / defaultDpi) - (a5inchHeigth / 2));
-					while ((a7distWidth < a5distWidth) && (a7distHeigth < a5distHeigth) && (minScaleUpDpi < dpi)) {
-						spm.setInfo(" - A5 dist is " + a5distWidth + " / " + a5distHeigth);
-						spm.setInfo(" - A7 dist is " + a7distWidth + " / " + a7distHeigth);
-						dpiScaleFactor++;
-						dpi = ((Math.round(rawDpi / 10) * 10) / dpiScaleFactor);
-						a5distWidth = Math.abs(((pageBoxes[p].width * dpiScaleFactor) / defaultDpi) - a5inchWidth);
-						a5distHeigth = Math.abs(((pageBoxes[p].height * dpiScaleFactor) / defaultDpi) - a5inchHeigth);
-						a7distWidth = Math.abs(((pageBoxes[p].width * dpiScaleFactor) / defaultDpi) - (a5inchWidth / 2));
-						a7distHeigth = Math.abs(((pageBoxes[p].height * dpiScaleFactor) / defaultDpi) - (a5inchHeigth / 2));
-					}
-					if (dpiScaleFactor > 1)
-						spm.setInfo(" - resolution scaled to " + dpi + " DPI");
-					
-					//	if image is beyond 400 DPI, scale to half of that
-					if (dpi >= minScaleDownDpi) {
-						int scaleDownFactor = 2;
-						while ((dpi / scaleDownFactor) >= minScaleDownDpi)
-							scaleDownFactor++;
-						spm.setInfo(" - scaling page image to " + (dpi / scaleDownFactor) + " DPI");
-						BufferedImage sPageImage = new BufferedImage((pageImage.getWidth() / scaleDownFactor), (pageImage.getHeight() / scaleDownFactor), pageImage.getType());
-						Graphics2D spig = sPageImage.createGraphics();
-						spig.drawImage(pageImage, 0, 0, sPageImage.getWidth(), sPageImage.getHeight(), Color.WHITE, null);
-						pageImage = sPageImage;
-						dpi = (dpi / scaleDownFactor);
-						spm.setInfo(" - page image scaled to " + dpi + " DPI");
-					}
-					
-					//	preserve original page image as supplement
-					synchronized (doc) {
-						ImSupplement.Scan.createScan(doc, p, dpi, pageImage);
-					}
-					
-					//	enhance image (cannot use cache here, as image might change during correction)
-					AnalysisImage ai = Imaging.wrapImage(pageImage, null);
-					spm.setInfo(" - enhancing image ...");
-					ai = Imaging.correctImage(ai, dpi, spm);
-					pageImage = ai.getImage();
-					
-					//	TODO when splitting OCR words for tokenization, pull up bottom of full words that have no descent
-					
-					//	TODO do further cleanup, e.g. removing pencil strokes, etc.
-					//	TODO ==> collect examples and talk to Hilde
-					
-					//	store image
-					String imageName;
-					synchronized (imageStore) {
-						imageName = imageStore.storePageImage(doc.docId, p, pageImage, dpi);
-					}
-					if (imageName == null) {
-						spm.setInfo(" --> page image storage failed");
-						throw new RuntimeException("Could not store image for page " + p);
-					}
-					if (pageImageCache != null)
-						pageImageCache.put(new Integer(p), new PageImage(pageImage, dpi, imageStore)); // specifying image store from outside indicates who's handling the image now, as we know it was stored successfully
-					Imaging.cleanUpCache(pageImage.hashCode() + "-");
-					
-					//	compute page bounds
-					pageBounds[p] = new BoundingBox(0, pageImage.getWidth(), 0, pageImage.getHeight());
-					spm.setInfo(" --> page image stored, page bounds are " + pageBounds[p].toString());
+				//	get raw image
+				BufferedImage pageImage = getPageImage(pageImageParts[p], objects, pdfDoc, pdfPages[p], pdfPageBoxes[p], spm);
+				if (pageImage == null) {
+					spm.setInfo(" --> page image generation failed");
+					throw new IOException("Could not generate image for page " + p);
 				}
+				spm.setInfo(" - got page image sized " + pageImage.getWidth() + " x " + pageImage.getHeight());
+				
+				//	compute DPI
+				int dpiScaleFactor = scaleFactor;
+				float dpiRatioWidth = (((float) pageImage.getWidth()) / pdfPageBoxes[p].width);
+				float dpiRatioHeight = (((float) pageImage.getHeight()) / pdfPageBoxes[p].height);
+				if (((dpiRatioWidth * defaultDpi) < 100) && ((dpiRatioHeight * defaultDpi) < 100) && (sPdfPageBoxes[p] != null)) {
+					dpiRatioWidth = (((float) pageImage.getWidth()) / sPdfPageBoxes[p].width);
+					dpiRatioHeight = (((float) pageImage.getHeight()) / sPdfPageBoxes[p].height);
+					spm.setInfo(" - using scaled resolution");
+				}
+				float dpiRatio = ((dpiRatioWidth + dpiRatioHeight) / 2);
+				float rawDpi = dpiRatio * defaultDpi;
+				int dpi = ((Math.round(rawDpi / 10) * 10) / dpiScaleFactor);
+				spm.setInfo(" - resolution computed as " + dpi + " DPI");
+				
+				//	guess DPI based on page size (minimum page size for (very most) publications should be A5 or so)
+				float a5distWidth = Math.abs((pdfPageBoxes[p].width / defaultDpi) - a5inchWidth);
+				float a5distHeigth = Math.abs((pdfPageBoxes[p].height / defaultDpi) - a5inchHeigth);
+				float a7distWidth = Math.abs((pdfPageBoxes[p].width / defaultDpi) - (a5inchWidth / 2));
+				float a7distHeigth = Math.abs((pdfPageBoxes[p].height / defaultDpi) - (a5inchHeigth / 2));
+				while ((a7distWidth < a5distWidth) && (a7distHeigth < a5distHeigth) && (minScaleUpDpi < dpi)) {
+					spm.setInfo(" - A5 dist is " + a5distWidth + " / " + a5distHeigth);
+					spm.setInfo(" - A7 dist is " + a7distWidth + " / " + a7distHeigth);
+					dpiScaleFactor++;
+					dpi = ((Math.round(rawDpi / 10) * 10) / dpiScaleFactor);
+					a5distWidth = Math.abs(((pdfPageBoxes[p].width * dpiScaleFactor) / defaultDpi) - a5inchWidth);
+					a5distHeigth = Math.abs(((pdfPageBoxes[p].height * dpiScaleFactor) / defaultDpi) - a5inchHeigth);
+					a7distWidth = Math.abs(((pdfPageBoxes[p].width * dpiScaleFactor) / defaultDpi) - (a5inchWidth / 2));
+					a7distHeigth = Math.abs(((pdfPageBoxes[p].height * dpiScaleFactor) / defaultDpi) - (a5inchHeigth / 2));
+				}
+				if (dpiScaleFactor > 1)
+					spm.setInfo(" - resolution scaled to " + dpi + " DPI");
+				
+				//	if image is beyond 400 DPI, scale to half of that
+				if (dpi >= minScaleDownDpi) {
+					int scaleDownFactor = 2;
+					while ((dpi / scaleDownFactor) >= minScaleDownDpi)
+						scaleDownFactor++;
+					spm.setInfo(" - scaling page image to " + (dpi / scaleDownFactor) + " DPI");
+					BufferedImage sPageImage = new BufferedImage((pageImage.getWidth() / scaleDownFactor), (pageImage.getHeight() / scaleDownFactor), pageImage.getType());
+					Graphics2D spig = sPageImage.createGraphics();
+					spig.drawImage(pageImage, 0, 0, sPageImage.getWidth(), sPageImage.getHeight(), Color.WHITE, null);
+					pageImage = sPageImage;
+					dpi = (dpi / scaleDownFactor);
+					spm.setInfo(" - page image scaled to " + dpi + " DPI");
+				}
+				
+				//	preserve original page image as supplement
+				synchronized (doc) {
+					ImSupplement.Scan.createScan(doc, (p - pDelta), dpi, pageImage);
+				}
+				
+				//	enhance image (cannot use cache here, as image might change during correction)
+				AnalysisImage ai = Imaging.wrapImage(pageImage, null);
+				spm.setInfo(" - enhancing image ...");
+				ai = Imaging.correctImage(ai, dpi, spm);
+				pageImage = ai.getImage();
+				
+				//	TODO when splitting OCR words for tokenization, pull up bottom of full words that have no descent
+				
+				//	store image
+				String imageName;
+				synchronized (imageStore) {
+					imageName = imageStore.storePageImage(doc.docId, (p - pDelta), pageImage, dpi);
+				}
+				if (imageName == null) {
+					spm.setInfo(" --> page image storage failed");
+					throw new IOException("Could not store image for page " + p);
+				}
+				if (pageImageCache != null)
+					pageImageCache.put(new Integer((p - pDelta)), new PageImage(pageImage, dpi, imageStore)); // specifying image store from outside indicates who's handling the image now, as we know it was stored successfully
+				Imaging.cleanUpCache(pageImage.hashCode() + "-");
+				
+				//	compute page bounds
+				pageBoxes[p] = new BoundingBox(0, pageImage.getWidth(), 0, pageImage.getHeight());
+				spm.setInfo(" --> page image stored, page bounds are " + pageBoxes[p].toString());
 			}
 		};
-		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pages.length : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
+		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pdfPageBoxes.length : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
 		spm.setProgress(99);
 		
 		//	check errors
 		this.checkException(pf);
 		
 		//	assemble document
-		for (int p = 0; p < pages.length; p++) {
+		for (int p = 0; p < pdfPageBoxes.length; p++) {
 			if ((PdfExtractorTest.aimAtPage != -1) && (PdfExtractorTest.aimAtPage != p))
 				continue;
-			ImPage page = new ImPage(doc, p, pageBounds[p]);
+			
+			//	adjust to ignore meta pages
+			if (noImagePageIDs.contains(new Integer(p)))
+				continue;
+			int pDelta = (noImagePageIDs.contains(new Integer(0)) ? noImagePageIDs.size() : 0);
+			
+			//	create page
+			ImPage page = new ImPage(doc, (p - pDelta), pageBoxes[p]);
 		}
 		
 		//	finally ...
 		spm.setProgress(100);
 	}
 	
-	private void addImagePdfPagesDouble(final ImDocument doc, final int scaleFactor, final Hashtable[] pages, final Page[] pdfPages, final Rectangle2D.Float[] pageBoxes, final HashMap[] pageImages, final String textImageId, final Map objects, final Map pageImageCache, ProgressMonitor pm, final Library library) throws IOException {
-		
-		//	build progress monitor with synchronized methods instead of synchronizing in-code
-		final ProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? pm : new SynchronizedProgressMonitor(pm));
+	private void addImagePdfPagesDouble(final ImDocument doc, final int scaleFactor, final Document pdfDoc, final Page[] pdfPages, final Rectangle2D.Float[] pdfPageBoxes, final Rectangle2D.Float[] sPdfPageBoxes, final ArrayList[] pageImageParts, final Set noImagePageIDs, final Map objects, final Map pageImageCache, final SynchronizedProgressMonitor spm) throws IOException {
 		
 		//	extract & save page images
-		final BoundingBox[] pageBounds = new BoundingBox[pages.length * 2];
+		final BoundingBox[] pageBoxes = new BoundingBox[pdfPages.length * 2];
 		ParallelFor pf = new ParallelFor() {
 			public void doFor(int pp) throws Exception {
 				
+				//	nothing to work with
+				if (pageImageParts[pp] == null)
+					return;
+				
 				//	update status display (might be inaccurate, but better than lock escalation)
-				spm.setStep("Importing double page " + pp + " of " + pages.length);
-				spm.setProgress(30 + ((pp * 70) / pages.length));
+				spm.setStep("Importing double page " + pp + " of " + pdfPages.length);
+				spm.setProgress(30 + ((pp * 70) / pdfPages.length));
 				spm.setInfo(" - getting double page image");
 				
+				//	adjust to ignore meta pages
+				if (noImagePageIDs.contains(new Integer(pp)))
+					return;
+				int ppDelta = (noImagePageIDs.contains(new Integer(0)) ? noImagePageIDs.size() : 0);
+				
 				//	images already extracted
-				if (imageStore.isPageImageAvailable(doc.docId, (pp * 2)) && imageStore.isPageImageAvailable(doc.docId, ((pp * 2) + 1))) {
+				if (imageStore.isPageImageAvailable(doc.docId, ((pp * 2) - ppDelta)) && imageStore.isPageImageAvailable(doc.docId, ((pp * 2) - ppDelta + 1))) {
 					spm.setInfo(" --> image halves already extracted");
 					spm.setInfo(" - getting image data ...");
-					PageImageInputStream piisLeft = imageStore.getPageImageAsStream(doc.docId, (pp * 2));
+					PageImageInputStream piisLeft = imageStore.getPageImageAsStream(doc.docId, ((pp * 2) - ppDelta));
 					piisLeft.close();
 					int dpiLeft = piisLeft.currentDpi;
-					pageBounds[pp * 2] = new BoundingBox(0, ((piisLeft.originalWidth * piisLeft.currentDpi) / piisLeft.originalDpi), 0, ((piisLeft.originalHeight * piisLeft.currentDpi) / piisLeft.originalDpi));
-					spm.setInfo(" - resolution left is " + dpiLeft + " DPI, page bounds are " + pageBounds[pp * 2].toString());
-					PageImageInputStream piisRight = imageStore.getPageImageAsStream(doc.docId, ((pp * 2) + 1));
+					pageBoxes[pp * 2] = new BoundingBox(0, ((piisLeft.originalWidth * piisLeft.currentDpi) / piisLeft.originalDpi), 0, ((piisLeft.originalHeight * piisLeft.currentDpi) / piisLeft.originalDpi));
+					spm.setInfo(" - resolution left is " + dpiLeft + " DPI, page bounds are " + pageBoxes[pp * 2].toString());
+					PageImageInputStream piisRight = imageStore.getPageImageAsStream(doc.docId, ((pp * 2) - ppDelta + 1));
 					piisRight.close();
 					int dpiRight = piisRight.currentDpi;
-					pageBounds[(pp * 2) + 1] = new BoundingBox(0, ((piisRight.originalWidth * piisRight.currentDpi) / piisRight.originalDpi), 0, ((piisRight.originalHeight * piisRight.currentDpi) / piisRight.originalDpi));
-					spm.setInfo(" - resolution right is " + dpiRight + " DPI, page bounds are " + pageBounds[(pp * 2) + 1].toString());
+					pageBoxes[(pp * 2) + 1] = new BoundingBox(0, ((piisRight.originalWidth * piisRight.currentDpi) / piisRight.originalDpi), 0, ((piisRight.originalHeight * piisRight.currentDpi) / piisRight.originalDpi));
+					spm.setInfo(" - resolution right is " + dpiRight + " DPI, page bounds are " + pageBoxes[(pp * 2) + 1].toString());
+					return;
 				}
 				
-				//	image not extracted as yet, do it now
-				else {
-					
-					//	get compressed image
-					PImage imageObject = ((PImage) pageImages[pp].get(textImageId));
-					if (imageObject == null) {
-						spm.setInfo(" --> image not found");
-						throw new RuntimeException("Could not find image object for double page " + pp);
-					}
-					spm.setInfo(" --> image not rendered yet");
-					spm.setInfo(" - rendering image ...");
-					
-					//	get raw image
-					BufferedImage doublePageImage = getImage(imageObject, objects, library, pdfPages[pp].getResources());
-					if (doublePageImage == null) {
-						spm.setInfo(" --> page image generation failed");
-						throw new RuntimeException("Could not generate image for double page " + pp);
-					}
-					spm.setInfo(" - got double page image sized " + doublePageImage.getWidth() + " x " + doublePageImage.getHeight());
-					
-					//	compute DPI
-					int dpiScaleFactor = scaleFactor;
-					float dpiRatio = ((((float) doublePageImage.getWidth()) / pageBoxes[pp].width) + (((float) doublePageImage.getHeight()) / pageBoxes[pp].height)) / 2;
-					float rawDpi = dpiRatio * defaultDpi;
-					int dpi = ((Math.round(rawDpi / 10) * 10) / dpiScaleFactor);
-					spm.setInfo(" - resolution computed as " + dpi + " DPI");
-					
-					//	guess DPI based on page size (minimum page size for (very most) publications should be A5 or so, twice A5 here)
-					float a5distWidth = Math.abs((pageBoxes[pp].width / defaultDpi) - (a5inchWidth * 2));
-					float a5distHeigth = Math.abs((pageBoxes[pp].height / defaultDpi) - a5inchHeigth);
-					float a7distWidth = Math.abs((pageBoxes[pp].width / defaultDpi) - a5inchWidth);
-					float a7distHeigth = Math.abs((pageBoxes[pp].height / defaultDpi) - (a5inchHeigth / 2));
-					while ((a7distWidth < a5distWidth) && (a7distHeigth < a5distHeigth) && (minScaleUpDpi < dpi)) {
-						spm.setInfo(" - A5 dist is " + a5distWidth + " / " + a5distHeigth);
-						spm.setInfo(" - A7 dist is " + a7distWidth + " / " + a7distHeigth);
-						dpiScaleFactor++;
-						dpi = ((Math.round(rawDpi / 10) * 10) / dpiScaleFactor);
-						a5distWidth = Math.abs(((pageBoxes[pp].width * dpiScaleFactor) / defaultDpi) - (a5inchWidth * 2));
-						a5distHeigth = Math.abs(((pageBoxes[pp].height * dpiScaleFactor) / defaultDpi) - a5inchHeigth);
-						a7distWidth = Math.abs(((pageBoxes[pp].width * dpiScaleFactor) / defaultDpi) - a5inchWidth);
-						a7distHeigth = Math.abs(((pageBoxes[pp].height * dpiScaleFactor) / defaultDpi) - (a5inchHeigth / 2));
-					}
-					if (dpiScaleFactor > 1)
-						spm.setInfo(" - resolution scaled to " + dpi + " DPI");
-					
-					//	if image is beyond 400 DPI, scale to half of that
-					if (dpi >= minScaleDownDpi) {
-						int scaleDownFactor = 2;
-						while ((dpi / scaleDownFactor) >= minScaleDownDpi)
-							scaleDownFactor++;
-						spm.setInfo(" - scaling double page image to " + (dpi / scaleDownFactor) + " DPI");
-						BufferedImage sDoublePageImage = new BufferedImage((doublePageImage.getWidth() / scaleDownFactor), (doublePageImage.getHeight() / scaleDownFactor), doublePageImage.getType());
-						Graphics2D spig = sDoublePageImage.createGraphics();
-						spig.drawImage(doublePageImage, 0, 0, sDoublePageImage.getWidth(), sDoublePageImage.getHeight(), Color.WHITE, null);
-						doublePageImage = sDoublePageImage;
-						dpi = (dpi / scaleDownFactor);
-						spm.setInfo(" - double page image scaled to " + dpi + " DPI");
-					}
-					
-					//	cut double page image into two single pages
-					BufferedImage pageImageLeft = doublePageImage.getSubimage(0, 0, (doublePageImage.getWidth() / 2), doublePageImage.getHeight());
-					BufferedImage pageImageRight = doublePageImage.getSubimage((doublePageImage.getWidth() / 2), 0, (doublePageImage.getWidth() / 2), doublePageImage.getHeight());
-					
-					//	preserve original page image halves
-					synchronized (doc) {
-						ImSupplement.Scan.createScan(doc, (pp * 2), dpi, pageImageLeft);
-						ImSupplement.Scan.createScan(doc, ((pp * 2) + 1), dpi, pageImageRight);
-					}
-							
-					//	enhance image halves (cannot use cache here, as image might change during correction)
-					AnalysisImage aiLeft = Imaging.wrapImage(pageImageLeft, null);
-					spm.setInfo(" - enhancing left image half ...");
-					aiLeft = Imaging.correctImage(aiLeft, dpi, spm);
-					pageImageLeft = aiLeft.getImage();
-					AnalysisImage aiRight = Imaging.wrapImage(pageImageRight, null);
-					spm.setInfo(" - enhancing right image half ...");
-					aiRight = Imaging.correctImage(aiRight, dpi, spm);
-					pageImageRight = aiRight.getImage();
-					
-					//	TODO do further cleanup, e.g. removing pencil strokes, etc.
-					//	TODO ==> collect examples and talk to Hilde
-					
-					//	store image halves
-					String imageNameLeft;
-					synchronized (imageStore) {
-						imageNameLeft = imageStore.storePageImage(doc.docId, (pp * 2), pageImageLeft, dpi);
-					}
-					if (imageNameLeft == null) {
-						spm.setInfo(" --> page image storage failed for left half");
-						throw new RuntimeException("Could not store left half of image for double page " + pp);
-					}
-					if (pageImageCache != null)
-						pageImageCache.put(new Integer(pp * 2), new PageImage(pageImageLeft, dpi, imageStore)); // specifying image store from outside indicates who's handling the image now, as we know it was stored successfully
-					Imaging.cleanUpCache(pageImageLeft.hashCode() + "-");
-					String imageNameRight;
-					synchronized (imageStore) {
-						imageNameRight = imageStore.storePageImage(doc.docId, ((pp * 2) + 1), pageImageRight, dpi);
-					}
-					if (imageNameRight == null) {
-						spm.setInfo(" --> page image storage failed for right half");
-						throw new RuntimeException("Could not store right half of image for double page " + pp);
-					}
-					if (pageImageCache != null)
-						pageImageCache.put(new Integer((pp * 2) + 1), new PageImage(pageImageRight, dpi, imageStore)); // specifying image store from outside indicates who's handling the image now, as we know it was stored successfully
-					Imaging.cleanUpCache(pageImageRight.hashCode() + "-");
-					
-					//	compute page bounds
-					pageBounds[pp * 2] = new BoundingBox(0, pageImageLeft.getWidth(), 0, pageImageLeft.getHeight());
-					pageBounds[(pp * 2) + 1] = new BoundingBox(0, pageImageRight.getWidth(), 0, pageImageRight.getHeight());
-					spm.setInfo(" --> double page image halves stored, page bounds are " + pageBounds[pp].toString() + " and " + pageBounds[pp + 1].toString());
+				//	get raw image
+				BufferedImage doublePageImage = getPageImage(pageImageParts[pp], objects, pdfDoc, pdfPages[pp], pdfPageBoxes[pp], spm);
+				if (doublePageImage == null) {
+					spm.setInfo(" --> page image generation failed");
+					throw new IOException("Could not generate image for double page " + pp);
 				}
+				spm.setInfo(" - got double page image sized " + doublePageImage.getWidth() + " x " + doublePageImage.getHeight());
+				
+				//	compute DPI
+				int dpiScaleFactor = scaleFactor;
+				float dpiRatioWidth = (((float) doublePageImage.getWidth()) / pdfPageBoxes[pp].width);
+				float dpiRatioHeight = (((float) doublePageImage.getHeight()) / pdfPageBoxes[pp].height);
+				if (((dpiRatioWidth * defaultDpi) < 100) && ((dpiRatioHeight * defaultDpi) < 100) && (sPdfPageBoxes[pp] != null)) {
+					dpiRatioWidth = (((float) doublePageImage.getWidth()) / sPdfPageBoxes[pp].width);
+					dpiRatioHeight = (((float) doublePageImage.getHeight()) / sPdfPageBoxes[pp].height);
+					spm.setInfo(" - using scaled resolution");
+				}
+				float dpiRatio = ((dpiRatioWidth + dpiRatioHeight) / 2);
+				float rawDpi = dpiRatio * defaultDpi;
+				int dpi = ((Math.round(rawDpi / 10) * 10) / dpiScaleFactor);
+				spm.setInfo(" - resolution computed as " + dpi + " DPI");
+				
+				//	guess DPI based on page size (minimum page size for (very most) publications should be A5 or so, twice A5 here)
+				float a5distWidth = Math.abs((pdfPageBoxes[pp].width / defaultDpi) - (a5inchWidth * 2));
+				float a5distHeigth = Math.abs((pdfPageBoxes[pp].height / defaultDpi) - a5inchHeigth);
+				float a7distWidth = Math.abs((pdfPageBoxes[pp].width / defaultDpi) - a5inchWidth);
+				float a7distHeigth = Math.abs((pdfPageBoxes[pp].height / defaultDpi) - (a5inchHeigth / 2));
+				while ((a7distWidth < a5distWidth) && (a7distHeigth < a5distHeigth) && (minScaleUpDpi < dpi)) {
+					spm.setInfo(" - A5 dist is " + a5distWidth + " / " + a5distHeigth);
+					spm.setInfo(" - A7 dist is " + a7distWidth + " / " + a7distHeigth);
+					dpiScaleFactor++;
+					dpi = ((Math.round(rawDpi / 10) * 10) / dpiScaleFactor);
+					a5distWidth = Math.abs(((pdfPageBoxes[pp].width * dpiScaleFactor) / defaultDpi) - (a5inchWidth * 2));
+					a5distHeigth = Math.abs(((pdfPageBoxes[pp].height * dpiScaleFactor) / defaultDpi) - a5inchHeigth);
+					a7distWidth = Math.abs(((pdfPageBoxes[pp].width * dpiScaleFactor) / defaultDpi) - a5inchWidth);
+					a7distHeigth = Math.abs(((pdfPageBoxes[pp].height * dpiScaleFactor) / defaultDpi) - (a5inchHeigth / 2));
+				}
+				if (dpiScaleFactor > 1)
+					spm.setInfo(" - resolution scaled to " + dpi + " DPI");
+				
+				//	if image is beyond 400 DPI, scale to half of that
+				if (dpi >= minScaleDownDpi) {
+					int scaleDownFactor = 2;
+					while ((dpi / scaleDownFactor) >= minScaleDownDpi)
+						scaleDownFactor++;
+					spm.setInfo(" - scaling double page image to " + (dpi / scaleDownFactor) + " DPI");
+					BufferedImage sDoublePageImage = new BufferedImage((doublePageImage.getWidth() / scaleDownFactor), (doublePageImage.getHeight() / scaleDownFactor), doublePageImage.getType());
+					Graphics2D spig = sDoublePageImage.createGraphics();
+					spig.drawImage(doublePageImage, 0, 0, sDoublePageImage.getWidth(), sDoublePageImage.getHeight(), Color.WHITE, null);
+					doublePageImage = sDoublePageImage;
+					dpi = (dpi / scaleDownFactor);
+					spm.setInfo(" - double page image scaled to " + dpi + " DPI");
+				}
+				
+				//	cut double page image into two single pages
+				BufferedImage pageImageLeft = doublePageImage.getSubimage(0, 0, (doublePageImage.getWidth() / 2), doublePageImage.getHeight());
+				BufferedImage pageImageRight = doublePageImage.getSubimage((doublePageImage.getWidth() / 2), 0, (doublePageImage.getWidth() / 2), doublePageImage.getHeight());
+				
+				//	preserve original page image halves
+				synchronized (doc) {
+					ImSupplement.Scan.createScan(doc, ((pp * 2) - ppDelta), dpi, pageImageLeft);
+					ImSupplement.Scan.createScan(doc, ((pp * 2) - ppDelta + 1), dpi, pageImageRight);
+				}
+						
+				//	enhance image halves (cannot use cache here, as image might change during correction)
+				AnalysisImage aiLeft = Imaging.wrapImage(pageImageLeft, null);
+				spm.setInfo(" - enhancing left image half ...");
+				aiLeft = Imaging.correctImage(aiLeft, dpi, spm);
+				pageImageLeft = aiLeft.getImage();
+				AnalysisImage aiRight = Imaging.wrapImage(pageImageRight, null);
+				spm.setInfo(" - enhancing right image half ...");
+				aiRight = Imaging.correctImage(aiRight, dpi, spm);
+				pageImageRight = aiRight.getImage();
+				
+				//	store image halves
+				String imageNameLeft;
+				synchronized (imageStore) {
+					imageNameLeft = imageStore.storePageImage(doc.docId, ((pp * 2) - ppDelta), pageImageLeft, dpi);
+				}
+				if (imageNameLeft == null) {
+					spm.setInfo(" --> page image storage failed for left half");
+					throw new IOException("Could not store left half of image for double page " + pp);
+				}
+				if (pageImageCache != null)
+					pageImageCache.put(new Integer((pp * 2) - ppDelta), new PageImage(pageImageLeft, dpi, imageStore)); // specifying image store from outside indicates who's handling the image now, as we know it was stored successfully
+				Imaging.cleanUpCache(pageImageLeft.hashCode() + "-");
+				String imageNameRight;
+				synchronized (imageStore) {
+					imageNameRight = imageStore.storePageImage(doc.docId, ((pp * 2) - ppDelta + 1), pageImageRight, dpi);
+				}
+				if (imageNameRight == null) {
+					spm.setInfo(" --> page image storage failed for right half");
+					throw new IOException("Could not store right half of image for double page " + pp);
+				}
+				if (pageImageCache != null)
+					pageImageCache.put(new Integer((pp * 2) - ppDelta + 1), new PageImage(pageImageRight, dpi, imageStore)); // specifying image store from outside indicates who's handling the image now, as we know it was stored successfully
+				Imaging.cleanUpCache(pageImageRight.hashCode() + "-");
+				
+				//	compute page bounds
+				pageBoxes[pp * 2] = new BoundingBox(0, pageImageLeft.getWidth(), 0, pageImageLeft.getHeight());
+				pageBoxes[(pp * 2) + 1] = new BoundingBox(0, pageImageRight.getWidth(), 0, pageImageRight.getHeight());
+				spm.setInfo(" --> double page image halves stored, page bounds are " + pageBoxes[pp * 2].toString() + " and " + pageBoxes[(pp * 2) + 1].toString());
 			}
 		};
-		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pages.length : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
+		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pdfPageBoxes.length : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
 		spm.setProgress(99);
 		
 		//	check errors
 		this.checkException(pf);
 		
 		//	assemble document (two pages per PDF page here)
-		for (int p = 0; p < pages.length; p++) {
-			if ((PdfExtractorTest.aimAtPage != -1) && (PdfExtractorTest.aimAtPage != p))
+		for (int pp = 0; pp < pdfPages.length; pp++) {
+			if ((PdfExtractorTest.aimAtPage != -1) && (PdfExtractorTest.aimAtPage != pp))
 				continue;
-			ImPage pageLeft = new ImPage(doc, (p * 2), pageBounds[p * 2]);
-			ImPage pageRight = new ImPage(doc, ((p * 2) + 1), pageBounds[(p * 2) + 1]);
+			
+			//	adjust to ignore meta pages
+			if (noImagePageIDs.contains(new Integer(pp)))
+				continue;
+			int ppDelta = (noImagePageIDs.contains(new Integer(0)) ? noImagePageIDs.size() : 0);
+			
+			//	create pages
+			ImPage pageLeft = new ImPage(doc, ((pp * 2) - ppDelta), pageBoxes[pp * 2]);
+			ImPage pageRight = new ImPage(doc, ((pp * 2) - ppDelta + 1), pageBoxes[(pp * 2) + 1]);
 		}
 		
 		//	finally ...
 		spm.setProgress(100);
+	}
+	
+	private BufferedImage getPageImage(ArrayList pageImageParts, Map objects, Document pdfDoc, Page pdfPage, Rectangle2D.Float pdfPageBox, ProgressMonitor spm) throws IOException {
+		
+		//	sort out figures overpainted later
+		for (int p = 0; p < pageImageParts.size(); p++) {
+			PImagePart pip = ((PImagePart) pageImageParts.get(p));
+			for (int cp = (p+1); cp < pageImageParts.size(); cp++) {
+				PImagePart cpip = ((PImagePart) pageImageParts.get(cp));
+				if (overlapsConsiderably(pip.pdfBounds, cpip.pdfBounds)) {
+					pageImageParts.remove(p--);
+					spm.setInfo("Excluded page image part for being overpainted by " + cpip.name + "@" + cpip.pdfBounds + ": " + pip.name + "@" + pip.pdfBounds);
+					break;
+				}
+			}
+		}
+		
+		//	single full page image (at least 99% of page size), use it as it is
+		if ((pageImageParts.size() == 1) && ((getSize(((PImagePart) pageImageParts.get(0)).pdfBounds) * 100) > (getSize(pdfPageBox) * 99))) {
+			spm.setInfo("Using single full-page image");
+			return this.getPageImagePart(((PImagePart) pageImageParts.get(0)), objects, pdfDoc, pdfPage, spm);
+		}
+		
+		//	compute rendering resolution
+		int maxPipDpi = 0;
+		for (int p = 0; p < pageImageParts.size(); p++) {
+			int pipDpi = ((PImagePart) pageImageParts.get(p)).dpi;
+			int pipScaleDownFactor = 1;
+			while ((pipDpi / pipScaleDownFactor) >= minScaleDownDpi)
+				pipScaleDownFactor++;
+			pipDpi /= pipScaleDownFactor;
+			maxPipDpi = Math.max(maxPipDpi, pipDpi);
+		}
+		spm.setInfo("Rendering resolution computed as " + maxPipDpi + " DPI from " + pageImageParts.size() + " page image parts");
+		
+		//	create base image
+		int piWidth = Math.round(Math.abs(pdfPageBox.width * maxPipDpi) / defaultDpi);
+		int piHeight = Math.round(Math.abs(pdfPageBox.height * maxPipDpi) / defaultDpi);
+		spm.setInfo("Rendering page image sized " + piWidth + "x" + piHeight);
+		BufferedImage pageImage = new BufferedImage(piWidth, piHeight, BufferedImage.TYPE_INT_ARGB);
+		Graphics2D piGraphics = pageImage.createGraphics();
+		piGraphics.setColor(Color.WHITE);
+		piGraphics.fillRect(0, 0, piWidth, piHeight);
+		
+		//	render remaining figures
+		for (int p = 0; p < pageImageParts.size(); p++) {
+			PImagePart pip = ((PImagePart) pageImageParts.get(p));
+			AffineTransform at = null;
+			if (pip.dpi != maxPipDpi) {
+				at = piGraphics.getTransform();
+				piGraphics.scale((((double) maxPipDpi) / pip.dpi), (((double) maxPipDpi) / pip.dpi));
+			}
+			spm.setInfo(" - rendering page image part sized " + (pip.bounds.right - pip.bounds.left) + "x" + (pip.bounds.bottom - pip.bounds.top) + " at " + pip.dpi + " scaled by " + (((double) maxPipDpi) / pip.dpi));
+			BufferedImage rPip = this.getPageImagePart(pip, objects, pdfDoc, pdfPage, spm);
+			piGraphics.drawImage(rPip, pip.bounds.left, pip.bounds.top, null);
+			if (at != null)
+				piGraphics.setTransform(at);
+		}
+		
+		//	finally ...
+		piGraphics.dispose();
+		return pageImage;
+	}
+	
+	private static final boolean overlapsConsiderably(Rectangle2D rect1, Rectangle2D rect2) {
+		if (!rect1.intersects(rect2))
+			return false;
+		Rectangle2D uRect = new Rectangle2D.Float();
+		Rectangle2D.union(rect1, rect2, uRect);
+		Rectangle2D iRect = new Rectangle2D.Float();
+		Rectangle2D.intersect(rect1, rect2, iRect);
+		return ((getSize(iRect) * 10) > (getSize(uRect) * 9));
+	}
+	
+	private static final double getSize(Rectangle2D rect) {
+		return Math.abs(rect.getWidth() * rect.getHeight());
+	}
+	
+	private BufferedImage getPageImagePart(PImagePart pip, Map objects, Document pdfDoc, Page pdfPage, ProgressMonitor spm) throws IOException {
+		
+		//	decode PStream to image
+		BufferedImage pipBi = decodeImage(pdfPage, pip.data.params, pip.data.bytes, objects);
+		if (pipBi == null) {
+			spm.setInfo("   --> could not decode figure");
+			return null;
+		}
+		spm.setInfo("     - got figure sized " + pipBi.getWidth() + " x " + pipBi.getHeight());
+		
+		//	interpret figure rotation (if above some 0.1°)
+		if (Math.abs(pip.pdfRotation) > 0.0005) {
+			pipBi = Imaging.rotateImage(pipBi, pip.pdfRotation);
+			spm.setInfo("     - figure rotated by " + ((180.0 / Math.PI) * pip.pdfRotation) + "°");
+		}
+		
+		Object csObj = PdfParser.dereference(pip.data.params.get("ColorSpace"), objects);
+		if (csObj != null) {
+			spm.setInfo("     - color space is " + csObj.toString());
+			/* If color space is DeviceCMYK, render page image to figure
+			 * resolution and cut out image: images with color space
+			 * DeviceCMYK come out somewhat differently colored than in
+			 * Acrobat, but we cannot seem to do anything about this -
+			 * IcePDF distorts them as well, if more in single image
+			 * rendering than in the page images it generates. */
+			if ("DeviceCMYK".equals(csObj.toString())) {
+				pipBi = extractFigureFromPageImage(pdfDoc, pip.pageId, pip.dpi, pip.bounds);
+				spm.setInfo("     --> figure re-rendered as part of page image");
+			}
+			/* If color space is Separation, values represent color
+			 * intensity rather than brightness, which means 1.0 is
+			 * black and 0.0 is white. This means the have to invert
+			 * brightness to get the actual image. IcePDF gets this
+			 * wrong as well, with images coming out white on black
+			 * rather than the other way around, so we have to do the
+			 * correction ourselves. */
+			else if ((csObj instanceof Vector) && (((Vector) csObj).size() == 4) && ((Vector) csObj).get(0).equals("Separation")) {
+				invertFigureBrightness(pipBi);
+				spm.setInfo("     --> figure brightness inverted for additive 'Separation' color space");
+			}
+			/* If color space is Indexed, IcePDF seems to do a lot better
+			 * in page image rendering than in single-image rendering. */
+			else if ((csObj instanceof Vector) && (((Vector) csObj).size() == 4) && ((Vector) csObj).get(0).equals("Indexed")) {
+				pipBi = extractFigureFromPageImage(pdfDoc, pip.pageId, pip.dpi, pip.bounds);
+				spm.setInfo("     --> figure re-rendered as part of page image");
+			}
+//			/* Just taking a look a ICCBased color space for now ... IcePDF
+//			 * doesn't really do better at those, as it seems ... */
+//			else if ((csObj instanceof Vector) && (((Vector) csObj).size() == 2) && ((Vector) csObj).get(0).equals("ICCBased")) {
+//				Object csEntryObj = PdfParser.dereference(((Vector) csObj).get(1), objects);
+//				spm.setInfo("     --> ICCBased color space");
+//				spm.setInfo("     --> ICCBased color space entry is " + csEntryObj);
+//				if (csEntryObj instanceof PStream) {
+//					PStream csEntry = ((PStream) csEntryObj);
+//					Object csFilter = csEntry.params.get("Filter");
+//					ByteArrayOutputStream csBaos = new ByteArrayOutputStream();
+//					PdfParser.decode(csFilter, csEntry.bytes, csEntry.params, csBaos, objects);
+//					System.out.println(new String(csBaos.toByteArray()));
+//				}
+//			}
+		}
+		
+		//	finally ...
+		return pipBi;
 	}
 	
 	private void checkException(ParallelFor pf) throws IOException, RuntimeException {
@@ -3256,282 +4330,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		}
 	}
 	
-	private static int textImageIdMinSamples = 3;
-	private static int textImageIdMaxSamples = 20;
-	private String findTextImageId(HashMap[] pageImages, PageTree pageTree, Map objects, boolean pagesAreLandscape, Library library) throws IOException {
-		HashSet imageIds = new HashSet();
-		StringIndex imageIdScores = new StringIndex(true);
-		
-		StringIndex iidValidities = new StringIndex(true);
-		int sampledPageCount = 0;
-		
-		if (pageImages.length <= textImageIdMinSamples) {
-			for (int p = 0; p < pageImages.length; p++) {
-				System.out.println(" Scoring images in page " + p);
-				Rectangle2D.Float pb = pageTree.getPage(p, "").getMediaBox();
-				BoundingBox pageBounds = new BoundingBox(((int) Math.round(pb.getMinX())), ((int) Math.round(pb.getMaxX())), ((int) Math.round(pb.getMinY())), ((int) Math.round(pb.getMaxY())));
-				System.out.println(" - page bounds are " + (pageBounds.right - pageBounds.left) + " x " + (pageBounds.bottom - pageBounds.top));
-				this.addImageIdsAndScores(pageImages[p], objects, imageIds, imageIdScores, pageBounds, pagesAreLandscape, library, pageTree.getPage(p, "").getResources());
-				for (Iterator iit = pageImages[p].keySet().iterator(); iit.hasNext();)
-					iidValidities.add((String) iit.next());
-				sampledPageCount++;
-			}
-		}
-		else if (pageImages.length <= textImageIdMaxSamples) {
-			HashSet sampled = new HashSet();
-			while (sampled.size() < textImageIdMinSamples) {
-				int p = ((int) (pageImages.length * Math.random()));
-				if (sampled.add(new Integer(p))) {
-					System.out.println(" Sampling images in page " + p);
-					Rectangle2D.Float pb = pageTree.getPage(p, "").getMediaBox();
-					BoundingBox pageBounds = new BoundingBox(((int) Math.round(pb.getMinX())), ((int) Math.round(pb.getMaxX())), ((int) Math.round(pb.getMinY())), ((int) Math.round(pb.getMaxY())));
-					System.out.println(" - page bounds are " + (pageBounds.right - pageBounds.left) + " x " + (pageBounds.bottom - pageBounds.top));
-					this.addImageIdsAndScores(pageImages[p], objects, imageIds, imageIdScores, pageBounds, pagesAreLandscape, library, pageTree.getPage(p, "").getResources());
-					for (Iterator iit = pageImages[p].keySet().iterator(); iit.hasNext();)
-						iidValidities.add((String) iit.next());
-					sampledPageCount++;
-				}
-			}
-			for (int p = 0; p < pageImages.length; p++) {
-				if (!sampled.add(new Integer(p)))
-					continue;
-				else if (!this.scoresAmbiguous(imageIds, imageIdScores))
-					break;
-				System.out.println(" Scoring images in page " + p);
-				Rectangle2D.Float pb = pageTree.getPage(p, "").getMediaBox();
-				BoundingBox pageBounds = new BoundingBox(((int) Math.round(pb.getMinX())), ((int) Math.round(pb.getMaxX())), ((int) Math.round(pb.getMinY())), ((int) Math.round(pb.getMaxY())));
-				System.out.println(" - page bounds are " + (pageBounds.right - pageBounds.left) + " x " + (pageBounds.bottom - pageBounds.top));
-				this.addImageIdsAndScores(pageImages[p], objects, imageIds, imageIdScores, pageBounds, pagesAreLandscape, library, pageTree.getPage(p, "").getResources());
-				for (Iterator iit = pageImages[p].keySet().iterator(); iit.hasNext();)
-					iidValidities.add((String) iit.next());
-				sampledPageCount++;
-			}
-		}
-		else {
-			HashSet sampled = new HashSet();
-			while (sampled.size() < textImageIdMinSamples) {
-				int p = ((int) (pageImages.length * Math.random()));
-				if (sampled.add(new Integer(p))) {
-					System.out.println(" Sampling images in page " + p);
-					Rectangle2D.Float pb = pageTree.getPage(p, "").getMediaBox();
-					BoundingBox pageBounds = new BoundingBox(((int) Math.round(pb.getMinX())), ((int) Math.round(pb.getMaxX())), ((int) Math.round(pb.getMinY())), ((int) Math.round(pb.getMaxY())));
-					System.out.println(" - page bounds are " + (pageBounds.right - pageBounds.left) + " x " + (pageBounds.bottom - pageBounds.top));
-					this.addImageIdsAndScores(pageImages[p], objects, imageIds, imageIdScores, pageBounds, pagesAreLandscape, library, pageTree.getPage(p, "").getResources());
-					for (Iterator iit = pageImages[p].keySet().iterator(); iit.hasNext();)
-						iidValidities.add((String) iit.next());
-					sampledPageCount++;
-				}
-			}
-			while ((sampled.size() < textImageIdMaxSamples) && scoresAmbiguous(imageIds, imageIdScores)) {
-				int p = ((int) (pageImages.length * Math.random()));
-				if (sampled.add(new Integer(p))) {
-					System.out.println(" Sampling images in page " + p);
-					Rectangle2D.Float pb = pageTree.getPage(p, "").getMediaBox();
-					BoundingBox pageBounds = new BoundingBox(((int) Math.round(pb.getMinX())), ((int) Math.round(pb.getMaxX())), ((int) Math.round(pb.getMinY())), ((int) Math.round(pb.getMaxY())));
-					System.out.println(" - page bounds are " + (pageBounds.right - pageBounds.left) + " x " + (pageBounds.bottom - pageBounds.top));
-					this.addImageIdsAndScores(pageImages[p], objects, imageIds, imageIdScores, pageBounds, pagesAreLandscape, library, pageTree.getPage(p, "").getResources());
-					for (Iterator iit = pageImages[p].keySet().iterator(); iit.hasNext();)
-						iidValidities.add((String) iit.next());
-					sampledPageCount++;
-				}
-			}
-		}
-		
-		int maxScore = 0;
-		String imageId = null;
-		for (Iterator iit = imageIds.iterator(); iit.hasNext();) {
-			String iid = ((String) iit.next());
-			
-			//	check if ID valid in two thirds of all sampled pages
-			if ((iidValidities.getCount(iid) * 3) < (sampledPageCount * 2))
-				continue;
-			
-			//	ensure ID works in at least two thirds of all pages
-			int iidPages = 0;
-			for (int p = 0; p < pageImages.length; p++) {
-				if (pageImages[p].containsKey(iid))
-					iidPages++;
-			}
-			if ((iidPages * 3) < (pageImages.length * 2))
-				continue;
-			
-			//	check if we have a new top ID
-			int iidScore = imageIdScores.getCount(iid);
-			if (iidScore > maxScore) {
-				imageId = iid;
-				maxScore = iidScore;
-			}
-		}
-		
-		if (imageId != null) {
-			for (int p = 0; p < pageImages.length; p++)
-				for (Iterator iit = pageImages[p].keySet().iterator(); iit.hasNext();) {
-					String imgId = ((String) iit.next());
-					if (imageId.equals(imgId))
-						continue;
-					PImage img = ((PImage) pageImages[p].get(imgId));
-					img.setImage(null);
-				}
-		}
-		System.gc();
-		return imageId;
-	}
-	
-	private boolean scoresAmbiguous(HashSet imageIds, StringIndex imageIdScores) {
-		int maxScore = 0;
-		int secondMaxScore = 0;
-		for (Iterator iit = imageIds.iterator(); iit.hasNext();) {
-			String iid = ((String) iit.next());
-			int iidScore = imageIdScores.getCount(iid);
-			if (iidScore > maxScore) {
-				secondMaxScore = maxScore;
-				maxScore = iidScore;
-			}
-			else if (iidScore > secondMaxScore)
-				secondMaxScore = iidScore;
-		}
-		return ((maxScore / 2) < secondMaxScore);
-	}
-	
-	private void addImageIdsAndScores(HashMap pageImages, Map objects, HashSet imageIds, StringIndex imageIdScores, BoundingBox pageBounds, boolean pagesAreLandscape, Library library, Resources resources) throws IOException {
-		int pageWidth = (pageBounds.right - pageBounds.left);
-		int pageHeight = (pageBounds.bottom - pageBounds.top);
-		float pageWidthByHeight = (((float) pageWidth) / pageHeight);
-		for (Iterator iit = pageImages.keySet().iterator(); iit.hasNext();) {
-			String imgId = ((String) iit.next());
-			System.out.println(" - doing image " + imgId);
-			PImage img = ((PImage) pageImages.get(imgId));
-			
-			//	get image
-			BufferedImage bi = this.getImage(img, objects, library, resources);
-			if (bi == null) {
-				System.out.println(" --> could not load image");
-				iit.remove();
-				continue;
-			}
-			System.out.println("   - got image, size is " + bi.getWidth() + " x " + bi.getHeight());
-			
-			/* use this to analyze cases with page images sliced into stripes,
-			 * tiles, etc., to figure out how to re-assemble them */
-//			//	deal with cases of page images stored in tiles
-//			ImageIO.write(bi, IMAGE_FORMAT, new File(this.basePath, ("Image." + pageTime + "." + imgId + "." + IMAGE_FORMAT)));
-			
-			//	check image size (this factually checks for at least 72 DPI)
-			if ((bi.getWidth() * 100) < (pageWidth * 98)) {
-				System.out.println(" --> image too small, width is less than 98% of " + pageWidth);
-				iit.remove();
-				continue;
-			}
-			if ((bi.getHeight() * 100) < (pageHeight * 98)) {
-				System.out.println(" --> image too small, height is less than 98% of " + pageHeight);
-				iit.remove();
-				continue;
-			}
-			System.out.println("   - image size is fine");
-			
-			//	check image proportions (must be similar to page proportions if we have an image of the page text)
-			float imgWidthByHeight = (((float) bi.getWidth()) / bi.getHeight());
-			if (((pageWidthByHeight / imgWidthByHeight) < 0.8) || ((imgWidthByHeight / pageWidthByHeight) < 0.8)) {
-				System.out.println(" --> image out of proportion, width by hight is " + imgWidthByHeight + ", but page is " + pageWidthByHeight);
-				iit.remove();
-				continue;
-			}
-			System.out.println("   - image proportion is fine");
-			
-			//	if image is landscape, cut it down the middle and score halves
-			if (pagesAreLandscape) {
-				int imgScoreLeft = this.scoreImage(bi.getSubimage(0, 0, (bi.getWidth() / 2), bi.getHeight()), imgId);
-				System.out.println(" --> left score is " + imgScoreLeft);
-				int imgScoreRight = this.scoreImage(bi.getSubimage((bi.getWidth() / 2), 0, (bi.getWidth() / 2), bi.getHeight()), imgId);
-				System.out.println(" --> right score is " + imgScoreRight);
-				imageIds.add(imgId);
-				imageIdScores.add(imgId, (imgScoreLeft + imgScoreRight));
-			}
-			
-			//	if image is portrait, score it as a whole
-			else {
-				int imgScore = this.scoreImage(bi, imgId);
-				System.out.println(" --> score is " + imgScore);
-				imageIds.add(imgId);
-				imageIdScores.add(imgId, imgScore);
-			}
-		}
-	}
-	
-	private int scoreImage(BufferedImage img, String imgId) throws IOException {
-		Complex[][] fft = getFft(img);
-		double max = Imaging.getMax(fft, Imaging.ADJUST_MODE_SQUARE_ROOT);
-		System.out.println("Got FFT (" + fft.length + "x" + fft[0].length + "), max is " + max);
-		
-		ArrayList peaks = new ArrayList();
-		Imaging.collectPeaks(fft, peaks, max/4, Imaging.ADJUST_MODE_SQUARE_ROOT);
-		System.out.println("Got " + peaks.size() + " peaks");
-		
-		ArrayList sPeaks = new ArrayList();
-		for (int p = 0; p < peaks.size(); p++) {
-			Peak peak = ((Peak) peaks.get(p));
-			if (peak.h >= (max/2))
-				sPeaks.add(peak);
-		}
-		System.out.println("Got " + sPeaks.size() + " scoring peaks");
-		
-		int score = 0;
-		for (int p = 0; p < sPeaks.size(); p++) {
-			Peak peak = ((Peak) sPeaks.get(p));
-			score += Math.abs(peak.y - fft.length/2);
-		}
-		System.out.println("Score for " + imgId + " is " + score);
-		return score;
-	}
-	
-	private Complex[][] getFft(BufferedImage image) throws IOException {
-		boolean isPage = (image.getWidth() < image.getHeight());
-		System.out.println("Image loaded (" + image.getWidth() + " x " + image.getHeight() + ") ==> " + (isPage ? "page" : "word"));
-		int tdimMax = 256;
-		int tdim = 1;
-		while ((tdim < tdimMax) && ((tdim < image.getWidth()) || (tdim < image.getHeight())))
-			tdim *= 2;
-		Complex[][] fft = Imaging.getFft(image, tdim, isPage);
-		return fft;
-	}
-	
-	private static Iterator getSortedKeyIterator(Hashtable ht) {
-		ArrayList keys = new ArrayList(ht.keySet());
-		Collections.sort(keys, new Comparator() {
-			public int compare(Object o1, Object o2) {
-				return o1.toString().compareTo(o2.toString());
-			}
-		});
-		return keys.iterator();
-	}
-	
-	private BufferedImage getImage(PImage pi, Map objects, Library lib, Resources res) throws IOException {
-		BufferedImage bi = pi.getImage();
-		System.out.println("Getting image from " + pi.data.params);
-		if (bi == null) {
-			bi = this.decodeImage(pi.data.params, pi.data.bytes, objects, lib, res);
-			System.out.println(" - image extracted, type is " + bi.getType());
-			if (bi.getType() == BufferedImage.TYPE_CUSTOM) {
-				BufferedImage rgbBi = new BufferedImage(bi.getWidth(), bi.getHeight(), BufferedImage.TYPE_INT_RGB);
-				rgbBi.getGraphics().drawImage(bi, 0, 0, null);
-				bi = rgbBi;
-			}
-			else if (bi.getType() == BufferedImage.TYPE_BYTE_BINARY) {}
-			else if (bi.getType() == BufferedImage.TYPE_BYTE_GRAY) {}
-			else if (bi.getType() != BufferedImage.TYPE_INT_RGB) {
-				BufferedImage rgbBi = new BufferedImage(bi.getWidth(), bi.getHeight(), BufferedImage.TYPE_INT_RGB);
-				rgbBi.getGraphics().drawImage(bi, 0, 0, null);
-				bi = rgbBi;
-			}
-			System.out.println(" - type adjusted to " + bi.getType());
-			pi.setImage(bi);
-			System.out.println(" ==> image extracted");
-		}
-		else System.out.println(" ==> extracted before");
-		return bi;
-	}
-	
-	private BufferedImage decodeImage(Hashtable params, byte[] stream, Map objects, Library lib, Resources res) throws IOException {
+	private BufferedImage decodeImage(Page pdfPage, Hashtable params, byte[] stream, Map objects) throws IOException {
 		System.out.println(" ==> read " + stream.length + " bytes");
 		System.out.println(" ==> Lenght parameter is " + params.get("Length"));
 		System.out.println(" ==> Width parameter is " + params.get("Width"));
@@ -3563,18 +4362,41 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			filterObj = objects.get(((Reference) filterObj).getObjectNumber() + " " + ((Reference) filterObj).getGenerationNumber());
 		
 		String filter = ((filterObj == null) ? null : filterObj.toString());
-		System.out.println(" --> filter is " + filter);
-		if ("JPXDecode".equals(filter))
+		System.out.println(" ==> filter is " + filter);
+		System.out.println(" ==> params are " + params);
+		if ((filter == null) && (params.get("Resources") instanceof Hashtable) && (params.get("Type") != null) && "XObject".equals(params.get("Type").toString())) {
+			//	get XObject image and recurse
+			System.out.println(new String(stream));
+			Hashtable resources = ((Hashtable) params.get("Resources"));
+			Hashtable xObject = ((Hashtable) PdfParser.dereference(resources.get("XObject"), objects));
+			System.out.println(" ==> getting XObject figures from " + xObject);
+			PFigure[] xpFigures = PdfParser.getPageFigures(pdfPage.getEntries(), stream, resources, objects, ProgressMonitor.dummy);
+			for (int f = 0; f < xpFigures.length; f++) {
+				System.out.println("   - " + xpFigures[f].name + " @" + xpFigures[f].bounds);
+				Object xpFigureObj = PdfParser.getObject(xObject, xpFigures[f].name, objects);
+				if (xpFigureObj instanceof PStream)
+					return this.decodeImage(pdfPage, ((PStream) xpFigureObj).params, ((PStream) xpFigureObj).bytes, objects);
+			}
+			return null;
+		}
+		else if ((filter != null) && "JPXDecode".equals(filter.toString())) {
+			System.out.println(" ==> decoding JPX");
 			return this.decodeJPX(stream);
-		else if ("JBIG2Decode".equals(filter)) {
+		}
+		else if ((filter != null) && "JBIG2Decode".equals(filter.toString())) {
+			System.out.println(" ==> decoding JBIG2");
 			//	JPedal seems to be the one ...
 			return this.decodeJBig2(stream);
 		}
-		else if ("FlateDecode".equals(filter)) {
+		else if ((filter != null) && "FlateDecode".equals(filter.toString())) {
+			System.out.println(" ==> decoding Flate");
 			//	TODO use java.util.zip.GZIPInputStream instead of IcePDF
-			return this.decodeFlate(stream, params);
+			return this.decodeFlate(stream, params, pdfPage.getLibrary(), pdfPage.getResources());
 		}
-		else return this.decodeOther(stream, params, filter, lib, res);
+		else {
+			System.out.println(" ==> decoding other");
+			return this.decodeOther(stream, params, filter, pdfPage.getLibrary(), pdfPage.getResources());
+		}
 	}
 	
 	private BufferedImage decodeJPX(byte[] stream) throws IOException {
@@ -3582,7 +4404,14 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	}
 	
 	private BufferedImage decodeImageMagick(byte[] stream, String format) throws IOException {
-		return ((this.imageDecoder == null) ? null : this.imageDecoder.decodeImage(stream, format));
+		if (this.imageDecoder == null) {
+			System.out.println(" ==> Image Magick not available");
+			return null;
+		}
+		else {
+			System.out.println(" ==> decoding via Image Magick");
+			return this.imageDecoder.decodeImage(stream, format);
+		}
 	}
 	
 	private BufferedImage decodeJBig2(byte[] stream) throws IOException {
@@ -3600,41 +4429,12 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		}
 	}
 	
-	private BufferedImage decodeFlate(byte[] stream, Hashtable params) throws IOException {
+	private BufferedImage decodeFlate(byte[] stream, Hashtable params, Library library, Resources resources) throws IOException {
 		SeekableInputConstrainedWrapper streamInputWrapper = new SeekableInputConstrainedWrapper(new SeekableByteArrayInputStream(stream), 0, stream.length, true);
-		Stream str = new Stream(new Library(), params, streamInputWrapper);
+		Stream str = new Stream(library, params, streamInputWrapper);
 		try {
-			/* if we have a mask image
-			 * Decoding [0, 1] ==> 0 means paint-through (default), requires black background
-			 * Decoding [1, 0] ==> 1 means paint-through, requires white background */
-			Color biBackgroundColor;
-			Object imObj = params.get("ImageMask");
-			if (imObj == null) {
-				System.out.println(" - image mask is null");
-				biBackgroundColor = Color.WHITE;
-			}
-			else {
-				System.out.println(" - image mask is " + imObj.getClass().getName() + " - " + imObj);
-				Object dObj = params.get("Decode");
-				if ((dObj instanceof Vector) && (((Vector) dObj).size() != 0)) {
-					System.out.println(" - decoder is " + dObj.getClass().getName() + " - " + dObj);
-					Object ptObj = ((Vector) dObj).get(0);
-					System.out.println(" - paint-through is " + dObj.getClass().getName() + " - " + dObj);
-					if (ptObj instanceof Number) {
-						if (((Number) ptObj).intValue() == 0)
-							biBackgroundColor = Color.BLACK;
-						else biBackgroundColor = Color.WHITE;
-					}
-					else biBackgroundColor = Color.BLACK;
-				}
-				else {
-					if (dObj == null)
-						System.out.println(" - decoder is null");
-					else System.out.println(" - decoder is " + dObj.getClass().getName() + " - " + dObj);
-					biBackgroundColor = Color.BLACK;
-				}
-			}
-			BufferedImage bi = str.getImage(biBackgroundColor, new Resources(new Library(), params), false);
+			Color biBackgroundColor = this.getBackgroundColor(params);
+			BufferedImage bi = str.getImage(biBackgroundColor, resources, false);
 			if (bi != null)
 				System.out.println(" ==> got flate image, size is " + bi.getWidth() + " x " + bi.getHeight());
 			else System.out.println(" ==> Could not decode image");
@@ -3644,7 +4444,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			System.out.println(" ==> Could not decode image: " + e.getMessage());
 			e.printStackTrace(System.out);
 			if (true) {
-				FlateDecode fd = new FlateDecode(new Library(), params, new ByteArrayInputStream(stream));
+				FlateDecode fd = new FlateDecode(library, params, new ByteArrayInputStream(stream));
 				byte[] buffer = new byte[1024];
 				int read;
 				while ((read = fd.read(buffer)) != -1)
@@ -3656,11 +4456,12 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		}
 	}
 	
-	private BufferedImage decodeOther(byte[] stream, Hashtable params, String filter, Library lib, Resources res) throws IOException {
+	private BufferedImage decodeOther(byte[] stream, Hashtable params, String filter, Library library, Resources resources) throws IOException {
 		SeekableInputConstrainedWrapper streamInputWrapper = new SeekableInputConstrainedWrapper(new SeekableByteArrayInputStream(stream), 0, stream.length, true);
-		Stream str = new Stream(lib, params, streamInputWrapper);
+		Stream str = new Stream(library, params, streamInputWrapper);
 		try {
-			BufferedImage bi = str.getImage(Color.white, new Resources(lib, params), false);
+			Color biBackgroundColor = this.getBackgroundColor(params);
+			BufferedImage bi = str.getImage(biBackgroundColor, resources, false);
 			if (bi != null)
 				System.out.println(" ==> got image, size is " + bi.getWidth() + " x " + bi.getHeight());
 			else System.out.println(" ==> Could not decode image");
@@ -3669,31 +4470,173 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		catch (Exception e) {
 			System.out.println(" ==> Could not decode image: " + e.getMessage());
 			e.printStackTrace(System.out);
-			if (true) {
-				System.out.print(new String(stream, 0, stream.length));
-				System.out.println();
-			}
 			return null;
 		}
 	}
 	
-	private BufferedImage extractFigureFromPageImage(Document doc, int p, Rectangle2D.Float pageBounds, int dpi, Rectangle2D figureBounds) {
+	private Color getBackgroundColor(Hashtable params) {
+		/* if we have a mask image
+		 * Decoding [0, 1] ==> 0 means paint-through (default), requires black background
+		 * Decoding [1, 0] ==> 1 means paint-through, requires white background WRONG, black as well */
+		Object imObj = params.get("ImageMask");
+		if (imObj == null) {
+			System.out.println(" - image mask is null");
+			return Color.WHITE;
+		}
+		else {
+			System.out.println(" - image mask is " + imObj.getClass().getName() + " - " + imObj);
+			Object dObj = params.get("Decode");
+			if ((dObj instanceof Vector) && (((Vector) dObj).size() != 0)) {
+				System.out.println(" - decoder is " + dObj.getClass().getName() + " - " + dObj);
+				Object ptObj = ((Vector) dObj).get(0);
+				System.out.println(" - paint-through is " + ptObj.getClass().getName() + " - " + ptObj);
+				if (ptObj instanceof Number) {
+					if (((Number) ptObj).intValue() == 0)
+						return Color.BLACK;
+					else return Color.BLACK;
+				}
+				else return Color.BLACK;
+			}
+			else {
+				if (dObj == null)
+					System.out.println(" - decoder is null");
+				else System.out.println(" - decoder is " + dObj.getClass().getName() + " - " + dObj);
+				return Color.BLACK;
+			}
+		}
+	}
+	
+	private BoundingBox getBoundingBox(Rectangle2D bounds, Rectangle2D.Float pageBounds, float magnification, int rotate) {
+		int left = Math.round(((float) (bounds.getMinX() - pageBounds.getMinX())) * magnification);
+		if ((rotate == 270) || (rotate == -90))
+			left += Math.round(pageBounds.width * magnification);
+		int right = Math.round(((float) (bounds.getMaxX() - pageBounds.getMinX()))  * magnification);
+		if ((rotate == 270) || (rotate == -90))
+			right += Math.round(pageBounds.width * magnification);
+		int top = Math.round((pageBounds.height - ((float) (bounds.getMaxY() - ((2 * pageBounds.getMinY()) - pageBounds.getMaxY())))) * magnification);
+		if ((rotate == 90) || (rotate == -270))
+			top += Math.round(pageBounds.height * magnification);
+		int bottom = Math.round((pageBounds.height - ((float) (bounds.getMinY() - ((2 * pageBounds.getMinY()) - pageBounds.getMaxY())))) * magnification);
+		if ((rotate == 90) || (rotate == -270))
+			bottom += Math.round(pageBounds.height * magnification);
+		return new BoundingBox(left, right, top, bottom);
+	}
+	
+	private BufferedImage extractFigureFromPageImage(Document pdfDoc, int p, Rectangle2D.Float pdfPageBounds, int rotate, int figureDpi, Rectangle2D pdfFigureBounds) {
 		
 		//	render page image at figure resolution
-		float figureMagnification = (((float) dpi) / defaultDpi);
+		float figureMagnification = (((float) figureDpi) / defaultDpi);
 		BufferedImage figurePageImage;
-		synchronized (doc) {
-			figurePageImage = ((BufferedImage) doc.getPageImage(p, GraphicsRenderingHints.SCREEN, Page.BOUNDARY_CROPBOX, 0, figureMagnification));
+		synchronized (pdfDoc) {
+			figurePageImage = ((BufferedImage) pdfDoc.getPageImage(p, GraphicsRenderingHints.SCREEN, Page.BOUNDARY_CROPBOX, 0, figureMagnification));
+			pdfDoc.getPageTree().getPage(p, "").reduceMemory();
 		}
 		
 		//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
-		int figureLeft = Math.round(((float) (figureBounds.getMinX() - pageBounds.getMinX())) * figureMagnification);
-		int figureRight = Math.round(((float) (figureBounds.getMaxX() - pageBounds.getMinX()))  * figureMagnification);
-		int figureTop = Math.round((pageBounds.height - ((float) (figureBounds.getMaxY() - ((2 * pageBounds.getMinY()) - pageBounds.getMaxY())))) * figureMagnification);
-		int figureBottom = Math.round((pageBounds.height - ((float) (figureBounds.getMinY() - ((2 * pageBounds.getMinY()) - pageBounds.getMaxY())))) * figureMagnification);
+		BoundingBox figureBox = this.getBoundingBox(pdfFigureBounds, pdfPageBounds, figureMagnification, rotate);
+		
+		//	make sure figure box is in bounds
+		int left = Math.max(figureBox.left, 0);
+		int width = ((Math.min(figureBox.right, figurePageImage.getWidth()) - figureBox.left) - Math.min(figureBox.left, 0));
+		int top = Math.max(figureBox.top, 0);
+		int height = ((Math.min(figureBox.bottom, figurePageImage.getHeight()) - figureBox.top) - Math.min(figureBox.top, 0));
 		
 		//	extract figure
-		return figurePageImage.getSubimage(figureLeft, figureTop, (figureRight - figureLeft), (figureBottom - figureTop));
+		return figurePageImage.getSubimage(left, top, width, height);
+	}
+	
+	private BufferedImage extractFigureFromPageImage(Document pdfDoc, int p, int figureDpi, BoundingBox figureBox) {
+		
+		//	render page image at figure resolution
+		float figureMagnification = (((float) figureDpi) / defaultDpi);
+		BufferedImage figurePageImage;
+		synchronized (pdfDoc) {
+			figurePageImage = ((BufferedImage) pdfDoc.getPageImage(p, GraphicsRenderingHints.SCREEN, Page.BOUNDARY_CROPBOX, 0, figureMagnification));
+			pdfDoc.getPageTree().getPage(p, "").reduceMemory();
+		}
+		
+		//	extract figure
+		return figurePageImage.getSubimage(figureBox.left, figureBox.top, (figureBox.right - figureBox.left), (figureBox.bottom - figureBox.top));
+	}
+	
+	private void correctInvertedGaryscale(BufferedImage bi) {
+		int rgb;
+		float[] hsb = new float[3];
+		
+		//	check average brightness and saturation
+		double bSum = 0;
+		double sSum = 0;
+		for (int x = 0; x < bi.getWidth(); x++)
+			for (int y = 0; y < bi.getHeight(); y++) {
+				rgb = bi.getRGB(x, y);
+				hsb = Color.RGBtoHSB(((rgb >> 16) & 255), ((rgb >> 8) & 255), ((rgb >> 0) & 255), hsb);
+				bSum += hsb[2];
+				sSum += hsb[1];
+			}
+		
+		//	this one's brighter than its inverse, keep it as is
+		if (bSum / (bi.getWidth() * bi.getHeight()) > 0.5)
+			return;
+		
+		//	this one looks like color, keep it as is
+		if (sSum / (bi.getWidth() * bi.getHeight()) > 0.05)
+			return;
+		
+		//	invert brightness
+		for (int x = 0; x < bi.getWidth(); x++)
+			for (int y = 0; y < bi.getHeight(); y++) {
+				rgb = bi.getRGB(x, y);
+				hsb = Color.RGBtoHSB(((rgb >> 16) & 255), ((rgb >> 8) & 255), ((rgb >> 0) & 255), hsb);
+				int g = ((int) (255 * (1.0f - hsb[2])));
+				rgb = ((255 << 24) | (g << 16) | (g << 8) | g);
+				bi.setRGB(x, y, rgb);
+			}
+	}
+	
+	private void invertFigureBrightness(BufferedImage bi) {
+		int rgb;
+		float[] hsb = new float[3];
+		
+		//	check average brightness
+		double bSum = 0;
+		for (int x = 0; x < bi.getWidth(); x++)
+			for (int y = 0; y < bi.getHeight(); y++) {
+				rgb = bi.getRGB(x, y);
+				hsb = Color.RGBtoHSB(((rgb >> 16) & 255), ((rgb >> 8) & 255), ((rgb >> 0) & 255), hsb);
+				bSum += hsb[2];
+			}
+		
+		//	this one's brighter than its inverse, keep it as is
+		if (bSum / (bi.getWidth() * bi.getHeight()) > 0.5)
+			return;
+		
+		//	invert brightness
+		for (int x = 0; x < bi.getWidth(); x++)
+			for (int y = 0; y < bi.getHeight(); y++) {
+				rgb = bi.getRGB(x, y);
+				hsb = Color.RGBtoHSB(((rgb >> 16) & 255), ((rgb >> 8) & 255), ((rgb >> 0) & 255), hsb);
+				bi.setRGB(x, y, Color.HSBtoRGB(hsb[0], hsb[1], (1.0f - hsb[2])));
+			}
+	}
+	
+	private ImDocument doCreateDocument(String docId) {
+		ImDocument doc = this.createDocument(docId);
+		doc.setPageImageSource(this.imageStore);
+		return doc;
+	}
+	
+	/**
+	 * Create an Image Markup document for some identifier. This method is used
+	 * to create Image Markup documents in all PDF loading methods in case the
+	 * argument Image Markup document is <code>null</code>. This default
+	 * implementation simply returns an unmodified <code>ImDocument</code>,
+	 * subclasses are welcome to overwrite it and add their specific behavior
+	 * to the documents.
+	 * @param docId the ID of the document
+	 * @return the document
+	 */
+	protected ImDocument createDocument(String docId) {
+		return new ImDocument(docId);
 	}
 	
 	private static MessageDigest checksumDigester = null;
@@ -3714,87 +4657,4 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		String checksum = new String(RandomByteSource.getHexCode(checksumBytes));
 		return checksum;
 	}
-//	
-//	public static void main(String[] args) throws Exception {
-//		File imagePath = new File("E:/Testdaten/PdfExtract/DeviceCMYK/");
-//		String imageName;
-//		imageName = "figure@11.[148,886,180,1164]";
-////		imageName = "figure@25.[148,886,176,1160]";
-////		imageName = "figure@29.[146,886,159,664]";
-//		BufferedImage bia = ImageIO.read(new File(imagePath, (imageName + ".a.png")));
-//		System.out.println("Acrobat image is " + bia.getWidth() + " x " + bia.getHeight());
-//		BufferedImage big = ImageIO.read(new File(imagePath, (imageName + ".g.png")));
-//		System.out.println("GoldenGATE image is " + big.getWidth() + " x " + big.getHeight());
-//		
-//		long rDistSum = 0;
-//		long gDistSum = 0;
-//		long bDistSum = 0;
-//		
-//		float[] hsla = new float[3];
-//		float[] hslg = new float[3];
-//		
-//		float hDist;
-//		float hDistMin = 1;
-//		float hDistMax = 0;
-//		double hDistSum = 0;
-//		double hDistSumAbs = 0;
-//		float sDist;
-//		float sDistMin = 1;
-//		float sDistMax = -1;
-//		double sDistSum = 0;
-//		double sDistSumAbs = 0;
-//		float lDist;
-//		float lDistMin = 1;
-//		float lDistMax = -1;
-//		double lDistSum = 0;
-//		double lDistSumAbs = 0;
-//		float whDist;
-//		float whDistMin = 1;
-//		float whDistMax = 0;
-//		double whDistSum = 0;
-//		double whDistSumAbs = 0;
-//		for (int x = 0; x < Math.min(bia.getWidth(), big.getWidth()); x++)
-//			for (int y = 0; y < Math.min(bia.getHeight(), big.getHeight()); y++) {
-//				int rgba = bia.getRGB(x, y);
-//				int rgbg = big.getRGB(x, y);
-//				rDistSum += Math.abs(((rgba >>> 16) & 255) - ((rgbg >>> 16) & 255));
-//				gDistSum += Math.abs(((rgba >>> 8) & 255) - ((rgbg >>> 8) & 255));
-//				bDistSum += Math.abs((rgba & 255) - (rgbg & 255));
-//				
-//				hsla = Color.RGBtoHSB(((rgba >>> 16) & 255), ((rgba >>> 8) & 255), (rgba & 255), hsla);
-//				hslg = Color.RGBtoHSB(((rgbg >>> 16) & 255), ((rgbg >>> 8) & 255), (rgbg & 255), hslg);
-//				hDist = (hsla[0] - hslg[0]);
-//				if (hDist < 0)
-//					hDist += 1;
-//				sDist = (hsla[1] - hslg[1]);
-//				lDist = (hsla[2] - hslg[2]);
-//				whDist = ((hDist * (hsla[1] + hslg[1])) / 2);
-//				
-//				hDistMin = Math.min(hDistMin, hDist);
-//				hDistMax = Math.max(hDistMax, hDist);
-//				hDistSum += hDist;
-//				hDistSumAbs += Math.abs(hDist);
-//				sDistMin = Math.min(sDistMin, sDist);
-//				sDistMax = Math.max(sDistMax, sDist);
-//				sDistSum += sDist;
-//				sDistSumAbs += Math.abs(sDist);
-//				lDistMin = Math.min(lDistMin, lDist);
-//				lDistMax = Math.max(lDistMax, lDist);
-//				lDistSum += lDist;
-//				lDistSumAbs += Math.abs(lDist);
-//				whDistMin = Math.min(whDistMin, whDist);
-//				whDistMax = Math.max(whDistMax, whDist);
-//				whDistSum += whDist;
-//				whDistSumAbs += Math.abs(whDist);
-//			}
-//		int biSize = (Math.min(bia.getWidth(), big.getWidth()) * Math.min(bia.getHeight(), big.getHeight()));
-//		System.out.println("Average R-Dist is " + (rDistSum / biSize));
-//		System.out.println("Average G-Dist is " + (gDistSum / biSize));
-//		System.out.println("Average B-Dist is " + (bDistSum / biSize));
-//		System.out.println();
-//		System.out.println("Average H-Dist is " + (hDistSum / biSize) + ", " + (hDistSumAbs / biSize) + " abs [" + hDistMin + "," + hDistMax + "]");
-//		System.out.println("Average S-Dist is " + (sDistSum / biSize) + ", " + (sDistSumAbs / biSize) + " abs [" + sDistMin + "," + sDistMax + "]");
-//		System.out.println("Average L-Dist is " + (lDistSum / biSize) + ", " + (lDistSumAbs / biSize) + " abs [" + lDistMin + "," + lDistMax + "]");
-//		System.out.println("Average S-weighted H-Dist is " + (whDistSum / biSize) + ", " + (whDistSumAbs / biSize) + " abs [" + whDistMin + "," + whDistMax + "]");
-//	}
 }

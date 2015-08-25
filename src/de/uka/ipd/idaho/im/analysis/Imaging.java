@@ -28,8 +28,9 @@
 package de.uka.ipd.idaho.im.analysis;
 
 import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.Graphics;
 import java.awt.Graphics2D;
-import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
@@ -63,6 +64,15 @@ import de.uka.ipd.idaho.stringUtils.csvHandler.StringTupel;
  * @author sautter
  */
 public class Imaging {
+	
+	/* TODO offer computing pixel row and column brightness histograms public methods ... and add
+- shearing angle as an argument (defaulting to 0 in shorter signature), which facilitates computing multiple variants without any actual image processing at all
+  - either in a single argument (as rotation angle)
+  - or in two arguments for horizontal and vertical
+- contrast computation based on average plain or square (flag argument) jump size
+- methods for computing maximum and minimum of histograms (check if java.util.Arrays already has max() and min() methods for arrays)
+- method for getting histogram peaks within some radius (argument) and/or above or below (two arguments) some thresholds
+	 */
 	
 	private static final int analysisImageCacheSize = 128;
 	private static Map analysisImageCache = Collections.synchronizedMap(new LinkedHashMap(128, 0.9f, true) {
@@ -312,14 +322,22 @@ public class Imaging {
 		if (psm == null)
 			psm = ProgressMonitor.dummy;
 		
+		//	show what's happening
+		ImageDisplayDialog idd = (DEBUG_CLEANUP ? new ImageDisplayDialog("Page Image Cleanup Steps") : null);
+		if (idd != null)
+			idd.addImage(copyImage(ai.getImage()), "Original");
+		
 		//	prepare image for enhancement
 		boolean changed;
 		
 		//	check for white on black
 		changed = false;
 		changed = correctWhiteOnBlack(ai, ((byte) 64));
-		if (changed)
+		if (changed) {
 			psm.setInfo("   - white-on-black inverted");
+			if (idd != null)
+				idd.addImage(copyImage(ai.getImage()), "White/Black Inverted");
+		}
 		
 		//	check binary vs. gray scale or color
 		boolean isGrayScale = isGrayScale(ai);
@@ -339,8 +357,11 @@ public class Imaging {
 				//	smooth out unevenly printed letters
 				changed = false;
 				changed = gaussBlur(ai, 1);
-				if (changed)
+				if (changed) {
 					psm.setInfo("   - letters smoothed");
+					if (idd != null)
+						idd.addImage(copyImage(ai.getImage()), "Letters Smoothed");
+				}
 				
 				//	apply low pass filter
 				/* TODO figure out if this makes sense here, as images might suffer,
@@ -349,22 +370,45 @@ public class Imaging {
 				changed = false;
 //				changed = eliminateBackground(ai, (dpi / 4), 3, 12);
 				changed = eliminateBackground(ai, dpi);
-				if (changed)
+				if (changed) {
 					psm.setInfo("   - background elimination done");
+					if (idd != null)
+						idd.addImage(copyImage(ai.getImage()), "Background Eliminated");
+				}
+			}
+			
+			//	apply low pass filter also if contrast somewhat higher
+			else if (contrast < 32) {
+				/* TODO figure out if this makes sense here, as images might suffer,
+				 * maybe better in OCR engine, applied to individual text images, but
+				 * then, this also hampers block identification */
+				changed = false;
+				changed = eliminateBackground(ai, dpi);
+				if (changed) {
+					psm.setInfo("   - background elimination done");
+					if (idd != null)
+						idd.addImage(copyImage(ai.getImage()), "Background Eliminated");
+				}
 			}
 			
 			//	whiten white
 			changed = false;
 			changed = whitenWhite(ai);
-			if (changed)
+			if (changed) {
 				psm.setInfo("   - white balance done");
+				if (idd != null)
+					idd.addImage(copyImage(ai.getImage()), "White Balanced");
+			}
 		}
 		
 		//	do feather dusting to get rid of spots in the middle of nowhere
 		changed = false;
 		changed = featherDust(ai, dpi, !isGrayScale, isSharp);
-		if (changed)
+		if (changed) {
 			psm.setInfo("   - feather dusting done");
+			if (idd != null)
+				idd.addImage(copyImage(ai.getImage()), "Feather Dusted");
+		}
 		
 //		//	do fine grained feather dusting to get rid of smaller spots
 //		if (dpi >= 200) {
@@ -383,8 +427,11 @@ public class Imaging {
 		//	correct page rotation
 		changed = false;
 		changed = correctPageRotation(ai, dpi, 0.1, ADJUST_MODE_SQUARE_ROOT);
-		if (changed)
+		if (changed) {
 			psm.setInfo("   - page rotation corrected");
+			if (idd != null)
+				idd.addImage(copyImage(ai.getImage()), "Put Upright");
+		}
 		
 //		//	cut white margins
 //		//	LET'S NOT DO THIS - SAVES LITTLE, BUT BLOWS PAGES OUT OF PROPORTION
@@ -392,6 +439,12 @@ public class Imaging {
 //		ai = textBounds.toImage();
 //		psm.setInfo("   - white margins removed, size is " + ai.getImage().getWidth() + " x " + ai.getImage().getHeight());
 //		
+		if (idd != null) {
+			idd.setSize(new Dimension(1000, 800));
+			idd.setLocationRelativeTo(null);
+			idd.setVisible(true);
+		}
+		
 		//	we're done here
 		return ai;
 	}
@@ -457,10 +510,10 @@ public class Imaging {
 				brightnessDiffCount++;
 			}
 		}
-		
-		System.out.println("Contrast buckets: ");
-		for (int d = (brightnessDiffCounts.length - 1); d >= 0; d--)
-			System.out.println("  " + d + ": " + brightnessDiffCounts[d]);
+//		
+//		System.out.println("Contrast buckets: ");
+//		for (int d = (brightnessDiffCounts.length - 1); d >= 0; d--)
+//			System.out.println("  " + d + ": " + brightnessDiffCounts[d]);
 		
 		int brightnessDiffsCounted = 0;
 		for (int d = (brightnessDiffCounts.length - 1); d >= 0; d--) {
@@ -705,7 +758,7 @@ public class Imaging {
 	
 	/**
 	 * Eliminate the background of an image. This method first applies a low
-	 * pass filter (large radius Gauss blur) to identfy the background, then
+	 * pass filter (large radius Gauss blur) to identify the background, then
 	 * subtracts it from the foreground. WARNING: This filter may eliminate or
 	 * severely damage both color and gray scale images.
 	 * @param analysisImage the wrapped image
@@ -723,7 +776,7 @@ public class Imaging {
 			for (int r = 0; r < brightness[c].length; r++)
 				backgroundBrightness[c][r] = brightness[c][r];
 		}
-		gaussBlur2D(backgroundBrightness, (dpi / 20), false);
+		gaussBlur2D(backgroundBrightness, (dpi / 10), false);
 		
 		//	scale brightness to use background as white
 		for (int c = 0; c < brightness.length; c++)
@@ -877,13 +930,13 @@ public class Imaging {
 	 * dark regions for positive thresholds, and light regions for negative
 	 * thresholds. In either case, considering diagonally adjacent non-white
 	 * (or non-black) pixels as connected is most sensible for binary images.
-	 * @param ai the image to analyze
+	 * @param analysisImage the image to analyze
 	 * @param brightnessThreshold the white threshold
 	 * @param includeDiagonal consider diagonally adjacent pixels connected?
 	 * @return the region coloring
 	 */
-	public static int[][] getRegionColoring(AnalysisImage ai, byte brightnessThreshold, boolean includeDiagonal) {
-		byte[][] brightness = ai.getBrightness();
+	public static int[][] getRegionColoring(AnalysisImage analysisImage, byte brightnessThreshold, boolean includeDiagonal) {
+		byte[][] brightness = analysisImage.getBrightness();
 		if (brightness.length == 0)
 			return new int[0][0];
 		int[][] regionColors = new int[brightness.length][brightness[0].length];
@@ -1231,7 +1284,7 @@ public class Imaging {
 							if (regionCodes[cc][cr] != regionCode)
 								continue;
 							ai.brightness[cc][cr] = 127;
-							ai.image.setRGB(cc, cr, tooSmall);
+							ai.image.setRGB(cc, cr, tooSmallOrBig);
 							regionCodes[cc][cr] = 0;
 							changed = true;
 						}
@@ -1372,12 +1425,20 @@ public class Imaging {
 	 * randomly dotted areas from being attached gradually from a few standalone
 	 * spots */
 	
+	private static BufferedImage copyImage(BufferedImage bi) {
+		BufferedImage cbi = new BufferedImage(bi.getWidth(), bi.getHeight(), ((bi.getType() == BufferedImage.TYPE_CUSTOM) ? BufferedImage.TYPE_INT_ARGB : bi.getType()));
+		Graphics cg = cbi.createGraphics();
+		cg.drawImage(bi, 0, 0, null);
+		cg.dispose();
+		return cbi;
+	}
+	
 	//	TODO set debug flag to false for export
 	private static final boolean DEBUG_CLEANUP = false;
 	private static final int whiteBalanced = (DEBUG_CLEANUP ? Color.CYAN.brighter().getRGB() : white);
 	private static final int backgroundEliminated = (DEBUG_CLEANUP ? Color.YELLOW.getRGB() : white);
 	private static final int tooFaint = (DEBUG_CLEANUP ? Color.MAGENTA.getRGB() : white);
-	private static final int tooSmall = (DEBUG_CLEANUP ? Color.RED.getRGB() : white);
+	private static final int tooSmallOrBig = (DEBUG_CLEANUP ? Color.RED.getRGB() : white);
 	private static final int tooSmallForStandalone = (DEBUG_CLEANUP ? Color.GREEN.getRGB(): white);
 	
 	private static int getSquareArea(int[][] colorCodes, int minCol, int maxCol, int minRow, int maxRow, int colorCode, int size, boolean sample) {
@@ -1838,6 +1899,7 @@ public class Imaging {
 					res.bottomRow = rect.bottomRow;
 					res.leftCol = lc;
 					res.rightCol = rc;
+					res = narrowTopAndBottom(res);
 					if (requireVerticalSplit) {
 						while ((rect.leftCol < res.leftCol) && !whiteCols[res.leftCol - rect.leftCol])
 							res.leftCol--;
@@ -2289,7 +2351,7 @@ public class Imaging {
 					res.bottomRow = br;
 					res.leftCol = rect.leftCol;
 					res.rightCol = rect.rightCol;
-					res = narrowTopAndBottom(res);
+					res = narrowLeftAndRight(res);
 					if (maxOffset == 0)
 						res.splitClean = true;
 					if (!res.isEmpty())
@@ -2547,20 +2609,39 @@ public class Imaging {
 		
 		//	detect and correct minor skewing via block line focusing
 		ArrayList blocks = new ArrayList();
+		HashSet blockIDs = new HashSet();
 		blocks.add(getContentBox(analysisImage));
 		for (int blk = 0; blk < blocks.size(); blk++) {
 			ImagePartRectangle ipr = ((ImagePartRectangle) blocks.get(blk));
 			if (DEBUG_LINE_FOCUSSING) System.out.println("Splitting " + ipr.getId() + ":");
+			if ((ipr.getWidth() < dpi) || ((ipr.getHeight() / 2) < dpi)) {
+				if (DEBUG_LINE_FOCUSSING) System.out.println(" --> too small");
+				blocks.remove(blk--);
+				continue;
+			}
 			ArrayList iprParts = new ArrayList();
 			ImagePartRectangle[] iprBlocks = splitIntoRows(ipr, (dpi / 8), maxBlockRotationAngle); // 3 mm
 			for (int b = 0; b < iprBlocks.length; b++) {
 				iprBlocks[b] = narrowLeftAndRight(iprBlocks[b]);
 				if (DEBUG_LINE_FOCUSSING) System.out.println(" - " + iprBlocks[b].getId());
+				if (!blockIDs.add(iprBlocks[b].getId())) {
+					if (DEBUG_LINE_FOCUSSING) System.out.println(" --> seen before");
+					continue;
+				}
 				ImagePartRectangle[] iprCols = splitIntoColumns(iprBlocks[b], (dpi / 8), maxBlockRotationAngle, true); // 3 mm
-				for (int c = 0; c < iprCols.length; c++) {
+				if (iprCols.length == 1) {
+					iprParts.add(iprBlocks[b]);
+					if (DEBUG_LINE_FOCUSSING) System.out.println(" --> single column, added");
+				}
+				else for (int c = 0; c < iprCols.length; c++) {
 					iprCols[c] = narrowTopAndBottom(iprCols[c]);
 					if (DEBUG_LINE_FOCUSSING) System.out.println("   - " + iprCols[c].getId());
+					if (!blockIDs.add(iprCols[c].getId())) {
+						if (DEBUG_LINE_FOCUSSING) System.out.println(" --> seen before");
+						continue;
+					}
 					iprParts.add(iprCols[c]);
+					if (DEBUG_LINE_FOCUSSING) System.out.println(" --> added");
 				}
 			}
 			if (iprParts.size() > 1) {
@@ -2596,7 +2677,7 @@ public class Imaging {
 		}
 		double blockRotationAngle = (weightedBlockRotationAngleSum / blockWeightSum);
 		System.out.println("Page rotation angle by block line focusing is " + (((float) ((int) (blockRotationAngle * 100))) / 100) + "°");
-		if (blockRotationAngle > blockRotationAngleStep) {
+		if (Math.abs(blockRotationAngle) > blockRotationAngleStep) {
 			analysisImage.setImage(rotateImage(analysisImage.getImage(), ((Math.PI / 180) * -blockRotationAngle)));
 			rotationCorrected = true;
 		}
@@ -2719,12 +2800,15 @@ public class Imaging {
 					rowBrightnessSums[r] += b;
 				}
 			}
+			
 			if (DEBUG_LINE_FOCUSSING) {
 				System.out.println("Row brightness for " + testAngles[a] + "° = " + ((Math.PI / 180) * testAngles[a]) + ":");
 				System.out.print(" - row brightness:");
 			}
 			
 			//	compute minimum, maximum, and average row brightness, as well as contrast (distance of individual row brightnesses from average)
+			int blockContentTopRow = block.getTopRow();
+			int blockContentBottomRow = block.getTopRow();
 			int minRowBrightness = Byte.MAX_VALUE;
 			int maxRowBrightness = 0;
 			int avgRowBrightness = (brightnessSum / (block.getWidth() * block.getHeight()));
@@ -2742,25 +2826,36 @@ public class Imaging {
 					rowBrightnessDistSum += Math.abs(rowBrightness - prevRowBrightness);
 					rowBrightnessDistSquareSum += ((rowBrightness - prevRowBrightness) * (rowBrightness - prevRowBrightness));
 				}
+				if (rowBrightness < 126)
+					blockContentBottomRow = (block.getTopRow() + r + 1);
+				else if (blockContentTopRow == (block.getTopRow() + r))
+					blockContentTopRow++;
 			}
+			int blockContentHeight = (blockContentBottomRow - blockContentTopRow);
 			if (DEBUG_LINE_FOCUSSING) {
 				System.out.println();
 				System.out.println(" - min is " + minRowBrightness);
 				System.out.println(" - max is " + maxRowBrightness);
 				System.out.println(" - avg is " + avgRowBrightness);
-				System.out.println(" - avg square distance to avg " + ((avgDistSquareSum + (block.getHeight() / 2)) / block.getHeight()));
-				System.out.println(" - avg distance between rows " + ((rowBrightnessDistSum + (block.getHeight() / 2)) / block.getHeight()));
-				System.out.println(" - avg square distance between rows " + ((rowBrightnessDistSquareSum + (block.getHeight() / 2)) / block.getHeight()));
+//				System.out.println(" - avg square distance to avg " + ((avgDistSquareSum + (block.getHeight() / 2)) / block.getHeight()));
+//				System.out.println(" - avg distance between rows " + ((rowBrightnessDistSum + (block.getHeight() / 2)) / block.getHeight()));
+//				System.out.println(" - avg square distance between rows " + ((rowBrightnessDistSquareSum + (block.getHeight() / 2)) / block.getHeight()));
+				System.out.println(" - content height is " + blockContentHeight + " of " + block.getHeight());
+				System.out.println(" - avg square distance to avg " + ((avgDistSquareSum + (blockContentHeight / 2)) / blockContentHeight));
+				System.out.println(" - avg distance between rows " + ((rowBrightnessDistSum + (blockContentHeight / 2)) / blockContentHeight));
+				System.out.println(" - avg square distance between rows " + ((rowBrightnessDistSquareSum + (blockContentHeight / 2)) / blockContentHeight));
 			}
 			
 			//	is this angle significant?
-			if (((rowBrightnessDistSquareSum + (block.getHeight() / 2)) / block.getHeight()) < ((maxRowBrightness - minRowBrightness) / 2)) {
+//			if (((rowBrightnessDistSquareSum + (block.getHeight() / 2)) / block.getHeight()) < ((maxRowBrightness - minRowBrightness) / 2)) {
+			if (((rowBrightnessDistSquareSum + (blockContentHeight / 2)) / blockContentHeight) < ((maxRowBrightness - minRowBrightness) / 2)) {
 				if (DEBUG_LINE_FOCUSSING) System.out.println(" --> unsafe");
 				continue;
 			}
 			
 			//	do we have a new top angle?
-			int testAngleScore = ((avgDistSquareSum + (block.getHeight() / 2)) / block.getHeight());
+//			int testAngleScore = ((avgDistSquareSum + (block.getHeight() / 2)) / block.getHeight());
+			int testAngleScore = ((avgDistSquareSum + (blockContentHeight / 2)) / blockContentHeight);
 			if (testAngleScore > rotationAngleScore) {
 				if (DEBUG_LINE_FOCUSSING) System.out.println(" --> new top angle");
 				rotationAngle = testAngles[a];
@@ -2772,18 +2867,20 @@ public class Imaging {
 		return rotationAngle;
 	}
 	
-	private static BufferedImage rotateImage(BufferedImage image, double angle) {
-		BufferedImage rImage = new BufferedImage(image.getWidth(), image.getHeight(), image.getType());
+	/**
+	 * Rotate an image by a given angle.
+	 * @param image the image to rotate
+	 * @param angle the angle to rotate by (in radiants)
+	 * @return the rotated image
+	 */
+	public static BufferedImage rotateImage(BufferedImage image, double angle) {
+		BufferedImage rImage = new BufferedImage(image.getWidth(), image.getHeight(), ((image.getType() == BufferedImage.TYPE_CUSTOM) ? BufferedImage.TYPE_INT_ARGB : image.getType()));
 		Graphics2D rImageGraphics = rImage.createGraphics();
-		Color originalColor = rImageGraphics.getColor();
 		rImageGraphics.setColor(Color.WHITE);
 		rImageGraphics.fillRect(0, 0, rImage.getWidth(), rImage.getHeight());
-		rImageGraphics.setColor(originalColor);
-		AffineTransform originalTransform = rImageGraphics.getTransform();
-//		rImageGraphics.rotate((angle / 2), (image.getWidth()/2), (image.getHeight()/2));
 		rImageGraphics.rotate(angle, (image.getWidth() / 2), (image.getHeight() / 2));
 		rImageGraphics.drawRenderedImage(image, null);
-		rImageGraphics.setTransform(originalTransform);
+		rImageGraphics.dispose();
 		return rImage;
 	}
 	
@@ -3096,6 +3193,7 @@ public class Imaging {
 			this.dpi = dpi;
 		}
 	}
+	
 	/* TODO use region coloring for block detection
 	 * - measure distance to next non-white pixel for all white pixels
 	 * - use as boundary for region coloring if distance above some (DPI fraction based) threshold

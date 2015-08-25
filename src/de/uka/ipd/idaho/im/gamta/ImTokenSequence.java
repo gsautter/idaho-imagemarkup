@@ -43,6 +43,7 @@ import java.util.TreeSet;
 
 import javax.swing.UIManager;
 
+import de.uka.ipd.idaho.gamta.Attributed;
 import de.uka.ipd.idaho.gamta.CharSequenceListener;
 import de.uka.ipd.idaho.gamta.Gamta;
 import de.uka.ipd.idaho.gamta.MutableAnnotation;
@@ -52,8 +53,8 @@ import de.uka.ipd.idaho.gamta.Token;
 import de.uka.ipd.idaho.gamta.TokenSequence;
 import de.uka.ipd.idaho.gamta.TokenSequenceListener;
 import de.uka.ipd.idaho.gamta.Tokenizer;
-import de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed;
 import de.uka.ipd.idaho.gamta.defaultImplementation.StringBufferCharSequence;
+import de.uka.ipd.idaho.gamta.util.CountingSet;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
@@ -62,7 +63,6 @@ import de.uka.ipd.idaho.im.ImPage;
 import de.uka.ipd.idaho.im.ImRegion;
 import de.uka.ipd.idaho.im.ImWord;
 import de.uka.ipd.idaho.im.util.ImfIO;
-import de.uka.ipd.idaho.stringUtils.StringIndex;
 import de.uka.ipd.idaho.stringUtils.StringUtils;
 
 /**
@@ -93,11 +93,14 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 	public static final int NORMALIZATION_LEVEL_PARAGRAPHS = 2;
 	
 	/** normalization level at which text whole streams are kept together, and text streams classified as <code>deleted</code>, <code>pageTitle</code>, or <code>artifact</code> are filtered out */
-	public static final int NORMALIZATION_LEVEL_STREAMS = 4;
+	public static final int NORMALIZATION_LEVEL_STREAMS = 3;
+	
+	/** constant for specifying whether or not diacrit characters are to be normalized to their base forms */
+	public static final int NORMALIZE_CHARACTERS = 4;
 	
 	static final BoundingBox NULL_BOUNDING_BOX = new BoundingBox(0, 0, 0, 0);
 	
-	class ImToken extends AbstractAttributed implements Token {
+	class ImToken implements Token {
 		int startOffset;
 		int index;
 		String value = null;
@@ -105,19 +108,21 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 		ArrayList imWords = new ArrayList(1);
 		ArrayList imWordAt;
 		BoundingBox boundingBox = null;
-		ImToken(int startOffset, int index, ImWord imw) {
+		ImToken(int startOffset, int index, ImWord imw, boolean normalizeChars) {
 			this.startOffset = startOffset;
 			this.index = index;
-			this.addWord(imw);
+			this.addWord(imw, normalizeChars);
 		}
 		private ImToken(int startOffset, int index) {
 			this.startOffset = startOffset;
 			this.index = index;
 		}
-		void addWord(ImWord imw) {
+		void addWord(ImWord imw, boolean normalizeChars) {
 			String imwValue = imw.getString();
 			if ((imwValue == null) || (imwValue.length() == 0))
 				return;
+			if (normalizeChars)
+				imwValue = normalizeString(imwValue);
 			if (this.value == null) {
 				this.value = imwValue;
 				this.imWordAt = new ArrayList(imwValue.length());
@@ -193,7 +198,7 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 			return tokenizer;
 		}
 		public boolean hasAttribute(String name) {
-			if (Token.PARAGRAPH_END_ATTRIBUTE.equals(name) && (((ImWord) this.imWords.get(this.imWords.size() - 1)).getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END))
+			if (Token.PARAGRAPH_END_ATTRIBUTE.equals(name) && ((((ImWord) this.imWords.get(this.imWords.size() - 1)).getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END) || (((ImWord) this.imWords.get(this.imWords.size() - 1)).getNextWord() == null)))
 				return true;
 			else if (PAGE_ID_ATTRIBUTE.equals(name))
 				return true;
@@ -202,9 +207,9 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 			else if (BOUNDING_BOX_ATTRIBUTE.equals(name))
 				return (this.getBoundingBox() != null);
 			else if (PAGE_NUMBER_ATTRIBUTE.equals(name))
-				return (super.hasAttribute(name) || ((ImWord) this.imWords.get(0)).getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE));
+				return (((ImWord) this.imWords.get(0)).getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE));
 			else if (LAST_PAGE_NUMBER_ATTRIBUTE.equals(name))
-				return (super.hasAttribute(name) || ((ImWord) this.imWords.get(this.imWords.size()-1)).getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE));
+				return (((ImWord) this.imWords.get(this.imWords.size()-1)).getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE));
 			else if (ImWord.TEXT_STREAM_TYPE_ATTRIBUTE.equals(name))
 				return true;
 			else if (ImWord.BOLD_ATTRIBUTE.equals(name))
@@ -217,10 +222,21 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 				return ((ImWord) this.imWords.get(0)).hasAttribute(ImWord.FONT_SIZE_ATTRIBUTE);
 			else if (ImWord.FONT_NAME_ATTRIBUTE.equals(name))
 				return ((ImWord) this.imWords.get(0)).hasAttribute(ImWord.FONT_NAME_ATTRIBUTE);
-			else return super.hasAttribute(name);
+			else if (this.imWords.size() == 1) // just avoiding the computational effort of a for loop in the most common case
+				return ((ImWord) this.imWords.get(0)).hasAttribute(name);
+			else {
+				for (int w = 0; w < this.imWords.size(); w++) {
+					if (((ImWord) this.imWords.get(w)).hasAttribute(name))
+						return true;
+				}
+				return false;
+			}
+		}
+		public Object getAttribute(String name) {
+			return this.getAttribute(name, null);
 		}
 		public Object getAttribute(String name, Object def) {
-			if (Token.PARAGRAPH_END_ATTRIBUTE.equals(name) && (((ImWord) this.imWords.get(this.imWords.size() - 1)).getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END))
+			if (Token.PARAGRAPH_END_ATTRIBUTE.equals(name) && ((((ImWord) this.imWords.get(this.imWords.size() - 1)).getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END) || (((ImWord) this.imWords.get(this.imWords.size() - 1)).getNextWord() == null)))
 				return "true";
 			else if (PAGE_ID_ATTRIBUTE.equals(name))
 				return ("" + ((ImWord) this.imWords.get(0)).getPage().pageId);
@@ -230,10 +246,10 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 				BoundingBox bb  = this.getBoundingBox();
 				return ((bb == null) ? def : bb.toString());
 			}
-			else if (PAGE_NUMBER_ATTRIBUTE.equals(name) && !super.hasAttribute(name) && ((ImWord) this.imWords.get(0)).getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
-				return ("" + ((ImWord) this.imWords.get(0)).getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE));
-			else if (LAST_PAGE_NUMBER_ATTRIBUTE.equals(name) && !super.hasAttribute(name) && ((ImWord) this.imWords.get(this.imWords.size()-1)).getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
-				return ("" + ((ImWord) this.imWords.get(this.imWords.size()-1)).getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE));
+			else if (PAGE_NUMBER_ATTRIBUTE.equals(name) && ((ImWord) this.imWords.get(0)).getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
+				return ((ImWord) this.imWords.get(0)).getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE);
+			else if (LAST_PAGE_NUMBER_ATTRIBUTE.equals(name) && ((ImWord) this.imWords.get(this.imWords.size()-1)).getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
+				return ((ImWord) this.imWords.get(this.imWords.size()-1)).getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE);
 			else if (ImWord.TEXT_STREAM_TYPE_ATTRIBUTE.equals(name))
 				return ((ImWord) this.imWords.get(0)).getTextStreamType();
 			else if (ImWord.BOLD_ATTRIBUTE.equals(name))
@@ -246,39 +262,24 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 				return ((ImWord) this.imWords.get(0)).getAttribute(ImWord.FONT_SIZE_ATTRIBUTE, def);
 			else if (ImWord.FONT_NAME_ATTRIBUTE.equals(name))
 				return ((ImWord) this.imWords.get(0)).getAttribute(ImWord.FONT_NAME_ATTRIBUTE, def);
-			else return super.getAttribute(name, def);
-		}
-		public Object getAttribute(String name) {
-			if (PARAGRAPH_END_ATTRIBUTE.equals(name) && (((ImWord) this.imWords.get(this.imWords.size() - 1)).getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END))
-				return "true";
-			else if (PAGE_ID_ATTRIBUTE.equals(name))
-				return ("" + ((ImWord) this.imWords.get(0)).getPage().pageId);
-			else if (LAST_PAGE_ID_ATTRIBUTE.equals(name))
-				return ("" + ((ImWord) this.imWords.get(this.imWords.size()-1)).getPage().pageId);
-			else if (BOUNDING_BOX_ATTRIBUTE.equals(name)) {
-				BoundingBox bb  = this.getBoundingBox();
-				return ((bb == null) ? null : bb.toString());
+			else if (this.imWords.size() == 1) // just avoiding the computational effort of a for loop in the most common case
+				return ((ImWord) this.imWords.get(0)).getAttribute(name, def);
+			else {
+				for (int w = 0; w < this.imWords.size(); w++) {
+					Object value = ((ImWord) this.imWords.get(w)).getAttribute(name);
+					if (value != null)
+						return value;
+				}
+				return def;
 			}
-			else if (PAGE_NUMBER_ATTRIBUTE.equals(name) && !super.hasAttribute(name) && ((ImWord) this.imWords.get(0)).getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
-				return ("" + ((ImWord) this.imWords.get(0)).getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE));
-			else if (LAST_PAGE_NUMBER_ATTRIBUTE.equals(name) && !super.hasAttribute(name) && ((ImWord) this.imWords.get(this.imWords.size()-1)).getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
-				return ("" + ((ImWord) this.imWords.get(this.imWords.size()-1)).getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE));
-			else if (ImWord.TEXT_STREAM_TYPE_ATTRIBUTE.equals(name))
-				return ((ImWord) this.imWords.get(0)).getTextStreamType();
-			else if (ImWord.BOLD_ATTRIBUTE.equals(name))
-				return ((ImWord) this.imWords.get(0)).getAttribute(ImWord.BOLD_ATTRIBUTE);
-			else if (ImWord.ITALICS_ATTRIBUTE.equals(name))
-				return ((ImWord) this.imWords.get(0)).getAttribute(ImWord.ITALICS_ATTRIBUTE);
-			else if (ImWord.ALL_CAPS_ATTRIBUTE.equals(name))
-				return ((ImWord) this.imWords.get(0)).getAttribute(ImWord.ALL_CAPS_ATTRIBUTE);
-			else if (ImWord.FONT_SIZE_ATTRIBUTE.equals(name))
-				return ((ImWord) this.imWords.get(0)).getAttribute(ImWord.FONT_SIZE_ATTRIBUTE);
-			else if (ImWord.FONT_NAME_ATTRIBUTE.equals(name))
-				return ((ImWord) this.imWords.get(0)).getAttribute(ImWord.FONT_NAME_ATTRIBUTE);
-			else return super.getAttribute(name);
 		}
 		public String[] getAttributeNames() {
-			TreeSet ans = new TreeSet(Arrays.asList(super.getAttributeNames()));
+			TreeSet ans = new TreeSet();
+			if (this.imWords.size() == 1) // just avoiding the computational effort of a for loop in the most common case
+				ans.addAll(Arrays.asList(((ImWord) this.imWords.get(0)).getAttributeNames()));
+			else for (int w = 0; w < this.imWords.size(); w++)
+				ans.addAll(Arrays.asList(((ImWord) this.imWords.get(w)).getAttributeNames()));
+			
 			if (((ImWord) this.imWords.get(this.imWords.size() - 1)).getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END)
 				ans.add(PARAGRAPH_END_ATTRIBUTE);
 			if (this.getBoundingBox() != null)
@@ -294,7 +295,61 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 				ans.add(ImWord.FONT_SIZE_ATTRIBUTE);
 			if (((ImWord) this.imWords.get(0)).hasAttribute(ImWord.FONT_NAME_ATTRIBUTE))
 				ans.add(ImWord.FONT_NAME_ATTRIBUTE);
+			
 			return ((String[]) ans.toArray(new String[ans.size()]));
+		}
+		public void clearAttributes() {
+			if (this.imWords.size() == 1) // just avoiding the computational effort of a for loop in the most common case
+				((ImWord) this.imWords.get(0)).clearAttributes();
+			else for (int w = 0; w < this.imWords.size(); w++)
+				((ImWord) this.imWords.get(w)).clearAttributes();
+		}
+		public void copyAttributes(Attributed source) {
+			if (this.imWords.size() == 1) // just avoiding the computational effort of a for loop in the most common case
+				((ImWord) this.imWords.get(0)).copyAttributes(source);
+			else for (int w = 0; w < this.imWords.size(); w++)
+				((ImWord) this.imWords.get(w)).copyAttributes(source);
+		}
+		public Object removeAttribute(String name) {
+			return this.setAttribute(name, null);
+		}
+		public void setAttribute(String name) {
+			this.setAttribute(name, "true");
+		}
+		public Object setAttribute(String name, Object value) {
+			if (Token.PARAGRAPH_END_ATTRIBUTE.equals(name)) {
+				Object oldValue = ((((ImWord) this.imWords.get(this.imWords.size() - 1)).getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END) ? "true" : null);
+				if (value == null)
+					((ImWord) this.imWords.get(this.imWords.size() - 1)).setNextRelation(ImWord.NEXT_RELATION_SEPARATE);
+				else ((ImWord) this.imWords.get(this.imWords.size() - 1)).setNextRelation(ImWord.NEXT_RELATION_PARAGRAPH_END);
+				return oldValue;
+			}
+			else if (PAGE_ID_ATTRIBUTE.equals(name))
+				return ("" + ((ImWord) this.imWords.get(0)).getPage().pageId);
+			else if (LAST_PAGE_ID_ATTRIBUTE.equals(name))
+				return ("" + ((ImWord) this.imWords.get(this.imWords.size()-1)).getPage().pageId);
+			else if (BOUNDING_BOX_ATTRIBUTE.equals(name)) {
+				BoundingBox bb  = this.getBoundingBox();
+				return ((bb == null) ? null : bb.toString());
+			}
+			else if (PAGE_NUMBER_ATTRIBUTE.equals(name))
+				return ((ImWord) this.imWords.get(0)).getPage().setAttribute(name, value);
+			else if (LAST_PAGE_NUMBER_ATTRIBUTE.equals(name))
+				return ((ImWord) this.imWords.get(this.imWords.size()-1)).getPage().setAttribute(name, value);
+			else if (ImWord.TEXT_STREAM_TYPE_ATTRIBUTE.equals(name)) {
+				if (value == null)
+					return ((ImWord) this.imWords.get(0)).getTextStreamType();
+				else return ((ImWord) this.imWords.get(0)).setTextStreamType(value.toString());
+			}
+			if (this.imWords.size() == 1) // just avoiding the computational effort of a for loop in the most common case
+				return ((ImWord) this.imWords.get(0)).setAttribute(name, value);
+			Object oldValue = null;
+			for (int w = 0; w < this.imWords.size(); w++) {
+				Object imwOldValue = ((ImWord) this.imWords.get(w)).setAttribute(name, value);
+				if (oldValue == null)
+					oldValue = imwOldValue;
+			}
+			return oldValue;
 		}
 		ImToken deltaClone(int deltaOffset, int deltaIndex) {
 			ImToken imt = new ImToken((this.startOffset - deltaOffset), (this.index - deltaIndex));
@@ -323,11 +378,67 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 		}
 	}
 	
+	private static final String normalizeString(String str) {
+		StringBuffer nStr = new StringBuffer();
+		for (int c = 0; c < str.length(); c++) {
+			char ch = str.charAt(c);
+			String nCh = getNormalizedChar(ch);
+			
+			//	current letter not normalized to anything but itself, simply append it
+			if (nCh == null) {
+				nStr.append(ch);
+				continue;
+			}
+			
+			//	normalized value has upper case letters, and is longer than 1, take care of capitalization
+			if (!nCh.equals(nCh.toLowerCase()) && (nCh.length() > 1)) {
+				boolean upper = true;
+				
+				//	check character before (if any)
+				if (c != 0) {
+					String lnCh = nStr.substring(nStr.length() - 1);
+					
+					//	character before in lower case, keep camel case
+					if (lnCh.equals(lnCh.toLowerCase()))
+						upper = false;
+				}
+				
+				//	check character after (if any)
+				if ((c+1) < str.length()) {
+					String nextStr = str.substring((c+1), (c+2));
+					
+					//	character before in lower case, keep camel case
+					if (nextStr.equals(nextStr.toLowerCase()))
+						upper = false;
+				}
+				
+				//	we're in all upper case, follow suite
+				if (upper)
+					nCh = nCh.toUpperCase();
+			}
+			
+			//	append what we've got
+			nStr.append(nCh);
+		}
+		
+		//	... finally
+		return nStr.toString();
+	}
+	private static final String getNormalizedChar(char ch) {
+		if ((ch < 33) || (ch == 160))
+			return " "; // turn all control characters into spaces, along with non-breaking space
+		else if (ch < 127)
+			return null; // no need to normalize basic ASCII characters
+		else if ("-\u00AD\u2010\u2011\u2012\u2013\u2014\u2015\\u2212".indexOf(ch) != -1)
+			return "-"; // normalize dashes right here
+		else return StringUtils.getNormalForm(ch);
+	}
+	
 	private Tokenizer tokenizer;
 	private ArrayList tokens = new ArrayList();
 	private HashMap imWordTokens = new HashMap();
 	
-	//	this one's for internal use only, namely for sub sequences, and for wrapping regions
+	//	these two are for internal use only, namely for sub sequences, and for wrapping regions
 	ImTokenSequence(Tokenizer tokenizer) {
 		this(tokenizer, new ImWord[0], NORMALIZATION_LEVEL_STREAMS);
 	}
@@ -338,25 +449,36 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 	 * @param tokenizer the tokenizer to use
 	 * @param textStreamHeads the heads of the logical text streams to include
 	 *            in the wrapper token sequence 
-	 * @param normalizationLevel the normalization level specifying how to
-	 *            merge individual text streams
+	 * @param configFlags an integer bundling configuration flags, like the
+	 *            normalization level, which specifies how to merge individual
+	 *            text streams
 	 */
-	public ImTokenSequence(Tokenizer tokenizer, ImWord[] textStreamHeads, int normalizationLevel) {
+	public ImTokenSequence(Tokenizer tokenizer, ImWord[] textStreamHeads, int configFlags) {
 		this.tokenizer = tokenizer;
-		this.addTextStreams(textStreamHeads, normalizationLevel, null);
+		this.addTextStreams(textStreamHeads, configFlags, null);
 	}
 	
-	void addTextStreams(ImWord[] textStreamHeads, int normalizationLevel, Set wordFilter) {
-		StringIndex tsIdCounts;
+	void addTextStreams(ImWord[] textStreamHeads, int configFlags, Set wordFilter) {
+		
+		//	read config flags
+		int normalizationLevel = (configFlags & NORMALIZATION_LEVEL_STREAMS);
+		boolean normalizeChars = ((configFlags & NORMALIZE_CHARACTERS) != 0);
+		
+		//	set up word filtering
+		CountingSet tsIdCounts;
 		if (wordFilter == null)
 			tsIdCounts = null;
 		else {
-			tsIdCounts = new StringIndex(true);
+			tsIdCounts = new CountingSet(new HashMap());
 			for (Iterator wit = wordFilter.iterator(); wit.hasNext();)
 				tsIdCounts.add(((ImWord) wit.next()).getTextStreamId());
 		}
+		
+		//	line up and sort text stream heads
 		ArrayList tshList = new ArrayList(Arrays.asList(textStreamHeads));
-		Collections.sort(tshList, layoutWordOrder);
+		sort(tshList); // we need to use out own little sort routine, as the JRE ones require a total order as of Java 1.7
+		
+		//	add text
 		while (tshList.size() != 0) {
 			
 			//	get next stream head to process
@@ -373,7 +495,7 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 				}
 				
 				//	add word
-				this.addImWord(imw, (normalizationLevel == NORMALIZATION_LEVEL_RAW));
+				this.addImWord(imw, (normalizationLevel == NORMALIZATION_LEVEL_RAW), normalizeChars);
 				
 				//	remember we've added one word from this stream
 				if (tsIdCounts != null) {
@@ -418,53 +540,118 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 				tshList.set(0, imw);
 				
 				//	... and use a single pass of bubble sort to get it into position
-				for (int t = 0; (t+1) < tshList.size(); t++) {
-					int c = layoutWordOrder.compare(tshList.get(t), tshList.get(t+1));
-					if (c <= 0)
-						break;
-					tshList.set((t+1), tshList.set(t, tshList.get(t+1)));
-				}
+				bubbleFirstIntoPlace(tshList);
 			}
 		}
 	}
 	
-	private static final Comparator layoutWordOrder = new Comparator() {
+	private static void bubbleFirstIntoPlace(ArrayList words) {
+		for (int w = 1; w < words.size(); w++) {
+			ImWord imw1 = ((ImWord) words.get(w-1));
+			ImWord imw2 = ((ImWord) words.get(w));
+			if ((imw1.pageId < imw2.pageId))
+				return;
+			if ((imw1.pageId == imw2.pageId) && (compare(imw1, imw2) <= 0))
+				return;
+			words.set(w, words.set((w-1), words.get(w)));
+		}
+	}
+	
+	private static void sort(ArrayList words) {
+		
+		//	sort by page ID first (this _is_ a total order)
+		Collections.sort(words, textStreamHeadPageIdOrder);
+		
+		//	bubble sort with our own comparison inside pages
+		int pageStart = 0;
+		for (int w = 1; w < words.size(); w++)
+			
+			//	this word starts a new page, sort previous one
+			if (((ImWord) words.get(w)).pageId > ((ImWord) words.get(pageStart)).pageId) {
+				sort(words, pageStart, w);
+				pageStart = w;
+			}
+		
+		//	sort last page
+		sort(words, pageStart, words.size());
+	}
+	
+	private static final Comparator textStreamHeadPageIdOrder = new Comparator() {
 		public int compare(Object obj1, Object obj2) {
-			ImWord imw1 = ((ImWord) obj1);
-			ImWord imw2 = ((ImWord) obj2);
-			
-			//	different pages
-			if (imw1.pageId != imw2.pageId)
-				return (imw1.pageId - imw2.pageId);
-			
-			//	same text stream, use ordering position
-			if (imw1.getTextStreamId().equals(imw2.getTextStreamId()))
-				return (imw1.getTextStreamPos() - imw2.getTextStreamPos());
-			
-			//	use bounding boxes
-			if (imw1.bounds.bottom <= imw2.bounds.top)
-				return -1;
-			if (imw2.bounds.bottom <= imw1.bounds.top)
-				return 1;
-			if (imw1.bounds.right <= imw2.bounds.left)
-				return -1;
-			if (imw2.bounds.right <= imw1.bounds.left)
-				return 1;
-			
-			//	handle overlapping bounding boxes
-			if (imw1.bounds.top != imw2.bounds.top)
-				return (imw1.bounds.top - imw2.bounds.top);
-			if (imw1.bounds.left != imw2.bounds.left)
-				return (imw1.bounds.left - imw2.bounds.left);
-			if (imw1.bounds.bottom != imw2.bounds.bottom)
-				return (imw2.bounds.bottom - imw1.bounds.bottom);
-			if (imw1.bounds.right != imw2.bounds.right)
-				return (imw2.bounds.right - imw1.bounds.right);
-			
-			//	little we can do about these two ...
-			return 0;
+			return (((ImWord) obj1).pageId - ((ImWord) obj2).pageId);
 		}
 	};
+	
+	/* Yes, admittedly, this bubble-sorts the specified section of the list.
+	 * In practice, however, the number of text stream heads in a single page
+	 * will be less than 10 in the very most cases, so we can safely accept
+	 * square complexity for the benefit of true in-place behavior, and the
+	 * property of being able to make do with a sort order that is not a total
+	 * order in some pathologic cases of weirdly overlapping and intersecting
+	 * words, like the strange OCR 'result' originating from figures */
+	private static void sort(ArrayList words, int from, int to) {
+		for (int r = 0; r < (to - from); r++) {
+			boolean unmodified = true;
+			for (int w = (from + 1); w < to; w++)
+				if (0 < compare(((ImWord) words.get(w-1)), ((ImWord) words.get(w)))) {
+					words.set(w, words.set((w-1), words.get(w)));
+					unmodified = false;
+				}
+			if (unmodified)
+				return;
+		}
+	}
+	
+	private static int compare(ImWord imw1, ImWord imw2) {
+		
+		//	same line (center Y of either word lies within the other) ==> sort left to right
+		if (((imw2.bounds.top < imw1.centerY) && (imw1.centerY < imw2.bounds.bottom)) || (imw1.bounds.top < imw2.centerY) && (imw2.centerY < imw1.bounds.bottom))
+			return (imw1.centerX - imw2.centerX);
+		
+		//	different lines, ==> sort top to bottom
+		else return (imw1.centerY - imw2.centerY);
+	}
+	
+//	/* WE CANNOT USE THIS SOPHISTICATED COMPARISON: As of Java 1.7, sorting
+//	 * routines strictly require a total order, and this comparison doesn't
+//	 * represent one in all cases. */
+//	private static final Comparator layoutWordOrder = new Comparator() {
+//		public int compare(Object obj1, Object obj2) {
+//			ImWord imw1 = ((ImWord) obj1);
+//			ImWord imw2 = ((ImWord) obj2);
+//			
+//			//	different pages
+//			if (imw1.pageId != imw2.pageId)
+//				return (imw1.pageId - imw2.pageId);
+//			
+//			//	same text stream, use ordering position
+//			if (imw1.getTextStreamId().equals(imw2.getTextStreamId()))
+//				return (imw1.getTextStreamPos() - imw2.getTextStreamPos());
+//			
+//			//	use bounding boxes
+//			if (imw1.bounds.bottom <= imw2.bounds.top)
+//				return -1;
+//			if (imw2.bounds.bottom <= imw1.bounds.top)
+//				return 1;
+//			if (imw1.bounds.right <= imw2.bounds.left)
+//				return -1;
+//			if (imw2.bounds.right <= imw1.bounds.left)
+//				return 1;
+//			
+//			//	handle overlapping bounding boxes
+//			if (imw1.bounds.top != imw2.bounds.top)
+//				return (imw1.bounds.top - imw2.bounds.top);
+//			if (imw1.bounds.left != imw2.bounds.left)
+//				return (imw1.bounds.left - imw2.bounds.left);
+//			if (imw1.bounds.bottom != imw2.bounds.bottom)
+//				return (imw2.bounds.bottom - imw1.bounds.bottom);
+//			if (imw1.bounds.right != imw2.bounds.right)
+//				return (imw2.bounds.right - imw1.bounds.right);
+//			
+//			//	little we can do about these two ...
+//			return 0;
+//		}
+//	};
 	
 	/**
 	 * Constructor wrapping a sequence of words of an Image Markup document.
@@ -474,25 +661,41 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 	 * @param lastWord the last word to include in the wrapper token sequence
 	 */
 	public ImTokenSequence(ImWord firstWord, ImWord lastWord) {
-		this(((Tokenizer) firstWord.getDocument().getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER)), firstWord, lastWord);
+		this(firstWord, lastWord, false);
+	}
+	
+	/**
+	 * Constructor wrapping a sequence of words of an Image Markup document.
+	 * The two argument words have to belong to the same logical text stream
+	 * for the constructed object to work in a meaningful way.
+	 * @param firstWord the first word to include in the wrapper token sequence
+	 * @param lastWord the last word to include in the wrapper token sequence
+	 * @param normalizeChars normalize diacritics to their base characters?
+	 */
+	public ImTokenSequence(ImWord firstWord, ImWord lastWord, boolean normalizeChars) {
+		this(((Tokenizer) firstWord.getDocument().getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER)), firstWord, lastWord, normalizeChars);
 	}
 	
 	ImTokenSequence(Tokenizer tokenizer, ImWord firstWord, ImWord lastWord) {
+		this(tokenizer, firstWord, lastWord, false);
+	}
+	
+	ImTokenSequence(Tokenizer tokenizer, ImWord firstWord, ImWord lastWord, boolean normalizeChars) {
 		this.tokenizer = tokenizer;
 		for (ImWord imw = firstWord; imw != null; imw = imw.getNextWord()) {
-			this.addImWord(imw, false);
+			this.addImWord(imw, false, normalizeChars);
 			if (imw == lastWord)
 				break;
 		}
 	}
 	
-	void addImWord(ImWord imw, boolean forceNewToken) {
+	void addImWord(ImWord imw, boolean forceNewToken, boolean normalizeChars) {
 //		System.out.println("ADDING WORD " + imw.getString() + " " + imw.bounds);
 		if ((imw.getString() == null) || (imw.getString().length() == 0))
 			return;
 		
 		if (this.tokens.isEmpty()) {
-			ImToken imt = new ImToken(0, 0, imw);
+			ImToken imt = new ImToken(0, 0, imw, normalizeChars);
 			this.tokens.add(imt);
 			this.imWordTokens.put(imw.getLocalID(), imt);
 //			System.out.println(" ==> first word");
@@ -539,14 +742,14 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 //			else System.out.println("   ==> no space");
 			
 			//	start new token
-			ImToken imt = new ImToken(pImt.imtEndOffset(), this.tokens.size(), imw);
+			ImToken imt = new ImToken(pImt.imtEndOffset(), this.tokens.size(), imw, normalizeChars);
 			this.tokens.add(imt);
 			this.imWordTokens.put(imw.getLocalID(), imt);
 		}
 		
 		//	this word belongs to previous one
 		else {
-			pImt.addWord(imw);
+			pImt.addWord(imw, normalizeChars);
 			this.imWordTokens.put(imw.getLocalID(), pImt);
 //			System.out.println(" ==> continued word");
 		}
@@ -743,14 +946,14 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 			uImw.setString(uImwString.toString());
 		}
 		
-		//	create new token overlay
+		//	create new token overlay (no need for char normalization here, as we're only copying around already normalized text)
 		HashSet updateImWordIDs = new HashSet();
 		ArrayList updateImTokens = new ArrayList();
 		for (int t = 0; t < updateTokenSequence.size(); t++) {
 			Token updateToken = updateTokenSequence.tokenAt(t);
 			uImw = ((ImWord) updateImWordAt.get(updateToken.getStartOffset()));
 			updateImWordIDs.add(uImw.getLocalID());
-			ImToken uImt = new ImToken((firstImt.startOffset + updateToken.getStartOffset()), (firstImt.index + t), uImw);
+			ImToken uImt = new ImToken((firstImt.startOffset + updateToken.getStartOffset()), (firstImt.index + t), uImw, false);
 			for (int o = 1; o < updateToken.length(); o++) {
 				 ImWord imw = ((ImWord) updateImWordAt.get(updateToken.getStartOffset() + o));
 				 if (imw == uImw)
@@ -758,7 +961,7 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 				 uImw.setNextRelation(ImWord.NEXT_RELATION_CONTINUE);
 				 uImw = imw;
 				 updateImWordIDs.add(uImw.getLocalID());
-				 uImt.addWord(uImw);
+				 uImt.addWord(uImw, false);
 			}
 			updateImTokens.add(uImt);
 			if (((t+1) < updateTokenSequence.size()) && (updateTokenSequence.getWhitespaceAfter(t).length() != 0))

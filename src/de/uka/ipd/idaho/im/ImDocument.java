@@ -28,6 +28,7 @@
 package de.uka.ipd.idaho.im;
 
 import java.awt.ComponentOrientation;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -40,6 +41,9 @@ import java.util.TreeMap;
 
 import de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
+import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
+import de.uka.ipd.idaho.gamta.util.imaging.PageImageSource;
+import de.uka.ipd.idaho.gamta.util.imaging.PageImageStore;
 import de.uka.ipd.idaho.im.util.ImUtils;
 
 /**
@@ -75,6 +79,16 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * - and add setImDocumentDataSource() method
 	 * - add isPageLoaded(int pageId) method
 	 * - auto-load page when it is retrieved by ID
+	 */
+	
+	/* TODO implement atomic changes
+	 * - startAtomicChange() and endAtomicChange()
+	 * - no notifying listeners within atomic changes, only after the end
+	 * - ImObjects issuing events store their changes instead ...
+	 * - ... register with parent document to be asked to issue events after atomic change ends ...
+	 * - ... and only do issue an even if final state different from original one
+	 * 
+	 * - maybe implement all of this right with event notification of this class
 	 */
 	
 	/** The name of the document attribute to store any non-default
@@ -355,6 +369,9 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	
 	private Properties documentProperties = new Properties();
 	
+	private PageImageSource pageImageSource = null;
+	private PageImageStore pageImageStore = null;
+	
 	/** Constructor
 	 * @param docId the ID of the document
 	 */
@@ -372,6 +389,45 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 		if (orientation == null)
 			orientation = ComponentOrientation.getOrientation(Locale.US);
 		this.orientation = orientation;
+	}
+	
+	/**
+	 * Give this Image Markup document a specific page image source to provide
+	 * page images for this very document. This causes the page images provided
+	 * by the argument source to be preferred over any other page image coming
+	 * from any other page image sources. If the argument page image source is
+	 * also a gape image store, it is used in the latter function as well.
+	 * @param pis the preferred page image source for the document
+	 */
+	public void setPageImageSource(PageImageSource pis) {
+		this.pageImageSource = pis;
+		if (pis instanceof PageImageStore)
+			this.pageImageStore = ((PageImageStore) pis);
+		else this.pageImageStore = null;
+	}
+	
+	/**
+	 * Retrieve the image of a particular page from the source associated with
+	 * this Image Markup document. If no dedicated page image source is present,
+	 * the general sources of page images will be consulted.
+	 * @return pageId the ID of the page whose image to retrieve
+	 * @return the image of the page with the argument ID
+	 */
+	public PageImage getPageImage(int pageId) throws IOException {
+		PageImage pi = ((this.pageImageSource == null) ? null : this.pageImageSource.getPageImage(this.docId,  pageId));
+		return ((pi == null) ? PageImage.getPageImage(this.docId, pageId) : pi);
+	}
+	
+	/**
+	 * Store the image of a particular page in the page image store associated
+	 * with this Image Markup document. If no dedicated page image store is
+	 * present, the general storages of page images will be consulted.
+	 * @return pi the page image to store
+	 * @return pageId the ID of the page the image belongs to
+	 * @return the storage name of the page image
+	 */
+	public String storePageImage(PageImage pi, int pageId) throws IOException {
+		return ((this.pageImageStore == null) ? PageImage.storePageImage(this.docId, pageId, pi) : this.pageImageStore.storePageImage(this.docId, pageId, pi));
 	}
 	
 	/**
@@ -522,12 +578,13 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	}
 	
 	/**
-	 * Add a supplement to the document.
+	 * Add a supplement to the document, or replace one with a newer version.
 	 * @param ims the supplement to add
+	 * @return the supplement replaced by the addition of the argument one
 	 */
-	public void addSupplement(ImSupplement ims) {
+	public ImSupplement addSupplement(ImSupplement ims) {
 		synchronized (this.supplementsById) {
-			this.supplementsById.put(ims.getId(), ims);
+			return ((ImSupplement) this.supplementsById.put(ims.getId(), ims));
 		}
 	}
 	
@@ -556,6 +613,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	}
 	
 	void addPage(ImPage page) {
+		//	TODO if page is being replaced, clean up index structures
 		this.pagesById.put(new Integer(page.pageId), page);
 	}
 	
@@ -918,22 +976,6 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 				spanningAnnots.add(annot);
 			}
 		return spanningAnnots.toAnnotArray();
-//		LinkedList wordAnnots = new LinkedList();
-//		for (int a = 0; a < this.annotations.size(); a++) {
-//			ImAnnotation annot = this.annotations.getAnnot(a);
-//			if (annot.getFirstWord().pageId > firstWord.pageId)
-//				continue;//break;
-//			if (annot.getLastWord().pageId < lastWord.pageId)
-//				continue;
-//			if (!annot.getFirstWord().getTextStreamId().equals(firstWord.getTextStreamId()))
-//				continue;
-//			if ((annot.getFirstWord().pageId == firstWord.pageId) && (annot.getFirstWord().getTextStreamPos() > firstWord.getTextStreamPos()))
-//				continue;//break;
-//			if ((annot.getLastWord().pageId == lastWord.pageId) && (annot.getLastWord().getTextStreamPos() < lastWord.getTextStreamPos()))
-//				continue;
-//			wordAnnots.add(annot);
-//		}
-//		return ((ImAnnotation[]) wordAnnots.toArray(new ImAnnotation[wordAnnots.size()]));
 	}
 	
 	/**
@@ -971,22 +1013,6 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			}
 		}
 		return overlappingAnnots.toAnnotArray();
-//		LinkedList wordAnnots = new LinkedList();
-//		for (int a = 0; a < this.annotations.size(); a++) {
-//			ImAnnotation annot = this.annotations.getAnnot(a);
-//			if (annot.getFirstWord().pageId > lastWord.pageId)
-//				continue;//break;
-//			if (annot.getLastWord().pageId < firstWord.pageId)
-//				continue;
-//			if (!annot.getFirstWord().getTextStreamId().equals(firstWord.getTextStreamId()))
-//				continue;
-//			if ((annot.getFirstWord().pageId == lastWord.pageId) && (annot.getFirstWord().getTextStreamPos() > lastWord.getTextStreamPos()))
-//				continue;//break;
-//			if ((annot.getLastWord().pageId == firstWord.pageId) && (annot.getLastWord().getTextStreamPos() < firstWord.getTextStreamPos()))
-//				continue;
-//			wordAnnots.add(annot);
-//		}
-//		return ((ImAnnotation[]) wordAnnots.toArray(new ImAnnotation[wordAnnots.size()]));
 	}
 	
 	private static class ImAnnotationCollectorList extends ArrayList {

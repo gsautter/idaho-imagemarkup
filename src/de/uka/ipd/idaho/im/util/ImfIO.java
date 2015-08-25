@@ -43,6 +43,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.SequenceInputStream;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -54,6 +55,7 @@ import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImageInputStream;
+import de.uka.ipd.idaho.gamta.util.imaging.PageImageSource;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImageStore.AbstractPageImageStore;
 import de.uka.ipd.idaho.im.ImAnnotation;
 import de.uka.ipd.idaho.im.ImDocument;
@@ -113,6 +115,20 @@ import de.uka.ipd.idaho.stringUtils.csvHandler.StringTupel;
  * @author sautter
  */
 public class ImfIO implements ImagingConstants {
+	
+	/* TODO
+- add "entries.csv" to IMFs, keeping MD5 checksum and create and update user and timestamp for each entry
+--> helps with only sending delta to server on update
+- rename ImfIO to ImFileIO
+- create ImFile to implement above change tracking, basically wrapping ImfIO loading behavior in dedicated object
+  - provide storeTo() methods (with stream or file argument)
+  - provide storeChangesTo() method (with stream argument) for server upload
+
+- consider storing content of pages (regions and words) in pageContent.<pageId>.csv files instead of regions.csv and words.csv
+--> allows for loading only some page range ImDocument instead of whole document (very helpful in GG Imagine Online), even if annotations still have to reside in single CSV
+==> then, don't do the latter, as the two tables differ considerably ...
+==> ... but do use, and version, words.<pageId>.csv
+	 */
 	
 	/**
 	 * Load an image markup document.
@@ -299,6 +315,7 @@ public class ImfIO implements ImagingConstants {
 				if (fontName == null)
 					continue;
 				if ((font == null) || !font.name.equals(fontName)) {
+					pm.setInfo("Adding font " + fontName);
 					font = new ImFont(doc, fontName);
 					String fontStyle = charData.getValue(ImFont.STYLE_ATTRIBUTE, "");
 					font.setBold(fontStyle.indexOf("B") != -1);
@@ -313,6 +330,23 @@ public class ImfIO implements ImagingConstants {
 			}
 		} catch (IOException ioe) { /* we might not have fonts ... */ }
 		
+		//	read page image data
+		final HashMap pageImageAttributesById = new HashMap();
+		try {
+			pm.setStep("Reading page image data");
+			pm.setBaseProgress(95);
+			pm.setMaxProgress(99);
+			InputStream pageImagesIn = getInputStream("pageImages.csv", cache, cacheFolder);
+			StringRelation pageImagesData = StringRelation.readCsvData(new InputStreamReader(pageImagesIn, "UTF-8"), true, null);
+			pageImagesIn.close();
+			for (int p = 0; p < pageImagesData.size(); p++) {
+				StringTupel pageImageData = pageImagesData.get(p);
+				int piPageId = Integer.parseInt(pageImageData.getValue(ImObject.PAGE_ID_ATTRIBUTE));
+				String piAttributes = pageImageData.getValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE);
+				pageImageAttributesById.put(new Integer(piPageId), piAttributes);
+			}
+		} catch (IOException ioe) { /* we might be faced with the old way ... */ }
+		
 		//	read pages
 		pm.setStep("Reading page data");
 		pm.setBaseProgress(60);
@@ -320,6 +354,7 @@ public class ImfIO implements ImagingConstants {
 		InputStream pagesIn = getInputStream("pages.csv", cache, cacheFolder);
 		StringRelation pagesData = StringRelation.readCsvData(new InputStreamReader(pagesIn, "UTF-8"), true, null);
 		pagesIn.close();
+		pm.setInfo("Adding " + pagesData.size() + " pages");
 		for (int p = 0; p < pagesData.size(); p++) {
 			pm.setProgress((p * 100) / pagesData.size());
 			StringTupel pageData = pagesData.get(p);
@@ -327,6 +362,19 @@ public class ImfIO implements ImagingConstants {
 			BoundingBox bounds = BoundingBox.parse(pageData.getValue(BOUNDING_BOX_ATTRIBUTE));
 			ImPage page = new ImPage(doc, pageId, bounds); // constructor adds page to document automatically
 			setAttributes(page, pageData.getValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, ""));
+//			System.out.println("Added page " + page.pageId + " with bounds " + bounds.toString());
+			String piAttributes = ((String) pageImageAttributesById.get(new Integer(pageId)));
+			if (piAttributes == null)
+				continue;
+			String[] piAttributeNameValuePairs = piAttributes.split("[\\<\\>]");
+			for (int a = 0; a < (piAttributeNameValuePairs.length-1); a+= 2) {
+				if ("originalDpi".equals(piAttributeNameValuePairs[a]))
+					page.setImageDPI(Integer.parseInt(piAttributeNameValuePairs[a+1]));
+				else if ("currentDpi".equals(piAttributeNameValuePairs[a])) {
+					page.setImageDPI(Integer.parseInt(piAttributeNameValuePairs[a+1]));
+					break;
+				}
+			}
 		}
 		
 		//	read words (first add words, then chain them and set attributes, as they might not be stored in stream order)
@@ -336,12 +384,14 @@ public class ImfIO implements ImagingConstants {
 		InputStream wordsIn = getInputStream("words.csv", cache, cacheFolder);
 		StringRelation wordsData = StringRelation.readCsvData(new InputStreamReader(wordsIn, "UTF-8"), true, null);
 		wordsIn.close();
+		pm.setInfo("Adding " + wordsData.size() + " words");
 		for (int w = 0; w < wordsData.size(); w++) {
 			pm.setProgress((w * 100) / wordsData.size());
 			StringTupel wordData = wordsData.get(w);
 			ImPage page = doc.getPage(Integer.parseInt(wordData.getValue(PAGE_ID_ATTRIBUTE)));
 			BoundingBox bounds = BoundingBox.parse(wordData.getValue(BOUNDING_BOX_ATTRIBUTE));
 			new ImWord(page, bounds, wordData.getValue(STRING_ATTRIBUTE));
+//			System.out.println("Added word '" + wordData.getValue(STRING_ATTRIBUTE) + "' to page " + page.pageId + " at " + bounds.toString());
 		}
 		pm.setStep("Chaining text streams");
 		pm.setBaseProgress(75);
@@ -371,6 +421,7 @@ public class ImfIO implements ImagingConstants {
 		InputStream regsIn = getInputStream("regions.csv", cache, cacheFolder);
 		StringRelation regsData = StringRelation.readCsvData(new InputStreamReader(regsIn, "UTF-8"), true, null);
 		regsIn.close();
+		pm.setInfo("Adding " + regsData.size() + " regions");
 		HashMap regionsById = new HashMap();
 		for (int r = 0; r < regsData.size(); r++) {
 			pm.setProgress((r * 100) / regsData.size());
@@ -382,6 +433,7 @@ public class ImfIO implements ImagingConstants {
 			ImRegion reg = ((ImRegion) regionsById.get(regId));
 			if (reg == null) {
 				reg = new ImRegion(page, bounds, type);
+//				System.out.println("Added '" + type + "' region to page " + page.pageId + " at " + bounds.toString());
 				regionsById.put(regId, reg);
 			}
 			setAttributes(reg, regData.getValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, ""));
@@ -394,6 +446,7 @@ public class ImfIO implements ImagingConstants {
 		InputStream annotsIn = getInputStream("annotations.csv", cache, cacheFolder);
 		StringRelation annotsData = StringRelation.readCsvData(new InputStreamReader(annotsIn, "UTF-8"), true, null);
 		annotsIn.close();
+		pm.setInfo("Adding " + annotsData.size() + " annotations");
 		for (int a = 0; a < annotsData.size(); a++) {
 			pm.setProgress((a * 100) / annotsData.size());
 			StringTupel annotData = annotsData.get(a);
@@ -415,6 +468,7 @@ public class ImfIO implements ImagingConstants {
 			InputStream supplementsIn = getInputStream("supplements.csv", cache, cacheFolder);
 			StringRelation supplementsData = StringRelation.readCsvData(new InputStreamReader(supplementsIn, "UTF-8"), true, null);
 			supplementsIn.close();
+			pm.setInfo("Adding " + supplementsData.size() + " supplements");
 			for (int s = 0; s < supplementsData.size(); s++) {
 				pm.setProgress((s * 100) / supplementsData.size());
 				StringTupel supplementData = supplementsData.get(s);
@@ -455,28 +509,11 @@ public class ImfIO implements ImagingConstants {
 			}
 		} catch (IOException ioe) { /* we might not have supplements ... */ }
 		
-		//	read page image data
-		final HashMap pageImageAttributesById = new HashMap();
-		try {
-			pm.setStep("Reading page image data");
-			pm.setBaseProgress(95);
-			pm.setMaxProgress(99);
-			InputStream pageImagesIn = getInputStream("pageImages.csv", cache, cacheFolder);
-			StringRelation pageImagesData = StringRelation.readCsvData(new InputStreamReader(pageImagesIn, "UTF-8"), true, null);
-			pageImagesIn.close();
-			for (int p = 0; p < pageImagesData.size(); p++) {
-				StringTupel pageImageData = pageImagesData.get(p);
-				int piPageId = Integer.parseInt(pageImageData.getValue(ImObject.PAGE_ID_ATTRIBUTE));
-				String piAttributes = pageImageData.getValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE);
-				pageImageAttributesById.put(new Integer(piPageId), piAttributes);
-			}
-		} catch (IOException ioe) { /* we might be faced with the old way ... */ }
-		
 		//	create page image source
 		pm.setStep("Creating page image source");
 		pm.setBaseProgress(99);
 		pm.setMaxProgress(100);
-		PageImage.addPageImageSource(new AbstractPageImageStore() {
+		PageImageSource pis = new AbstractPageImageStore() {
 			public boolean isPageImageAvailable(String name) {
 				if (!name.startsWith(docId))
 					return false;
@@ -495,13 +532,36 @@ public class ImfIO implements ImagingConstants {
 				return this.getPageImageInputStream(getInputStream(name, cache, cacheFolder), piPageIdStr);
 			}
 			private PageImageInputStream getPageImageInputStream(InputStream in, String piPageIdStr) throws IOException {
+//				
+//				//	test for PNG byte order mark
+//				PeekInputStream peekIn = new PeekInputStream(in, "‰PNG".length());
+//				System.out.println("‰PNG = " + Arrays.toString("‰PNG".getBytes()));
+//				byte[] peek = new byte["‰PNG".getBytes().length];
+//				peekIn.peek(peek);
+//				System.out.println(Arrays.toString(peek) + " = " + new String(peek));
+//				
+//				//	this one's the old way
+//				if (!peekIn.startsWith("‰PNG".getBytes()))
+//					return new PageImageInputStream(peekIn, this);
 				
 				//	test for PNG byte order mark
-				PeekInputStream peekIn = new PeekInputStream(in, "‰PNG".length());
+				PeekInputStream peekIn = new PeekInputStream(in, pngSignature.length);
+//				System.out.println("‰PNG = " + Arrays.toString("‰PNG".getBytes()));
+//				System.out.println("PNG signature = " + Arrays.toString(pngSignature));
+//				byte[] peek = new byte["‰PNG".getBytes().length];
+//				peekIn.peek(peek);
+//				System.out.println(Arrays.toString(peek) + " = " + new String(peek));
 				
 				//	this one's the old way
-				if (!peekIn.startsWith("‰PNG".getBytes()))
+				if (!peekIn.startsWith(pngSignature))
 					return new PageImageInputStream(peekIn, this);
+				
+				//	get attribute string
+				String piAttributes = ((String) pageImageAttributesById.get(new Integer(piPageIdStr)));
+				if (piAttributes == null) {
+					peekIn.close();
+					throw new FileNotFoundException("page" + piPageIdStr + "." + IMAGE_FORMAT);
+				}
 				
 				//	initialize attributes, edges with default values
 				int originalWidth = -1;
@@ -514,25 +574,24 @@ public class ImfIO implements ImagingConstants {
 				int bottomEdge = 0;
 				
 				//	read attribute string
-				String piAttributes = ((String) pageImageAttributesById.get(new Integer(piPageIdStr)));
 				String[] piAttributeNameValuePairs = piAttributes.split("[\\<\\>]");
-				for (int p = 0; p < (piAttributeNameValuePairs.length-1); p+= 2) {
-					if ("originalWidth".equals(piAttributeNameValuePairs[p]))
-						originalWidth = Integer.parseInt(piAttributeNameValuePairs[p+1]);
-					else if ("originalHeight".equals(piAttributeNameValuePairs[p]))
-						originalHeight = Integer.parseInt(piAttributeNameValuePairs[p+1]);
-					else if ("originalDpi".equals(piAttributeNameValuePairs[p]))
-						originalDpi = Integer.parseInt(piAttributeNameValuePairs[p+1]);
-					else if ("currentDpi".equals(piAttributeNameValuePairs[p]))
-						currentDpi = Integer.parseInt(piAttributeNameValuePairs[p+1]);
-					else if ("leftEdge".equals(piAttributeNameValuePairs[p]))
-						leftEdge = Integer.parseInt(piAttributeNameValuePairs[p+1]);
-					else if ("rightEdge".equals(piAttributeNameValuePairs[p]))
-						rightEdge = Integer.parseInt(piAttributeNameValuePairs[p+1]);
-					else if ("topEdge".equals(piAttributeNameValuePairs[p]))
-						topEdge = Integer.parseInt(piAttributeNameValuePairs[p+1]);
-					else if ("bottomEdge".equals(piAttributeNameValuePairs[p]))
-						bottomEdge = Integer.parseInt(piAttributeNameValuePairs[p+1]);
+				for (int a = 0; a < (piAttributeNameValuePairs.length-1); a+= 2) {
+					if ("originalWidth".equals(piAttributeNameValuePairs[a]))
+						originalWidth = Integer.parseInt(piAttributeNameValuePairs[a+1]);
+					else if ("originalHeight".equals(piAttributeNameValuePairs[a]))
+						originalHeight = Integer.parseInt(piAttributeNameValuePairs[a+1]);
+					else if ("originalDpi".equals(piAttributeNameValuePairs[a]))
+						originalDpi = Integer.parseInt(piAttributeNameValuePairs[a+1]);
+					else if ("currentDpi".equals(piAttributeNameValuePairs[a]))
+						currentDpi = Integer.parseInt(piAttributeNameValuePairs[a+1]);
+					else if ("leftEdge".equals(piAttributeNameValuePairs[a]))
+						leftEdge = Integer.parseInt(piAttributeNameValuePairs[a+1]);
+					else if ("rightEdge".equals(piAttributeNameValuePairs[a]))
+						rightEdge = Integer.parseInt(piAttributeNameValuePairs[a+1]);
+					else if ("topEdge".equals(piAttributeNameValuePairs[a]))
+						topEdge = Integer.parseInt(piAttributeNameValuePairs[a+1]);
+					else if ("bottomEdge".equals(piAttributeNameValuePairs[a]))
+						bottomEdge = Integer.parseInt(piAttributeNameValuePairs[a+1]);
 				}
 				
 				//	default current DPI to original DPI if not given explicitly
@@ -565,20 +624,29 @@ public class ImfIO implements ImagingConstants {
 			public boolean storePageImage(String name, PageImage pageImage) throws IOException {
 				if (!name.startsWith(docId))
 					return false;
-				name = ("page" + name.substring(docId.length() + ".".length()) + "." + IMAGE_FORMAT);
+				String piPageIdStr = name.substring(docId.length() + ".".length());
+				name = ("page" + piPageIdStr + "." + IMAGE_FORMAT);
 				OutputStream out = getOutputStream(name, cache, cacheFolder);
-				pageImage.write(out);
+				pageImage.writeImage(out);
 				out.close();
+				pageImageAttributesById.put(new Integer(piPageIdStr), getPageImageAttributes(pageImage));
 				return true;
 			}
 			public int getPriority() {
 				return 10; // we only want page images for one document, but those we really do want
 			}
-		});
+		};
+//		PageImage.addPageImageSource(pis);
+		doc.setPageImageSource(pis);
 		
 		//	finally ...
 		return doc;
 	}
+	
+	/* we need to hard-code the first byte 0x89 ('‰' on ISO-8859) converts
+	 * differently on MacRoman and other encodings if embedded as a string
+	 * constant in the code */
+	private static final byte[] pngSignature = {((byte) 0x89), ((byte) 'P'), ((byte) 'N'), ((byte) 'G')};
 	
 	private static InputStream getInputStream(String name, HashMap cache, File cacheFolder) throws IOException {
 		if (cache == null)
@@ -666,6 +734,7 @@ public class ImfIO implements ImagingConstants {
 			
 			//	data for words
 			ImWord[] pageWords = pages[p].getWords();
+			Arrays.sort(pageWords, ImUtils.textStreamOrder); // some effort, but negligible in comparison to image handling, and helps a lot reading word table
 			for (int w = 0; w < pageWords.length; w++) {
 				StringTupel wordData = new StringTupel();
 				wordData.setValue(PAGE_ID_ATTRIBUTE, ("" + pageWords[w].pageId));
@@ -798,7 +867,6 @@ public class ImfIO implements ImagingConstants {
 			String piName = PageImage.getPageImageName(doc.docId, pages[p].pageId);
 			piName = ("page" + piName.substring(doc.docId.length() + ".".length()) + "." + IMAGE_FORMAT);
 			zout.putNextEntry(new ZipEntry(piName));
-//			pi.write(zout);
 			pi.writeImage(zout);
 			zout.closeEntry();
 			
@@ -868,8 +936,9 @@ public class ImfIO implements ImagingConstants {
 		String[] ans = imo.getAttributeNames();
 		for (int a = 0; a < ans.length; a++) {
 			Object value = imo.getAttribute(ans[a]);
-			if (value != null)
+			if (value != null) try {
 				attributes.append(ans[a] + "<" + escape(value.toString()) + ">");
+			} catch (RuntimeException re) {}
 		}
 		return attributes.toString();
 	}
