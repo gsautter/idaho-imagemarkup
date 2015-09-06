@@ -2136,6 +2136,8 @@ public class PdfParser {
 			else if ("Ts".equals(tag))
 				this.doTs(stack);
 			
+			//	TODO keep track of text color (G, g, RG, and rg tags) to identify water marks (light gray text)
+			
 			else if ("Td".equals(tag))
 				this.doTd(stack);
 			else if ("TD".equals(tag))

@@ -429,7 +429,7 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 			return " "; // turn all control characters into spaces, along with non-breaking space
 		else if (ch < 127)
 			return null; // no need to normalize basic ASCII characters
-		else if ("-\u00AD\u2010\u2011\u2012\u2013\u2014\u2015\\u2212".indexOf(ch) != -1)
+		else if ("-\u00AD\u2010\u2011\u2012\u2013\u2014\u2015\u2212".indexOf(ch) != -1)
 			return "-"; // normalize dashes right here
 		else return StringUtils.getNormalForm(ch);
 	}

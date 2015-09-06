@@ -1265,6 +1265,15 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	private void addAnnotation(ImRegion region, ImWord[] regionWords) {
 		if (regionWords.length == 0)
 			return;
+		ArrayList docRegionWords = new ArrayList();
+		for (int w = 0; w < regionWords.length; w++) {
+			if (this.getTokenIndexOf(regionWords[w]) >= 0)
+				docRegionWords.add(regionWords[w]);
+		}
+		if (docRegionWords.isEmpty())
+			return;
+		if (docRegionWords.size() < regionWords.length)
+			regionWords = ((ImWord[]) docRegionWords.toArray(new ImWord[docRegionWords.size()]));
 		this.indexAnnotationBase(this.getAnnotationBase(region, regionWords));
 	}
 	private void indexAnnotationBase(ImAnnotationBase base) {

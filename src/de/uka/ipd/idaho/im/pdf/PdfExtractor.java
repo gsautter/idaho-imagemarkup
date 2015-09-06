@@ -91,6 +91,7 @@ import de.uka.ipd.idaho.gamta.util.ProgressMonitor.CascadingProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor.SynchronizedProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.constants.TableConstants;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
+import de.uka.ipd.idaho.gamta.util.imaging.DocumentStyle;
 import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImageInputStream;
@@ -121,7 +122,6 @@ import de.uka.ipd.idaho.im.pdf.PdfParser.PStream;
 import de.uka.ipd.idaho.im.pdf.PdfParser.PWord;
 import de.uka.ipd.idaho.im.pdf.test.PdfExtractorTest;
 import de.uka.ipd.idaho.im.utilities.ImageDisplayDialog;
-import de.uka.ipd.idaho.plugins.docStyle.DocumentStyle;
 
 /**
  * Utility for extracting page images and text from a PDF file.
@@ -133,12 +133,6 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	/* TODO cut page structure analysis and OCR out of this class
 	 * - more universal, just need to have ImDocument and page images
 	 * ==> facilitates using them on staples (bundles of scans) as well
-	 */
-	
-	/* TODO facilitate using style patterns (keyed by journal name and year of publication):
-	 * - block margins
-	 * - column margins
-	 * - ...
 	 */
 	
 	//	TODO_maybe facilitate learning style patterns
@@ -1381,11 +1375,9 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					pageImage = pi.image;
 				}
 				
-				//	get layout hints (defaulting to kind of universal ball park figures)
+				//	get page content area layout hint (defaulting to whole page bounds), as well as number of columns
 				BoundingBox contentArea = docLayout.getBoxProperty("contentArea", pages[p].bounds, imageDPIs[p]);
 				int columnCount = docLayout.getIntProperty("columnCount", -1);
-				int minColumnMargin = ((columnCount == 1) ? (pages[p].bounds.right - pages[p].bounds.left) : docLayout.getIntProperty("minColumnMargin", (imageDPIs[p] / 10), imageDPIs[p]));
-				int minBlockMargin = docLayout.getIntProperty("minBlockMargin", (imageDPIs[p] / 10), imageDPIs[p]);
 				
 				//	index words by bounding boxes, and determine page content bounds
 				ImWord[] pWords = pages[p].getWords();
@@ -1461,16 +1453,32 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 							apiBrightness[c][r] = ((byte) 127);
 					}
 				
-				/* TODO also use minColumnWidth and maxColumnWidth (later, with multi-column test cases)
-				 * - on a column split, keep merging neighboring columns narrower than min width
-				 *   ==> should prevent enumeration bulletins from being split off their text
-				 * - or even use BoundingBox[] columnAreas, marking where text columns are ...
-				 * - ... and merge column split results narrower than threshold that lie within same column area
-				 */
+				//	get column and block margin layout hints (defaulting to kind of universal ball park figures)
+				int minBlockMargin = docLayout.getIntProperty("minBlockMargin", (imageDPIs[p] / 10), imageDPIs[p]);
+				int minColumnMargin = ((columnCount == 1) ? (pages[p].bounds.right - pages[p].bounds.left) : docLayout.getIntProperty("minColumnMargin", (imageDPIs[p] / 10), imageDPIs[p]));
+				
+				//	get (or compute) column areas to correct erroneous column splits
+				BoundingBox[] columnAreas = docLayout.getBoxListProperty("columnAreas", null, imageDPIs[p]);
+				if (columnAreas == null) {
+					if (columnCount == 1) {
+						columnAreas = new BoundingBox[1];
+						columnAreas[0] = contentArea;
+					}
+					else if (columnCount == 2) {
+						columnAreas = new BoundingBox[2];
+						columnAreas[0] = new BoundingBox(contentArea.left, ((contentArea.left + contentArea.right) / 2), contentArea.top, contentArea.bottom);
+						columnAreas[1] = new BoundingBox(((contentArea.left + contentArea.right) / 2), contentArea.right, contentArea.top, contentArea.bottom);
+					}
+					else if ((columnCount != -1) && (contentArea != pages[p].bounds)) {
+						columnAreas = new BoundingBox[columnCount];
+						for (int c = 0; c < columnCount; c++)
+							columnAreas[c] = new BoundingBox((contentArea.left + (((contentArea.right - contentArea.left) * c) / columnCount)), (contentArea.left + (((contentArea.right - contentArea.left) * (c + 1)) / columnCount)), contentArea.top, contentArea.bottom);
+					}
+				}
 				
 				//	obtain visual page structure
 //				Region pageRootRegion = PageImageAnalysis.getPageRegion(api, imageDPIs[p], false, spm);
-				Region pageRootRegion = PageImageAnalysis.getPageRegion(api, imageDPIs[p], minColumnMargin, minBlockMargin, false, spm);
+				Region pageRootRegion = PageImageAnalysis.getPageRegion(api, imageDPIs[p], minColumnMargin, minBlockMargin, columnAreas, false, spm);
 				
 				//	add page content to document
 				addRegionStructure(pages[p], null, pageRootRegion, imageDPIs[p], wordsByBoxes, spm);
@@ -3060,6 +3068,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		//	get document pages
 		final ImPage[] pages = doc.getPages();
 		
+		//	get document style and use it for page structure analysis
+		DocumentStyle docStyle = DocumentStyle.getStyleFor(doc);
+		final DocumentStyle docLayout = docStyle.getSubset("layout");
+		
 		//	analyze page text layout
 		spm.setBaseProgress(0);
 		spm.setMaxProgress(50);
@@ -3081,11 +3093,17 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					throw new IOException("Could not find image for page " + pages[p].pageId);
 				}
 				
-				//	index words by bounding boxes
+				//	get page content area layout hint (defaulting to whole page bounds), as well as number of columns
+				BoundingBox contentArea = docLayout.getBoxProperty("contentArea", pages[p].bounds, pi.currentDpi);
+				
+				//	index words by bounding boxes, excluding ones outside content area as artifacts
 				ImWord[] pageWords = pages[p].getWords();
 				HashMap wordsByBoxes = new HashMap();
-				for (int w = 0; w < pageWords.length; w++)
-					wordsByBoxes.put(pageWords[w].bounds, pageWords[w]);
+				for (int w = 0; w < pageWords.length; w++) {
+					if (contentArea.includes(pageWords[w].bounds, true))
+						wordsByBoxes.put(pageWords[w].bounds, pageWords[w]);
+					else pageWords[w].setTextStreamType(ImWord.TEXT_STREAM_TYPE_ARTIFACT);
+				}
 				
 				//	obtain higher level page structure
 				Region pageRootRegion;
@@ -3093,8 +3111,34 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					pageRootRegion = ((Region) pageRegionCache.remove(pages[p]));
 				}
 				if (pageRootRegion == null) {
+					int columnCount = docLayout.getIntProperty("columnCount", -1);
+					
+					//	get column and block margin layout hints (defaulting to kind of universal ball park figures)
+					int minBlockMargin = docLayout.getIntProperty("minBlockMargin", (pi.currentDpi / 10), pi.currentDpi);
+					int minColumnMargin = ((columnCount == 1) ? (pages[p].bounds.right - pages[p].bounds.left) : docLayout.getIntProperty("minColumnMargin", (pi.currentDpi / 10), pi.currentDpi));
+					
+					//	get (or compute) column areas to correct erroneous column splits
+					BoundingBox[] columnAreas = docLayout.getBoxListProperty("columnAreas", null, pi.currentDpi);
+					if (columnAreas == null) {
+						if (columnCount == 1) {
+							columnAreas = new BoundingBox[1];
+							columnAreas[0] = contentArea;
+						}
+						else if (columnCount == 2) {
+							columnAreas = new BoundingBox[2];
+							columnAreas[0] = new BoundingBox(contentArea.left, ((contentArea.left + contentArea.right) / 2), contentArea.top, contentArea.bottom);
+							columnAreas[1] = new BoundingBox(((contentArea.left + contentArea.right) / 2), contentArea.right, contentArea.top, contentArea.bottom);
+						}
+						else if ((columnCount != -1) && (contentArea != pages[p].bounds)) {
+							columnAreas = new BoundingBox[columnCount];
+							for (int c = 0; c < columnCount; c++)
+								columnAreas[c] = new BoundingBox((contentArea.left + (((contentArea.right - contentArea.left) * c) / columnCount)), (contentArea.left + (((contentArea.right - contentArea.left) * (c + 1)) / columnCount)), contentArea.top, contentArea.bottom);
+						}
+					}
+					
+					//	compute page structure
 					AnalysisImage api = Imaging.wrapImage(pi.image, null);
-					pageRootRegion = PageImageAnalysis.getPageRegion(api, pi.currentDpi, false, spm);
+					pageRootRegion = PageImageAnalysis.getPageRegion(api, pi.currentDpi, minColumnMargin, minBlockMargin, columnAreas, false, spm);
 				}
 				addTextBlockStructure(pages[p], null, pageRootRegion, pi.currentDpi, wordsByBoxes, spm);
 				
@@ -3338,6 +3382,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		//	get document pages
 		final ImPage[] pages = doc.getPages();
 		
+		//	get document style and use it for page structure analysis
+		DocumentStyle docStyle = DocumentStyle.getStyleFor(doc);
+		final DocumentStyle docLayout = docStyle.getSubset("layout");
+		
 		//	do high level structure analysis (down to blocks) and OCR
 		ParallelFor pf = new ParallelFor() {
 			public void doFor(int p) throws Exception {
@@ -3357,9 +3405,39 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					throw new IOException("Could not find image for page " + pages[p].pageId);
 				}
 				
+				//	get page content area layout hint (defaulting to whole page bounds), as well as number of columns
+				BoundingBox contentArea = docLayout.getBoxProperty("contentArea", pages[p].bounds, pi.currentDpi);
+				int columnCount = docLayout.getIntProperty("columnCount", -1);
+				
+				//	get column and block margin layout hints (defaulting to kind of universal ball park figures)
+				int minBlockMargin = docLayout.getIntProperty("minBlockMargin", (pi.currentDpi / 10), pi.currentDpi);
+				int minColumnMargin = ((columnCount == 1) ? (pages[p].bounds.right - pages[p].bounds.left) : docLayout.getIntProperty("minColumnMargin", (pi.currentDpi / 10), pi.currentDpi));
+				
+				//	get (or compute) column areas to correct erroneous column splits
+				BoundingBox[] columnAreas = docLayout.getBoxListProperty("columnAreas", null, pi.currentDpi);
+				if (columnAreas == null) {
+					if (columnCount == 1) {
+						columnAreas = new BoundingBox[1];
+						columnAreas[0] = contentArea;
+					}
+					else if (columnCount == 2) {
+						columnAreas = new BoundingBox[2];
+						columnAreas[0] = new BoundingBox(contentArea.left, ((contentArea.left + contentArea.right) / 2), contentArea.top, contentArea.bottom);
+						columnAreas[1] = new BoundingBox(((contentArea.left + contentArea.right) / 2), contentArea.right, contentArea.top, contentArea.bottom);
+					}
+					else if ((columnCount != -1) && (contentArea != pages[p].bounds)) {
+						columnAreas = new BoundingBox[columnCount];
+						for (int c = 0; c < columnCount; c++)
+							columnAreas[c] = new BoundingBox((contentArea.left + (((contentArea.right - contentArea.left) * c) / columnCount)), (contentArea.left + (((contentArea.right - contentArea.left) * (c + 1)) / columnCount)), contentArea.top, contentArea.bottom);
+					}
+				}
+				
+				//	compute page structure
+				
 				//	obtain higher level page structure
 				AnalysisImage api = Imaging.wrapImage(pi.image, null);
-				Region pageRootRegion = PageImageAnalysis.getPageRegion(api, pi.currentDpi, false, spm);
+//				Region pageRootRegion = PageImageAnalysis.getPageRegion(api, pi.currentDpi, false, spm);
+				Region pageRootRegion = PageImageAnalysis.getPageRegion(api, pi.currentDpi, minColumnMargin, minBlockMargin, columnAreas, false, spm);
 				addRegionBlocks(pages[p], pageRootRegion, pi.currentDpi, spm);
 				if (pageRegionCache != null)
 					synchronized (pageRegionCache) {

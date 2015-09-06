@@ -833,8 +833,8 @@ public class ImUtils implements ImagingConstants {
 	 */
 	public static boolean isCaptionAboveTargetMatch(BoundingBox captionBox, BoundingBox targetBox, int dpi) {
 		
-		//	check vertical alignment
-		if (targetBox.top < captionBox.bottom)
+		//	check vertical alignment (we need to cut this a little slack, as images can be masked to smaller sizes in born-digital PDFs)
+		if (targetBox.top < ((captionBox.top + captionBox.bottom) / 2))
 			return false;
 		
 		//	compute widths and overlap
@@ -842,8 +842,8 @@ public class ImUtils implements ImagingConstants {
 		int targetBoxWidth = (targetBox.right - targetBox.left);
 		int overlapWidth = (Math.min(captionBox.right, targetBox.right) - Math.max(captionBox.left, targetBox.left));
 		
-		//	90% overlap of narrower in wider part should do
-		if ((overlapWidth * 10) < (Math.min(captionBoxWidth, targetBoxWidth) * 9))
+		//	80% overlap of narrower in wider part should do
+		if ((overlapWidth * 5) < (Math.min(captionBoxWidth, targetBoxWidth) * 4))
 			return false;
 		
 		//	check distance (less than an inch)
@@ -863,8 +863,8 @@ public class ImUtils implements ImagingConstants {
 	 */
 	public static boolean isCaptionBelowTargetMatch(BoundingBox captionBox, BoundingBox targetBox, int dpi) {
 		
-		//	check vertical alignment
-		if (captionBox.top < targetBox.bottom)
+		//	check vertical alignment (we need to cut this a little slack, as images can be masked to smaller sizes in born-digital PDFs)
+		if (((captionBox.top + captionBox.bottom) / 2) < targetBox.bottom)
 			return false;
 		
 		//	compute widths and overlap
@@ -872,8 +872,8 @@ public class ImUtils implements ImagingConstants {
 		int targetBoxWidth = (targetBox.right - targetBox.left);
 		int overlapWidth = (Math.min(captionBox.right, targetBox.right) - Math.max(captionBox.left, targetBox.left));
 		
-		//	90% overlap of narrower in wider part should do
-		if ((overlapWidth * 10) < (Math.min(captionBoxWidth, targetBoxWidth) * 9))
+		//	80% overlap of narrower in wider part should do
+		if ((overlapWidth * 5) < (Math.min(captionBoxWidth, targetBoxWidth) * 4))
 			return false;
 		
 		//	check distance (less than an inch)
