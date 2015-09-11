@@ -1541,8 +1541,24 @@ public class PdfParser {
 					continue;
 				}
 				
+				//	different font directions, skip for now
+				if (lastWord.fontDirection != word.fontDirection) {
+					lastWord = word;
+					if (DEBUG_JOIN_WORDS) System.out.println(" --> different font directions");
+					continue;
+				}
+				
+				//	compute cut word box, depending on font direction
+				Rectangle2D.Float cutWordBox;
+				if (word.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION)
+					cutWordBox = new Rectangle2D.Float(((float) lastWord.bounds.getMinX()), ((float) lastWord.bounds.getMinY()), ((float) (word.bounds.getMinX() - lastWord.bounds.getMinX())), ((float) lastWord.bounds.getHeight()));
+				else if (lastWord.fontDirection == PWord.BOTTOM_UP_FONT_DIRECTION)
+					cutWordBox = new Rectangle2D.Float(((float) lastWord.bounds.getMinX()), ((float) lastWord.bounds.getMinY()), ((float) lastWord.bounds.getWidth()), ((float) (word.bounds.getMinY() - lastWord.bounds.getMinY())));
+				else if (lastWord.fontDirection == PWord.TOP_DOWN_FONT_DIRECTION)
+					cutWordBox = new Rectangle2D.Float(((float) lastWord.bounds.getMinX()), ((float) lastWord.bounds.getMinY()), ((float) lastWord.bounds.getWidth()), ((float) (word.bounds.getMinY() - lastWord.bounds.getMinY())));
+				else continue; // never gonna happen, but Java don't know
+				
 				//	cut previous word
-				Rectangle2D.Float cutWordBox = new Rectangle2D.Float(((float) lastWord.bounds.getMinX()), ((float) lastWord.bounds.getMinY()), ((float) (word.bounds.getMinX() - lastWord.bounds.getMinX())), ((float) lastWord.bounds.getHeight()));
 				PWord cutWord = new PWord(lastWord.charCodes, lastWord.str, cutWordBox, lastWord.fontSize, lastWord.fontDirection, lastWord.font);
 				if (DEBUG_RENDER_PAGE_CONTENT || DEBUG_JOIN_WORDS) System.out.println("Got cut word: '" + cutWord.str + "' @ " + cutWord.bounds);
 				words.set((w-1), cutWord);
