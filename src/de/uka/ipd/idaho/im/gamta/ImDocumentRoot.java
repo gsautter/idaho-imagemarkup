@@ -92,6 +92,8 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		private ImAnnotation aData;
 		private ImRegion rData;
 		private ImWord[] rDataWords;
+		private int leftEmptyCellsToSpan = 0;
+		private int rightEmptyCellsToSpan = 0;
 		private ImToken tData;
 		private ImWord pFirstWord;
 		private ImWord pLastWord;
@@ -426,7 +428,6 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		}
 		public void addAnnotationListener(AnnotationListener al) {/* no use listening on a short-lived wrapper */}
 		public void removeAnnotationListener(AnnotationListener al) {/* no use listening on a short-lived wrapper */}
-		
 		public boolean hasAttribute(String name) {
 			if (PAGE_ID_ATTRIBUTE.equals(name))
 				return true;
@@ -437,6 +438,12 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			else if (PAGE_NUMBER_ATTRIBUTE.equals(name) || this.base.getAttributed().hasAttribute(name) && this.base.firstWord().getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
 				return true;
 			else if (LAST_PAGE_NUMBER_ATTRIBUTE.equals(name) || this.base.getAttributed().hasAttribute(name) && this.base.lastWord().getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
+				return true;
+			else if (TableConstants.COL_SPAN_ATTRIBUTE.equals(name) && ((this.base.leftEmptyCellsToSpan + this.base.rightEmptyCellsToSpan) != 0))
+				return true;
+			else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Left").equals(name) && (this.base.leftEmptyCellsToSpan != 0))
+				return true;
+			else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Right").equals(name) && (this.base.rightEmptyCellsToSpan != 0))
 				return true;
 			else return this.base.getAttributed().hasAttribute(name);
 		}
@@ -453,6 +460,12 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 				return ("" + this.base.firstWord().getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE));
 			else if (LAST_PAGE_NUMBER_ATTRIBUTE.equals(name) && !this.base.getAttributed().hasAttribute(name) && this.base.lastWord().getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
 				return ("" + this.base.lastWord().getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE));
+			else if (TableConstants.COL_SPAN_ATTRIBUTE.equals(name) && ((this.base.leftEmptyCellsToSpan + this.base.rightEmptyCellsToSpan) != 0))
+				return ("" + (this.base.leftEmptyCellsToSpan + 1 + this.base.rightEmptyCellsToSpan));
+			else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Left").equals(name) && (this.base.leftEmptyCellsToSpan != 0))
+				return ("" + this.base.leftEmptyCellsToSpan);
+			else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Right").equals(name) && (this.base.rightEmptyCellsToSpan != 0))
+				return ("" + this.base.rightEmptyCellsToSpan);
 			else return this.base.getAttributed().getAttribute(name);
 		}
 		public Object getAttribute(String name, Object def) {
@@ -468,6 +481,12 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 				return ("" + this.base.firstWord().getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE));
 			else if (LAST_PAGE_NUMBER_ATTRIBUTE.equals(name) && !this.base.getAttributed().hasAttribute(name) && this.base.lastWord().getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
 				return ("" + this.base.lastWord().getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE));
+			else if (TableConstants.COL_SPAN_ATTRIBUTE.equals(name) && ((this.base.leftEmptyCellsToSpan + this.base.rightEmptyCellsToSpan) != 0))
+				return ("" + (this.base.leftEmptyCellsToSpan + 1 + this.base.rightEmptyCellsToSpan));
+			else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Left").equals(name) && (this.base.leftEmptyCellsToSpan != 0))
+				return ("" + this.base.leftEmptyCellsToSpan);
+			else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Right").equals(name) && (this.base.rightEmptyCellsToSpan != 0))
+				return ("" + this.base.rightEmptyCellsToSpan);
 			else return this.base.getAttributed().getAttribute(name, def);
 		}
 		public String[] getAttributeNames() {
@@ -482,13 +501,27 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			}
 			if (this.base.getBoundingBox() != null)
 				ans.add(BOUNDING_BOX_ATTRIBUTE);
+			if ((this.base.leftEmptyCellsToSpan + this.base.rightEmptyCellsToSpan) != 0)
+				ans.add(TableConstants.COL_SPAN_ATTRIBUTE);
+			if (this.base.leftEmptyCellsToSpan != 0)
+				ans.add(TableConstants.COL_SPAN_ATTRIBUTE + "Left");
+			if (this.base.rightEmptyCellsToSpan != 0)
+				ans.add(TableConstants.COL_SPAN_ATTRIBUTE + "Right");
 			return ((String[]) ans.toArray(new String[ans.size()]));
 		}
 		public void setAttribute(String name) {
+			if ((name != null) && name.startsWith(TableConstants.COL_SPAN_ATTRIBUTE) && ((this.base.leftEmptyCellsToSpan + this.base.rightEmptyCellsToSpan) != 0))
+				return;
 			this.base.getAttributed().setAttribute(name);
 		}
 		public Object setAttribute(String name, Object value) {
-			return this.base.getAttributed().setAttribute(name, value);
+			if (TableConstants.COL_SPAN_ATTRIBUTE.equals(name) && ((this.base.leftEmptyCellsToSpan + this.base.rightEmptyCellsToSpan) != 0))
+				return ("" + (this.base.leftEmptyCellsToSpan + 1 + this.base.rightEmptyCellsToSpan));
+			else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Left").equals(name) && (this.base.leftEmptyCellsToSpan != 0))
+				return ("" + this.base.leftEmptyCellsToSpan);
+			else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Right").equals(name) && (this.base.rightEmptyCellsToSpan != 0))
+				return ("" + this.base.rightEmptyCellsToSpan);
+			else return this.base.getAttributed().setAttribute(name, value);
 		}
 		public void copyAttributes(Attributed source) {
 			this.base.getAttributed().copyAttributes(source);
@@ -1166,12 +1199,30 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			}
 			ImRegion[] rowCells = rows[r].getRegions(ImRegion.TABLE_CELL_TYPE);
 			Arrays.sort(rowCells, ImUtils.leftRightOrder);
+			int emptyLeftCellsToSpan = 0;
+			ImAnnotationBase leftCellImab = null;
 			for (int c = 0; c < rowCells.length; c++) {
 				ImWord[] cellWords = rowCells[c].getWords();
 				if (cellWords.length != 0) {
 					Arrays.sort(cellWords, ImUtils.textStreamOrder);
-					this.addAnnotation(rowCells[c], cellWords);
+					ImAnnotationBase cellImab = this.addAnnotation(rowCells[c], cellWords);
+					if (cellImab == null) {
+						if (leftCellImab != null)
+							leftCellImab.rightEmptyCellsToSpan++;
+						else emptyLeftCellsToSpan++;
+					}
+					else {
+						leftCellImab = cellImab;
+						if (emptyLeftCellsToSpan != 0) {
+							leftCellImab.leftEmptyCellsToSpan += emptyLeftCellsToSpan;
+							emptyLeftCellsToSpan = 0;
+						}
+					}
 				}
+				else if (leftCellImab != null)
+					leftCellImab.rightEmptyCellsToSpan++;
+				else emptyLeftCellsToSpan++;
+				//	TODO figure out how to fill in empty table cells without blowing rest of logic
 			}
 		}
 	}
@@ -1262,19 +1313,21 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	private void addAnnotation(ImWord pFirstWord, ImWord pLastWord) {
 		this.indexAnnotationBase(new ImAnnotationBase(pFirstWord, pLastWord));
 	}
-	private void addAnnotation(ImRegion region, ImWord[] regionWords) {
+	private ImAnnotationBase addAnnotation(ImRegion region, ImWord[] regionWords) {
 		if (regionWords.length == 0)
-			return;
+			return null;
 		ArrayList docRegionWords = new ArrayList();
 		for (int w = 0; w < regionWords.length; w++) {
 			if (this.getTokenIndexOf(regionWords[w]) >= 0)
 				docRegionWords.add(regionWords[w]);
 		}
 		if (docRegionWords.isEmpty())
-			return;
+			return null;
 		if (docRegionWords.size() < regionWords.length)
 			regionWords = ((ImWord[]) docRegionWords.toArray(new ImWord[docRegionWords.size()]));
-		this.indexAnnotationBase(this.getAnnotationBase(region, regionWords));
+		ImAnnotationBase imab = this.getAnnotationBase(region, regionWords);
+		this.indexAnnotationBase(imab);
+		return imab;
 	}
 	private void indexAnnotationBase(ImAnnotationBase base) {
 		indexAnnotationBase(this.annotations, base, this.typedAnnotationBaseOrder);

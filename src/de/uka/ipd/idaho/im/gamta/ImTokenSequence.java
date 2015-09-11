@@ -588,7 +588,7 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 	 * square complexity for the benefit of true in-place behavior, and the
 	 * property of being able to make do with a sort order that is not a total
 	 * order in some pathologic cases of weirdly overlapping and intersecting
-	 * words, like the strange OCR 'result' originating from figures */
+	 * words, like the strange OCR 'results' originating from figures */
 	private static void sort(ArrayList words, int from, int to) {
 		for (int r = 0; r < (to - from); r++) {
 			boolean unmodified = true;
@@ -1178,7 +1178,6 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 		String docName;
 		
 		//	only use documents we have an IMF version of right now
-		//	TODO produce more such document with PdfExtractorTest
 //		docName = "19970730111_ftp.pdf.imf"; // scanned, with born-digital looking text embedded, comes out better when loaded from image
 		docName = "MEZ_909-919.pdf.imf"; // born-digital, renders perfectly fine
 		
