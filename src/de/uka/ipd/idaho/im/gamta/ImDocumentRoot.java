@@ -1222,7 +1222,6 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 				else if (leftCellImab != null)
 					leftCellImab.rightEmptyCellsToSpan++;
 				else emptyLeftCellsToSpan++;
-				//	TODO figure out how to fill in empty table cells without blowing rest of logic
 			}
 		}
 	}
