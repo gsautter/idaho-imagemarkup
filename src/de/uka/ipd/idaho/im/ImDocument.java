@@ -613,8 +613,9 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	}
 	
 	void addPage(ImPage page) {
-		//	TODO if page is being replaced, clean up index structures
-		this.pagesById.put(new Integer(page.pageId), page);
+		ImPage oldPage = ((ImPage) this.pagesById.put(new Integer(page.pageId), page));
+		if (oldPage != null)
+			oldPage.dispose();
 	}
 	
 	/**
@@ -665,7 +666,8 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 		if ((annot instanceof ImDocumentAnnotation) && (annot.getDocument() == this))
 			return annot;
 		ImAnnotation docAnnot = this.addAnnotation(annot.getFirstWord(), annot.getLastWord(), annot.getType());
-		docAnnot.copyAttributes(annot);
+		if (docAnnot != null)
+			docAnnot.copyAttributes(annot);
 		return docAnnot;
 	}
 	
@@ -739,7 +741,8 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	void annotationTypeChanged(ImDocumentAnnotation annot, String oldType, String oldId) {
 		synchronized (this.annotations) {
 			this.annotationsById.remove(oldId);
-			this.annotationsById.put(annot.getId(), annot);
+			ImDocumentAnnotation oldAnnot = ((ImDocumentAnnotation) this.annotationsById.put(annot.getId(), annot));
+			//	TODO make damn sure we cannot have any start-end-type duplicates !!!
 			updateAnnotationIndex(this.annotationsByType, oldType, annot.getType(), annot);
 		}
 	}
@@ -751,7 +754,8 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			if (typeAnnots != null)
 				typeAnnots.reSort();
 			this.annotationsById.remove(oldId);
-			this.annotationsById.put(annot.getId(), annot);
+			ImDocumentAnnotation oldAnnot = ((ImDocumentAnnotation) this.annotationsById.put(annot.getId(), annot));
+			//	TODO make damn sure we cannot have any start-end-type duplicates !!!
 			for (int p = oldFirstWord.pageId; p < annot.getFirstWord().pageId; p++) {
 				ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
 				if (pageAnnots != null)
@@ -776,7 +780,8 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			if (typeAnnots != null)
 				typeAnnots.reSort();
 			this.annotationsById.remove(oldId);
-			this.annotationsById.put(annot.getId(), annot);
+			ImDocumentAnnotation oldAnnot = ((ImDocumentAnnotation) this.annotationsById.put(annot.getId(), annot));
+			//	TODO make damn sure we cannot have any start-end-type duplicates !!!
 			for (int p = (annot.getLastWord().pageId + 1); p <= oldLastWord.pageId; p++) {
 				ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
 				if (pageAnnots != null)
@@ -793,6 +798,17 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			updateAnnotationIndex(this.annotationsByLastWord, oldLastWord.getLocalID(), annot.getLastWord().getLocalID(), annot);
 		}
 	}
+	
+	/* TODO cleanest way of dealing with start-end-type duplicates:
+	 * - use multi-map for annotationsById index
+	 *   - single annotation: annotation proper
+	 *   - multiple annotations: ArrayList, get() returns first
+	 * - keep counter of multi-valued index keys
+	 * - provide cleanup() method to merge them
+	 * - trigger cleanup via public cleanupAnnotations() method ...
+	 * - ... stating in its JavaDoc that it should be called after annotation modifying operation completed ...
+	 * - ... linking to said JavaDoc from all annotation related methods of this class
+	 */
 	
 	private static void updateAnnotationIndex(TreeMap index, String oldKey, String newKey, ImDocumentAnnotation annot) {
 		if (oldKey != null) {

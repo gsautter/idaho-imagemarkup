@@ -737,6 +737,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	
 	private String annotationNestingOrder;
 	
+	private boolean paragraphsAreLogical;
 	private boolean showTokensAsWordAnnotations = false;
 //	private LinkedList regionAnnotationBaseAttic = null;
 	
@@ -789,6 +790,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		
 		//	read normalization level
 		int normalizationLevel = (configFlags & NORMALIZATION_LEVEL_STREAMS);
+		this.paragraphsAreLogical = ((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS));
 		
 		//	collect text stream IDs
 		HashSet textStreamIDs = new HashSet();
@@ -903,6 +905,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		
 		//	read normalization level
 		int normalizationLevel = (configFlags & NORMALIZATION_LEVEL_STREAMS);
+		this.paragraphsAreLogical = ((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS));
 		
 		//	add annotation overlay for annotations
 		ImAnnotation[] annotations = this.doc.getAnnotations();
@@ -1077,6 +1080,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		
 		//	read normalization level
 		int normalizationLevel = (configFlags & NORMALIZATION_LEVEL_STREAMS);
+		this.paragraphsAreLogical = ((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS));
 		boolean excludeTables = ((configFlags & EXCLUDE_TABLES) != 0);
 		boolean excludeCaptionsFootnotes = ((configFlags & EXCLUDE_CAPTIONS_AND_FOOTNOTES) != 0);
 		
@@ -1303,14 +1307,18 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		this.useRandomAnnotationIDs = uraids;
 	}
 	
-	private void addAnnotation(ImAnnotation annot) {
-		this.indexAnnotationBase(this.getAnnotationBase(annot));
+	private ImAnnotationBase addAnnotation(ImAnnotation annot) {
+		ImAnnotationBase imab = this.getAnnotationBase(annot);
+		this.indexAnnotationBase(imab);
+		return imab;
 	}
-	private void addAnnotation(ImRegion region) {
-		this.addAnnotation(region, region.getWords());
+	private ImAnnotationBase addAnnotation(ImRegion region) {
+		return this.addAnnotation(region, region.getWords());
 	}
-	private void addAnnotation(ImWord pFirstWord, ImWord pLastWord) {
-		this.indexAnnotationBase(new ImAnnotationBase(pFirstWord, pLastWord));
+	private ImAnnotationBase addAnnotation(ImWord pFirstWord, ImWord pLastWord) {
+		ImAnnotationBase imab = new ImAnnotationBase(pFirstWord, pLastWord);
+		this.indexAnnotationBase(imab);
+		return imab;
 	}
 	private ImAnnotationBase addAnnotation(ImRegion region, ImWord[] regionWords) {
 		if (regionWords.length == 0)
@@ -1545,17 +1553,62 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 //		
 //		WAS SORTING PROBLEM IN DocumentEditor WRITE THROUGH, AS THIS WRAPPER DOESN'T SORT ANNOTATIONS JUST LIKE ORIGINAL DATA MODEL
 		
-		//	add annotation to backing document (might go wrong if words belong to different logical text streams)
-		ImAnnotation ima = this.doc.addAnnotation(firstWord, lastWord, type);
-		if (ima == null)
-			return null;
+		//	adding paragraph, and normalization level is paragraphs or streams
+		if (this.paragraphsAreLogical && ImagingConstants.PARAGRAPH_TYPE.equals(type) && firstWord.getTextStreamId().equals(lastWord.getTextStreamId())) {
+			
+			//	adjust underlying text stream ...
+			for (ImWord imw = firstWord; imw != null; imw = imw.getNextWord()) {
+				
+				//	set next relation of last word to paragraph break
+				if (imw == lastWord) {
+					imw.setNextRelation(ImWord.NEXT_RELATION_PARAGRAPH_END);
+					break;
+				}
+				
+				//	we only need to handle internal paragraph breaks
+				if ((imw.getNextRelation() != ImWord.NEXT_RELATION_PARAGRAPH_END) || (imw.getNextWord() == null))
+					continue;
+				
+				//	check for hyphenation
+				boolean imwHyphenated = ((imw.getString() != null) && imw.getString().matches(".+[\\-\\u00AD\\u2010-\\u2015\\u2212]"));
+				boolean nImwContinues = false;
+				if (imwHyphenated) {
+					String nextWordString = imw.getNextWord().getString();
+					if (nextWordString == null) {} // little we can do here ...
+					else if (nextWordString.length() == 0) {} // ... or here
+					else if (nextWordString.charAt(0) == Character.toUpperCase(nextWordString.charAt(0))) {} // starting with capital letter, not a word continued
+					else if ("and;or;und;oder;et;ou;y;e;o;u;ed".indexOf(nextWordString.toLowerCase()) != -1) {} // rather looks like an enumeration continued than a word (western European languages for now)
+					else nImwContinues = true;
+				}
+				
+				//	we do have a hyphenated word
+				if (imwHyphenated && nImwContinues)
+					imw.setNextRelation(ImWord.NEXT_RELATION_HYPHENATED);
+				
+				//	we have two separate words
+				else imw.setNextRelation(ImWord.NEXT_RELATION_SEPARATE);
+			}
+			
+			//	... and return emulated paragraph
+			ImAnnotationBase imab = this.addAnnotation(firstWord, lastWord);
+			return this.getAnnotationView(imab, sourceBase);
+		}
 		
-		//	add annotation to wrapper registers
-		ImAnnotationBase imab = this.getAnnotationBase(ima);
-		this.indexAnnotationBase(imab);
-		
-		//	finally
-		return this.getAnnotationView(imab, sourceBase);
+		//	non-paragraph annotation, or raw or word normalization
+		else {
+			
+			//	add annotation to backing document (might go wrong if words belong to different logical text streams)
+			ImAnnotation ima = this.doc.addAnnotation(firstWord, lastWord, type);
+			if (ima == null)
+				return null;
+			
+			//	add annotation to wrapper registers
+			ImAnnotationBase imab = this.getAnnotationBase(ima);
+			this.indexAnnotationBase(imab);
+			
+			//	finally
+			return this.getAnnotationView(imab, sourceBase);
+		}
 	}
 	private ImAnnotationBase getAnnotationBase(ImAnnotation ima) {
 		ImAnnotationBase imab = ((ImAnnotationBase) this.annotationBasesByAnnotations.get(ima));
