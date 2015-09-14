@@ -1541,17 +1541,6 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		//	get first and last words
 		ImWord firstWord = ((ImWord) firstToken.imWords.get(0));
 		ImWord lastWord = ((ImWord) lastToken.imWords.get(lastToken.imWords.size()-1));
-//		
-//		//	make sure to not add annotations that already exist from regions (client code working against interface cannot tell difference)
-//		String eImabID = (type + "@" + firstWord.getLocalID() + "-" + lastWord.getLocalID());
-//		if (this.emulatedAnnotationBasesByIDs.containsKey(eImabID)) {
-//			System.out.println("Not double-annotating emulated annotation " + eImabID);
-//			ImAnnotationBase eImab = ((ImAnnotationBase) this.emulatedAnnotationBasesByIDs.get(eImabID));
-//			return this.getAnnotationView(eImab, sourceBase);
-//		}
-//		System.out.println("Annotating " + eImabID);
-//		
-//		WAS SORTING PROBLEM IN DocumentEditor WRITE THROUGH, AS THIS WRAPPER DOESN'T SORT ANNOTATIONS JUST LIKE ORIGINAL DATA MODEL
 		
 		//	adding paragraph, and normalization level is paragraphs or streams
 		if (this.paragraphsAreLogical && ImagingConstants.PARAGRAPH_TYPE.equals(type) && firstWord.getTextStreamId().equals(lastWord.getTextStreamId())) {
