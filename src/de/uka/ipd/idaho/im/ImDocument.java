@@ -707,14 +707,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			updateAnnotationIndex(this.annotationsByType, null, annot.getType(), annot);
 			updateAnnotationIndex(this.annotationsByFirstWord, null, annot.getFirstWord().getLocalID(), annot);
 			updateAnnotationIndex(this.annotationsByLastWord, null, annot.getLastWord().getLocalID(), annot);
-			for (int p = firstWord.pageId; p <= lastWord.pageId; p++) {
-				ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
-				if (pageAnnots == null) {
-					pageAnnots = new ArrayList();
-					this.annotationsByPageId.put(new Integer(p), pageAnnots);
-				}
-				pageAnnots.add(annot);
-			}
+			this.indexAnnotationForPageIDs(annot, firstWord.pageId, lastWord.pageId);
 		}
 		this.notifyAnnotationAdded(annot);
 		return annot;
@@ -735,11 +728,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 				updateAnnotationIndex(this.annotationsByType, annot.getType(), null, docAnnot);
 				updateAnnotationIndex(this.annotationsByFirstWord, annot.getFirstWord().getLocalID(), null, docAnnot);
 				updateAnnotationIndex(this.annotationsByLastWord, annot.getLastWord().getLocalID(), null, docAnnot);
-				for (int p = annot.getFirstWord().pageId; p <= annot.getLastWord().pageId; p++) {
-					ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
-					if (pageAnnots != null)
-						pageAnnots.remove(annot);
-				}
+				this.unIndexAnnotationForPageIDs(docAnnot, annot.getFirstWord().pageId, annot.getLastWord().pageId);
 			}
 			this.notifyAnnotationRemoved(annot);
 		}
@@ -761,14 +750,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			}
 			
 			if (!annotInIndexes)
-				for (int p = annot.getFirstWord().pageId; p <= annot.getLastWord().pageId; p++) {
-					ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
-					if (pageAnnots == null) {
-						pageAnnots = new ArrayList();
-						this.annotationsByPageId.put(new Integer(p), pageAnnots);
-					}
-					pageAnnots.add(annot);
-				}
+				this.indexAnnotationForPageIDs(annot, annot.getFirstWord().pageId, annot.getLastWord().pageId);
 		}
 	}
 	
@@ -793,28 +775,10 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 				typeAnnots.reSort();
 			
 			if (annotInIndexes) {
-				for (int p = oldFirstWord.pageId; p < annot.getFirstWord().pageId; p++) {
-					ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
-					if (pageAnnots != null)
-						pageAnnots.remove(annot);
-				}
-				for (int p = annot.getFirstWord().pageId; p < oldFirstWord.pageId; p++) {
-					ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
-					if (pageAnnots == null) {
-						pageAnnots = new ArrayList();
-						this.annotationsByPageId.put(new Integer(p), pageAnnots);
-					}
-					pageAnnots.add(annot);
-				}
+				this.unIndexAnnotationForPageIDs(annot, oldFirstWord.pageId, annot.getFirstWord().pageId);
+				this.indexAnnotationForPageIDs(annot, annot.getFirstWord().pageId, oldFirstWord.pageId);
 			}
-			else for (int p = annot.getFirstWord().pageId; p <= annot.getLastWord().pageId; p++) {
-				ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
-				if (pageAnnots == null) {
-					pageAnnots = new ArrayList();
-					this.annotationsByPageId.put(new Integer(p), pageAnnots);
-				}
-				pageAnnots.add(annot);
-			}
+			else this.indexAnnotationForPageIDs(annot, annot.getFirstWord().pageId, annot.getLastWord().pageId);
 		}
 	}
 	
@@ -839,28 +803,10 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 				typeAnnots.reSort();
 			
 			if (annotInIndexes) {
-				for (int p = (annot.getLastWord().pageId + 1); p <= oldLastWord.pageId; p++) {
-					ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
-					if (pageAnnots != null)
-						pageAnnots.remove(annot);
-				}
-				for (int p = (oldLastWord.pageId + 1); p <= annot.getLastWord().pageId; p++) {
-					ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
-					if (pageAnnots == null) {
-						pageAnnots = new ArrayList();
-						this.annotationsByPageId.put(new Integer(p), pageAnnots);
-					}
-					pageAnnots.add(annot);
-				}
+				this.unIndexAnnotationForPageIDs(annot, (annot.getLastWord().pageId + 1), oldLastWord.pageId);
+				this.indexAnnotationForPageIDs(annot, (oldLastWord.pageId + 1), annot.getLastWord().pageId);
 			}
-			else for (int p = annot.getFirstWord().pageId; p <= annot.getLastWord().pageId; p++) {
-				ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
-				if (pageAnnots == null) {
-					pageAnnots = new ArrayList();
-					this.annotationsByPageId.put(new Integer(p), pageAnnots);
-				}
-				pageAnnots.add(annot);
-			}
+			else this.indexAnnotationForPageIDs(annot, annot.getFirstWord().pageId, annot.getLastWord().pageId);
 		}
 	}
 	
@@ -976,18 +922,11 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 				for (int a = 1; a < annotList.size(); a++) {
 					ImDocumentAnnotation dAnnot = ((ImDocumentAnnotation) annotList.get(a));
 					AttributeUtils.copyAttributes(dAnnot, annot, AttributeUtils.ADD_ATTRIBUTE_COPY_MODE);
-					
 					annotations.removeAnnot(dAnnot);
-					
 					updateAnnotationIndex(annotationsByType, dAnnot.getType(), null, dAnnot);
 					updateAnnotationIndex(annotationsByFirstWord, dAnnot.getFirstWord().getLocalID(), null, dAnnot);
 					updateAnnotationIndex(annotationsByLastWord, dAnnot.getLastWord().getLocalID(), null, dAnnot);
-					
-					for (int p = dAnnot.getFirstWord().pageId; p <= dAnnot.getLastWord().pageId; p++) {
-						ArrayList pageAnnots = ((ArrayList) annotationsByPageId.get(new Integer(p)));
-						if (pageAnnots != null)
-							pageAnnots.remove(dAnnot);
-					}
+					unIndexAnnotationForPageIDs(dAnnot, dAnnot.getFirstWord().pageId, dAnnot.getLastWord().pageId);
 				}
 				annotList.clear();
 				this.annotsById.put(annotId, annot);
@@ -1011,6 +950,25 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 				index.put(newKey, newKeyAnnots);
 			}
 			newKeyAnnots.addAnnot(annot); // this method automatically maintains sort order
+		}
+	}
+	
+	private void indexAnnotationForPageIDs(ImDocumentAnnotation annot, int fromPageId, int toPageId) {
+		for (int p = fromPageId; p <= toPageId; p++) {
+			ArrayList pageAnnots = ((ArrayList) this.annotationsByPageId.get(new Integer(p)));
+			if (pageAnnots == null) {
+				pageAnnots = new ArrayList();
+				this.annotationsByPageId.put(new Integer(p), pageAnnots);
+			}
+			pageAnnots.add(annot);
+		}
+	}
+	
+	private void unIndexAnnotationForPageIDs(ImDocumentAnnotation annot, int fromPageId, int toPageId) {
+		for (int p = fromPageId; p <= toPageId; p++) {
+			ArrayList pageAnnots = ((ArrayList) annotationsByPageId.get(new Integer(p)));
+			if (pageAnnots != null)
+				pageAnnots.remove(annot);
 		}
 	}
 	
