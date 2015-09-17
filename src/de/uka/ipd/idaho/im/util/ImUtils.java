@@ -1001,6 +1001,8 @@ public class ImUtils implements ImagingConstants {
 	 * contain any words, or if no column or row gaps exist, this method
 	 * returns null. Newly generated table cells are not attached to the page.
 	 * @param table the table whose cells to retrieve
+	 * @param rows an array holding existing table rows (may be null)
+	 * @param cols an array holding existing table columns (may be null)
 	 * @return an array holding the table cells
 	 */
 	public static ImRegion[][] getTableCells(ImRegion table, ImRegion[] rows, ImRegion[] cols) {

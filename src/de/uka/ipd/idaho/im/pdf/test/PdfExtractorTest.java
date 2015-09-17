@@ -427,12 +427,14 @@ public class PdfExtractorTest implements ImagingConstants {
 		//	some figures not extracted properly
 		pdfName = "Moore & Gosliner 2014.pdf";
 		
-		//	font char width problem on page 8
-		pdfName = "zt00872.pdf";
+		//	some more problematic Zootaxa
+//		pdfName = "Zootaxa/zt00001.pdf"; // strange image bounds on pages 2, 3, 5, 6, and 8 ==> now adjusting figure bounds if figure is upside down or right side left
+//		pdfName = "Zootaxa/zt00020.pdf"; // same problem, same fix
+		pdfName = "Zootaxa/zt00094.pdf"; // same problem, same fix
 		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
-		aimAtPage = 8; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
+		aimAtPage = -1; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
 		//	TODO try pages 12, 13, 16, 17, and 21 of Prasse 1979
 		System.out.println("Aiming at page " + aimAtPage);
 		final PdfExtractor pdfExtractor = new PdfExtractor(pdfDataPath, pis, true);

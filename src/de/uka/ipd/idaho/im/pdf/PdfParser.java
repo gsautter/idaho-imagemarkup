@@ -2329,11 +2329,16 @@ public class PdfParser {
 					System.out.println(" ==> image rotation is " + rotation + " (" + rotation1 + "/" + rotation2 + ") = " + ((180.0 / Math.PI) * rotation) + "°");
 			}
 			
-			Rectangle2D bounds = new Rectangle2D.Float(translate[0], translate[1], scaleX, scaleY);
+			Rectangle2D bounds;
 			if (Math.abs(((180.0 / Math.PI) * rotation) - 90) < 5)
 				bounds = new Rectangle2D.Float(translate[0], (translate[1] - scaleY), scaleX, scaleY);
 			else if (Math.abs(((180.0 / Math.PI) * rotation) + 90) < 5)
 				bounds = new Rectangle2D.Float((translate[0] - scaleX), translate[1], scaleX, scaleY);
+			else if (rightSideLeft)
+				bounds = new Rectangle2D.Float((translate[0] - scaleX), translate[1], scaleX, scaleY);
+			else if (upsideDown)
+				bounds = new Rectangle2D.Float(translate[0], (translate[1] - scaleY), scaleX, scaleY);
+			else bounds = new Rectangle2D.Float(translate[0], translate[1], scaleX, scaleY);
 			if (DEBUG_RENDER_PAGE_CONTENT && (this.figures != null))
 				System.out.println(" ==> image rendering bounds " + bounds);
 			

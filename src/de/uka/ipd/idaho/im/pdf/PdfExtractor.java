@@ -1080,6 +1080,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		final BufferedImage[] pageImages = new BufferedImage[pData.length];
 		final String[] imageNames = new String[pData.length];
 		final int[] imageDPIs = new int[pData.length];
+		final boolean[] blockFlipInPage = new boolean[pData.length];
 		final BoundingBox[] pageBounds = new BoundingBox[pData.length];
 		pf = new ParallelFor() {
 			public void doFor(int p) throws Exception {
@@ -1141,12 +1142,14 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						if ((bubLeft < bubRight) && (bubTop < bubBottom) && (bubLeft < ((pData[p].pdfPageBox.getWidth() * magnification) / 3)) && (bubRight > ((pData[p].pdfPageBox.getWidth() * magnification * 2) / 3)) && (bubTop < ((pData[p].pdfPageBox.getHeight() * magnification) / 3)) && (bubBottom > ((pData[p].pdfPageBox.getHeight() * magnification * 2) / 3))) {
 							spm.setInfo("Got bottom-up block with " + buWords.size() + " words to flip");
 							flipBlockWords(pData[p].pdfPageBox, pData[p].words, buWords, PWord.BOTTOM_UP_FONT_DIRECTION);
+							blockFlipInPage[p] = true;
 						}
 						
 						//	we do have a significant top-down block, flip its words (image is already extended here, so test against scaled page bounds)
 						else if ((tdbLeft < tdbRight) && (tdbTop < tdbBottom) && (tdbLeft < ((pData[p].pdfPageBox.getWidth() * magnification) / 3)) && (tdbRight > ((pData[p].pdfPageBox.getWidth() * magnification * 2) / 3)) && (tdbTop < ((pData[p].pdfPageBox.getHeight() * magnification) / 3)) && (tdbBottom > ((pData[p].pdfPageBox.getHeight() * magnification * 2) / 3))) {
 							spm.setInfo("Got top-down block with " + tdWords.size() + " words to flip");
 							flipBlockWords(pData[p].pdfPageBox, pData[p].words, tdWords, PWord.TOP_DOWN_FONT_DIRECTION);
+							blockFlipInPage[p] = true;
 						}
 					}
 					else spm.setInfo(" --> could not use page image generated earlier, resolution mismatch at " + pi.currentDpi + " DPI");
@@ -1211,6 +1214,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						pageImages[p] = flipBlockImage(pageImages[p], pData[p].pdfPageBox, bubLeft, bubRight, bubTop, bubBottom, pData[p].words, PWord.BOTTOM_UP_FONT_DIRECTION, magnification);
 						rg = pageImages[p].createGraphics();
 						flipBlockWords(pData[p].pdfPageBox, pData[p].words, buWords, PWord.BOTTOM_UP_FONT_DIRECTION);
+						blockFlipInPage[p] = true;
 					}
 					
 					//	we do have a significant top-down block, flip it
@@ -1219,6 +1223,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						pageImages[p] = flipBlockImage(pageImages[p], pData[p].pdfPageBox, tdbLeft, tdbRight, tdbTop, tdbBottom, pData[p].words, PWord.TOP_DOWN_FONT_DIRECTION, magnification);
 						rg = pageImages[p].createGraphics();
 						flipBlockWords(pData[p].pdfPageBox, pData[p].words, buWords, PWord.TOP_DOWN_FONT_DIRECTION);
+						blockFlipInPage[p] = true;
 					}
 					
 					//	paint own words
@@ -1379,6 +1384,14 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				BoundingBox contentArea = docLayout.getBoxProperty("contentArea", pages[p].bounds, imageDPIs[p]);
 				int columnCount = docLayout.getIntProperty("columnCount", -1);
 				
+				//	we've had a block flip, extend content area to square to prevent content cutoff
+				if (blockFlipInPage[p]) {
+					if (contentArea != pages[p].bounds)
+						contentArea = new BoundingBox(contentArea.left, (contentArea.left + (contentArea.bottom - contentArea.top)), contentArea.top, contentArea.bottom);
+					if (columnCount != -1)
+						columnCount = 1;
+				}
+				
 				//	index words by bounding boxes, and determine page content bounds
 				ImWord[] pWords = pages[p].getWords();
 				HashMap wordsByBoxes = new HashMap();
@@ -1429,6 +1442,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				//	whiten out figures so they don't get in the way
 				for (int f = 0; f < pData[p].figures.length; f++) {
 					BoundingBox fbb = getBoundingBox(pData[p].figures[f].bounds, pData[p].pdfPageBox, magnification, pData[p].rotate);
+					System.out.println("Marking figure " + fbb);
 					for (int c = fbb.left; c < fbb.right; c++) {
 						for (int r = fbb.top; r < fbb.bottom; r++)
 							apiBrightness[c][r] = ((byte) 127);
