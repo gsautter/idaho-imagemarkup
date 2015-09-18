@@ -887,9 +887,33 @@ public class ImUtils implements ImagingConstants {
 	 * contain any words, or if no row gaps exist, this method returns null.
 	 * Newly generated table rows are not attached to the page.
 	 * @param table the table whose rows to retrieve
+	 * @param minColumnMargin the minimum margin between two columns
+	 * @param minColumnCount the minimum number of columns
 	 * @return an array holding the table rows
 	 */
 	public static ImRegion[] getTableRows(ImRegion table) {
+		
+		//	get page
+		ImPage page = table.getPage();
+		if (page == null)
+			page = table.getDocument().getPage(table.pageId);
+		
+		//	estimate minimums and get columns
+		return getTableRows(table,  (page.getImageDPI() / 50) /* about 0.5mm */, 0);
+	}
+	
+	/**
+	 * Retrieve the rows of a table. If table rows are already marked, this
+	 * method simply returns them. If no rows are marked, this method tries to
+	 * generate them. If generation fails, e.g. if the argument region does not
+	 * contain any words, or if no row gaps exist, this method returns null.
+	 * Newly generated table rows are not attached to the page.
+	 * @param table the table whose rows to retrieve
+	 * @param minRowMargin the minimum margin between two rows
+	 * @param minRowCount the minimum number of rows
+	 * @return an array holding the table rows
+	 */
+	public static ImRegion[] getTableRows(ImRegion table, int minRowMargin, int minRowCount) {
 		
 		//	get page
 		ImPage page = table.getPage();
@@ -918,7 +942,7 @@ public class ImUtils implements ImagingConstants {
 			//	collect row gaps
 			ArrayList rowGaps = new ArrayList();
 			TreeSet rowGapWidths = new TreeSet(Collections.reverseOrder());
-			collectGaps(rowGaps, rowGapWidths, rowWordCols, (page.getImageDPI() / 50) /* about 0.5mm */);
+			collectGaps(rowGaps, rowGapWidths, rowWordCols, minRowMargin, (minRowCount - 1));
 			
 			//	do we have anything to work with?
 			if (rowGaps.isEmpty())
@@ -953,6 +977,28 @@ public class ImUtils implements ImagingConstants {
 		if (page == null)
 			page = table.getDocument().getPage(table.pageId);
 		
+		//	estimate minimums and get columns
+		return getTableColumns(table, (page.getImageDPI() / 30) /* less than 1mm */, 0);
+	}
+	
+	/**
+	 * Retrieve the columns of a table. If table columns are already marked,
+	 * this method simply returns them. If no columns are marked, this method
+	 * tries to generate them. If generation fails, e.g. if the argument region
+	 * does not contain any words, or if no column gaps exist, this method
+	 * returns null. Newly generated table columns are not attached to the page.
+	 * @param table the table whose columns to retrieve
+	 * @param minColumnMargin the minimum margin between two columns
+	 * @param minColumnCount the minimum number of columns
+	 * @return an array holding the table columns
+	 */
+	public static ImRegion[] getTableColumns(ImRegion table, int minColumnMargin, int minColumnCount) {
+		
+		//	get page
+		ImPage page = table.getPage();
+		if (page == null)
+			page = table.getDocument().getPage(table.pageId);
+		
 		//	try and get existing table columns first
 		ImRegion[] tableCols = getRegionsInside(page, table.bounds, ImRegion.TABLE_COL_TYPE, false);
 		
@@ -975,7 +1021,7 @@ public class ImUtils implements ImagingConstants {
 			//	collect column gaps
 			ArrayList colGaps = new ArrayList();
 			TreeSet colGapWidths = new TreeSet(Collections.reverseOrder());
-			collectGaps(colGaps, colGapWidths, colWordRows, (page.getImageDPI() / 30) /* less than 1mm */);
+			collectGaps(colGaps, colGapWidths, colWordRows, minColumnMargin, (minColumnCount - 1));
 			
 			//	do we have anything to work with?
 			if (colGaps.isEmpty())
@@ -1450,7 +1496,7 @@ public class ImUtils implements ImagingConstants {
 		}
 	}
 	
-	private static void collectGaps(ArrayList gaps, TreeSet gapWidths, int[] wordDensity, int minGapWidth) {
+	private static void collectGaps(ArrayList gaps, TreeSet gapWidths, int[] wordDensity, int minGapWidth, int minGapCount) {
 		
 		//	collect gaps
 		int gapStart = -1;
@@ -1469,7 +1515,7 @@ public class ImUtils implements ImagingConstants {
 			}
 		}
 		
-		//	find best gap width
+		//	find best gap width fulfilling minimum width and count
 		int maxScore = 0;
 		int maxScoreGapWidth = wordDensity.length;
 		for (Iterator cgwit = gapWidths.iterator(); cgwit.hasNext();) {
@@ -1479,7 +1525,7 @@ public class ImUtils implements ImagingConstants {
 				if (((Gap) gaps.get(g)).getWidth() >= gapWidth)
 					gapCount++;
 			}
-			if ((gapCount * gapWidth) > maxScore) {
+			if ((gapCount > minGapCount) && ((gapCount * gapWidth) > maxScore)) {
 				maxScore = (gapCount * gapWidth);
 				maxScoreGapWidth = gapWidth;
 			}
