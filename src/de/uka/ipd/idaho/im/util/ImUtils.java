@@ -1525,7 +1525,7 @@ public class ImUtils implements ImagingConstants {
 				if (((Gap) gaps.get(g)).getWidth() >= gapWidth)
 					gapCount++;
 			}
-			if ((gapCount > minGapCount) && ((gapCount * gapWidth) > maxScore)) {
+			if ((gapCount >= minGapCount) && ((gapCount * gapWidth) > maxScore)) {
 				maxScore = (gapCount * gapWidth);
 				maxScoreGapWidth = gapWidth;
 			}
