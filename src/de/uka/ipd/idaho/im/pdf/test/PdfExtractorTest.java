@@ -434,7 +434,7 @@ public class PdfExtractorTest implements ImagingConstants {
 		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
-		aimAtPage = -1; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
+		aimAtPage = 0; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
 		//	TODO try pages 12, 13, 16, 17, and 21 of Prasse 1979
 		System.out.println("Aiming at page " + aimAtPage);
 		final PdfExtractor pdfExtractor = new PdfExtractor(pdfDataPath, pis, true);

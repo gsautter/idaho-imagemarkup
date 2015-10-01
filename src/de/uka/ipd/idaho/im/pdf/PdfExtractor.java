@@ -58,6 +58,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.Vector;
 
+import javax.imageio.ImageIO;
+
 import org.icepdf.core.exceptions.PDFException;
 import org.icepdf.core.exceptions.PDFSecurityException;
 import org.icepdf.core.io.SeekableByteArrayInputStream;
@@ -135,7 +137,23 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * ==> facilitates using them on staples (bundles of scans) as well
 	 */
 	
-	//	TODO_maybe facilitate learning style patterns
+	/* We have to do this here, as this class is the one that incurs the IcePDF
+	 * dependency, and we have to make sure this system property is set before
+	 * any part of IcePDF is loaded, as reading below system property sets a
+	 * final boolean in IcePDF code, which incurs unwanted hard disc caching.
+	 * Thus, we have to set this system property before any IcePDF class is
+	 * even loaded.
+	 * 
+	 * Glad to learn that classes occurring in method signatures are loaded
+	 * after static initializers have been executed. */
+	static {
+		try {
+			System.setProperty("org.icepdf.core.streamcache.enabled", "false");
+		} catch (Exception e) { /* let's swallow this one, especially if it is
+		for security reasons, as setting this property is a behavioral thing,
+		not something that any functionality would depend on */ }
+		ImageIO.setUseCache(false);
+	}
 	
 	private File basePath;
 	private PageImageStore imageStore;

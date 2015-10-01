@@ -532,25 +532,9 @@ public class ImfIO implements ImagingConstants {
 				return this.getPageImageInputStream(getInputStream(name, cache, cacheFolder), piPageIdStr);
 			}
 			private PageImageInputStream getPageImageInputStream(InputStream in, String piPageIdStr) throws IOException {
-//				
-//				//	test for PNG byte order mark
-//				PeekInputStream peekIn = new PeekInputStream(in, "‰PNG".length());
-//				System.out.println("‰PNG = " + Arrays.toString("‰PNG".getBytes()));
-//				byte[] peek = new byte["‰PNG".getBytes().length];
-//				peekIn.peek(peek);
-//				System.out.println(Arrays.toString(peek) + " = " + new String(peek));
-//				
-//				//	this one's the old way
-//				if (!peekIn.startsWith("‰PNG".getBytes()))
-//					return new PageImageInputStream(peekIn, this);
 				
 				//	test for PNG byte order mark
 				PeekInputStream peekIn = new PeekInputStream(in, pngSignature.length);
-//				System.out.println("‰PNG = " + Arrays.toString("‰PNG".getBytes()));
-//				System.out.println("PNG signature = " + Arrays.toString(pngSignature));
-//				byte[] peek = new byte["‰PNG".getBytes().length];
-//				peekIn.peek(peek);
-//				System.out.println(Arrays.toString(peek) + " = " + new String(peek));
 				
 				//	this one's the old way
 				if (!peekIn.startsWith(pngSignature))
