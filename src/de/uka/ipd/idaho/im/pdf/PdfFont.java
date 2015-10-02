@@ -50,6 +50,7 @@ import java.util.Vector;
 
 import org.icepdf.core.pobjects.Name;
 
+import de.uka.ipd.idaho.gamta.util.CountingSet;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
 import de.uka.ipd.idaho.im.pdf.PdfParser.PStream;
 import de.uka.ipd.idaho.im.pdf.PdfParser.PString;
@@ -64,7 +65,7 @@ import de.uka.ipd.idaho.stringUtils.StringUtils;
  */
 class PdfFont {
 	
-	private static final boolean DEBUG_CHAR_HANDLING = false;
+	private static final boolean DEBUG_CHAR_HANDLING = true;
 	
 	static class BaseFont {
 		Hashtable descriptor;
@@ -172,7 +173,8 @@ class PdfFont {
 	HashMap charImages = new HashMap(2);
 	HashMap charNameImages = new HashMap(2);
 	
-	TreeSet usedChars = new TreeSet(); // when decoding glyphs, only go for chars in this set, as all others are spurious and never used in document
+//	TreeSet usedChars = new TreeSet(); // when decoding glyphs, only go for chars in this set, as all others are spurious and never used in document
+	TreeMap usedCharStats = new TreeMap(); // stats about char usages (predecessors, successors) to help resolve glyph decoding ambiguities
 	TreeSet usedCharNames = new TreeSet(); // names of chars in above set, as those might also come from Differences mapping in SID fonts
 	CharDecoder charDecoder = null;
 	
@@ -206,20 +208,60 @@ class PdfFont {
 		//	TODO figure out if encoding correction makes sense or causes errors
 	}
 	
+	boolean usesCharCode(Integer cc) {
+		return this.usedCharStats.containsKey(cc);
+	}
 	int[] getUsedCharCodes() {
-		int[] charCodes = new int[this.usedChars.size()];
+//		int[] charCodes = new int[this.usedChars.size()];
+//		int cci = 0;
+//		for (Iterator ccit = this.usedChars.iterator(); ccit.hasNext();)
+//			charCodes[cci++] = ((Integer) ccit.next()).intValue();
+//		return charCodes;
+		int[] charCodes = new int[this.usedCharStats.size()];
 		int cci = 0;
-		for (Iterator ccit = this.usedChars.iterator(); ccit.hasNext();)
+		for (Iterator ccit = this.usedCharStats.keySet().iterator(); ccit.hasNext();)
 			charCodes[cci++] = ((Integer) ccit.next()).intValue();
 		return charCodes;
 	}
 	
+	private int wordCount = 0;
+	private int wordLength = 0;
+	private int wordLengthSum = 0;
+	private int prevUsedChb = -1;
+	void startWord() {
+		this.prevUsedChb = -1;
+	}
+	void endWord() {
+		this.setCharUsed(-1);
+		this.wordCount++;
+		this.wordLengthSum += this.wordLength;
+		this.wordLength = 0;
+	}
 	void setCharUsed(int chb) {
-		if (this.usedChars.add(new Integer(chb))) {
+//		if (this.usedChars.add(new Integer(chb))) {
+//			if (DEBUG_LOAD_FONTS)
+//				System.out.println("Font " + this.name + ": using char " + chb);
+//			if (this.diffNameMappings.containsKey(new Integer(chb)))
+//				this.usedCharNames.add(this.diffNameMappings.get(new Integer(chb)));
+//			else {
+//				String uch = this.getUnicode(chb);
+//				if (uch.length() != 0) {
+//					String chn = StringUtils.getCharName(uch.charAt(0));
+//					if (chn != null)
+//						this.usedCharNames.add(chn);
+//				}
+//			}
+//		}
+		if (chb != -1)
+			this.wordLength++;
+		
+		Integer chbObj = new Integer(chb);
+		CharUsageStats chbStats = ((CharUsageStats) this.usedCharStats.get(chbObj));
+		if ((chb != -1) && (chbStats == null)) {
 			if (DEBUG_LOAD_FONTS)
 				System.out.println("Font " + this.name + ": using char " + chb);
-			if (this.diffNameMappings.containsKey(new Integer(chb)))
-				this.usedCharNames.add(this.diffNameMappings.get(new Integer(chb)));
+			if (this.diffNameMappings.containsKey(chbObj))
+				this.usedCharNames.add(this.diffNameMappings.get(chbObj));
 			else {
 				String uch = this.getUnicode(chb);
 				if (uch.length() != 0) {
@@ -228,8 +270,37 @@ class PdfFont {
 						this.usedCharNames.add(chn);
 				}
 			}
+			chbStats = new CharUsageStats(chb);
+			this.usedCharStats.put(chbObj, chbStats);
+		}
+		Integer prevChbObj = new Integer(this.prevUsedChb);
+		CharUsageStats prevChbStats = ((CharUsageStats) this.usedCharStats.get(prevChbObj));
+		
+		if (chbStats != null) {
+			chbStats.usageCount++;
+			chbStats.predecessors.add(prevChbObj);
+		}
+		if (prevChbStats != null)
+			prevChbStats.successors.add(chbObj);
+		
+		this.prevUsedChb = chb;
+	}
+	CharUsageStats getCharUsageStats(Integer cc) {
+		return ((CharUsageStats) this.usedCharStats.get(cc));
+	}
+	static class CharUsageStats {
+		final int charByte;
+		final CountingSet predecessors = new CountingSet(new HashMap());
+		final CountingSet successors = new CountingSet(new HashMap());
+		int usageCount = 0;
+		CharUsageStats(int charByte) {
+			this.charByte = charByte;
 		}
 	}
+	float getAverageWordLength() {
+		return ((this.wordCount == 0) ? 0 : (((float) this.wordLengthSum) / this.wordCount));
+	}
+	
 	private void setCharDecoder(CharDecoder charDecoder) {
 		this.charDecoder = charDecoder;
 		System.out.println("Font " + this.name + ": char decoder set to " + this.charDecoder);
@@ -1973,7 +2044,8 @@ FontFile2=65 0R
 				for (Iterator eit = diffEncodings.keySet().iterator(); eit.hasNext();) {
 					Integer charCode = ((Integer) eit.next());
 					Object charName = diffEncodingNames.get(charCode);
-					if (!font.usedChars.contains(charCode)) {
+//					if (!font.usedChars.contains(charCode)) {
+					if (!font.usesCharCode(charCode)) {
 						pm.setInfo("   - ignoring unused char " + charName);
 						continue;
 					}

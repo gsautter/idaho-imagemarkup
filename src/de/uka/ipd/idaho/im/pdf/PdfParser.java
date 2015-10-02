@@ -76,11 +76,6 @@ import de.uka.ipd.idaho.stringUtils.StringUtils;
  */
 public class PdfParser {
 	
-	/* TODO implement decryption of encrypted PStream data
-	 * - see page 91 onward of PDF reference
-	 * - only for content without passwords, however (we want to take this hurdle in data mobilization, not crack secret content ...)
-	 */
-	
 	/**
 	 * Parse a binary PDF file into individual objects. The returned map holds
 	 * the parsed objects, the keys being the object numbers together with the
@@ -685,6 +680,7 @@ public class PdfParser {
 	//	TODOne decode bytes only when encoding clear
 	private static PString cropString(PdfByteInputStream bytes) throws IOException {
 		if (DEBUG_PARSE_PDF) System.out.println("Cropping string");
+		ByteArrayOutputStream oBaos = (DEBUG_PARSE_PDF ? new ByteArrayOutputStream() : null);
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		int open = 1;
 		boolean escaped = false;
@@ -707,12 +703,15 @@ public class PdfParser {
 //				}
 				if (('0' <= peek) && (peek <= '9')) {
 					int oct = 0;
+					if (oBaos != null) oBaos.write(bytes.peek());
 					int b0 = bytes.read();
 					peek = bytes.peek();
 					if (('0' <= peek) && (peek <= '9')) {
+						if (oBaos != null) oBaos.write(bytes.peek());
 						int b1 = bytes.read();
 						peek = bytes.peek();
 						if (('0' <= peek) && (peek <= '9')) {
+							if (oBaos != null) oBaos.write(bytes.peek());
 							int b2 = bytes.read();
 							oct = (((b0 - '0') * 64) + ((b1 - '0') * 8) + (b2 - '0'));
 						}
@@ -725,44 +724,60 @@ public class PdfParser {
 				}
 				else if (peek == 'n') {
 					baos.write('\n');
+					if (oBaos != null) oBaos.write(bytes.peek());
 					bytes.read();
 				}
 				else if (peek == 'r') {
 					baos.write('\r');
+					if (oBaos != null) oBaos.write(bytes.peek());
 					bytes.read();
 				}
 				else if (peek == 't') {
 					baos.write('\t');
+					if (oBaos != null) oBaos.write(bytes.peek());
 					bytes.read();
 				}
 				else if (peek == 'f') {
 					baos.write('\f');
+					if (oBaos != null) oBaos.write(bytes.peek());
 					bytes.read();
 				}
 				else if (peek == 'b') {
 					baos.write('\b');
+					if (oBaos != null) oBaos.write(bytes.peek());
 					bytes.read();
 				}
 				else if (peek == '\r') {
+					if (oBaos != null) oBaos.write(bytes.peek());
 					bytes.read();
 					peek = bytes.peek();
-					if (peek == '\n')
+					if (peek == '\n') {
+						if (oBaos != null) oBaos.write(bytes.peek());
 						bytes.read();
+					}
 				}
 				else if (peek == '\n') {
+					if (oBaos != null) oBaos.write(bytes.peek());
 					bytes.read();
 					peek = bytes.peek();
-					if (peek == '\r')
+					if (peek == '\r') {
+						if (oBaos != null) oBaos.write(bytes.peek());
 						bytes.read();
+					}
 				}
-				else baos.write(bytes.read());
+				else {
+					if (oBaos != null) oBaos.write(bytes.peek());
+					baos.write(bytes.read());
+				}
 				escaped = false;
 			}
 			else if (bytes.peek() == '\\') {
 				escaped = true;
+				if (oBaos != null) oBaos.write(bytes.peek());
 				bytes.read();
 			}
 			else if (bytes.peek() == '(') {
+				if (oBaos != null) oBaos.write(bytes.peek());
 				baos.write(bytes.read());
 				open++;
 			}
@@ -772,9 +787,22 @@ public class PdfParser {
 					bytes.read();
 					break;
 				}
-				else baos.write(bytes.read());
+				else {
+					if (oBaos != null) oBaos.write(bytes.peek());
+					baos.write(bytes.read());
+				}
 			}
-			else baos.write(bytes.read());
+			else {
+				if (oBaos != null) oBaos.write(bytes.peek());
+				baos.write(bytes.read());
+			}
+		}
+		if (DEBUG_PARSE_PDF) {
+			System.out.println(" -->  " + Arrays.toString(oBaos.toByteArray()));
+			System.out.println(" ==> " + Arrays.toString(baos.toByteArray()));
+			System.out.println("  ANSI " + new String(baos.toByteArray()));
+			System.out.println("  UTF-16LE " + new String(baos.toByteArray(), "UTF-16LE"));
+			System.out.println("  UTF-16BE " + new String(baos.toByteArray(), "UTF-16BE"));
 		}
 		return new PString(baos.toByteArray());
 	}
@@ -809,7 +837,7 @@ public class PdfParser {
 			while (bytes.peek() == '%') {
 				skipComment(bytes);
 				if (!bytes.skipSpaceCheckEnd())
-					throw new IOException("Broken dictionary");
+					throw new IOException("Broken array");
 			}
 			if (bytes.peek() == ']') {
 				bytes.read();
@@ -818,7 +846,7 @@ public class PdfParser {
 			while (bytes.peek() == '%') {
 				skipComment(bytes);
 				if (!bytes.skipSpaceCheckEnd())
-					throw new IOException("Broken dictionary");
+					throw new IOException("Broken array");
 			}
 			array.add(cropNext(bytes, expectPTags, hexIsHex2));
 		}
@@ -913,6 +941,9 @@ public class PdfParser {
 		
 		final boolean isHexWithSpace;
 		
+		final boolean isUtf16beAnsi;
+		final boolean isUtf16leAnsi;
+		
 		PString(byte[] bytes) {
 			this(bytes, false, false, false);
 		}
@@ -921,6 +952,22 @@ public class PdfParser {
 			this.isHex2 = isHex2;
 			this.isHex4 = isHex4;
 			this.isHexWithSpace = withSpace;
+			if (!this.isHex2 && !this.isHex4 && ((bytes.length & 1) == 0))  {
+				int evenZeros = 0;
+				int oddZeros = 0;
+				for (int b = 0; b < bytes.length; b++)
+					if (bytes[b] == 0) {
+						if ((b & 1) == 0)
+							evenZeros++;
+						else oddZeros++;
+					}
+				this.isUtf16beAnsi = ((evenZeros * 2) == bytes.length);
+				this.isUtf16leAnsi = ((oddZeros * 2) == bytes.length);
+			}
+			else {
+				this.isUtf16beAnsi = false;
+				this.isUtf16leAnsi = false;
+			}
 		}
 		public int hashCode() {
 			return this.toString().hashCode();
@@ -948,22 +995,32 @@ public class PdfParser {
 				for (int b = 0; b < this.bytes.length; b += 4)
 					string.append((char) this.getHex4(b));
 			}
+			else if (this.isUtf16beAnsi) {
+				for (int c = 1; c < this.bytes.length; c+=2)
+					string.append((char) convertUnsigned(this.bytes[c]));
+			}
+			else if (this.isUtf16leAnsi) {
+				for (int c = 0; c < this.bytes.length; c+=2)
+					string.append((char) convertUnsigned(this.bytes[c]));
+			}
 			else for (int c = 0; c < this.bytes.length; c++)
 				string.append((char) convertUnsigned(this.bytes[c]));
 			return string.toString();
 		}
 		public int length() {
-			return (this.isHex4 ? ((this.bytes.length + 3) / 4) : (this.isHex2 ? ((this.bytes.length + 1) / 2) : this.bytes.length));
+			return (this.isHex4 ? ((this.bytes.length + 3) / 4) : ((this.isHex2 || this.isUtf16beAnsi || this.isUtf16leAnsi) ? ((this.bytes.length + 1) / 2) : this.bytes.length));
 		}
 		public char charAt(int index) {
 			if (this.isHex2)
 				return ((char) this.getHex2(index * 2));
 			else if (this.isHex4)
 				return ((char) this.getHex4(index * 4));
+			else if (this.isUtf16beAnsi || this.isUtf16leAnsi)
+				return ((char) convertUnsigned(this.bytes[(index * 2) + (this.isUtf16beAnsi ? 1 : 0)]));
 			else return ((char) convertUnsigned(this.bytes[index]));
 		}
 		public CharSequence subSequence(int start, int end) {
-			if (this.isHex2) {
+			if (this.isHex2 || this.isUtf16beAnsi || this.isUtf16leAnsi) {
 				start *= 2;
 				end *= 2;
 				if (end > this.bytes.length)
@@ -2034,6 +2091,7 @@ public class PdfParser {
 					System.out.println("   - font name " + this.pwrFont.name);
 					System.out.println("   - bold: " + this.pwrFont.bold + ", italic: " + this.pwrFont.italics);
 					System.out.println("   - space width is " + this.pwrFontSpaceWidth);
+					System.out.println("   - implicit space: " + this.pwrFont.hasImplicitSpaces);
 				}
 				this.computeEffectiveFontSizeAndDirection();
 			}
@@ -2519,10 +2577,10 @@ public class PdfParser {
 					if (!isSpace)
 						rendered.append(' ');
 					this.endWord();
-					if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
-						System.out.println("Drawing implicit space");
 //					updateMatrix(this.lineMatrix, this.pwrCharSpacing, 0);
 					float spaceWidth = (this.pwrCharSpacing + (this.pwrFont.hasImplicitSpaces ? ((this.pwrFont.getCharWidth(ch) - this.pwrFont.getMeasuredCharWidth(ch)) / 1000) : 0));
+					if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+						System.out.println("Drawing implicit space of width " + spaceWidth);
 					updateMatrix(this.lineMatrix, spaceWidth, 0);
 				}
 			}
@@ -2566,6 +2624,8 @@ public class PdfParser {
 				return;
 			if (this.start != null)
 				return;
+			if (this.words == null)
+				this.pwrFont.startWord();
 			this.wordCharCodes = new StringBuffer();
 			this.wordString = new StringBuffer();
 			this.start = transform(0, 0, 1, this.lineMatrix);
@@ -2577,6 +2637,8 @@ public class PdfParser {
 		private void endWord() {
 			if (this.start == null)
 				return;
+			if (this.words == null)
+				this.pwrFont.endWord();
 			float[] end = transform(0, 0, 1, this.lineMatrix);
 			end = this.applyTransformationMatrices(end);
 			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null)) {

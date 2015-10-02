@@ -854,11 +854,12 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			public void doFor(int p) throws Exception {
 				
 				//	nothing to work with
-				if ((pData[p] == null) || (pData[p].words == null) || (pData[p].words.length == 0))
+				if ((pData[p] == null) || (pData[p].words == null) || (pData[p].figures == null))
 					return;
 				
 				//	update status display (might be inaccurate, but better than lock escalation)
 				spm.setProgress((p * 100) / pData.length);
+				System.out.println("Got page content with " + pData[p].words.length + " words and " + pData[p].figures.length + " figures");
 				
 				//	sanitize words (if any)
 				if (pData[p].words.length != 0) {
@@ -906,7 +907,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			for (int c = 0; c < charCodes.length; c++) {
 				String charStr = pFont.getUnicode(charCodes[c]);
 				BufferedImage charImage = pFont.getCharImage(charCodes[c]);
-				imFont.addCharacter(charCodes[c], charStr, ((charImage == null) ? null : ImFont.scaleCharImage(charImage)));
+				imFont.addCharacter(charCodes[c], charStr, (((charImage == null) || ((charImage.getWidth() * charImage.getHeight()) == 0)) ? null : ImFont.scaleCharImage(charImage)));
 				System.out.println("   - added char " + charCodes[c] + ": '" + charStr + "', image is " + charImage);
 			}
 			if (imFont.getCharacterCount() == 0)
@@ -1104,7 +1105,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			public void doFor(int p) throws Exception {
 				
 				//	nothing to work with
-				if ((pData[p] == null) || (pData[p].words == null) || (pData[p].words.length == 0))
+				if ((pData[p] == null) || (pData[p].words == null))
 					return;
 				
 				//	update status display (might be inaccurate, but better than lock escalation)
@@ -1324,7 +1325,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			public void doFor(int p) throws Exception {
 				
 				//	nothing to work with
-				if ((pData[p] == null) || (pData[p].words == null) || (pData[p].words.length == 0))
+				if ((pData[p] == null) || (pData[p].words == null))
 					return;
 				spm.setInfo("Generating page " + p + " of " + pData.length);
 				spm.setProgress((p * 100) / pData.length);
@@ -1386,7 +1387,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			public void doFor(int p) throws Exception {
 				
 				//	nothing to work with
-				if ((pData[p] == null) || (pData[p].words == null) || (pData[p].words.length == 0))
+				if ((pData[p] == null) || (pData[p].words == null))
 					return;
 				spm.setInfo("Analyzing structure of page " + p + " of " + pData.length);
 				spm.setProgress((p * 100) / pData.length);
@@ -1461,8 +1462,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				for (int f = 0; f < pData[p].figures.length; f++) {
 					BoundingBox fbb = getBoundingBox(pData[p].figures[f].bounds, pData[p].pdfPageBox, magnification, pData[p].rotate);
 					System.out.println("Marking figure " + fbb);
-					for (int c = fbb.left; c < fbb.right; c++) {
-						for (int r = fbb.top; r < fbb.bottom; r++)
+					for (int c = Math.max(fbb.left, 0); c < Math.min(fbb.right, apiBrightness.length); c++) {
+						for (int r = Math.max(fbb.top, 0); r < Math.min(fbb.bottom, apiBrightness[c].length); r++)
 							apiBrightness[c][r] = ((byte) 127);
 					}
 				}
@@ -1472,8 +1473,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				for (Iterator wbbit = wordsByBoxes.keySet().iterator(); wbbit.hasNext();) {
 					BoundingBox wbb = ((BoundingBox) wbbit.next());
 					System.out.println("Marking word " + wbb);
-					for (int c = wbb.left; c < wbb.right; c++) {
-						for (int r = wbb.top; r < wbb.bottom; r++)
+					for (int c = Math.max(wbb.left, 0); c < Math.min(wbb.right, apiBrightness.length); c++) {
+						for (int r = Math.max(wbb.top, 0); r < Math.min(wbb.bottom, apiBrightness[0].length); r++)
 							apiBrightness[c][r] = ((byte) 0);
 					}
 				}
@@ -1545,10 +1546,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					//	add image regions only now
 					for (int f = 0; f < pData[p].figures.length; f++) {
 						BoundingBox fbb = getBoundingBox(pData[p].figures[f].bounds, pData[p].pdfPageBox, magnification, pData[p].rotate);
-						int fLeft = fbb.left;
-						int fRight = fbb.right;
-						int fTop = fbb.top;
-						int fBottom = fbb.bottom;
+						int fLeft = Math.max(fbb.left, 0);
+						int fRight = Math.min(fbb.right, apiBrightness.length);
+						int fTop = Math.max(fbb.top, 0);
+						int fBottom = Math.min(fbb.bottom, apiBrightness[0].length);
 						
 						//	narrow left and right
 						while (fLeft < fRight) {

@@ -432,9 +432,13 @@ public class PdfExtractorTest implements ImagingConstants {
 //		pdfName = "Zootaxa/zt00020.pdf"; // same problem, same fix
 		pdfName = "Zootaxa/zt00094.pdf"; // same problem, same fix
 		
+		//	job applications from sweetheart ... hinky stuff
+		pdfName = "FAZ_Volo_Bewerbung_komplett_Jennifer_Warzecha_01_10.pdf";
+		pdfName = "Bewerbung_Mitarbeiterin_Presse_und_Office_Quaentchen_und_Glueck__von_ Jennifer Warzecha_27_12.pdf"; // font issues on page 0
+		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
-		aimAtPage = 0; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
+		aimAtPage = 30; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
 		//	TODO try pages 12, 13, 16, 17, and 21 of Prasse 1979
 		System.out.println("Aiming at page " + aimAtPage);
 		final PdfExtractor pdfExtractor = new PdfExtractor(pdfDataPath, pis, true);

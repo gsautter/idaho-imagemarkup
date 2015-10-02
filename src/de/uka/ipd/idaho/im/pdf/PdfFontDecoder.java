@@ -303,7 +303,8 @@ public class PdfFontDecoder {
 					continue;
 				chars[c] = ((char) chi.intValue());
 				chn = StringUtils.getCharName(chars[c]);
-				if (!DEBUG_TYPE1C_RENDRING && !pFont.usedChars.contains(new Integer(c)) && !pFont.usedCharNames.contains(chn)) {
+//				if (!DEBUG_TYPE1C_RENDRING && !pFont.usedChars.contains(new Integer(c)) && !pFont.usedCharNames.contains(chn)) {
+				if (!DEBUG_TYPE1C_RENDRING && !pFont.usesCharCode(new Integer(c)) && !pFont.usedCharNames.contains(chn)) {
 					pm.setInfo("     - ignoring unused char " + c + " (" + chn + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
 					continue;
 				}
@@ -330,7 +331,8 @@ public class PdfFontDecoder {
 					else if (chn.indexOf('_') != -1)
 						chars[c] = StringUtils.getCharForName(chn.replaceAll("_", ""));
 				}
-				if (!DEBUG_TYPE1C_RENDRING && !pFont.usedChars.contains(new Integer(c)) && !pFont.usedCharNames.contains(chn)) {
+//				if (!DEBUG_TYPE1C_RENDRING && !pFont.usedChars.contains(new Integer(c)) && !pFont.usedCharNames.contains(chn)) {
+				if (!DEBUG_TYPE1C_RENDRING && !pFont.usesCharCode(new Integer(c)) && !pFont.usedCharNames.contains(chn)) {
 					pm.setInfo("     - ignoring unused char " + c + " with SID " + sid + " (" + chn + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
 					continue;
 				}
@@ -640,7 +642,7 @@ public class PdfFontDecoder {
 			int xHeight = ((xHeightCount == 0) ? 0 : (xHeightSum / xHeightCount));
 			if (DEBUG_TYPE1C_LOADING) System.out.println(" - average cap-height is " + capHeight + ", average x-height is " + xHeight);
 			
-			//	rectify small-caps
+			//	rectify small-caps TODO use char usage stats
 			for (int c = 0; c < Math.min(csContent.size(), csIndexContent.size()); c++) {
 				if (charImages[c] == null)
 					continue;
@@ -699,6 +701,8 @@ public class PdfFontDecoder {
 			if (DEBUG_TYPE1C_LOADING) System.out.println(" ==> mis-match");
 			Arrays.fill(chars, ((char) 0));
 		}
+		
+		//	TODO use char usage stats
 		
 		//	cache character images to speed up matters
 		pm.setInfo("   - OCR decoding remaining characters");
@@ -886,6 +890,14 @@ public class PdfFontDecoder {
 	}
 	
 	private static void checkImplicitSpaces(PdfFont pFont, CharImage[] charImages, char[] chars, ArrayList csContent, ArrayList sidIndex, HashMap resolvedCodesOrCidMap, HashMap unresolvedCodes) {
+		
+		//	check average word length (will be well below 2 for implicit space fonts)
+		float avgFontWordLength = pFont.getAverageWordLength();
+		if (DEBUG_TYPE1C_LOADING) System.out.println(" - average font word length is " + avgFontWordLength);
+		if (avgFontWordLength > 2) {
+			if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" ==> based on word length, char widths appear to make sense");
+			return;
+		}
 		
 		//	measure maximum char height and relation to nominal font box
 		int maxCharHeight = 0;
@@ -2243,12 +2255,14 @@ public class PdfFontDecoder {
 	}
 	
 	private static BufferedImage scaleImage(BufferedImage img, int maxHeight) {
-		if (img.getHeight() > maxHeight) {
-			BufferedImage sImg = new BufferedImage(((maxHeight * img.getWidth()) / img.getHeight()), maxHeight, img.getType());
-			sImg.getGraphics().drawImage(img, 0, 0, sImg.getWidth(), sImg.getHeight(), null);
-			return sImg;
-		}
-		else return img;
+//		TODO reactivate this once we have better tracking to splines
+//		if (img.getHeight() > maxHeight) {
+//			BufferedImage sImg = new BufferedImage(((maxHeight * img.getWidth()) / img.getHeight()), maxHeight, img.getType());
+//			sImg.getGraphics().drawImage(img, 0, 0, sImg.getWidth(), sImg.getHeight(), null);
+//			return sImg;
+//		}
+//		else
+			return img;
 	}
 	
 	private static int readFontType1cEncoding(byte[] data, int start, HashMap eDict) {
@@ -2670,7 +2684,8 @@ FontName12 38//SID–, FD FontName
 	private static final boolean DEBUG_TRUE_TYPE_LOADING = true;
 	
 	static void readFontTrueType(byte[] data, PdfFont pFont, boolean dataFromBaseFont, ProgressMonitor pm) {
-		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("Used chars are "+ pFont.usedChars.toString());
+//		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("Used chars are "+ pFont.usedChars.toString());
+		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("Used chars are "+ Arrays.toString(pFont.getUsedCharCodes()));
 		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("Unicode mapping is "+ pFont.ucMappings.toString());
 		
 		//	read basic data
@@ -2862,7 +2877,8 @@ FontName12 38//SID–, FD FontName
 						int stGlyphIndex = readUnsigned(cmapBytes, stByteOffset, (stByteOffset+1));
 						stByteOffset += 1;
 						if (stGlyphIndex != 0) {
-							if (!pFont.usedChars.contains(new Integer(c)) || cidsByGlyphIndex.containsKey(new Integer(stGlyphIndex)))
+//							if (!pFont.usedChars.contains(new Integer(c)) || cidsByGlyphIndex.containsKey(new Integer(stGlyphIndex)))
+							if (!pFont.usesCharCode(new Integer(c)) || cidsByGlyphIndex.containsKey(new Integer(stGlyphIndex)))
 								continue;
 							if (DEBUG_TRUE_TYPE_LOADING) System.out.println("       - CID " + c + " mapped to " + stGlyphIndex);
 							cidsByGlyphIndex.put(new Integer(stGlyphIndex), new Integer(c));
@@ -2915,7 +2931,8 @@ FontName12 38//SID–, FD FontName
 					if (DEBUG_TRUE_TYPE_LOADING) System.out.println("       - ID range offsets are " + Arrays.toString(stIdRangeOffsets));
 					for (int s = 0; s < stSegCount; s++)
 						for (int c = stSegStarts[s]; c <= stSegEnds[s]; c++) {
-							if (!pFont.usedChars.contains(new Integer(c)))
+//							if (!pFont.usedChars.contains(new Integer(c)))
+							if (!pFont.usesCharCode(new Integer(c)))
 								continue;
 							if (stIdRangeOffsets[s] == 0) {
 								int stGlyphIndex = c + stIdDeltas[s];
@@ -3086,7 +3103,8 @@ FontName12 38//SID–, FD FontName
 				chars[c] = ucCh.charAt(0);
 				chn = StringUtils.getCharName(chars[c]);
 			}
-			if (!DEBUG_TRUE_TYPE_RENDERING && !pFont.usedChars.contains(new Integer(glyph.cid))) {
+//			if (!DEBUG_TRUE_TYPE_RENDERING && !pFont.usedChars.contains(new Integer(glyph.cid))) {
+			if (!DEBUG_TRUE_TYPE_RENDERING && !pFont.usesCharCode(new Integer(glyph.cid))) {
 				pm.setInfo("     - ignoring unused char " + c + " with CID " + glyph.cid + " (" + ucCh + ", " + chn + ")");
 				continue;
 			}
@@ -3331,7 +3349,7 @@ FontName12 38//SID–, FD FontName
 			int xHeight = ((xHeightCount == 0) ? 0 : (xHeightSum / xHeightCount));
 			if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" - average cap-height is " + capHeight + ", average x-height is " + xHeight);
 			
-			//	rectify small-caps
+			//	rectify small-caps TODO use char usage stats
 			for (int c = 0; c < glyphData.size(); c++) {
 				if (charImages[c] == null)
 					continue;
@@ -3361,6 +3379,8 @@ FontName12 38//SID–, FD FontName
 				unresolvedCIDs.add(new Integer(glyph.cid));
 			}
 		}
+		
+		//	TODO use char usage stats
 		
 		//	cache character images to speed up matters
 		pm.setInfo("   - OCR decoding remaining characters");
@@ -3501,6 +3521,14 @@ FontName12 38//SID–, FD FontName
 			GlyphDataTrueType glyph = ((GlyphDataTrueType) glyphData.get(c));
 		}
 		
+		//	check average word length (will be well below 2 for implicit space fonts)
+		float avgFontWordLength = pFont.getAverageWordLength();
+		if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" - average font word length is " + avgFontWordLength);
+		if (avgFontWordLength > 2) {
+			if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" ==> based on word length, char widths appear to make sense");
+			return;
+		}
+		
 		//	measure maximum char height and relation to nominal font box
 		int maxCharHeight = 0;
 		for (int c = 0; c < charImages.length; c++) {
@@ -3508,7 +3536,7 @@ FontName12 38//SID–, FD FontName
 				maxCharHeight = Math.max(maxCharHeight, charImages[c].box.getHeight());
 		}
 		float charHeightRel = (maxCharHeight / (pFont.ascent - pFont.descent));
-		if (DEBUG_TYPE1C_LOADING) System.out.println(" - maximum height is " + maxCharHeight + " for " + (pFont.ascent - pFont.descent) + ", relation is " + charHeightRel);
+		if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" - maximum height is " + maxCharHeight + " for " + (pFont.ascent - pFont.descent) + ", relation is " + charHeightRel);
 		
 		//	compare nominal to measured char widths
 		float ncCharWidthRelSum = 0;
@@ -3523,26 +3551,26 @@ FontName12 38//SID–, FD FontName
 			//	get nominal width and compare to actual width
 			float nCharWidth = pFont.getCharWidth(new Character((char) glyph.cid));
 			float nCharWidthRel = ((charImages[c].box.getWidth() * 1000) / nCharWidth);
-			if (DEBUG_TYPE1C_LOADING) System.out.println(" - nominal width of char " + c + " (CID " + glyph.cid + ", " + StringUtils.getCharName(chars[c]) + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ") is " + nCharWidth);
-			if (DEBUG_TYPE1C_LOADING) System.out.println(" - actual width is " + charImages[c].box.getWidth() + ", relation is " + nCharWidthRel);
+			if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" - nominal width of char " + c + " (CID " + glyph.cid + ", " + StringUtils.getCharName(chars[c]) + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ") is " + nCharWidth);
+			if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" - actual width is " + charImages[c].box.getWidth() + ", relation is " + nCharWidthRel);
 			float cCharWidth = ((nCharWidth * nCharWidthRel) / charHeightRel);
 			float ncCharWidthRel = (nCharWidth / cCharWidth);
-			if (DEBUG_TYPE1C_LOADING) System.out.println(" --> computed width is " + cCharWidth + ", relation is " + ncCharWidthRel);
+			if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" --> computed width is " + cCharWidth + ", relation is " + ncCharWidthRel);
 			ncCharWidthRelSum += ncCharWidthRel;
 			ncCharWidthRelCount++;
 		}
 		float avgNcCharWidthRel = ((ncCharWidthRelCount == 0) ? 0 : (ncCharWidthRelSum / ncCharWidthRelCount));
-		if (DEBUG_TYPE1C_LOADING) System.out.println(" --> average nominal char width to computed char width relation is " + avgNcCharWidthRel + " from " + ncCharWidthRelCount + " chars");
+		if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" --> average nominal char width to computed char width relation is " + avgNcCharWidthRel + " from " + ncCharWidthRelCount + " chars");
 		
-		//	this font seams to indicate sincere char widths
+		//	this font seems to indicate sincere char widths
 		//	TODO verify threshold, might be safer off with 2
 		if (avgNcCharWidthRel < 1.5) {
-			if (DEBUG_TYPE1C_LOADING) System.out.println(" ==> char widths appear to make sense");
+			if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" ==> char widths appear to make sense");
 			return;
 		}
 		
 		//	nominal char width way larger than measured char width, we have implicit spaces
-		if (DEBUG_TYPE1C_LOADING) System.out.println(" ==> char widths appear to imply spaces");
+		if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" ==> char widths appear to imply spaces");
 		pFont.hasImplicitSpaces = true;
 		
 		//	add measured char widths

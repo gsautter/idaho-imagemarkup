@@ -573,6 +573,8 @@ public class PdfCharDecoder {
 	
 	static SortedSet getScoredCharSignatures(CharMetrics cm, int style, boolean debug, char debugChar, int[] efforts) {
 		TreeSet scss = new TreeSet(scoredCharSignatureOrder);
+		if (cm == null)
+			return scss;
 		int mpdComputed = 0;
 		int lodComputed = 0;
 		int fbdComputed = 0;
