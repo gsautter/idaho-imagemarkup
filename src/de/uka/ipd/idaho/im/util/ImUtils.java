@@ -723,7 +723,7 @@ public class ImUtils implements ImagingConstants {
 		if (paragraphs.length == 0)
 			return new ImAnnotation[0];
 		int dpi = page.getImageDPI();
-		Arrays.sort(paragraphs, ImUtils.topDownOrder);
+		Arrays.sort(paragraphs, topDownOrder);
 		
 		//	add captions above target area (only the closest ones, though)
 		if (above) {
@@ -744,7 +744,7 @@ public class ImUtils implements ImagingConstants {
 					continue;
 				if (!ImWord.TEXT_STREAM_TYPE_CAPTION.equals(paragraphWords[0].getTextStreamType()))
 					continue;
-				Arrays.sort(paragraphWords, ImUtils.textStreamOrder);
+				Arrays.sort(paragraphWords, textStreamOrder);
 				if (paragraphWords[0].getString() == null)
 					continue;
 				if (matchTargetType && (ImRegion.TABLE_TYPE.equals(target.getType()) != paragraphWords[0].getString().toLowerCase().startsWith("tab")))
@@ -782,7 +782,7 @@ public class ImUtils implements ImagingConstants {
 					continue;
 				if (!ImWord.TEXT_STREAM_TYPE_CAPTION.equals(paragraphWords[0].getTextStreamType()))
 					continue;
-				Arrays.sort(paragraphWords, ImUtils.textStreamOrder);
+				Arrays.sort(paragraphWords, textStreamOrder);
 				if (paragraphWords[0].getString() == null)
 					continue;
 				if (matchTargetType && (ImRegion.TABLE_TYPE.equals(target.getType()) != paragraphWords[0].getString().toLowerCase().startsWith("tab")))
@@ -1136,8 +1136,8 @@ public class ImUtils implements ImagingConstants {
 				if (cellWords.length == 0)
 					continue;
 				makeStream(cellWords, null, null);
-				orderStream(cellWords, ImUtils.leftRightTopDownOrder);
-				Arrays.sort(cellWords, ImUtils.textStreamOrder);
+				orderStream(cellWords, leftRightTopDownOrder);
+				Arrays.sort(cellWords, textStreamOrder);
 				if (lastCellEnd != null)
 					cellWords[0].setPreviousWord(lastCellEnd);
 				lastCellEnd = cellWords[cellWords.length-1];
@@ -1411,9 +1411,9 @@ public class ImUtils implements ImagingConstants {
 				
 				//	get columns and rows of current table
 				ImRegion[] rows = getRegionsInside(tables[ty][tx].getPage(), tables[ty][tx].bounds, ImRegion.TABLE_ROW_TYPE, false);
-				Arrays.sort(rows, ImUtils.topDownOrder);
+				Arrays.sort(rows, topDownOrder);
 				ImRegion[] cols = getRegionsInside(tables[ty][tx].getPage(), tables[ty][tx].bounds, ImRegion.TABLE_COL_TYPE, false);
-				Arrays.sort(cols, ImUtils.leftRightOrder);
+				Arrays.sort(cols, leftRightOrder);
 				
 				//	initialize data on first table in grid row 
 				if (rowData == null) {
@@ -1454,7 +1454,7 @@ public class ImUtils implements ImagingConstants {
 		BoundingBox cellBounds = new BoundingBox(col.bounds.left, col.bounds.right, row.bounds.top, row.bounds.bottom);
 		ImWord[] cellWords = table.getPage().getWordsInside(cellBounds);
 		if (cellWords.length != 0) {
-			Arrays.sort(cellWords, ImUtils.textStreamOrder);
+			Arrays.sort(cellWords, textStreamOrder);
 			String cellStr = getString(cellWords[0], cellWords[cellWords.length-1], true);
 			if (cellStr.matches("\\.\\s*[0-9]+"))
 				cellStr = ("0." + cellStr.substring(".".length()).trim());

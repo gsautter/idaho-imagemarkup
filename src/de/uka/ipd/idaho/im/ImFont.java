@@ -536,7 +536,7 @@ public class ImFont implements ImObject {
 	public static BufferedImage scaleCharImage(BufferedImage charImage) {
 		if ((charImage == null) || (charImage.getHeight() == 32))
 			return charImage;
-		BufferedImage sCharImage = new BufferedImage(((charImage.getWidth() * 32) / charImage.getHeight()), 32, charImage.getType());
+		BufferedImage sCharImage = new BufferedImage(Math.max(1, ((charImage.getWidth() * 32) / charImage.getHeight())), 32, charImage.getType());
 		Graphics2D sCiGr = sCharImage.createGraphics();
 		sCiGr.setColor(Color.WHITE);
 		sCiGr.fillRect(0, 0, sCharImage.getWidth(), sCharImage.getHeight());
