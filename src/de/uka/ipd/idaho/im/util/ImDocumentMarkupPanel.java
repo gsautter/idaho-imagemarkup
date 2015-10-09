@@ -2190,7 +2190,6 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			super.dispose();
 			editWordDialog = null;
 			if (editWordPage != null) {
-//				editWordPage.textStringImage = null;
 				editWordPage.textStringImages = null;
 				editWordPage = null;
 				ImDocumentMarkupPanel.this.repaint();
@@ -2946,15 +2945,52 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				}
 			}
 			
-			//	paint other (activated) layout objects
+			/* paint (activated) regions, outdenting on nesting so lines don't obfuscate one another:
+			 * - collect _painted_ regions
+			 * - compute outdent for each (exploiting that regions are sorted by decreasing size)
+			 *   - initialize outdent for each region to -1
+			 *   - for each region, test if it contains other regions, and assign outdent 0 to the ones that do not
+			 *   - for each remaining region, test if it contains other regions with unknown outdent, and assign outdent (largest-contained-outdent + 1) to the ones that do not
+			 *   - repeat the latter until all regions have an outdent assigned
+			 * ==> far better visualization
+			 * */
 			ImRegion[] regions = this.page.getRegions();
+			ArrayList paintedRegions = new ArrayList();
 			for (int r = 0; r < regions.length; r++) {
-				if (!areRegionsPainted(regions[r].getType()))
-					continue;
+				if (areRegionsPainted(regions[r].getType()))
+					paintedRegions.add(regions[r]);
+			}
+			if (paintedRegions.size() < regions.length)
+				regions = ((ImRegion[]) paintedRegions.toArray(new ImRegion[paintedRegions.size()]));
+			int[] regionOutdents = new int[regions.length];
+			Arrays.fill(regionOutdents, -1);
+			for (boolean remaining = true; remaining;) {
+				remaining = false;
+				for (int r = 0; r < regions.length; r++) {
+					if (regionOutdents[r] != -1)
+						continue;
+					int regionOutdent = 0;
+					for (int cr = (r+1); cr < regions.length; cr++) {
+						if (!regions[r].bounds.includes(regions[cr].bounds, false))
+							continue;
+						if (regionOutdents[cr] == -1) {
+							regionOutdent = -1;
+							break;
+						}
+						else regionOutdent = Math.max(regionOutdent, (regionOutdents[cr] + 1));
+					}
+					if (regionOutdent == -1)
+						remaining = true;
+					else regionOutdents[r] = regionOutdent;
+				}
+			}
+			for (int r = 0; r < regionOutdents.length; r++)
+				regionOutdents[r] *= 2;
+			for (int r = 0; r < regions.length; r++) {
 				Color layoutObjectColor = getLayoutObjectColor(regions[r].getType(), true);
 				if (ImRegion.IMAGE_TYPE.equals(regions[r].getType()))
-					boList.add(new RegionRectangle(regions[r].bounds.left, regions[r].bounds.right, regions[r].bounds.top, regions[r].bounds.bottom, layoutObjectColor));
-				else boList.add(new RegionRectangle(regions[r].bounds.left - 2, regions[r].bounds.right, regions[r].bounds.top - 2, regions[r].bounds.bottom, layoutObjectColor));
+					boList.add(new RegionRectangle(regions[r].bounds.left, regions[r].bounds.right, regions[r].bounds.top, regions[r].bounds.bottom, layoutObjectColor, regionOutdents[r]));
+				else boList.add(new RegionRectangle(regions[r].bounds.left - 2, regions[r].bounds.right, regions[r].bounds.top - 2, regions[r].bounds.bottom, layoutObjectColor, regionOutdents[r]));
 			}
 			
 			//	count starts and ends
@@ -3024,33 +3060,34 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			final short right;
 			final short top;
 			final short bottom;
+			final boolean isOutline;
 			short zLeft;
 			short zRight;
 			short zTop;
 			short zBottom;
-			BoxBasedBackgroundObject(int left, int right, int top, int bottom, Color color) {
+			BoxBasedBackgroundObject(int left, int right, int top, int bottom, Color color, boolean isOutline) {
 				super(color);
 				this.left = ((short) left);
 				this.right = ((short) right);
 				this.top = ((short) top);
 				this.bottom = ((short) bottom);
+				this.isOutline = isOutline;
 			}
 			void checkZoomAndPosition() {
 				if (this.zDpi == renderingDpi)
 					return;
-				this.zLeft = this.zoom(this.left, (getLeftOffset() - (this.isOutline() ? 1 : 0)));
-				this.zRight = this.zoom(this.right, (getLeftOffset() - (this.isOutline() ? 0 : 1)));
-				this.zTop = this.zoom(this.top, (getTopOffset() - (this.isOutline() ? 1 : 0)));
-				this.zBottom = this.zoom(this.bottom, (getTopOffset() - (this.isOutline() ? 0 : 1)));
+				this.zLeft = this.zoom(this.left, (getLeftOffset() - (this.isOutline ? 1 : 0)));
+				this.zRight = this.zoom(this.right, (getLeftOffset() - (this.isOutline ? 0 : 1)));
+				this.zTop = this.zoom(this.top, (getTopOffset() - (this.isOutline ? 1 : 0)));
+				this.zBottom = this.zoom(this.bottom, (getTopOffset() - (this.isOutline ? 0 : 1)));
 				this.zDpi = renderingDpi;
 			}
-			abstract boolean isOutline();
 		}
 		
 		private class WordRectangle extends BoxBasedBackgroundObject {
 			final byte flags;
 			WordRectangle(int left, int right, int top, int bottom, Color color, byte flags) {
-				super(left, right, top, bottom, color);
+				super(left, right, top, bottom, color, false /* drag in right and bottom */);
 				this.flags = flags;
 			}
 			void paint(Graphics gr) {
@@ -3084,9 +3121,6 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				gr.drawLine(this.zLeft, this.zTop, this.zRight, this.zTop);
 				gr.drawLine(this.zLeft, this.zBottom, this.zRight, this.zBottom);
 			}
-			boolean isOutline() {
-				return false; // drag in right and bottom
-			}
 		}
 		
 		private class WordConnector extends BackgroundObject {
@@ -3112,38 +3146,34 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		}
 		
 		private class RegionRectangle extends BoxBasedBackgroundObject {
-			RegionRectangle(int left, int right, int top, int bottom, Color color) {
-				super(left, right, top, bottom, color);
+			final int out;
+			RegionRectangle(int left, int right, int top, int bottom, Color color, int out) {
+				super(left, right, top, bottom, color, true /* push out left and top */);
+				this.out = out;
 			}
 			void paint(Graphics gr) {
 				gr.setColor(this.color);
-				gr.drawLine(this.zLeft, this.zTop, this.zLeft, this.zBottom);
-				gr.drawLine(this.zRight, this.zTop, this.zRight, this.zBottom);
-				gr.drawLine(this.zLeft, this.zTop, this.zRight, this.zTop);
-				gr.drawLine(this.zLeft, this.zBottom, this.zRight, this.zBottom);
-			}
-			boolean isOutline() {
-				return true; // push out left and top
+				gr.drawLine((this.zLeft - this.out), (this.zTop - this.out), (this.zLeft - this.out), (this.zBottom + this.out));
+				gr.drawLine((this.zRight + this.out), (this.zTop - this.out), (this.zRight + this.out), (this.zBottom + this.out));
+				gr.drawLine((this.zLeft - this.out), (this.zTop - this.out), (this.zRight + this.out), (this.zTop - this.out));
+				gr.drawLine((this.zLeft - this.out), (this.zBottom + this.out), (this.zRight + this.out), (this.zBottom + this.out));
 			}
 		}
 		
 		private class AnnotHighlight extends BoxBasedBackgroundObject {
 			AnnotHighlight(int left, int right, int top, int bottom, Color color) {
-				super(left, right, top, bottom, color);
+				super(left, right, top, bottom, color, false /* drag in right and bottom */);
 			}
 			void paint(Graphics gr) {
 				gr.setColor(this.color);
 				gr.fillRect(this.zLeft, this.zTop, (this.zRight - this.zLeft), (this.zBottom - this.zTop));
-			}
-			boolean isOutline() {
-				return false; // drag in right and bottom
 			}
 		}
 		
 		private class AnnotStart extends BoxBasedBackgroundObject {
 			final int out;
 			AnnotStart(int left, int right, int top, int bottom, Color color, int out) {
-				super(left, right, top, bottom, color);
+				super(left, right, top, bottom, color, false /* drag in right and bottom */);
 				this.out = out;
 			}
 			void paint(Graphics gr) {
@@ -3153,15 +3183,12 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				gr.drawLine((this.zLeft - (this.out * annotationHighlightMargin)), (this.zTop - this.out), (this.zLeft + annotationHighlightMargin), (this.zTop - this.out));
 				gr.drawLine((this.zLeft - (this.out * annotationHighlightMargin)), (this.zBottom + this.out), (this.zLeft + annotationHighlightMargin), (this.zBottom + this.out));
 			}
-			boolean isOutline() {
-				return false; // drag in right and bottom
-			}
 		}
 		
 		private class AnnotEnd extends BoxBasedBackgroundObject {
 			final int out;
 			AnnotEnd(int left, int right, int top, int bottom, Color color, int out) {
-				super(left, right, top, bottom, color);
+				super(left, right, top, bottom, color, false /* drag in right and bottom */);
 				this.out = out;
 			}
 			void paint(Graphics gr) {
@@ -3170,9 +3197,6 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 					gr.drawLine((this.zRight + (this.out * annotationHighlightMargin) - t), (this.zTop - this.out), (this.zRight + (this.out * annotationHighlightMargin) - t), (this.zBottom + this.out));
 				gr.drawLine((this.zRight + (this.out * annotationHighlightMargin)), (this.zTop - this.out), (this.zRight - annotationHighlightMargin), (this.zTop - this.out));
 				gr.drawLine((this.zRight + (this.out * annotationHighlightMargin)), (this.zBottom + this.out), (this.zRight - annotationHighlightMargin), (this.zBottom + this.out));
-			}
-			boolean isOutline() {
-				return false; // drag in right and bottom
 			}
 		}
 		
