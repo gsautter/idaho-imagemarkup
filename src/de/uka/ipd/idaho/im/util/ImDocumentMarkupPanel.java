@@ -2993,13 +2993,13 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				else boList.add(new RegionRectangle(regions[r].bounds.left - 2, regions[r].bounds.right, regions[r].bounds.top - 2, regions[r].bounds.bottom, layoutObjectColor, regionOutdents[r]));
 			}
 			
-			//	count starts and ends
-			CountingSet seCounts = new CountingSet();
+			//	count annotation starts and ends
+			CountingSet annotStartEndCounts = new CountingSet();
 			for (int a = 0; a < annots.length; a++) {
 				if (!areAnnotationsPainted(annots[a].getType()))
 					continue;
-				seCounts.add("S" + annots[a].getFirstWord().getLocalID());
-				seCounts.add("E" + annots[a].getLastWord().getLocalID());
+				annotStartEndCounts.add("S" + annots[a].getFirstWord().getLocalID());
+				annotStartEndCounts.add("E" + annots[a].getLastWord().getLocalID());
 			}
 			
 			//	paint starts and ends of (activated) annotations
@@ -3016,13 +3016,13 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				
 				//	paint opaque kind of square bracket before first and after last word
 				if (fw.pageId == this.page.pageId) {
-					int out = seCounts.getCount("S" + fw.getLocalID());
-					seCounts.remove("S" + fw.getLocalID());
+					int out = annotStartEndCounts.getCount("S" + fw.getLocalID());
+					annotStartEndCounts.remove("S" + fw.getLocalID());
 					boList.add(new AnnotStart(fw.bounds.left, fw.bounds.right, fw.bounds.top, fw.bounds.bottom, annotColor, out));
 				}
 				if (lw.pageId == this.page.pageId) {
-					int out = seCounts.getCount("E" + lw.getLocalID());
-					seCounts.remove("E" + lw.getLocalID());
+					int out = annotStartEndCounts.getCount("E" + lw.getLocalID());
+					annotStartEndCounts.remove("E" + lw.getLocalID());
 					boList.add(new AnnotEnd(lw.bounds.left, lw.bounds.right, lw.bounds.top, lw.bounds.bottom, annotColor, out));
 				}
 			}
@@ -3322,35 +3322,26 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			}
 		}
 		private void paintBox(Graphics graphics, BoundingBox box, float zoom, int leftOffset, int topOffset) {
-			this.paintBox(graphics, box, zoom, leftOffset, topOffset, true, true);
+			graphics.drawRect((leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * box.top)), Math.round(zoom * (box.right - box.left - 1)), Math.round(zoom * (box.bottom - box.top - 1)));
 		}
-		private void paintBox(Graphics graphics, BoundingBox box, float zoom, int leftOffset, int topOffset, boolean paintLeft, boolean paintRight) {
-			if (paintLeft && paintRight)
-				graphics.drawRect((leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * box.top)), Math.round(zoom * (box.right - box.left - 1)), Math.round(zoom * (box.bottom - box.top - 1)));
-			else {
-				graphics.drawLine((leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * box.top)), (leftOffset + Math.round(zoom * (box.right-1))), (topOffset + Math.round(zoom * box.top)));
-				graphics.drawLine((leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * (box.bottom-1))), (leftOffset + Math.round(zoom * (box.right-1))), (topOffset + Math.round(zoom * (box.bottom-1))));
-				if (paintLeft)
-					graphics.drawLine((leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * box.top)), (leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * (box.bottom-1))));
-				if (paintRight)
-					graphics.drawLine((leftOffset + Math.round(zoom * (box.right-1))), (topOffset + Math.round(zoom * box.top)), (leftOffset + Math.round(zoom * (box.right-1))), (topOffset + Math.round(zoom * (box.bottom-1))));
-			}
-		}
+//		private void paintBox(Graphics graphics, BoundingBox box, float zoom, int leftOffset, int topOffset) {
+//			this.paintBox(graphics, box, zoom, leftOffset, topOffset, true, true);
+//		}
+//		private void paintBox(Graphics graphics, BoundingBox box, float zoom, int leftOffset, int topOffset, boolean paintLeft, boolean paintRight) {
+//			if (paintLeft && paintRight)
+//				graphics.drawRect((leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * box.top)), Math.round(zoom * (box.right - box.left - 1)), Math.round(zoom * (box.bottom - box.top - 1)));
+//			else {
+//				graphics.drawLine((leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * box.top)), (leftOffset + Math.round(zoom * (box.right-1))), (topOffset + Math.round(zoom * box.top)));
+//				graphics.drawLine((leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * (box.bottom-1))), (leftOffset + Math.round(zoom * (box.right-1))), (topOffset + Math.round(zoom * (box.bottom-1))));
+//				if (paintLeft)
+//					graphics.drawLine((leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * box.top)), (leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * (box.bottom-1))));
+//				if (paintRight)
+//					graphics.drawLine((leftOffset + Math.round(zoom * (box.right-1))), (topOffset + Math.round(zoom * box.top)), (leftOffset + Math.round(zoom * (box.right-1))), (topOffset + Math.round(zoom * (box.bottom-1))));
+//			}
+//		}
 		private void fillBox(Graphics graphics, BoundingBox box, float zoom, int leftOffset, int topOffset) {
 			graphics.fillRect((leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * box.top)), Math.round((zoom * (box.right - box.left)) - 1), Math.round((zoom * (box.bottom - box.top)) - 1));
 		}
-//		
-//		private void fillBox(WritableRaster wr, int color, BoundingBox box, float zoom, int leftOffset, int topOffset) {
-//			int left = (leftOffset + Math.round(zoom * box.left));
-//			int top = (topOffset + Math.round(zoom * box.top));
-//			int width = Math.round(zoom * (box.right - box.left));
-//			int height = Math.round(zoom * (box.bottom - box.top));
-//			int[] c = {color};
-//			for (int x = left; x < (left + width); x++) {
-//				for (int y = top; y < (top + height); y++)
-//					wr.setPixel(x, y, c);
-//			}
-//		}
 		
 		private Point[] getConnectorLineSequence(BoundingBox from, BoundingBox to) {
 			LinkedList cls = new LinkedList();

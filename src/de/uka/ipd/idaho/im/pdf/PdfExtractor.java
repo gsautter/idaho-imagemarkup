@@ -1178,6 +1178,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				if (pageImages[p] == null) {
 					spm.setInfo(" - generating page image");
 					synchronized (pdfDoc) {
+						pdfDoc.getPageTree().getPage(p, "").init(); // there might have been a previous call to reduceMemory() ...
 						pageImages[p] = ((BufferedImage) pdfDoc.getPageImage(p, GraphicsRenderingHints.SCREEN, Page.BOUNDARY_CROPBOX, 0, magnification));
 					}
 					if (pageImages[p] == null) {
@@ -4639,6 +4640,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		float figureMagnification = (((float) figureDpi) / defaultDpi);
 		BufferedImage figurePageImage;
 		synchronized (pdfDoc) {
+			pdfDoc.getPageTree().getPage(p, "").init(); // there might have been a previous call to reduceMemory() ...
 			figurePageImage = ((BufferedImage) pdfDoc.getPageImage(p, GraphicsRenderingHints.SCREEN, Page.BOUNDARY_CROPBOX, 0, figureMagnification));
 			pdfDoc.getPageTree().getPage(p, "").reduceMemory();
 		}
@@ -4662,6 +4664,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		float figureMagnification = (((float) figureDpi) / defaultDpi);
 		BufferedImage figurePageImage;
 		synchronized (pdfDoc) {
+			pdfDoc.getPageTree().getPage(p, "").init(); // there might have been a previous call to reduceMemory() ...
 			figurePageImage = ((BufferedImage) pdfDoc.getPageImage(p, GraphicsRenderingHints.SCREEN, Page.BOUNDARY_CROPBOX, 0, figureMagnification));
 			pdfDoc.getPageTree().getPage(p, "").reduceMemory();
 		}
