@@ -432,13 +432,12 @@ public class PdfExtractorTest implements ImagingConstants {
 //		pdfName = "Zootaxa/zt00020.pdf"; // same problem, same fix
 		pdfName = "Zootaxa/zt00094.pdf"; // same problem, same fix
 		
-		//	job applications from sweetheart ... hinky stuff
-		pdfName = "FAZ_Volo_Bewerbung_komplett_Jennifer_Warzecha_01_10.pdf";
-		pdfName = "Bewerbung_Mitarbeiterin_Presse_und_Office_Quaentchen_und_Glueck__von_ Jennifer Warzecha_27_12.pdf"; // font issues on page 0
+		//	IJSEM superscript problem on page 3
+		pdfName = "IJSEM/35.full.pdf"; 
 		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
-		aimAtPage = 30; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
+		aimAtPage = -1; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
 		//	TODO try pages 12, 13, 16, 17, and 21 of Prasse 1979
 		System.out.println("Aiming at page " + aimAtPage);
 		final PdfExtractor pdfExtractor = new PdfExtractor(pdfDataPath, pis, true);
@@ -570,10 +569,10 @@ public class PdfExtractorTest implements ImagingConstants {
 				paintBox(bi, scaleDown, words[w], col.getRGB(), imageMargin, 0);
 				paintBaseline(bi, scaleDown, words[w], Color.PINK.getRGB(), imageMargin);
 			}
-//			
-//			ImRegion[] lines = pages[p].getRegions(LINE_ANNOTATION_TYPE);
-//			for (int l = 0; l < lines.length; l++)
-//				paintBox(bi, scaleDown, lines[l], Color.ORANGE.getRGB(), imageMargin, 1);
+			
+			ImRegion[] lines = pages[p].getRegions(LINE_ANNOTATION_TYPE);
+			for (int l = 0; l < lines.length; l++)
+				paintBox(bi, scaleDown, lines[l], Color.ORANGE.getRGB(), imageMargin, 1);
 //			
 //			Annotation[] cells = pages[p].getAnnotations("td");
 //			for (int c = 0; c < cells.length; c++)

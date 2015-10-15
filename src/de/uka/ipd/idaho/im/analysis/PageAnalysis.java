@@ -1169,7 +1169,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			int pRight = pRegions[p].bounds.left;
 			int pTop = pRegions[p].bounds.bottom;
 			int pBottom = pRegions[p].bounds.top;
-			ImRegion[] cRegions = (WORD_ANNOTATION_TYPE.equals(cType) ? region.getPage().getWordsInside(pRegions[p].bounds) : region.getPage().getRegionsInside(pRegions[p].bounds, false));
+			ImRegion[] cRegions = (WORD_ANNOTATION_TYPE.equals(cType) ? region.getPage().getWordsInside(pRegions[p].bounds) : region.getPage().getRegionsInside(pRegions[p].bounds, true));
 			for (int c = 0; c < cRegions.length; c++) {
 				if (!cType.equals(cRegions[c].getType()))
 					continue;
@@ -1178,7 +1178,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 				pTop = Math.min(pTop, cRegions[c].bounds.top);
 				pBottom = Math.max(pBottom, cRegions[c].bounds.bottom);
 			}
-			if ((pLeft < pRight) && (pTop < pBottom) && ((pRegions[p].bounds.left < pLeft) || (pRight < pRegions[p].bounds.right) || (pRegions[p].bounds.top < pTop) || (pBottom < pRegions[p].bounds.bottom))) {
+			if ((pLeft < pRight) && (pTop < pBottom) && ((pRegions[p].bounds.left != pLeft) || (pRight != pRegions[p].bounds.right) || (pRegions[p].bounds.top != pTop) || (pBottom != pRegions[p].bounds.bottom))) {
 				BoundingBox pBox = new BoundingBox(pLeft, pRight, pTop, pBottom);
 				ImRegion pRegion = new ImRegion(region.getPage(), pBox, pType);
 				pRegion.copyAttributes(pRegions[p]);

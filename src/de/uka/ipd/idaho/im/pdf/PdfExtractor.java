@@ -1605,6 +1605,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				//	adjust bounding boxes
 				shrinkToChildren(pages[p], LINE_ANNOTATION_TYPE, WORD_ANNOTATION_TYPE, -1);
 				ImRegion[] blockRemainders = shrinkToChildren(pages[p], BLOCK_ANNOTATION_TYPE, LINE_ANNOTATION_TYPE, imageDPIs[p]);
+//				ImRegion[] blockRemainders = shrinkToChildren(pages[p], BLOCK_ANNOTATION_TYPE, WORD_ANNOTATION_TYPE, imageDPIs[p]);
 				
 				//	preserve image blocks that were attached to text blocks
 				for (int r = 0; r < blockRemainders.length; r++) {
@@ -2794,7 +2795,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			int pBottom = pRegions[p].bounds.top;
 			
 			//	collect convex hull of children
-			ImRegion[] cRegions = (WORD_ANNOTATION_TYPE.equals(cType) ? page.getWordsInside(pRegions[p].bounds) : page.getRegionsInside(pRegions[p].bounds, false));
+			ImRegion[] cRegions = (WORD_ANNOTATION_TYPE.equals(cType) ? page.getWordsInside(pRegions[p].bounds) : page.getRegionsInside(pRegions[p].bounds, true));
 			for (int c = 0; c < cRegions.length; c++) {
 				if (!cType.equals(cRegions[c].getType()))
 					continue;
