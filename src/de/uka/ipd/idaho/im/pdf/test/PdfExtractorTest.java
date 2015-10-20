@@ -432,9 +432,6 @@ public class PdfExtractorTest implements ImagingConstants {
 //		pdfName = "Zootaxa/zt00020.pdf"; // same problem, same fix
 		pdfName = "Zootaxa/zt00094.pdf"; // same problem, same fix
 		
-		//	IJSEM superscript problem on page 3
-		pdfName = "IJSEM/35.full.pdf"; 
-		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
 		aimAtPage = -1; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed

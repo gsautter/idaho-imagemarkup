@@ -1246,6 +1246,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						blockFlipInPage[p] = true;
 					}
 					
+					//	TODO measure orientation of figure images as well, and flip them
+					
+					//	TODO if whole page to flip, flip page image as well
+					
 					//	paint own words
 					for (int w = 0; w < pData[p].words.length; w++) {
 						
@@ -1411,6 +1415,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					if (columnCount != -1)
 						columnCount = 1;
 				}
+				//	TODO revise this, especially column count (mixed-orientation pages !!!)
 				
 				//	index words by bounding boxes, and determine page content bounds
 				ImWord[] pWords = pages[p].getWords();
@@ -1605,7 +1610,6 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				//	adjust bounding boxes
 				shrinkToChildren(pages[p], LINE_ANNOTATION_TYPE, WORD_ANNOTATION_TYPE, -1);
 				ImRegion[] blockRemainders = shrinkToChildren(pages[p], BLOCK_ANNOTATION_TYPE, LINE_ANNOTATION_TYPE, imageDPIs[p]);
-//				ImRegion[] blockRemainders = shrinkToChildren(pages[p], BLOCK_ANNOTATION_TYPE, WORD_ANNOTATION_TYPE, imageDPIs[p]);
 				
 				//	preserve image blocks that were attached to text blocks
 				for (int r = 0; r < blockRemainders.length; r++) {

@@ -209,7 +209,7 @@ public class ImUtils implements ImagingConstants {
 		for (int w = 1; w < words.length; w++)
 			
 			//	this word starts a new line, sort previous one
-			if (words[w].centerY > words[lineStart].bounds.bottom) {
+			if ((words[w].centerY > words[lineStart].bounds.bottom) && (words[lineStart].centerY < words[w].bounds.top)) {
 				Arrays.sort(words, lineStart, w, leftRightOrder);
 				lineStart = w;
 			}
