@@ -32,6 +32,8 @@ import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
+import java.awt.Toolkit;
+import java.awt.datatransfer.Transferable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -394,7 +396,7 @@ public class ImUtils implements ImagingConstants {
 		 * @return an indicator for which button the user closed the prompt with
 		 */
 		public int prompt(Component parent) {
-			return JOptionPane.showConfirmDialog(parent, this, this.title, JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+			return DialogFactory.confirm(this, this.title, JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
 		}
 	}
 	
@@ -455,7 +457,7 @@ public class ImUtils implements ImagingConstants {
 			if (AnnotationUtils.isValidAnnotationType(typeOrName))
 				return typeOrName;
 			if (showError)
-				JOptionPane.showMessageDialog(DialogFactory.getTopWindow(), ("'" + typeOrName + "' is not a valid type or name."), "Invalid Type Or Name", JOptionPane.ERROR_MESSAGE);
+				DialogFactory.alert(("'" + typeOrName + "' is not a valid type or name."), "Invalid Type Or Name", JOptionPane.ERROR_MESSAGE);
 			return null;
 		}
 		
@@ -475,6 +477,54 @@ public class ImUtils implements ImagingConstants {
 			else if (selectable.length != 0)
 				this.selector.setSelectedIndex(0);
 		}
+	}
+	
+	/**
+	 * Manage of copy operations as first part of copy &amp; paste.
+	 * 
+	 * @author sautter
+	 */
+	public static interface CopyManager {
+		
+		/**
+		 * Copy a data string as the first part of a copy &amp; paste operation.
+		 * This default implementation simply copies the data to the system
+		 * clipboard. Sub classes may overwrite this method to take other measures.
+		 * @param data the data to copy
+		 */
+		public abstract void copy(Transferable data);
+	}
+	
+	/**
+	 * Retrieve the current copy manager.
+	 * @return the current copy manager
+	 */
+	public static CopyManager getCopyManager() {
+		return copyManager;
+	}
+	
+	/**
+	 * Set the copy manager to use for copying data. Setting the copy manager
+	 * to <code>null</code> reverts to the default behavior.
+	 * @param cm the copy manager to set.
+	 */
+	public static void setCopyManager(CopyManager cm) {
+		copyManager = cm;
+	}
+	
+	private static CopyManager copyManager = null;
+	
+	/**
+	 * Copy a data string as the first part of a copy &amp; paste operation.
+	 * If no <code>CopyManager</code> is registered, this method copies the
+	 * data to the system clipboard. If a <code>CopyManager</code> is
+	 * registered, it is used.
+	 * @param data the data to copy
+	 */
+	public static void copy(Transferable data) {
+		if (copyManager == null)
+			Toolkit.getDefaultToolkit().getSystemClipboard().setContents(data, null);
+		else copyManager.copy(data);
 	}
 	
 	/**

@@ -1750,8 +1750,9 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	/**
 	 * Retrieve the available actions for a box selection. This implementation
 	 * provides the action for hiding the page the selection lies on if the
-	 * selection does not intersect with any words or regions. Sub classes this
-	 * method thus have to include the actions returned by this implementation.
+	 * selection does not intersect with any words or regions. Sub classes
+	 * overwriting this method thus have to include the actions returned by
+	 * this implementation.
 	 * @param start the point where the selection started, one corner of the
 	 *            box
 	 * @param end the point where the selection ended, the opposite corner of
@@ -1895,7 +1896,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				//	catch whatever might happen
 				catch (Throwable t) {
 					t.printStackTrace(System.out);
-					JOptionPane.showMessageDialog(DialogFactory.getTopWindow(), ("Error applying " + imt.getLabel() + ":\n" + t.getMessage()), "Error Running DocumentProcessor", JOptionPane.ERROR_MESSAGE);
+					DialogFactory.alert(("Error applying " + imt.getLabel() + ":\n" + t.getMessage()), "Error Running DocumentProcessor", JOptionPane.ERROR_MESSAGE, null);
 				}
 				
 				//	clean up
@@ -2215,7 +2216,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 						for (int t = 0; t < wordTokens.size(); t++)
 							msg.append("\r\n- '" + wordTokens.valueAt(t) + "'");
 						msg.append("\r\nUse 'Edit Page Image & Words' to individually mark words OCR has conflated into one.");
-						JOptionPane.showMessageDialog(this.getOwner(), msg.toString(), "Invalid Word String", JOptionPane.ERROR_MESSAGE);
+						DialogFactory.alert(msg.toString(), "Invalid Word String", JOptionPane.ERROR_MESSAGE, null);
 						return;
 					}
 				}
