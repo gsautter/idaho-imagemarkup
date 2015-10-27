@@ -50,9 +50,9 @@ import de.uka.ipd.idaho.im.util.ImUtils;
 public class PageAnalysis implements ImagingConstants, TableConstants {
 	
 	/**
-	 * Group the lines inside a the blocks of a page into paragraphs. This
-	 * method is for convenience, it loops through to the splitIntoPargaraphs()
-	 * method that takes a single region as an argument.
+	 * Group the lines inside the blocks of a page into paragraphs. This method
+	 * is for convenience, it loops through to the splitIntoPargaraphs() method
+	 * that takes a single region as an argument.
 	 * @param blocks the blocks to split
 	 * @param dpi the resolution of the page image the bounding boxes of the
 	 *            argument annotations refer to
@@ -64,9 +64,9 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 	}
 	
 	/**
-	 * Group the lines inside a the blocks of a page into paragraphs. This
-	 * method is for convenience, it loops through to the splitIntoPargaraphs()
-	 * method that takes a single region as an argument.
+	 * Group the lines inside the blocks of a page into paragraphs. This method
+	 * is for convenience, it loops through to the splitIntoPargaraphs() method
+	 * that takes a single region as an argument.
 	 * @param blocks the blocks to split
 	 * @param dpi the resolution of the page image the bounding boxes of the
 	 *            argument annotations refer to
@@ -83,10 +83,10 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 	}
 	
 	/**
-	 * Group the lines inside a the blocks of a page into paragraphs. This
-	 * convenience method first calls splitIntoPargarphsShortLines(), then
-	 * splitIntoParagraphsLineStart(), and finally
-	 * splitIntoParagraphsLineDistance().
+	 * Group the lines inside a block into paragraphs. This convenience method
+	 * first calls <code>splitIntoPargarphsShortLines()</code>, then
+	 * <code>splitIntoParagraphsLineStart()</code>, and finally 
+	 * <code>splitIntoParagraphsLineDistance()</code>.
 	 * @param block the block to split
 	 * @param dpi the resolution of the page image the bounding boxes of the
 	 *            argument annotation and its children refer to
@@ -97,10 +97,10 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 	}
 	
 	/**
-	 * Group the lines inside a the blocks of a page into paragraphs. This
-	 * convenience method first calls splitIntoPargarphsShortLines(), then
-	 * splitIntoParagraphsLineStart(), and finally
-	 * splitIntoParagraphsLineDistance().
+	 * Group the lines inside a block into paragraphs. This convenience method
+	 * first calls <code>splitIntoPargarphsShortLines()</code>, then
+	 * <code>splitIntoParagraphsLineStart()</code>, and finally 
+	 * <code>splitIntoParagraphsLineDistance()</code>.
 	 * @param block the block to split
 	 * @param dpi the resolution of the page image the bounding boxes of the
 	 *            argument annotation and its children refer to
