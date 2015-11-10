@@ -1605,6 +1605,34 @@ public class PdfParser {
 					continue;
 				}
 				
+				//	check if words on same line
+				if (word.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) {
+					float lwCenterY = ((float) ((lastWord.bounds.getMinY() + lastWord.bounds.getMaxY()) / 2));
+					float wCenterY = ((float) ((word.bounds.getMinY() + word.bounds.getMaxY()) / 2));
+					if ((lwCenterY < word.bounds.getMaxY()) && (lwCenterY > word.bounds.getMinY())) { /* last word center Y inside word height */ }
+					else if ((wCenterY < lastWord.bounds.getMaxY()) && (wCenterY > lastWord.bounds.getMinY())) { /* word center Y inside last word height */ }
+					else {
+						lastWord = word;
+						if (DEBUG_JOIN_WORDS) System.out.println(" --> different lines");
+						continue;
+					}
+				}
+				else {
+					float lwMinX = ((float) Math.min(lastWord.bounds.getMinX(), lastWord.bounds.getMaxX()));
+					float lwMaxX = ((float) Math.max(lastWord.bounds.getMinX(), lastWord.bounds.getMaxX()));
+					float lwCenterX = ((float) ((lastWord.bounds.getMinX() + lastWord.bounds.getMaxX()) / 2));
+					float wMinX = ((float) Math.min(word.bounds.getMinX(), word.bounds.getMaxX()));
+					float wMaxX = ((float) Math.max(word.bounds.getMinX(), word.bounds.getMaxX()));
+					float wCenterX = ((float) ((word.bounds.getMinX() + word.bounds.getMaxX()) / 2));
+					if ((lwCenterX < wMaxX) && (lwCenterX > wMinX)) { /* last word center Y inside word height (turned by 90°) */ }
+					else if ((wCenterX < lwMaxX) && (wCenterX > lwMinX)) { /* word center Y inside last word height (turned by 90°) */ }
+					else {
+						lastWord = word;
+						if (DEBUG_JOIN_WORDS) System.out.println(" --> different lines");
+						continue;
+					}
+				}
+				
 				//	compute cut word box, depending on font direction
 				Rectangle2D.Float cutWordBox;
 				if (word.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION)

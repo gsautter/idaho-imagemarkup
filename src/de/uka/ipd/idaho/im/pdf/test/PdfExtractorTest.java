@@ -430,11 +430,14 @@ public class PdfExtractorTest implements ImagingConstants {
 		//	some more problematic Zootaxa
 //		pdfName = "Zootaxa/zt00001.pdf"; // strange image bounds on pages 2, 3, 5, 6, and 8 ==> now adjusting figure bounds if figure is upside down or right side left
 //		pdfName = "Zootaxa/zt00020.pdf"; // same problem, same fix
-		pdfName = "Zootaxa/zt00094.pdf"; // same problem, same fix
+//		pdfName = "Zootaxa/zt00094.pdf"; // same problem, same fix
+		
+		//	some weird word left-right flip-overs
+		pdfName = "29875.pdf"; // TODO word misplacements, e.g. in pages 14 and 20
 		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
-		aimAtPage = -1; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
+		aimAtPage = 20; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
 		//	TODO try pages 12, 13, 16, 17, and 21 of Prasse 1979
 		System.out.println("Aiming at page " + aimAtPage);
 		final PdfExtractor pdfExtractor = new PdfExtractor(pdfDataPath, pis, true);
