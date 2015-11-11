@@ -948,21 +948,27 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				if (pData[p].words[w].str.matches("[0-9]{1,3}(\\.[0-9]{3})+\\,[0-9]+")) {
 					thousandDotCount++;
 					decimalCommaCount++;
+					spm.setInfo("  thousand dot & decimal comma in " + pData[p].words[w].str + " (page " + p + ")");
 				}
 				
 				//	as well as thousand commas ...
 				else if (pData[p].words[w].str.matches("[0-9]{1,3}(\\,[0-9]{3})+\\.[0-9]+")) {
 					thousandCommaCount++;
 					decimalDotCount++;
+					spm.setInfo("  thousand comma & decimal dot in " + pData[p].words[w].str + " (page " + p + ")");
 				}
 				
 				//	count decimal dots ...
-				else if (pData[p].words[w].str.matches(".*[0-9]\\.[0-9]+"))
+				else if (pData[p].words[w].str.matches(".*[0-9]\\.[0-9]+")) {
 					decimalDotCount++;
+					spm.setInfo("  decimal dot in " + pData[p].words[w].str + " (page " + p + ")");
+				}
 				
 				//	as well as decimal commas ...
-				else if (pData[p].words[w].str.matches(".*[0-9]\\,[0-9]+"))
+				else if (pData[p].words[w].str.matches(".*[0-9]\\,[0-9]+")) {
 					decimalCommaCount++;
+					spm.setInfo("  decimal comma in " + pData[p].words[w].str + " (page " + p + ")");
+				}
 			}
 		}
 		spm.setInfo("Found " + decimalDotCount + " decimal dots and " + decimalCommaCount + " decimal commas");
@@ -975,14 +981,62 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		spm.setMaxProgress(40);
 		final Tokenizer numberTokenizer;
 		if ((decimalDotCount > thousandDotCount) && (decimalDotCount > decimalCommaCount)) {
-			if (thousandCommaCount == 0)
-				numberTokenizer = new RegExTokenizer("((([1-9][0-9]*)|0)(\\.[0-9]+)?)|\\,|\\.");
-			else numberTokenizer = new RegExTokenizer("((([1-9][0-9\\,]*)|0)(\\.[0-9]+)?)|\\,|\\.");
+			if ((thousandCommaCount == 0) && (decimalCommaCount == 0))
+				numberTokenizer = new RegExTokenizer(
+						"(" +
+							"(" +
+								"([1-9][0-9]*)" +
+								"|" +
+								"0" +
+							")" +
+							"(\\.[0-9]+)?" +
+						")" +
+						"|\\,|\\.");
+			else numberTokenizer = new RegExTokenizer(
+					"(" +
+						"(" +
+							"(" +
+								"[1-9]" +
+								"(" +
+									"[0-9]" +
+									"|" +
+									"(\\,[0-9]{3})" +
+								")*" +
+							")" +
+							"|" +
+							"0" +
+						")" +
+						"(\\.[0-9]+)?" +
+					")|\\,|\\.");
 		}
 		else if ((decimalCommaCount > thousandCommaCount) && (decimalCommaCount > decimalDotCount)) {
-			if (thousandDotCount == 0)
-				numberTokenizer = new RegExTokenizer("((([1-9][0-9]*)|0)(\\,[0-9]+)?)|\\.|\\,");
-			else numberTokenizer = new RegExTokenizer("((([1-9][0-9\\.]*)|0)(\\,[0-9]+)?)|\\.|\\,");
+			if ((thousandDotCount == 0) && (decimalDotCount == 0))
+				numberTokenizer = new RegExTokenizer(
+						"(" +
+							"(" +
+								"([1-9][0-9]*)" +
+								"|" +
+								"0" +
+							")" +
+							"(\\,[0-9]+)?" +
+						")" +
+						"|\\.|\\,");
+			else numberTokenizer = new RegExTokenizer(
+					"(" +
+						"(" +
+							"(" +
+								"[1-9]" +
+								"(" +
+									"[0-9]" +
+									"|" +
+									"(\\.[0-9]{3})" +
+								")*" +
+							")" +
+							"|" +
+							"0)" +
+						"(\\,[0-9]+)?" +
+					")" +
+					"|\\.|\\,");
 		}
 		else numberTokenizer = tokenizer;
 		pf = new ParallelFor() {
