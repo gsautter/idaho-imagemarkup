@@ -3038,7 +3038,10 @@ FontName12 38//SID–, FD FontName
 			if (glyph instanceof SimpleGlyphDataTrueType)
 				runFontTrueTypeOps(((SimpleGlyphDataTrueType) glyph), false, otrs[c], false);
 			else runFontTrueTypeOps(((CompoundGlyphDataTrueType) glyph), glyphsByIndex, otrs[c], false);
-			if (DEBUG_TRUE_TYPE_LOADING) System.out.println("     --> " + otrs[c].minX + " < X < " + otrs[c].maxX);
+			if (DEBUG_TRUE_TYPE_LOADING) {
+				System.out.println("     --> " + otrs[c].minX + " < X < " + otrs[c].maxX);
+				System.out.println("     --> " + otrs[c].minY + " < Y < " + otrs[c].maxY);
+			}
 			maxDescent = Math.min(maxDescent, otrs[c].minY);
 			maxCapHeight = Math.max(maxCapHeight, otrs[c].maxY);
 		}
@@ -3718,14 +3721,22 @@ FontName12 38//SID–, FD FontName
 			if ((flags & 1) == 0) {
 				arg1 = readUnsigned(glyfBytes, glyfByteOffset, (glyfByteOffset+1));
 				glyfByteOffset += 1;
+				if (arg1 > 127)
+					arg1 -= 256;
 				arg2 = readUnsigned(glyfBytes, glyfByteOffset, (glyfByteOffset+1));
 				glyfByteOffset += 1;
+				if (arg2 > 127)
+					arg2 -= 256;
 			}
 			else {
 				arg1 = readUnsigned(glyfBytes, glyfByteOffset, (glyfByteOffset+2));
 				glyfByteOffset += 2;
+				if (arg1 > 32768)
+					arg1 -= 65536;
 				arg2 = readUnsigned(glyfBytes, glyfByteOffset, (glyfByteOffset+2));
 				glyfByteOffset += 2;
+				if (arg2 > 32768)
+					arg2 -= 65536;
 			}
 			if (DEBUG_TRUE_TYPE_LOADING) System.out.println("       - arguments are " + arg1 + " and " + arg2);
 			
@@ -3959,7 +3970,7 @@ FontName12 38//SID–, FD FontName
 			this.y += dy;
 			this.minY = Math.min(this.minY, this.y);
 			this.maxY = Math.max(this.maxY, this.y);
-//			System.out.println("Move " + this.id + " to " + dx + "/" + dy + ":");
+//			System.out.println("Move to " + dx + "/" + dy + ":");
 //			System.out.println(" " + this.minX + " < X < " + this.maxX);
 //			System.out.println(" " + this.minY + " < Y < " + this.maxY);
 		}
@@ -3972,7 +3983,7 @@ FontName12 38//SID–, FD FontName
 			this.y = y;
 			this.minY = Math.min(this.minY, this.y);
 			this.maxY = Math.max(this.maxY, this.y);
-//			System.out.println("Move " + this.id + " to " + dx + "/" + dy + ":");
+//			System.out.println("Move abs to " + x + "/" + y + ":");
 //			System.out.println(" " + this.minX + " < X < " + this.maxX);
 //			System.out.println(" " + this.minY + " < Y < " + this.maxY);
 		}
@@ -3988,19 +3999,85 @@ FontName12 38//SID–, FD FontName
 			this.minPaintX = Math.min(this.minPaintX, this.x);
 			this.minPaintY = Math.min(this.minPaintY, this.y);
 			this.mCount++;
-//			System.out.println("Line " + this.id + " to " + dx + "/" + dy + ":");
+//			System.out.println("Line to " + dx + "/" + dy + ":");
 //			System.out.println(" " + this.minX + " < X < " + this.maxX);
 //			System.out.println(" " + this.minY + " < Y < " + this.maxY);
 		}
 		void curveTo(int dx1, int dy1, int dx2, int dy2) {
-			this.lineTo(dx1, dy1);
-			this.lineTo(dx2, dy2);
+			/* simply line to control point if lying inside rectagle spanned
+			 * opened by current position and target point, which is basically
+			 * the case if both deltas have the same direction (signum) in both
+			 * dimensions */
+			if (((dx1 <= 0) == (dx2 <= 0)) && ((dy1 <= 0) == (dy2 <= 0))) {
+				this.lineTo(dx1, dy1);
+				this.lineTo(dx2, dy2);
+			}
+			/* otherwise, compute vertex of parabola and use that, as including
+			 * control point proper in size estimation incurs catastrophic size
+			 * over-estimation on tight turns close to 180° whose control point
+			 * is either way up or way down (formula see below) */
+			else {
+//				float p0x = 0;
+//				float p0y = 0;
+//				float p1x = dx1;
+//				float p1y = dy1;
+				float p2x = (dx1 + dx2);
+				float p2y = (dy1 + dy2);
+				
+//				float p3x = /*p0x + */p2x;
+//				float p3y = /*p0y + */p2y;
+				
+				float tnom = (((/*p0x*/ -/*p1x*/dx1) * (/*p3x*/p2x - (2*/*p1x*/dx1))) + ((/*p0y*/ -/*p1y*/dy1) * (/*p3y*/p2y - (2*/*p1y*/dy1))));
+				float tdenom = (((/*p3x*/p2x * /*p3x*/p2x) - (4 * /*p1x*/dx1 * (/*p3x*/p2x - /*p1x*/dx1))) + ((/*p3y*/p2y * /*p3y*/p2y) - (4 * /*p1y*/dy1 * (/*p3y*/p2y - /*p1y*/dy1))));
+				float t = tnom / tdenom;
+				int vx = Math.round((/*p0x * */(1-t) * (1-t)) + (/*p1x*/dx1 * t * (1-t)) + (p2x * t * t));
+				int vy = Math.round((/*p0y * */(1-t) * (1-t)) + (/*p1y*/dy1 * t * (1-t)) + (p2y * t * t));
+				
+				dx2 = dx2 + (dx1 - vx);
+				dy2 = dy2 + (dy1 - vy);
+				dx1 = vx;
+				dy1 = vy;
+				this.lineTo(dx1, dy1);
+				this.lineTo(dx2, dy2);
+			}
 		}
 		void closePath() {}
 		void closePath(int dx, int dy) {
 			this.lineTo(dx, dy);
 		}
 	}
+	
+	/*
+Formula for Bezier vertex taken from:
+http://math.stackexchange.com/questions/217522/how-do-you-find-the-vertex-of-a-b%C3%A9zier-quadratic-curve
+
+P3 = P0 + P2
+t = ((P0-P1)*(P3-2P1)) / (P3*P3-4P1*(P3-P1))
+P(t) = P0(1-t)^2 + P1t(1-t) + P2t^2
+
+Fixing P1 to (0,0) because we're interested in relative offsets, not absolute positions.
+
+p0x = 0;
+p0y = 0;
+p1x = dx1;
+p1y = dy1;
+p2x = (dx1 + dx2);
+p2y = (dy1 + dy2);
+
+p3x = p0x + p2x;
+p3y = p0y + p2y;
+
+tnom = ((p0x - p1x) * (p3x - (2*p1x))) + ((p0y - p1y) * (p3y - (2*p1y)))
+tdenom = ((p3x * p3x) - (4 * p1x * (p3x - p1x))) + ((p3y * p3y) - (4 * p1y * (p3y - p1y)))
+t = tnom / tdenom
+vx = (p0x * (1-t) * (1-t)) + (p1x * t * (1-t)) + (p2x * t * t);
+vy = (p0y * (1-t) * (1-t)) + (p1y * t * (1-t)) + (p2y * t * t);
+
+dx2 = dx2 + (dx1 - vx);
+dy2 = dy2 + (dy1 - vy);
+dx1 = vx;
+dy1 = vy;
+	 */
 	
 	private static class OpGraphicsTrueType extends OpReceiverTrueType {
 		int minX;

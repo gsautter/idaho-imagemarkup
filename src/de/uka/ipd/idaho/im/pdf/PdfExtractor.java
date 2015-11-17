@@ -3848,17 +3848,23 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						pipAreaSum += ((float) Math.abs(pip.pdfBounds.getWidth() * pip.pdfBounds.getHeight()));
 					}
 					
-					//	combined width of images in page less than 90% of page width, too little for a scan
-					if ((Math.abs(pipMaxX - pipMinX) * 10) < (Math.abs(pData[p].pdfPageBox.getWidth()) * 9))
+					//	combined width of images in page less than 85% of page width, too little for a scan
+					if ((Math.abs(pipMaxX - pipMinX) * 20) < (Math.abs(pData[p].pdfPageBox.getWidth()) * 17)) {
+						spm.setInfo(" ==> Too narrow (" + (pipMaxX - pipMinX) + " of " + Math.abs(pData[p].pdfPageBox.getWidth()) + "), not a scan");
 						pageImageParts[p] = null;
+					}
 					
-					//	combined height of images in page less than 90% of page height, too little for a scan
-					else if ((Math.abs(pipMaxY - pipMinY) * 10) < (Math.abs(pData[p].pdfPageBox.getHeight()) * 9))
+					//	combined height of images in page less than 85% of page height, too little for a scan
+					else if ((Math.abs(pipMaxY - pipMinY) * 20) < (Math.abs(pData[p].pdfPageBox.getHeight()) * 17)) {
+						spm.setInfo(" ==> Too low (" + (pipMaxY - pipMinY) + " of " + Math.abs(pData[p].pdfPageBox.getHeight()) + "), not a scan");
 						pageImageParts[p] = null;
+					}
 					
-					//	combined area of images in page less than 90% of page area, too little for a scan
-					else if ((Math.abs(pipAreaSum) * 10) < (Math.abs(pData[p].pdfPageBox.getWidth() * pData[p].pdfPageBox.getHeight()) * 9))
+					//	combined area of images in page less than 80% of page area, too little for a scan
+					else if ((Math.abs(pipAreaSum) * 10) < (Math.abs(pData[p].pdfPageBox.getWidth() * pData[p].pdfPageBox.getHeight()) * 8)) {
+						spm.setInfo(" ==> Too small (" + pipAreaSum + " of " + Math.abs(pData[p].pdfPageBox.getWidth() * pData[p].pdfPageBox.getHeight()) + "), not a scan");
 						pageImageParts[p] = null;
+					}
 				}
 				else spm.setInfo(" ==> XObject dictionary not found, cannot decode images");
 			}
@@ -3952,11 +3958,11 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				
 				//	one or two leading meta pages
 				if (noImagePageIDs.contains(new Integer(0)) && ((noImagePageIDs.size() == 1) || noImagePageIDs.contains(new Integer(1))))
-					spm.setInfo(" --> ignoring " + noImagePageIDs.size() + " leading meta pages");
+					spm.setInfo(" --> ignoring " + noImagePageIDs.size() + " leading meta page(s)");
 				
 				//	one or two tailing meta pages
 				else if (noImagePageIDs.contains(new Integer(pageImageParts.length - 1)) && ((noImagePageIDs.size() == 1) || noImagePageIDs.contains(new Integer(pageImageParts.length - 2))))
-					spm.setInfo(" --> ignoring " + noImagePageIDs.size() + " tailing meta pages");
+					spm.setInfo(" --> ignoring " + noImagePageIDs.size() + " tailing meta page(s)");
 				
 				//	something else, something weird
 				else throw new IOException("Unable to find images for all pages");
