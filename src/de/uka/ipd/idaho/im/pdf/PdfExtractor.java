@@ -618,6 +618,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		
 		//	decode PStream to image
 		BufferedImage pFigureImage = decodeImage(pdfPage, ((PStream) pFigureData).params, ((PStream) pFigureData).bytes, objects);
+		boolean pFigureImageFromPageImage = false;
 		if (pFigureImage == null) {
 			spm.setInfo("   --> could not decode figure");
 			return null;
@@ -687,6 +688,13 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		
 		//	TODO if we're above 600 DPI, scale down half, third, etc., until at most 600 DPI
 		
+		//	test for blank image only now, as we have all the data for the page image fallback
+		if (this.checkEmptyImage(pFigureImage)) {
+			pFigureImage = this.extractFigureFromPageImage(pdfDoc, p, pdfPageBox, rotate, pFigureDpi, pFigure.bounds);
+			pFigureImageFromPageImage = true;
+			spm.setInfo("     --> blank decoded figure re-rendered as part of page image");
+		}
+		
 		//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
 		BoundingBox pFigureBox = this.getBoundingBox(pFigure.bounds, pdfPageBox, magnification, rotate);
 		spm.setInfo("     - rendering bounds are " + pFigureBox);
@@ -694,14 +702,17 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		Object csObj = PdfParser.dereference(((PStream) pFigureData).params.get("ColorSpace"), objects);
 		if (csObj != null) {
 			spm.setInfo("     - color space is " + csObj.toString());
+			/* If we've used the fallback already, no use doing so again */
+			if (pFigureImageFromPageImage) {}
 			/* If color space is DeviceCMYK, render page image to figure
 			 * resolution and cut out image: images with color space
 			 * DeviceCMYK come out somewhat differently colored than in
 			 * Acrobat, but we cannot seem to do anything about this -
 			 * IcePDF distorts them as well, if more in single image
 			 * rendering than in the page images it generates. */
-			if ("DeviceCMYK".equals(csObj.toString())) {
-				pFigureImage = extractFigureFromPageImage(pdfDoc, p, pdfPageBox, rotate, pFigureDpi, pFigure.bounds);
+			else if ("DeviceCMYK".equals(csObj.toString())) {
+				pFigureImage = this.extractFigureFromPageImage(pdfDoc, p, pdfPageBox, rotate, pFigureDpi, pFigure.bounds);
+				pFigureImageFromPageImage = true;
 				spm.setInfo("     --> figure re-rendered as part of page image");
 			}
 			/* If color space is Separation, values represent color
@@ -712,13 +723,15 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			 * rather than the other way around, so we have to do the
 			 * correction ourselves. */
 			else if ((csObj instanceof Vector) && (((Vector) csObj).size() == 4) && ((Vector) csObj).get(0).equals("Separation")) {
-				invertFigureBrightness(pFigureImage);
+				this.invertFigureBrightness(pFigureImage);
+				pFigureImageFromPageImage = true;
 				spm.setInfo("     --> figure brightness inverted for additive 'Separation' color space");
 			}
 			/* If color space is Indexed, IcePDF seems to do a lot better
 			 * in page image rendering than in single-image rendering. */
 			else if ((csObj instanceof Vector) && (((Vector) csObj).size() == 4) && ((Vector) csObj).get(0).equals("Indexed")) {
-				pFigureImage = extractFigureFromPageImage(pdfDoc, p, pdfPageBox, rotate, pFigureDpi, pFigure.bounds);
+				pFigureImage = this.extractFigureFromPageImage(pdfDoc, p, pdfPageBox, rotate, pFigureDpi, pFigure.bounds);
+				pFigureImageFromPageImage = true;
 				spm.setInfo("     --> figure re-rendered as part of page image");
 			}
 		}
@@ -4681,6 +4694,18 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				return Color.BLACK;
 			}
 		}
+	}
+	
+	private boolean checkEmptyImage(BufferedImage bi) {
+		if ((bi.getWidth() == 0) || (bi.getHeight() == 0))
+			return true;
+		int topLeftRgb = bi.getRGB(0, 0);
+		for (int c = 0; c < bi.getWidth(); c++)
+			for (int r = 0; r < bi.getHeight(); r++) {
+				if (bi.getRGB(c, r) != topLeftRgb)
+					return false;
+			}
+		return true;
 	}
 	
 	private BoundingBox getBoundingBox(Rectangle2D bounds, Rectangle2D.Float pageBounds, float magnification, int rotate) {

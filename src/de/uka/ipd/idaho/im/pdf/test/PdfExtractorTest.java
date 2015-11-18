@@ -432,12 +432,13 @@ public class PdfExtractorTest implements ImagingConstants {
 //		pdfName = "Zootaxa/zt00020.pdf"; // same problem, same fix
 //		pdfName = "Zootaxa/zt00094.pdf"; // same problem, same fix
 		
-		//	strange font mis-decodings
-		pdfName = "423_436_Schwendiger-1.pdf"; // TODO some char on page 8 makes glyph rendering so small that it incurs mis-decodings
+		//	figure problems
+		pdfName = "390-715-1-PB.pdf"; // TODO supplements for figures on page 3 come up blank ==> found "Unsupported color conversion request"
+		
 		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
-		aimAtPage = -1; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
+		aimAtPage = 3; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
 		//	TODO try pages 12, 13, 16, 17, and 21 of Prasse 1979
 		System.out.println("Aiming at page " + aimAtPage);
 		final PdfExtractor pdfExtractor = new PdfExtractor(pdfDataPath, pis, true);
