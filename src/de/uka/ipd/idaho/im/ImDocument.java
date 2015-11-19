@@ -43,6 +43,7 @@ import de.uka.ipd.idaho.gamta.AttributeUtils;
 import de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
+import de.uka.ipd.idaho.gamta.util.imaging.PageImageInputStream;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImageSource;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImageStore;
 import de.uka.ipd.idaho.im.util.ImUtils;
@@ -418,6 +419,18 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	public PageImage getPageImage(int pageId) throws IOException {
 		PageImage pi = ((this.pageImageSource == null) ? null : this.pageImageSource.getPageImage(this.docId,  pageId));
 		return ((pi == null) ? PageImage.getPageImage(this.docId, pageId) : pi);
+	}
+	
+	/**
+	 * Retrieve the image of a particular page from the source associated with
+	 * this Image Markup document. If no dedicated page image source is present,
+	 * the general sources of page images will be consulted.
+	 * @return pageId the ID of the page whose image to retrieve
+	 * @return the image of the page with the argument ID
+	 */
+	public PageImageInputStream getPageImageAsStream(int pageId) throws IOException {
+		PageImageInputStream piis = ((this.pageImageSource == null) ? null : this.pageImageSource.getPageImageAsStream(this.docId,  pageId));
+		return ((piis == null) ? PageImage.getPageImageAsStream(this.docId, pageId) : piis);
 	}
 	
 	/**

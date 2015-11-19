@@ -774,6 +774,8 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		return ((textStreamHeads.length == nonDeletedTextStreamHeads.size()) ? textStreamHeads : ((ImWord[]) nonDeletedTextStreamHeads.toArray(new ImWord[nonDeletedTextStreamHeads.size()])));
 	}
 	
+	//	TODO add constructor signature taking a firstPageId and lastPageId argument
+	
 	/**
 	 * Constructor wrapping selected logical text streams of an Image Markup
 	 * document.

@@ -31,6 +31,7 @@ import de.uka.ipd.idaho.gamta.Attributed;
 import de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
+import de.uka.ipd.idaho.gamta.util.imaging.PageImageInputStream;
 
 /**
  * A layout related object in an image markup document. If a layout object is
@@ -139,6 +140,21 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 		catch (Exception e) {
 			e.printStackTrace(System.out);
 			return PageImage.getPageImage(this.getDocument().docId, this.pageId);
+		}
+	}
+	
+	/**
+	 * Retrieve an input stream of an image of the page this layout object lies
+	 * in.
+	 * @return an image of the page this layout object lies in
+	 */
+	public PageImageInputStream getImageAsStream() {
+		try {
+			return this.getDocument().getPageImageAsStream(this.pageId);
+		}
+		catch (Exception e) {
+			e.printStackTrace(System.out);
+			return PageImage.getPageImageAsStream(this.getDocument().docId, this.pageId);
 		}
 	}
 	
