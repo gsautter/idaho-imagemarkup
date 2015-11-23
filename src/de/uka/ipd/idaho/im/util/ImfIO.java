@@ -116,19 +116,45 @@ import de.uka.ipd.idaho.stringUtils.csvHandler.StringTupel;
  */
 public class ImfIO implements ImagingConstants {
 	
-	/* TODO
-- add "entries.csv" to IMFs, keeping MD5 checksum and create and update user and timestamp for each entry
---> helps with only sending delta to server on update
-- rename ImfIO to ImFileIO
-- create ImFile to implement above change tracking, basically wrapping ImfIO loading behavior in dedicated object
-  - provide storeTo() methods (with stream or file argument)
-  - provide storeChangesTo() method (with stream argument) for server upload
-
-- consider storing content of pages (regions and words) in pageContent.<pageId>.csv files instead of regions.csv and words.csv
---> allows for loading only some page range ImDocument instead of whole document (very helpful in GG Imagine Online), even if annotations still have to reside in single CSV
-==> then, don't do the latter, as the two tables differ considerably ...
-==> ... but do use, and version, words.<pageId>.csv
+	/**
+	 * Load an image markup document. If the argument file is an actual file,
+	 * this method assumes it to be a zipped-up Image Markup File. If the file
+	 * is a folder, however, this method assumes it to be an already un-zipped
+	 * Image Markup File.
+	 * @param file the file to load from
+	 * @return an image markup document representing the content of the
+	 *            argument stream.
+	 * @throws IOException
 	 */
+	public static ImDocument loadDocument(File file) throws IOException {
+		return loadDocument(file, null);
+	}
+	
+	/**
+	 * Load an image markup document. If the argument file is an actual file,
+	 * this method assumes it to be a zipped-up Image Markup File. If the file
+	 * is a folder, however, this method assumes it to be an already un-zipped
+	 * Image Markup File.
+	 * @param in the input stream to load from
+	 * @param pm a progress monitor to observe the loading process
+	 * @return an image markup document representing the content of the
+	 *            argument stream.
+	 * @throws IOException
+	 */
+	public static ImDocument loadDocument(File file, ProgressMonitor pm) throws IOException {
+		
+		//	assume folder to be un-zipped IMF
+		if (file.isDirectory())
+			return loadDocument(null, file, pm, -1);
+		
+		//	assume file to be zipped-up IMF
+		else {
+			FileInputStream fis = new FileInputStream(file);
+			ImDocument doc = loadDocument(fis, null, pm, ((int) file.length()));
+			fis.close();
+			return doc;
+		}
+	}
 	
 	/**
 	 * Load an image markup document.
@@ -214,7 +240,7 @@ public class ImfIO implements ImagingConstants {
 			pm = ProgressMonitor.dummy;
 		
 		//	make reading observable if we know how many bytes to expect
-		if (inLength != -1) {
+		if ((in != null) && (inLength != -1)) {
 			final ProgressMonitor fpm = pm;
 			final int fInLength = (inLength / 100);
 			in = new FilterInputStream(in) {
@@ -247,42 +273,46 @@ public class ImfIO implements ImagingConstants {
 			};
 		}
 		
-		//	get ready to unzip
-		ZipInputStream zin = new ZipInputStream(in);
-		
 		//	cache (in memory or on disc)
 		final HashMap cache = ((cacheFolder == null) ? new HashMap() : null);
 		
-		//	read and cache archive contents
-		pm.setStep("Un-zipping & caching archive");
-		pm.setBaseProgress(0);
-		pm.setMaxProgress(50);
-		for (ZipEntry ze; (ze = zin.getNextEntry()) != null;) {
-			String zen = ze.getName();
-			pm.setInfo(zen);
-			OutputStream cacheOut;
+		//	un-zip data from input stream
+		if (in != null) {
 			
-			//	we do have a cache folder
-			if (cache == null) {
-				File cacheFile = new File(cacheFolder, zen);
-				cacheFile.getParentFile().mkdirs();
-				cacheFile.createNewFile();
-				cacheOut = new BufferedOutputStream(new FileOutputStream(cacheFile));
+			//	get ready to unzip
+			ZipInputStream zin = new ZipInputStream(in);
+			
+			//	read and cache archive contents
+			pm.setStep("Un-zipping & caching archive");
+			pm.setBaseProgress(0);
+			pm.setMaxProgress(50);
+			for (ZipEntry ze; (ze = zin.getNextEntry()) != null;) {
+				String zen = ze.getName();
+				pm.setInfo(zen);
+				OutputStream cacheOut;
+				
+				//	we do have a cache folder
+				if (cache == null) {
+					File cacheFile = new File(cacheFolder, zen);
+					cacheFile.getParentFile().mkdirs();
+					cacheFile.createNewFile();
+					cacheOut = new BufferedOutputStream(new FileOutputStream(cacheFile));
+				}
+				
+				//	we have to use in memory caching
+				else cacheOut = new ByteArrayOutputStream();
+				
+				//	cache entry
+				byte[] buffer = new byte[1024];
+				for (int r; (r = zin.read(buffer, 0, buffer.length)) != -1;)
+					cacheOut.write(buffer, 0, r);
+				cacheOut.flush();
+				cacheOut.close();
+				
+				//	add to in memory cache
+				if (cache != null)
+					cache.put(zen, ((ByteArrayOutputStream) cacheOut).toByteArray());
 			}
-			
-			//	we have to use in memory caching
-			else cacheOut = new ByteArrayOutputStream();
-			
-			//	cache entry
-			byte[] buffer = new byte[1024];
-			for (int r; (r = zin.read(buffer, 0, buffer.length)) != -1;)
-				cacheOut.write(buffer, 0, r);
-			cacheOut.flush();
-			cacheOut.close();
-			
-			//	add to in memory cache
-			if (cache != null)
-				cache.put(zen, ((ByteArrayOutputStream) cacheOut).toByteArray());
 		}
 		
 		//	read document meta data
@@ -297,7 +327,8 @@ public class ImfIO implements ImagingConstants {
 		if (docId == null)
 			throw new IOException("Invalid image markup data: document ID missing");
 		//	TODO_later load orientation
-		ImDocument doc = new ImDocument(docId);
+//		ImDocument doc = new ImDocument(docId);
+		ImfIoDocument doc = new ImfIoDocument(docId);
 		setAttributes(doc, docData.getValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE));
 		
 		//	read fonts (if any)
@@ -343,7 +374,8 @@ public class ImfIO implements ImagingConstants {
 				StringTupel pageImageData = pageImagesData.get(p);
 				int piPageId = Integer.parseInt(pageImageData.getValue(ImObject.PAGE_ID_ATTRIBUTE));
 				String piAttributes = pageImageData.getValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE);
-				pageImageAttributesById.put(new Integer(piPageId), piAttributes);
+//				pageImageAttributesById.put(new Integer(piPageId), piAttributes);
+				pageImageAttributesById.put(new Integer(piPageId), new PageImageAttributes(piAttributes));
 			}
 		} catch (IOException ioe) { /* we might be faced with the old way ... */ }
 		
@@ -363,18 +395,9 @@ public class ImfIO implements ImagingConstants {
 			ImPage page = new ImPage(doc, pageId, bounds); // constructor adds page to document automatically
 			setAttributes(page, pageData.getValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, ""));
 //			System.out.println("Added page " + page.pageId + " with bounds " + bounds.toString());
-			String piAttributes = ((String) pageImageAttributesById.get(new Integer(pageId)));
-			if (piAttributes == null)
-				continue;
-			String[] piAttributeNameValuePairs = piAttributes.split("[\\<\\>]");
-			for (int a = 0; a < (piAttributeNameValuePairs.length-1); a+= 2) {
-				if ("originalDpi".equals(piAttributeNameValuePairs[a]))
-					page.setImageDPI(Integer.parseInt(piAttributeNameValuePairs[a+1]));
-				else if ("currentDpi".equals(piAttributeNameValuePairs[a])) {
-					page.setImageDPI(Integer.parseInt(piAttributeNameValuePairs[a+1]));
-					break;
-				}
-			}
+			PageImageAttributes pia = ((PageImageAttributes) pageImageAttributesById.get(new Integer(pageId)));
+			if (pia != null)
+				page.setImageDPI(pia.currentDpi);
 		}
 		
 		//	read words (first add words, then chain them and set attributes, as they might not be stored in stream order)
@@ -478,32 +501,40 @@ public class ImfIO implements ImagingConstants {
 				final String sfn = (sid + "." + smt.substring(smt.lastIndexOf('/') + "/".length()));
 				pm.setInfo(sfn);
 				ImSupplement supplement;
+//				if (ImSupplement.SOURCE_TYPE.equals(st))
+//					supplement = new ImSupplement.Source(doc, smt) {
+//						public InputStream getInputStream() throws IOException {
+//							return ImfIO.getInputStream(sfn, cache, cacheFolder);
+//						}
+//					};
+//				else if (ImSupplement.SCAN_TYPE.equals(st))
+//					supplement = new ImSupplement.Scan(doc, smt) {
+//						public InputStream getInputStream() throws IOException {
+//							return ImfIO.getInputStream(sfn, cache, cacheFolder);
+//						}
+//					};
+//				else if (ImSupplement.FIGURE_TYPE.equals(st))
+//					supplement = new ImSupplement.Figure(doc, smt) {
+//						public InputStream getInputStream() throws IOException {
+//							return ImfIO.getInputStream(sfn, cache, cacheFolder);
+//						}
+//					};
+//				else supplement = new ImSupplement(doc, st, smt) {
+//					public String getId() {
+//						return sid;
+//					}
+//					public InputStream getInputStream() throws IOException {
+//						return ImfIO.getInputStream(sfn, cache, cacheFolder);
+//					}
+//				};
 				if (ImSupplement.SOURCE_TYPE.equals(st))
-					supplement = new ImSupplement.Source(doc, smt) {
-						public InputStream getInputStream() throws IOException {
-							return ImfIO.getInputStream(sfn, cache, cacheFolder);
-						}
-					};
+					supplement = new ImfIoSourceSupplement(doc, smt);
 				else if (ImSupplement.SCAN_TYPE.equals(st))
-					supplement = new ImSupplement.Scan(doc, smt) {
-						public InputStream getInputStream() throws IOException {
-							return ImfIO.getInputStream(sfn, cache, cacheFolder);
-						}
-					};
+					supplement = new ImfIoScanSupplement(doc, smt);
 				else if (ImSupplement.FIGURE_TYPE.equals(st))
-					supplement = new ImSupplement.Figure(doc, smt) {
-						public InputStream getInputStream() throws IOException {
-							return ImfIO.getInputStream(sfn, cache, cacheFolder);
-						}
-					};
-				else supplement = new ImSupplement(doc, st, smt) {
-					public String getId() {
-						return sid;
-					}
-					public InputStream getInputStream() throws IOException {
-						return ImfIO.getInputStream(sfn, cache, cacheFolder);
-					}
-				};
+					supplement = new ImfIoFigureSupplement(doc, smt);
+				else supplement = new ImfIoPlainSupplement(doc, st, smt, sid);
+				((ImfIoSupplement) supplement).setDataSource(sfn, cache, cacheFolder);
 				setAttributes(supplement, supplementData.getValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, ""));
 				doc.addSupplement(supplement);
 			}
@@ -513,118 +544,281 @@ public class ImfIO implements ImagingConstants {
 		pm.setStep("Creating page image source");
 		pm.setBaseProgress(99);
 		pm.setMaxProgress(100);
-		PageImageSource pis = new AbstractPageImageStore() {
-			public boolean isPageImageAvailable(String name) {
-				if (!name.startsWith(docId))
-					return false;
-				name = ("page" + name.substring(docId.length() + ".".length()) + "." + IMAGE_FORMAT);
-				if (cache == null) {
-					File pif = new File(cacheFolder, name);
-					return pif.exists();
-				}
-				else return cache.containsKey(name);
-			}
-			public PageImageInputStream getPageImageAsStream(String name) throws IOException {
-				if (!name.startsWith(docId))
-					return null;
-				String piPageIdStr = name.substring(docId.length() + ".".length());
-				name = ("page" + piPageIdStr + "." + IMAGE_FORMAT);
-				return this.getPageImageInputStream(getInputStream(name, cache, cacheFolder), piPageIdStr);
-			}
-			private PageImageInputStream getPageImageInputStream(InputStream in, String piPageIdStr) throws IOException {
-				
-				//	test for PNG byte order mark
-				PeekInputStream peekIn = new PeekInputStream(in, pngSignature.length);
-				
-				//	this one's the old way
-				if (!peekIn.startsWith(pngSignature))
-					return new PageImageInputStream(peekIn, this);
-				
-				//	get attribute string
-				String piAttributes = ((String) pageImageAttributesById.get(new Integer(piPageIdStr)));
-				if (piAttributes == null) {
-					peekIn.close();
-					throw new FileNotFoundException("page" + piPageIdStr + "." + IMAGE_FORMAT);
-				}
-				
-				//	initialize attributes, edges with default values
-				int originalWidth = -1;
-				int originalHeight = -1;
-				int originalDpi = -1;
-				int currentDpi = -1;
-				int leftEdge = 0;
-				int rightEdge = 0;
-				int topEdge = 0;
-				int bottomEdge = 0;
-				
-				//	read attribute string
-				String[] piAttributeNameValuePairs = piAttributes.split("[\\<\\>]");
-				for (int a = 0; a < (piAttributeNameValuePairs.length-1); a+= 2) {
-					if ("originalWidth".equals(piAttributeNameValuePairs[a]))
-						originalWidth = Integer.parseInt(piAttributeNameValuePairs[a+1]);
-					else if ("originalHeight".equals(piAttributeNameValuePairs[a]))
-						originalHeight = Integer.parseInt(piAttributeNameValuePairs[a+1]);
-					else if ("originalDpi".equals(piAttributeNameValuePairs[a]))
-						originalDpi = Integer.parseInt(piAttributeNameValuePairs[a+1]);
-					else if ("currentDpi".equals(piAttributeNameValuePairs[a]))
-						currentDpi = Integer.parseInt(piAttributeNameValuePairs[a+1]);
-					else if ("leftEdge".equals(piAttributeNameValuePairs[a]))
-						leftEdge = Integer.parseInt(piAttributeNameValuePairs[a+1]);
-					else if ("rightEdge".equals(piAttributeNameValuePairs[a]))
-						rightEdge = Integer.parseInt(piAttributeNameValuePairs[a+1]);
-					else if ("topEdge".equals(piAttributeNameValuePairs[a]))
-						topEdge = Integer.parseInt(piAttributeNameValuePairs[a+1]);
-					else if ("bottomEdge".equals(piAttributeNameValuePairs[a]))
-						bottomEdge = Integer.parseInt(piAttributeNameValuePairs[a+1]);
-				}
-				
-				//	default current DPI to original DPI if not given explicitly
-				if (currentDpi == -1)
-					currentDpi = originalDpi;
-				
-				//	wrap attribute values in byte array
-				byte[] piAttributeBytes = {
-					((byte) ((originalWidth / 256))),
-					((byte) ((originalWidth & 255))),
-					((byte) ((originalHeight / 256))),
-					((byte) ((originalHeight & 255))),
-					((byte) ((originalDpi / 256))),
-					((byte) ((originalDpi & 255))),
-					((byte) ((currentDpi / 256))),
-					((byte) ((currentDpi & 255))),
-					((byte) ((leftEdge / 256))),
-					((byte) ((leftEdge & 255))),
-					((byte) ((rightEdge / 256))),
-					((byte) ((rightEdge & 255))),
-					((byte) ((topEdge / 256))),
-					((byte) ((topEdge & 255))),
-					((byte) ((bottomEdge / 256))),
-					((byte) ((bottomEdge & 255))),
-				};
-				
-				//	prepend attribute bytes to image data
-				return new PageImageInputStream(new SequenceInputStream(new ByteArrayInputStream(piAttributeBytes), peekIn), this);
-			}
-			public boolean storePageImage(String name, PageImage pageImage) throws IOException {
-				if (!name.startsWith(docId))
-					return false;
-				String piPageIdStr = name.substring(docId.length() + ".".length());
-				name = ("page" + piPageIdStr + "." + IMAGE_FORMAT);
-				OutputStream out = getOutputStream(name, cache, cacheFolder);
-				pageImage.writeImage(out);
-				out.close();
-				pageImageAttributesById.put(new Integer(piPageIdStr), getPageImageAttributes(pageImage));
-				return true;
-			}
-			public int getPriority() {
-				return 10; // we only want page images for one document, but those we really do want
-			}
-		};
-//		PageImage.addPageImageSource(pis);
-		doc.setPageImageSource(pis);
+		doc.setPageImageSource(new ImfIoPageImageStore(docId, cache, cacheFolder, pageImageAttributesById));
 		
 		//	finally ...
 		return doc;
+	}
+	
+	private static class ImfIoDocument extends ImDocument {
+		ImfIoPageImageStore imfIoPis;
+		ImfIoDocument(String docId) {
+			super(docId);
+		}
+		public void setPageImageSource(PageImageSource pis) {
+			super.setPageImageSource(pis);
+			this.imfIoPis = ((pis instanceof ImfIoPageImageStore) ? ((ImfIoPageImageStore) pis) : null);
+		}
+	}
+	
+	/* THIS IS REALLY UGLY ... but hard to do otherwise as Java just won't
+	 * allow multiple inheritance ... */
+	private static interface ImfIoSupplement {
+		public abstract void setDataSource(String fileName, HashMap cache, File cacheFolder);
+		public abstract File getDataCacheFolder();
+	}
+	private static class ImfIoSourceSupplement extends ImSupplement.Source implements ImfIoSupplement {
+		ImfIoSourceSupplement(ImDocument doc, String mimeType) {
+			super(doc, mimeType);
+		}
+		private String fileName;
+		private HashMap cache;
+		private File cacheFolder;
+		public void setDataSource(String fileName, HashMap cache, File cacheFolder) {
+			this.fileName = fileName;
+			this.cache = cache;
+			this.cacheFolder = cacheFolder;
+		}
+		public File getDataCacheFolder() {
+			return this.cacheFolder;
+		}
+		public InputStream getInputStream() throws IOException {
+			return ImfIO.getInputStream(this.fileName, this.cache, this.cacheFolder);
+		}
+	}
+	private static class ImfIoScanSupplement extends ImSupplement.Scan implements ImfIoSupplement {
+		ImfIoScanSupplement(ImDocument doc, String mimeType) {
+			super(doc, mimeType);
+		}
+		private String fileName;
+		private HashMap cache;
+		private File cacheFolder;
+		public void setDataSource(String fileName, HashMap cache, File cacheFolder) {
+			this.fileName = fileName;
+			this.cache = cache;
+			this.cacheFolder = cacheFolder;
+		}
+		public File getDataCacheFolder() {
+			return this.cacheFolder;
+		}
+		public InputStream getInputStream() throws IOException {
+			return ImfIO.getInputStream(this.fileName, this.cache, this.cacheFolder);
+		}
+	}
+	private static class ImfIoFigureSupplement extends ImSupplement.Figure implements ImfIoSupplement {
+		ImfIoFigureSupplement(ImDocument doc, String mimeType) {
+			super(doc, mimeType);
+		}
+		private String fileName;
+		private HashMap cache;
+		private File cacheFolder;
+		public void setDataSource(String fileName, HashMap cache, File cacheFolder) {
+			this.fileName = fileName;
+			this.cache = cache;
+			this.cacheFolder = cacheFolder;
+		}
+		public File getDataCacheFolder() {
+			return this.cacheFolder;
+		}
+		public InputStream getInputStream() throws IOException {
+			return ImfIO.getInputStream(this.fileName, this.cache, this.cacheFolder);
+		}
+	}
+	private static class ImfIoPlainSupplement extends ImSupplement implements ImfIoSupplement {
+		private String id;
+		ImfIoPlainSupplement(ImDocument doc, String type, String mimeType, String id) {
+			super(doc, type, mimeType);
+			this.id = id;
+		}
+		public String getId() {
+			return this.id;
+		}
+		private String fileName;
+		private HashMap cache;
+		private File cacheFolder;
+		public void setDataSource(String fileName, HashMap cache, File cacheFolder) {
+			this.fileName = fileName;
+			this.cache = cache;
+			this.cacheFolder = cacheFolder;
+		}
+		public File getDataCacheFolder() {
+			return this.cacheFolder;
+		}
+		public InputStream getInputStream() throws IOException {
+			return ImfIO.getInputStream(this.fileName, this.cache, this.cacheFolder);
+		}
+	}
+	
+	private static class ImfIoPageImageStore extends AbstractPageImageStore {
+		final String docId;
+		final HashMap cache;
+		final File cacheFolder;
+		final HashMap pageImageAttributesById;
+		ImfIoPageImageStore(String docId, HashMap cache, File cacheFolder, HashMap pageImageAttributesById) {
+			this.docId = docId;
+			this.cache = cache;
+			this.cacheFolder = cacheFolder;
+			this.pageImageAttributesById = pageImageAttributesById;
+		}
+		public boolean isPageImageAvailable(String name) {
+			if (!name.startsWith(this.docId))
+				return false;
+			name = ("page" + name.substring(this.docId.length() + ".".length()) + "." + IMAGE_FORMAT);
+			if (this.cache == null) {
+				File pif = new File(this.cacheFolder, name);
+				return pif.exists();
+			}
+			else return cache.containsKey(name);
+		}
+		public PageImageInputStream getPageImageAsStream(String name) throws IOException {
+			if (!name.startsWith(this.docId))
+				return null;
+			String piPageIdStr = name.substring(this.docId.length() + ".".length());
+			name = ("page" + piPageIdStr + "." + IMAGE_FORMAT);
+			return this.getPageImageInputStream(getInputStream(name, cache, cacheFolder), piPageIdStr);
+		}
+		private PageImageInputStream getPageImageInputStream(InputStream in, String piPageIdStr) throws IOException {
+			
+			//	test for PNG byte order mark
+			PeekInputStream peekIn = new PeekInputStream(in, pngSignature.length);
+			
+			//	this one's the old way
+			if (!peekIn.startsWith(pngSignature)) {
+				PageImageInputStream piis = new PageImageInputStream(peekIn, this);
+				return piis;
+			}
+			
+			//	get attributes TODO consider parsing on demand, saving effort with large documents of which only an excerpt is used
+			PageImageAttributes piAttributes = this.getPageImageAttributes(new Integer(piPageIdStr));
+			if (piAttributes == null) {
+				peekIn.close();
+				throw new FileNotFoundException("page" + piPageIdStr + "." + IMAGE_FORMAT);
+			}
+			
+			//	wrap and return page image input stream
+			return piAttributes.wrap(peekIn, this);
+		}
+		public boolean storePageImage(String name, PageImage pageImage) throws IOException {
+			if (!name.startsWith(this.docId))
+				return false;
+			String piPageIdStr = name.substring(this.docId.length() + ".".length());
+			name = ("page" + piPageIdStr + "." + IMAGE_FORMAT);
+			OutputStream out = getOutputStream(name, this.cache, this.cacheFolder);
+			pageImage.writeImage(out);
+			out.close();
+			Integer pageId = new Integer(piPageIdStr);
+			PageImageAttributes piAttributes = this.getPageImageAttributes(pageId);
+			if (piAttributes == null) {
+				piAttributes = new PageImageAttributes(pageImage);
+				this.pageImageAttributesById.put(pageId, piAttributes);
+			}
+			else piAttributes.updateAttributes(pageImage);
+			return true;
+		}
+		public int getPriority() {
+			return 10; // we only want page images for one document, but those we really do want
+		}
+		PageImageAttributes getPageImageAttributes(Integer pageId) {
+			return ((PageImageAttributes) this.pageImageAttributesById.get(pageId));
+		}
+	};
+	
+	private static class PageImageAttributes {
+		int originalWidth = -1;
+		int originalHeight = -1;
+		int originalDpi = -1;
+		int currentDpi = -1;
+		int leftEdge = 0;
+		int rightEdge = 0;
+		int topEdge = 0;
+		int bottomEdge = 0;
+		byte[] piAttributeBytes = new byte[16];
+		PageImageAttributes(String piAttributes) {
+			
+			//	read attribute string
+			String[] piAttributeNameValuePairs = piAttributes.split("[\\<\\>]");
+			for (int a = 0; a < (piAttributeNameValuePairs.length-1); a+= 2) {
+				if ("originalWidth".equals(piAttributeNameValuePairs[a]))
+					this.originalWidth = Integer.parseInt(piAttributeNameValuePairs[a+1]);
+				else if ("originalHeight".equals(piAttributeNameValuePairs[a]))
+					this.originalHeight = Integer.parseInt(piAttributeNameValuePairs[a+1]);
+				else if ("originalDpi".equals(piAttributeNameValuePairs[a]))
+					this.originalDpi = Integer.parseInt(piAttributeNameValuePairs[a+1]);
+				else if ("currentDpi".equals(piAttributeNameValuePairs[a]))
+					this.currentDpi = Integer.parseInt(piAttributeNameValuePairs[a+1]);
+				else if ("leftEdge".equals(piAttributeNameValuePairs[a]))
+					this.leftEdge = Integer.parseInt(piAttributeNameValuePairs[a+1]);
+				else if ("rightEdge".equals(piAttributeNameValuePairs[a]))
+					this.rightEdge = Integer.parseInt(piAttributeNameValuePairs[a+1]);
+				else if ("topEdge".equals(piAttributeNameValuePairs[a]))
+					this.topEdge = Integer.parseInt(piAttributeNameValuePairs[a+1]);
+				else if ("bottomEdge".equals(piAttributeNameValuePairs[a]))
+					this.bottomEdge = Integer.parseInt(piAttributeNameValuePairs[a+1]);
+			}
+			
+			//	default current DPI to original DPI if not given explicitly
+			if (this.currentDpi == -1)
+				this.currentDpi = this.originalDpi;
+			
+			//	wrap attribute values in byte array
+			this.updateAttributeBytes();
+		}
+		
+		PageImageAttributes(PageImage pi) {
+			this.updateAttributes(pi);
+		}
+		
+		void updateAttributes(PageImage pi) {
+			this.originalWidth = pi.originalWidth;
+			this.originalHeight = pi.originalHeight;
+			this.originalDpi = pi.originalDpi;
+			this.currentDpi = pi.currentDpi;
+			this.leftEdge = pi.leftEdge;
+			this.rightEdge = pi.rightEdge;
+			this.topEdge = pi.topEdge;
+			this.bottomEdge = pi.bottomEdge;
+			this.updateAttributeBytes();
+		}
+		private void updateAttributeBytes() {
+			this.piAttributeBytes[0] = ((byte) ((this.originalWidth / 256)));
+			this.piAttributeBytes[1] = ((byte) ((this.originalWidth & 255)));
+			this.piAttributeBytes[2] = ((byte) ((this.originalHeight / 256)));
+			this.piAttributeBytes[3] = ((byte) ((this.originalHeight & 255)));
+			this.piAttributeBytes[4] = ((byte) ((this.originalDpi / 256)));
+			this.piAttributeBytes[5] = ((byte) ((this.originalDpi & 255)));
+			this.piAttributeBytes[6] = ((byte) ((this.currentDpi / 256)));
+			this.piAttributeBytes[7] = ((byte) ((this.currentDpi & 255)));
+			this.piAttributeBytes[8] = ((byte) ((this.leftEdge / 256)));
+			this.piAttributeBytes[9] = ((byte) ((this.leftEdge & 255)));
+			this.piAttributeBytes[10] = ((byte) ((this.rightEdge / 256)));
+			this.piAttributeBytes[11] = ((byte) ((this.rightEdge & 255)));
+			this.piAttributeBytes[12] = ((byte) ((this.topEdge / 256)));
+			this.piAttributeBytes[13] = ((byte) ((this.topEdge & 255)));
+			this.piAttributeBytes[14] = ((byte) ((this.bottomEdge / 256)));
+			this.piAttributeBytes[15] = ((byte) ((this.bottomEdge & 255)));
+		}
+		
+		PageImageInputStream wrap(InputStream in, PageImageSource pis) throws IOException {
+			return new PageImageInputStream(new SequenceInputStream(new ByteArrayInputStream(this.piAttributeBytes), in), pis);
+		}
+		
+		String toAttributeString() {
+			StringBuffer piAttributes = new StringBuffer();
+			piAttributes.append("originalWidth<" + this.originalWidth + ">");
+			piAttributes.append("originalHeight<" + this.originalHeight + ">");
+			piAttributes.append("originalDpi<" + this.originalDpi + ">");
+			if (this.currentDpi != this.originalDpi)
+				piAttributes.append("currentDpi<" + this.currentDpi + ">");
+			if (this.leftEdge != 0)
+				piAttributes.append("leftEdge<" + this.leftEdge + ">");
+			if (this.rightEdge != 0)
+				piAttributes.append("rightEdge<" + this.rightEdge + ">");
+			if (this.topEdge != 0)
+				piAttributes.append("topEdge<" + this.topEdge + ">");
+			if (this.bottomEdge != 0)
+				piAttributes.append("bottomEdge<" + this.bottomEdge + ">");
+			return piAttributes.toString();
+		}
 	}
 	
 	/* we need to hard-code the first byte 0x89 ('‰' on ISO-8859) converts
@@ -640,15 +834,68 @@ public class ImfIO implements ImagingConstants {
 		else throw new FileNotFoundException(name);
 	}
 	
-	private static OutputStream getOutputStream(final String name, final HashMap cache, File cacheFolder) throws IOException {
-		if (cache == null)
-			return new BufferedOutputStream(new FileOutputStream(new File(cacheFolder, name)));
+	private static OutputStream getOutputStream(final String name, final HashMap cache, final File cacheFolder) throws IOException {
+		if (cache == null) {
+			final File newFile = new File(cacheFolder, (name + ".new"));
+			return new BufferedOutputStream(new FileOutputStream(newFile) {
+				public void close() throws IOException {
+					super.close();
+					File exFile = new File(cacheFolder, name);
+					if (exFile.exists())
+						exFile.renameTo(new File(cacheFolder, (name + "." + System.currentTimeMillis() + ".old")));
+					newFile.renameTo(new File(cacheFolder, name));
+				}
+			});
+		}
 		else return new ByteArrayOutputStream() {
 			public void close() throws IOException {
 				super.close();
 				cache.put(name, this.toByteArray());
 			}
 		};
+	}
+	
+	/**
+	 * Store an image markup document to a file. If the argument file is an
+	 * actual file, this method zips up the document and stores it in that
+	 * file. If the argument file actually is a folder, on the other hand, this
+	 * method does not zip up the individual entries, but stores them in the
+	 * argument folder as individual files. If the argument file does not
+	 * exist, it is created and treated as a file.
+	 * @param doc the image markup document to store.
+	 * @param file the file or folder to store the document to
+	 * @throws IOException
+	 */
+	public static void storeDocument(ImDocument doc, File file) throws IOException {
+		storeDocument(doc, file, null);
+	}
+	
+	/**
+	 * Store an image markup document to a file. If the argument file is an
+	 * actual file, this method zips up the document and stores it in that
+	 * file. If the argument file actually is a folder, on the other hand, this
+	 * method does not zip up the individual entries, but stores them in the
+	 * argument folder as individual files. If the argument file does not
+	 * exist, it is created and treated as a file.
+	 * @param doc the image markup document to store.
+	 * @param file the file or folder to store the document to
+	 * @param pm a progress monitor to observe the storage process
+	 * @throws IOException
+	 */
+	public static void storeDocument(ImDocument doc, File file, ProgressMonitor pm) throws IOException {
+		
+		//	file does not exist, create it as a file
+		if (!file.exists()) {
+			file.getAbsoluteFile().getParentFile().mkdirs();
+			file.createNewFile();
+		}
+		
+		//	we have a directory, store document without zipping
+		if (file.isDirectory())
+			storeDocument(doc, null, file, pm);
+		
+		//	we have an actual file (maybe of our own creation), zip up document
+		else storeDocument(doc, new BufferedOutputStream(new FileOutputStream(file)), pm);
 	}
 	
 	/**
@@ -671,14 +918,18 @@ public class ImfIO implements ImagingConstants {
 	 * @throws IOException
 	 */
 	public static void storeDocument(ImDocument doc, OutputStream out, ProgressMonitor pm) throws IOException {
+		storeDocument(doc, out, null, pm);
+	}
+	
+	private static void storeDocument(ImDocument doc, OutputStream out, File folder, ProgressMonitor pm) throws IOException {
 		
 		//	check progress monitor
 		if (pm == null)
 			pm = ProgressMonitor.dummy;
 		
 		//	get ready to zip
-		ZipOutputStream zout = new ZipOutputStream(out);
-		BufferedWriter zbw = new BufferedWriter(new OutputStreamWriter(zout, "UTF-8"));
+		ZipOutputStream zout = ((out == null) ? null : new ZipOutputStream(out));
+		BufferedWriter zbw;
 		StringVector keys = new StringVector();
 		
 		//	store document meta data
@@ -692,10 +943,9 @@ public class ImfIO implements ImagingConstants {
 		docsData.addElement(docData);
 		keys.clear();
 		keys.parseAndAddElements((DOCUMENT_ID_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zout.putNextEntry(new ZipEntry("document.csv"));
+		zbw = getWriter(zout, folder, "document.csv");
 		StringRelation.writeCsvData(zbw, docsData, keys);
-		zbw.flush();
-		zout.closeEntry();
+		zbw.close();
 		
 		//	assemble data for pages, words, and regions
 		pm.setStep("Collecting pages, regions, and words");
@@ -752,10 +1002,9 @@ public class ImfIO implements ImagingConstants {
 		pm.setMaxProgress(12);
 		keys.clear();
 		keys.parseAndAddElements((PAGE_ID_ATTRIBUTE + ";" + BOUNDING_BOX_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zout.putNextEntry(new ZipEntry("pages.csv"));
+		zbw = getWriter(zout, folder, "pages.csv");
 		StringRelation.writeCsvData(zbw, pagesData, keys);
-		zbw.flush();
-		zout.closeEntry();
+		zbw.close();
 		
 		//	store words
 		pm.setStep("Storing word data");
@@ -763,10 +1012,9 @@ public class ImfIO implements ImagingConstants {
 		pm.setMaxProgress(18);
 		keys.clear();
 		keys.parseAndAddElements((PAGE_ID_ATTRIBUTE + ";" + BOUNDING_BOX_ATTRIBUTE + ";" + STRING_ATTRIBUTE + ";" + ImWord.PREVIOUS_WORD_ATTRIBUTE + ";" + ImWord.NEXT_WORD_ATTRIBUTE + ";" + ImWord.NEXT_RELATION_ATTRIBUTE + ";" + ImWord.TEXT_STREAM_TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zout.putNextEntry(new ZipEntry("words.csv"));
+		zbw = getWriter(zout, folder, "words.csv");
 		StringRelation.writeCsvData(zbw, wordsData, keys);
-		zbw.flush();
-		zout.closeEntry();
+		zbw.close();
 		
 		//	store regions
 		pm.setStep("Storing region data");
@@ -774,10 +1022,9 @@ public class ImfIO implements ImagingConstants {
 		pm.setMaxProgress(20);
 		keys.clear();
 		keys.parseAndAddElements((PAGE_ID_ATTRIBUTE + ";" + BOUNDING_BOX_ATTRIBUTE + ";" + TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zout.putNextEntry(new ZipEntry("regions.csv"));
+		zbw = getWriter(zout, folder, "regions.csv");
 		StringRelation.writeCsvData(zbw, regsData, keys);
-		zbw.flush();
-		zout.closeEntry();
+		zbw.close();
 		
 		//	store annotations
 		pm.setStep("Storing annotation data");
@@ -796,10 +1043,9 @@ public class ImfIO implements ImagingConstants {
 		}
 		keys.clear();
 		keys.parseAndAddElements((ImAnnotation.FIRST_WORD_ATTRIBUTE + ";" + ImAnnotation.LAST_WORD_ATTRIBUTE + ";" + TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zout.putNextEntry(new ZipEntry("annotations.csv"));
+		zbw = getWriter(zout, folder, "annotations.csv");
 		StringRelation.writeCsvData(zbw, annotsData, keys);
-		zbw.flush();
-		zout.closeEntry();
+		zbw.close();
 		
 		//	store fonts (if any)
 		pm.setStep("Storing font data");
@@ -833,10 +1079,9 @@ public class ImfIO implements ImagingConstants {
 		}
 		keys.clear();
 		keys.parseAndAddElements((ImFont.NAME_ATTRIBUTE + ";" + ImFont.STYLE_ATTRIBUTE + ";" + ImFont.CHARACTER_ID_ATTRIBUTE + ";" + ImFont.CHARACTER_STRING_ATTRIBUTE + ";" + ImFont.CHARACTER_IMAGE_ATTRIBUTE), ";");
-		zout.putNextEntry(new ZipEntry("fonts.csv"));
+		zbw = getWriter(zout, folder, "fonts.csv");
 		StringRelation.writeCsvData(zbw, fontsData, keys);
-		zbw.flush();
-		zout.closeEntry();
+		zbw.close();
 		
 		//	store page images
 		pm.setStep("Storing page images");
@@ -846,17 +1091,41 @@ public class ImfIO implements ImagingConstants {
 		for (int p = 0; p < pages.length; p++) {
 			pm.setInfo("Page " + p);
 			pm.setProgress((p * 100) / pages.length);
+			String piAttributes;
 			
-			PageImage pi = pages[p].getPageImage();
-			String piName = PageImage.getPageImageName(doc.docId, pages[p].pageId);
-			piName = ("page" + piName.substring(doc.docId.length() + ".".length()) + "." + IMAGE_FORMAT);
-			zout.putNextEntry(new ZipEntry(piName));
-			pi.writeImage(zout);
-			zout.closeEntry();
+			/* we have to write the page image proper if
+			 * - we're zipping up the document
+			 * - the document was loaded via other facilities
+			 * - the page image store has changed
+			 * - the document was loaded from its zipped-up form
+			 * - the document was loaded from a different folder */
+			if ((folder == null) || !(doc instanceof ImfIoDocument) || (((ImfIoDocument) doc).imfIoPis == null) || (((ImfIoDocument) doc).imfIoPis.cacheFolder == null) || !folder.equals(((ImfIoDocument) doc).imfIoPis.cacheFolder)) {
+				PageImageInputStream piis = pages[p].getPageImageAsStream();
+				piAttributes = getPageImageAttributes(piis);
+				String piName = PageImage.getPageImageName(doc.docId, pages[p].pageId);
+				piName = ("page" + piName.substring(doc.docId.length() + ".".length()) + "." + IMAGE_FORMAT);
+				OutputStream piOut = getOutputStream(zout, folder, piName);
+				byte[] pib = new byte[1024];
+				for (int r; (r = piis.read(pib, 0, pib.length)) != -1;)
+					piOut.write(pib, 0, r);
+				piOut.close();
+				piis.close();
+			}
+			
+			//	otherwise, we only have to get the attributes
+			else {
+				PageImageAttributes pia = ((ImfIoDocument) doc).imfIoPis.getPageImageAttributes(new Integer(pages[p].pageId));
+				if (pia == null) {
+					PageImageInputStream piis = pages[p].getPageImageAsStream();
+					piAttributes = getPageImageAttributes(piis);
+					piis.close();
+				}
+				else piAttributes = pia.toAttributeString();
+			}
 			
 			StringTupel piData = new StringTupel();
 			piData.setValue(ImObject.PAGE_ID_ATTRIBUTE, ("" + pages[p].pageId));
-			piData.setValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, getPageImageAttributes(pi));
+			piData.setValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, piAttributes);
 			pageImagesData.addElement(piData);
 		}
 		
@@ -866,10 +1135,9 @@ public class ImfIO implements ImagingConstants {
 		pm.setMaxProgress(80);
 		keys.clear();
 		keys.parseAndAddElements((ImObject.PAGE_ID_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zout.putNextEntry(new ZipEntry("pageImages.csv"));
+		zbw = getWriter(zout, folder, "pageImages.csv");
 		StringRelation.writeCsvData(zbw, pageImagesData, keys);
-		zbw.flush();
-		zout.closeEntry();
+		zbw.close();
 		
 		//	store meta data of supplements
 		pm.setStep("Storing supplement data");
@@ -887,10 +1155,9 @@ public class ImfIO implements ImagingConstants {
 		}
 		keys.clear();
 		keys.parseAndAddElements((ImSupplement.ID_ATTRIBUTE + ";" + ImSupplement.TYPE_ATTRIBUTE + ";" + ImSupplement.MIME_TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zout.putNextEntry(new ZipEntry("supplements.csv"));
+		zbw = getWriter(zout, folder, "supplements.csv");
 		StringRelation.writeCsvData(zbw, supplementsData, keys);
-		zbw.flush();
-		zout.closeEntry();
+		zbw.close();
 		
 		//	store supplements proper
 		pm.setStep("Storing supplements");
@@ -898,21 +1165,64 @@ public class ImfIO implements ImagingConstants {
 		pm.setMaxProgress(100);
 		for (int s = 0; s < supplements.length; s++) {
 			pm.setProgress((s * 100) / supplements.length);
-			InputStream sdis = supplements[s].getInputStream();
 			String smt = supplements[s].getMimeType();
 			String sfn = (supplements[s].getId() + "." + smt.substring(smt.lastIndexOf('/') + "/".length()));
 			pm.setInfo("Supplement " + sfn);
-			zout.putNextEntry(new ZipEntry(sfn));
-			byte[] sdb = new byte[1024];
-			for (int r; (r = sdis.read(sdb, 0, sdb.length)) != -1;)
-				zout.write(sdb, 0, r);
-			zout.closeEntry();
+			
+			/* we have to write the supplement proper if
+			 * - we're zipping up the document
+			 * - the document was loaded via other facilities
+			 * - the document was loaded from its zipped-up form
+			 * - the document was loaded from a different folder */
+			if ((folder == null) || !(supplements[s] instanceof ImfIoSupplement) || !folder.equals(((ImfIoSupplement) supplements[s]).getDataCacheFolder())) {
+				InputStream sdIn = supplements[s].getInputStream();
+				OutputStream sdOut = getOutputStream(zout, folder, sfn);
+				byte[] sdb = new byte[1024];
+				for (int r; (r = sdIn.read(sdb, 0, sdb.length)) != -1;)
+					sdOut.write(sdb, 0, r);
+				sdOut.close();
+				sdIn.close();
+			}
 		}
 		
 		//	finally
 		pm.setProgress(100);
-		zout.flush();
-		zout.close();
+		if (zout != null) {
+			zout.flush();
+			zout.close();
+		}
+	}
+	
+	private static OutputStream getOutputStream(final ZipOutputStream zout, final File folder, final String name) throws IOException {
+		if (zout == null) {
+			final File newFile = new File(folder, (name + ".new"));
+			return new BufferedOutputStream(new FileOutputStream(newFile) {
+				private File exFile = new File(folder, name);
+				public void close() throws IOException {
+					if (this.exFile == null)
+						return;
+					super.flush();
+					super.close();
+					if (this.exFile.exists())
+						this.exFile.renameTo(new File(folder, (name + "." + System.currentTimeMillis() + ".old")));
+					this.exFile = null;
+					newFile.renameTo(new File(folder, name));
+				}
+			});
+		}
+		else {
+			zout.putNextEntry(new ZipEntry(name));
+			return new BufferedOutputStream(zout) {
+				public void close() throws IOException {
+					super.flush();
+					zout.closeEntry();
+				}
+			};
+		}
+	}
+	
+	private static BufferedWriter getWriter(final ZipOutputStream zout, final File folder, final String name) throws IOException {
+		return new BufferedWriter(new OutputStreamWriter(getOutputStream(zout, folder, name), "UTF-8"));
 	}
 	
 	private static String getAttributesString(ImObject imo) {
@@ -945,21 +1255,21 @@ public class ImfIO implements ImagingConstants {
 		return escapedString.toString();
 	}
 	
-	private static String getPageImageAttributes(PageImage pi) {
+	private static String getPageImageAttributes(PageImageInputStream piis) {
 		StringBuffer piAttributes = new StringBuffer();
-		piAttributes.append("originalWidth<" + pi.originalWidth + ">");
-		piAttributes.append("originalHeight<" + pi.originalHeight + ">");
-		piAttributes.append("originalDpi<" + pi.originalDpi + ">");
-		if (pi.currentDpi != pi.originalDpi)
-			piAttributes.append("currentDpi<" + pi.currentDpi + ">");
-		if (pi.leftEdge != 0)
-			piAttributes.append("leftEdge<" + pi.leftEdge + ">");
-		if (pi.rightEdge != 0)
-			piAttributes.append("rightEdge<" + pi.rightEdge + ">");
-		if (pi.topEdge != 0)
-			piAttributes.append("topEdge<" + pi.topEdge + ">");
-		if (pi.bottomEdge != 0)
-			piAttributes.append("bottomEdge<" + pi.bottomEdge + ">");
+		piAttributes.append("originalWidth<" + piis.originalWidth + ">");
+		piAttributes.append("originalHeight<" + piis.originalHeight + ">");
+		piAttributes.append("originalDpi<" + piis.originalDpi + ">");
+		if (piis.currentDpi != piis.originalDpi)
+			piAttributes.append("currentDpi<" + piis.currentDpi + ">");
+		if (piis.leftEdge != 0)
+			piAttributes.append("leftEdge<" + piis.leftEdge + ">");
+		if (piis.rightEdge != 0)
+			piAttributes.append("rightEdge<" + piis.rightEdge + ">");
+		if (piis.topEdge != 0)
+			piAttributes.append("topEdge<" + piis.topEdge + ">");
+		if (piis.bottomEdge != 0)
+			piAttributes.append("bottomEdge<" + piis.bottomEdge + ">");
 		return piAttributes.toString();
 	}
 	
@@ -1016,22 +1326,19 @@ public class ImfIO implements ImagingConstants {
 //	 */
 //	public static void main(String[] args) throws Exception {
 //		final File baseFolder = new File("E:/Testdaten/PdfExtract/");
-//		final String pdfName = "dikow_2012.pdf";
+//		final String pdfName = "zt00872.pdf";
 //		
-//		ImDocument imDoc = loadDocument(new FileInputStream(new File(baseFolder, (pdfName + ".imf"))));
-//		ImPage[] imPages = imDoc.getPages();
-//		System.out.println("Document loaded, got " + imPages.length + " pages");
-//		for (int p = 0; p < imPages.length; p++) {
-//			ImWord[] imWords = imPages[p].getWords();
-//			System.out.println(" - got " + imWords.length + " words in page " + p);
-//			PageImage pi = PageImage.getPageImage(imDoc.docId, imPages[p].pageId);
-//			System.out.println(" - got page image, size is " + pi.image.getWidth() + "x" + pi.image.getHeight());
-//		}
+////		ImDocument imDoc = loadDocument(new FileInputStream(new File(baseFolder, (pdfName + ".imf"))));
+//		ImDocument imDoc = loadDocument(new File(baseFolder, (pdfName + ".new.imd")));
+////		
+////		File imFile = new File(baseFolder, (pdfName + ".new.imf"));
+////		OutputStream imOut = new BufferedOutputStream(new FileOutputStream(imFile));
+////		storeDocument(imDoc, imOut);
+////		imOut.flush();
+////		imOut.close();
 //		
-//		File imFile = new File(baseFolder, (pdfName + ".new.imf"));
-//		OutputStream imOut = new BufferedOutputStream(new FileOutputStream(imFile));
-//		storeDocument(imDoc, imOut);
-//		imOut.flush();
-//		imOut.close();
+//		File imFolder = new File(baseFolder, (pdfName + ".new.imd"));
+//		imFolder.mkdirs();
+//		storeDocument(imDoc, imFolder);
 //	}
 }

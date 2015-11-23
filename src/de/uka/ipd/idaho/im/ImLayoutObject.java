@@ -148,7 +148,7 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 	 * in.
 	 * @return an image of the page this layout object lies in
 	 */
-	public PageImageInputStream getImageAsStream() {
+	public PageImageInputStream getPageImageAsStream() {
 		try {
 			return this.getDocument().getPageImageAsStream(this.pageId);
 		}
