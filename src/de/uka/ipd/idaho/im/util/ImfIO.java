@@ -29,6 +29,7 @@ package de.uka.ipd.idaho.im.util;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
+import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -43,13 +44,20 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.SequenceInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.LinkedList;
+import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
 import de.uka.ipd.idaho.easyIO.streams.PeekInputStream;
+import de.uka.ipd.idaho.easyIO.util.RandomByteSource;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
@@ -117,6 +125,112 @@ import de.uka.ipd.idaho.stringUtils.csvHandler.StringTupel;
 public class ImfIO implements ImagingConstants {
 	
 	/**
+	 * Metadata of a single entry in an IMF, to allow differential updates of
+	 * documents stored in folders.
+	 * 
+	 * @author sautter
+	 */
+	public static class ImfEntry implements Comparable {
+		
+		/** the name of the entry, e.g. 'document.csv' */
+		public final String name;
+		
+		/** the time the entry was last modified */
+		public final long updateTime;
+		
+		/** the MD5 hash of the entry data */
+		public final String dataHash;
+		
+		private final String fileName;
+		
+		/**
+		 * @param name
+		 * @param updateTime
+		 * @param dataHash
+		 */
+		public ImfEntry(String name, long updateTime, String dataHash) {
+			this.name = name;
+			this.updateTime = updateTime;
+			this.dataHash = dataHash;
+			if (name.lastIndexOf('.') == -1)
+				this.fileName = (this.name + "." + this.dataHash);
+			else this.fileName = (this.name.substring(0, this.name.lastIndexOf('.')) + "." + this.dataHash + this.name.substring(this.name.lastIndexOf('.')));
+		}
+		
+		/**
+		 * @param file
+		 */
+		public ImfEntry(File file) {
+			this(file.getName(), file.lastModified());
+		}
+		
+		/**
+		 * @param name
+		 * @param updateTime
+		 * @param dataHash
+		 */
+		public ImfEntry(ZipEntry ze) {
+			this(ze.getName(), ze.getTime());
+		}
+		
+		private ImfEntry(String fileName, long updateTime) {
+			String[] fileNameParts = fileName.split("\\.");
+			if (fileNameParts.length < 2)
+				throw new IllegalArgumentException("Illegal name+hash string '" + fileName + "'");
+			if (updateTime < 1)
+				throw new IllegalArgumentException("Illegal update time " + updateTime + " in IMF Entry '" + fileName + "'");
+			this.updateTime = updateTime;
+			if (fileNameParts.length == 2) {
+				this.name = fileNameParts[0];
+				this.dataHash = fileNameParts[1];
+			}
+			else {
+				StringBuffer name = new StringBuffer();
+				for (int p = 0; p < fileNameParts.length; p++)
+					if (p != (fileNameParts.length - 2)) {
+						if (p != 0)
+							name.append('.');
+						name.append(fileNameParts[p]);
+					}
+				this.name = name.toString();
+				this.dataHash = fileNameParts[fileNameParts.length - 2];
+			}
+			this.fileName = fileName;
+		}
+		
+		/**
+		 * Create the name of a file to store this IMF Entry on persistent
+		 * storage. The returned file name takes the form '&lt;nameLessFileExtension&gt;.
+		 * &lt;dataHash&gt;.&lt;fileExtension&gt;'.
+		 * @return the file name for the IMF Entry
+		 */
+		public String getFileName() {
+			return this.fileName;
+		}
+		
+		/**
+		 * Convert the IMF Entry into a tab separated string for listing. The
+		 * returned string has the form '&lt;name&gt; &lt;updateTime&gt; 
+		 * &lt;dataHash&gt;'.
+		 * @return a tab separated string representation of the IMF Entry
+		 */
+		public String toTabString() {
+			return (this.name + "\t" + this.updateTime + "\t" + this.dataHash);
+		}
+		
+		/**
+		 * Compares this IMF entry to another one based on the names, sorting
+		 * in case sensitive lexicographical order.
+		 * @param obj the IMF entry to compare this one to
+		 * @return the comparison result
+		 * @see java.lang.Comparable#compareTo(java.lang.Object)
+		 */
+		public int compareTo(Object obj) {
+			return ((obj instanceof ImfEntry) ? this.name.compareTo(((ImfEntry) obj).name) : -1);
+		}
+	}
+	
+	/**
 	 * Load an image markup document. If the argument file is an actual file,
 	 * this method assumes it to be a zipped-up Image Markup File. If the file
 	 * is a folder, however, this method assumes it to be an already un-zipped
@@ -145,12 +259,12 @@ public class ImfIO implements ImagingConstants {
 		
 		//	assume folder to be un-zipped IMF
 		if (file.isDirectory())
-			return loadDocument(null, file, pm, -1);
+			return loadDocument(null, -1, null, file, pm);
 		
 		//	assume file to be zipped-up IMF
 		else {
 			FileInputStream fis = new FileInputStream(file);
-			ImDocument doc = loadDocument(fis, null, pm, ((int) file.length()));
+			ImDocument doc = loadDocument(fis, ((int) file.length()), null, null, pm);
 			fis.close();
 			return doc;
 		}
@@ -202,7 +316,7 @@ public class ImfIO implements ImagingConstants {
 	 *            argument stream.
 	 * @throws IOException
 	 */
-	public static ImDocument loadDocument(InputStream in, final File cacheFolder) throws IOException {
+	public static ImDocument loadDocument(InputStream in, File cacheFolder) throws IOException {
 		return loadDocument(in, cacheFolder, null, -1);
 	}
 	
@@ -217,7 +331,7 @@ public class ImfIO implements ImagingConstants {
 	 *            argument stream.
 	 * @throws IOException
 	 */
-	public static ImDocument loadDocument(InputStream in, final File cacheFolder, ProgressMonitor pm) throws IOException {
+	public static ImDocument loadDocument(InputStream in, File cacheFolder, ProgressMonitor pm) throws IOException {
 		return loadDocument(in, cacheFolder, pm, -1);
 	}
 	
@@ -233,7 +347,11 @@ public class ImfIO implements ImagingConstants {
 	 *            argument stream.
 	 * @throws IOException
 	 */
-	public static ImDocument loadDocument(InputStream in, final File cacheFolder, ProgressMonitor pm, int inLength) throws IOException {
+	public static ImDocument loadDocument(InputStream in, File cacheFolder, ProgressMonitor pm, int inLength) throws IOException {
+		return loadDocument(in, inLength, cacheFolder, null, pm);
+	}
+	
+	private static ImDocument loadDocument(InputStream in, int inLength, final File cacheFolder, File folder, ProgressMonitor pm) throws IOException {
 		
 		//	check progress monitor
 		if (pm == null)
@@ -274,7 +392,20 @@ public class ImfIO implements ImagingConstants {
 		}
 		
 		//	cache (in memory or on disc)
-		final HashMap cache = ((cacheFolder == null) ? new HashMap() : null);
+		final HashMap cache = (((in != null) && (cacheFolder == null)) ? new HashMap() : null);
+		final Map imfEntries = ((folder != null) ? new LinkedHashMap() : null);
+		
+		//	load 'entries.txt' if loading from folder
+		if (folder != null) {
+			BufferedReader imfEntryIn = new BufferedReader(new InputStreamReader(new FileInputStream(new File(folder, "entries.txt")), "UTF-8"));
+			for (String imfEntryLine; (imfEntryLine = imfEntryIn.readLine()) != null;) {
+				String[] imfEntryData = imfEntryLine.split("\\t");
+				if (imfEntryData.length == 3) try {
+					imfEntries.put(imfEntryData[0], new ImfEntry(imfEntryData[0], Long.parseLong(imfEntryData[1]), imfEntryData[2]));
+				} catch (NumberFormatException nfe) {}
+			}
+			imfEntryIn.close();
+		}
 		
 		//	un-zip data from input stream
 		if (in != null) {
@@ -319,7 +450,7 @@ public class ImfIO implements ImagingConstants {
 		pm.setStep("Reading document data");
 		pm.setBaseProgress(50);
 		pm.setMaxProgress(55);
-		InputStream docIn = getInputStream("document.csv", cache, cacheFolder);
+		InputStream docIn = getInputStream("document.csv", cache, cacheFolder, folder, imfEntries);
 		StringRelation docsData = StringRelation.readCsvData(new InputStreamReader(docIn, "UTF-8"), true, null);
 		StringTupel docData = docsData.get(0);
 		final String docId = docData.getValue(DOCUMENT_ID_ATTRIBUTE);
@@ -327,16 +458,23 @@ public class ImfIO implements ImagingConstants {
 		if (docId == null)
 			throw new IOException("Invalid image markup data: document ID missing");
 		//	TODO_later load orientation
-//		ImDocument doc = new ImDocument(docId);
-		ImfIoDocument doc = new ImfIoDocument(docId);
+		final ImfIoDocument doc = new ImfIoDocument(docId);
 		setAttributes(doc, docData.getValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE));
+		if (cache != null)
+			doc.cache = cache;
+		else if (cacheFolder != null)
+			doc.cacheFolder = cacheFolder;
+		else if (folder != null) {
+			doc.folder = folder;
+			doc.imfEntries.putAll(imfEntries);
+		}
 		
 		//	read fonts (if any)
 		pm.setStep("Reading font data");
 		pm.setBaseProgress(55);
 		pm.setMaxProgress(60);
 		try {
-			InputStream fontsIn = getInputStream("fonts.csv", cache, cacheFolder);
+			InputStream fontsIn = doc.getInputStream("fonts.csv");
 			StringRelation fontsData = StringRelation.readCsvData(new InputStreamReader(fontsIn, "UTF-8"), true, null);
 			fontsIn.close();
 			ImFont font = null;
@@ -367,14 +505,13 @@ public class ImfIO implements ImagingConstants {
 			pm.setStep("Reading page image data");
 			pm.setBaseProgress(95);
 			pm.setMaxProgress(99);
-			InputStream pageImagesIn = getInputStream("pageImages.csv", cache, cacheFolder);
+			InputStream pageImagesIn = doc.getInputStream("pageImages.csv");
 			StringRelation pageImagesData = StringRelation.readCsvData(new InputStreamReader(pageImagesIn, "UTF-8"), true, null);
 			pageImagesIn.close();
 			for (int p = 0; p < pageImagesData.size(); p++) {
 				StringTupel pageImageData = pageImagesData.get(p);
 				int piPageId = Integer.parseInt(pageImageData.getValue(ImObject.PAGE_ID_ATTRIBUTE));
 				String piAttributes = pageImageData.getValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE);
-//				pageImageAttributesById.put(new Integer(piPageId), piAttributes);
 				pageImageAttributesById.put(new Integer(piPageId), new PageImageAttributes(piAttributes));
 			}
 		} catch (IOException ioe) { /* we might be faced with the old way ... */ }
@@ -383,7 +520,7 @@ public class ImfIO implements ImagingConstants {
 		pm.setStep("Reading page data");
 		pm.setBaseProgress(60);
 		pm.setMaxProgress(65);
-		InputStream pagesIn = getInputStream("pages.csv", cache, cacheFolder);
+		InputStream pagesIn = doc.getInputStream("pages.csv");
 		StringRelation pagesData = StringRelation.readCsvData(new InputStreamReader(pagesIn, "UTF-8"), true, null);
 		pagesIn.close();
 		pm.setInfo("Adding " + pagesData.size() + " pages");
@@ -394,7 +531,6 @@ public class ImfIO implements ImagingConstants {
 			BoundingBox bounds = BoundingBox.parse(pageData.getValue(BOUNDING_BOX_ATTRIBUTE));
 			ImPage page = new ImPage(doc, pageId, bounds); // constructor adds page to document automatically
 			setAttributes(page, pageData.getValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, ""));
-//			System.out.println("Added page " + page.pageId + " with bounds " + bounds.toString());
 			PageImageAttributes pia = ((PageImageAttributes) pageImageAttributesById.get(new Integer(pageId)));
 			if (pia != null)
 				page.setImageDPI(pia.currentDpi);
@@ -404,7 +540,7 @@ public class ImfIO implements ImagingConstants {
 		pm.setStep("Reading word data");
 		pm.setBaseProgress(65);
 		pm.setMaxProgress(75);
-		InputStream wordsIn = getInputStream("words.csv", cache, cacheFolder);
+		InputStream wordsIn = doc.getInputStream("words.csv");
 		StringRelation wordsData = StringRelation.readCsvData(new InputStreamReader(wordsIn, "UTF-8"), true, null);
 		wordsIn.close();
 		pm.setInfo("Adding " + wordsData.size() + " words");
@@ -414,7 +550,6 @@ public class ImfIO implements ImagingConstants {
 			ImPage page = doc.getPage(Integer.parseInt(wordData.getValue(PAGE_ID_ATTRIBUTE)));
 			BoundingBox bounds = BoundingBox.parse(wordData.getValue(BOUNDING_BOX_ATTRIBUTE));
 			new ImWord(page, bounds, wordData.getValue(STRING_ATTRIBUTE));
-//			System.out.println("Added word '" + wordData.getValue(STRING_ATTRIBUTE) + "' to page " + page.pageId + " at " + bounds.toString());
 		}
 		pm.setStep("Chaining text streams");
 		pm.setBaseProgress(75);
@@ -441,7 +576,7 @@ public class ImfIO implements ImagingConstants {
 		pm.setStep("Reading region data");
 		pm.setBaseProgress(80);
 		pm.setMaxProgress(85);
-		InputStream regsIn = getInputStream("regions.csv", cache, cacheFolder);
+		InputStream regsIn = doc.getInputStream("regions.csv");
 		StringRelation regsData = StringRelation.readCsvData(new InputStreamReader(regsIn, "UTF-8"), true, null);
 		regsIn.close();
 		pm.setInfo("Adding " + regsData.size() + " regions");
@@ -456,7 +591,6 @@ public class ImfIO implements ImagingConstants {
 			ImRegion reg = ((ImRegion) regionsById.get(regId));
 			if (reg == null) {
 				reg = new ImRegion(page, bounds, type);
-//				System.out.println("Added '" + type + "' region to page " + page.pageId + " at " + bounds.toString());
 				regionsById.put(regId, reg);
 			}
 			setAttributes(reg, regData.getValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, ""));
@@ -466,7 +600,7 @@ public class ImfIO implements ImagingConstants {
 		pm.setStep("Reading annotation data");
 		pm.setBaseProgress(85);
 		pm.setMaxProgress(90);
-		InputStream annotsIn = getInputStream("annotations.csv", cache, cacheFolder);
+		InputStream annotsIn = doc.getInputStream("annotations.csv");
 		StringRelation annotsData = StringRelation.readCsvData(new InputStreamReader(annotsIn, "UTF-8"), true, null);
 		annotsIn.close();
 		pm.setInfo("Adding " + annotsData.size() + " annotations");
@@ -488,7 +622,7 @@ public class ImfIO implements ImagingConstants {
 		pm.setBaseProgress(90);
 		pm.setMaxProgress(95);
 		try {
-			InputStream supplementsIn = getInputStream("supplements.csv", cache, cacheFolder);
+			InputStream supplementsIn = doc.getInputStream("supplements.csv");
 			StringRelation supplementsData = StringRelation.readCsvData(new InputStreamReader(supplementsIn, "UTF-8"), true, null);
 			supplementsIn.close();
 			pm.setInfo("Adding " + supplementsData.size() + " supplements");
@@ -501,42 +635,34 @@ public class ImfIO implements ImagingConstants {
 				final String sfn = (sid + "." + smt.substring(smt.lastIndexOf('/') + "/".length()));
 				pm.setInfo(sfn);
 				ImSupplement supplement;
-//				if (ImSupplement.SOURCE_TYPE.equals(st))
-//					supplement = new ImSupplement.Source(doc, smt) {
-//						public InputStream getInputStream() throws IOException {
-//							return ImfIO.getInputStream(sfn, cache, cacheFolder);
-//						}
-//					};
-//				else if (ImSupplement.SCAN_TYPE.equals(st))
-//					supplement = new ImSupplement.Scan(doc, smt) {
-//						public InputStream getInputStream() throws IOException {
-//							return ImfIO.getInputStream(sfn, cache, cacheFolder);
-//						}
-//					};
-//				else if (ImSupplement.FIGURE_TYPE.equals(st))
-//					supplement = new ImSupplement.Figure(doc, smt) {
-//						public InputStream getInputStream() throws IOException {
-//							return ImfIO.getInputStream(sfn, cache, cacheFolder);
-//						}
-//					};
-//				else supplement = new ImSupplement(doc, st, smt) {
-//					public String getId() {
-//						return sid;
-//					}
-//					public InputStream getInputStream() throws IOException {
-//						return ImfIO.getInputStream(sfn, cache, cacheFolder);
-//					}
-//				};
 				if (ImSupplement.SOURCE_TYPE.equals(st))
-					supplement = new ImfIoSourceSupplement(doc, smt);
+					supplement = new ImSupplement.Source(doc, smt) {
+						public InputStream getInputStream() throws IOException {
+							return doc.getInputStream(sfn);
+						}
+					};
 				else if (ImSupplement.SCAN_TYPE.equals(st))
-					supplement = new ImfIoScanSupplement(doc, smt);
+					supplement = new ImSupplement.Scan(doc, smt) {
+						public InputStream getInputStream() throws IOException {
+							return doc.getInputStream(sfn);
+						}
+					};
 				else if (ImSupplement.FIGURE_TYPE.equals(st))
-					supplement = new ImfIoFigureSupplement(doc, smt);
-				else supplement = new ImfIoPlainSupplement(doc, st, smt, sid);
-				((ImfIoSupplement) supplement).setDataSource(sfn, cache, cacheFolder);
+					supplement = new ImSupplement.Figure(doc, smt) {
+						public InputStream getInputStream() throws IOException {
+							return doc.getInputStream(sfn);
+						}
+					};
+				else supplement = new ImSupplement(doc, st, smt) {
+					public String getId() {
+						return sid;
+					}
+					public InputStream getInputStream() throws IOException {
+						return doc.getInputStream(sfn);
+					}
+				};
 				setAttributes(supplement, supplementData.getValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, ""));
-				doc.addSupplement(supplement);
+				doc.addSupplement(supplement, false);
 			}
 		} catch (IOException ioe) { /* we might not have supplements ... */ }
 		
@@ -544,7 +670,11 @@ public class ImfIO implements ImagingConstants {
 		pm.setStep("Creating page image source");
 		pm.setBaseProgress(99);
 		pm.setMaxProgress(100);
-		doc.setPageImageSource(new ImfIoPageImageStore(docId, cache, cacheFolder, pageImageAttributesById));
+		doc.setPageImageSource(new ImfIoPageImageStore(doc, pageImageAttributesById));
+		
+		//	if we're in folder mode, store clean IMF entries
+		if (imfEntries != null)
+			doc.imfEntries.putAll(imfEntries);
 		
 		//	finally ...
 		return doc;
@@ -555,127 +685,98 @@ public class ImfIO implements ImagingConstants {
 		ImfIoDocument(String docId) {
 			super(docId);
 		}
+		
 		public void setPageImageSource(PageImageSource pis) {
 			super.setPageImageSource(pis);
-			this.imfIoPis = ((pis instanceof ImfIoPageImageStore) ? ((ImfIoPageImageStore) pis) : null);
+			this.imfIoPis = (((pis instanceof ImfIoPageImageStore) && (((ImfIoPageImageStore) pis).doc == this)) ? ((ImfIoPageImageStore) pis) : null);
+		}
+		
+		public ImSupplement addSupplement(ImSupplement ims) {
+			return this.addSupplement(ims, true);
+		}
+		ImSupplement addSupplement(ImSupplement ims, boolean isExternal) {
+			if (isExternal) {
+				String smt = ims.getMimeType();
+				String sfn = (ims.getId() + "." + smt.substring(smt.lastIndexOf('/') + "/".length()));
+				this.imfEntries.remove(sfn); // mark supplement as dirty
+			}
+			return super.addSupplement(ims);
+		}
+		ImfEntry getImfEntry(ImSupplement ims) {
+			String smt = ims.getMimeType();
+			String sfn = (ims.getId() + "." + smt.substring(smt.lastIndexOf('/') + "/".length()));
+			ImfEntry imfe = ((ImfEntry) this.imfEntries.get(sfn));
+			if (imfe != null) {
+				File sf = new File(this.folder, imfe.getFileName());
+				return (sf.exists() ? imfe : null);
+			}
+			else return null;
+		}
+		
+		HashMap cache;
+		File cacheFolder;
+		File folder;
+		final Map imfEntries = new HashMap();
+		
+		void bindToFolder(File folder, Map imfEntries) {
+			if (this.cache != null)
+				this.cache.clear();
+			this.cache = null;
+			this.cacheFolder = null;
+			this.folder = folder;
+			this.imfEntries.putAll(imfEntries);
+		}
+		
+		boolean isInputStreamAvailable(String entryName) {
+			
+			//	we're in zip-based im-memory mode
+			if (this.cache != null)
+				return this.cache.containsKey(entryName);
+			
+			//	we're in zip-based folder mode
+			if (this.cacheFolder != null)
+				return (new File(this.cacheFolder, entryName)).exists();
+			
+			//	we're in folder mode
+			if (this.folder != null) {
+				ImfEntry imfe = ((ImfEntry) this.imfEntries.get(entryName));
+				if (imfe == null)
+					return false;
+				else return (new File(this.folder, imfe.getFileName())).exists();
+			}
+			
+			//	whatever went wrong ...
+			return false;
+		}
+		InputStream getInputStream(String entryName) throws IOException {
+			return ImfIO.getInputStream(entryName, this.cache, this.cacheFolder, this.folder, this.imfEntries);
+		}
+		OutputStream getOutputStream(String entryName) throws IOException {
+			return ImfIO.getOutputStream(entryName, this.cache, this.cacheFolder, this.folder, this.imfEntries);
 		}
 	}
 	
-	/* THIS IS REALLY UGLY ... but hard to do otherwise as Java just won't
-	 * allow multiple inheritance ... */
-	private static interface ImfIoSupplement {
-		public abstract void setDataSource(String fileName, HashMap cache, File cacheFolder);
-		public abstract File getDataCacheFolder();
-	}
-	private static class ImfIoSourceSupplement extends ImSupplement.Source implements ImfIoSupplement {
-		ImfIoSourceSupplement(ImDocument doc, String mimeType) {
-			super(doc, mimeType);
-		}
-		private String fileName;
-		private HashMap cache;
-		private File cacheFolder;
-		public void setDataSource(String fileName, HashMap cache, File cacheFolder) {
-			this.fileName = fileName;
-			this.cache = cache;
-			this.cacheFolder = cacheFolder;
-		}
-		public File getDataCacheFolder() {
-			return this.cacheFolder;
-		}
-		public InputStream getInputStream() throws IOException {
-			return ImfIO.getInputStream(this.fileName, this.cache, this.cacheFolder);
-		}
-	}
-	private static class ImfIoScanSupplement extends ImSupplement.Scan implements ImfIoSupplement {
-		ImfIoScanSupplement(ImDocument doc, String mimeType) {
-			super(doc, mimeType);
-		}
-		private String fileName;
-		private HashMap cache;
-		private File cacheFolder;
-		public void setDataSource(String fileName, HashMap cache, File cacheFolder) {
-			this.fileName = fileName;
-			this.cache = cache;
-			this.cacheFolder = cacheFolder;
-		}
-		public File getDataCacheFolder() {
-			return this.cacheFolder;
-		}
-		public InputStream getInputStream() throws IOException {
-			return ImfIO.getInputStream(this.fileName, this.cache, this.cacheFolder);
-		}
-	}
-	private static class ImfIoFigureSupplement extends ImSupplement.Figure implements ImfIoSupplement {
-		ImfIoFigureSupplement(ImDocument doc, String mimeType) {
-			super(doc, mimeType);
-		}
-		private String fileName;
-		private HashMap cache;
-		private File cacheFolder;
-		public void setDataSource(String fileName, HashMap cache, File cacheFolder) {
-			this.fileName = fileName;
-			this.cache = cache;
-			this.cacheFolder = cacheFolder;
-		}
-		public File getDataCacheFolder() {
-			return this.cacheFolder;
-		}
-		public InputStream getInputStream() throws IOException {
-			return ImfIO.getInputStream(this.fileName, this.cache, this.cacheFolder);
-		}
-	}
-	private static class ImfIoPlainSupplement extends ImSupplement implements ImfIoSupplement {
-		private String id;
-		ImfIoPlainSupplement(ImDocument doc, String type, String mimeType, String id) {
-			super(doc, type, mimeType);
-			this.id = id;
-		}
-		public String getId() {
-			return this.id;
-		}
-		private String fileName;
-		private HashMap cache;
-		private File cacheFolder;
-		public void setDataSource(String fileName, HashMap cache, File cacheFolder) {
-			this.fileName = fileName;
-			this.cache = cache;
-			this.cacheFolder = cacheFolder;
-		}
-		public File getDataCacheFolder() {
-			return this.cacheFolder;
-		}
-		public InputStream getInputStream() throws IOException {
-			return ImfIO.getInputStream(this.fileName, this.cache, this.cacheFolder);
-		}
-	}
 	
 	private static class ImfIoPageImageStore extends AbstractPageImageStore {
-		final String docId;
-		final HashMap cache;
-		final File cacheFolder;
+		final ImfIoDocument doc;
 		final HashMap pageImageAttributesById;
-		ImfIoPageImageStore(String docId, HashMap cache, File cacheFolder, HashMap pageImageAttributesById) {
-			this.docId = docId;
-			this.cache = cache;
-			this.cacheFolder = cacheFolder;
+		ImfIoPageImageStore(ImfIoDocument doc, HashMap pageImageAttributesById) {
+			this.doc = doc;
+			this.doc.imfIoPis = this;
 			this.pageImageAttributesById = pageImageAttributesById;
 		}
 		public boolean isPageImageAvailable(String name) {
-			if (!name.startsWith(this.docId))
+			if (!name.startsWith(this.doc.docId))
 				return false;
-			name = ("page" + name.substring(this.docId.length() + ".".length()) + "." + IMAGE_FORMAT);
-			if (this.cache == null) {
-				File pif = new File(this.cacheFolder, name);
-				return pif.exists();
-			}
-			else return cache.containsKey(name);
+			name = ("page" + name.substring(this.doc.docId.length() + ".".length()) + "." + IMAGE_FORMAT);
+			return this.doc.isInputStreamAvailable(name);
 		}
 		public PageImageInputStream getPageImageAsStream(String name) throws IOException {
-			if (!name.startsWith(this.docId))
+			if (!name.startsWith(this.doc.docId))
 				return null;
-			String piPageIdStr = name.substring(this.docId.length() + ".".length());
+			String piPageIdStr = name.substring(this.doc.docId.length() + ".".length());
 			name = ("page" + piPageIdStr + "." + IMAGE_FORMAT);
-			return this.getPageImageInputStream(getInputStream(name, cache, cacheFolder), piPageIdStr);
+			return this.getPageImageInputStream(this.doc.getInputStream(name), piPageIdStr);
 		}
 		private PageImageInputStream getPageImageInputStream(InputStream in, String piPageIdStr) throws IOException {
 			
@@ -699,11 +800,11 @@ public class ImfIO implements ImagingConstants {
 			return piAttributes.wrap(peekIn, this);
 		}
 		public boolean storePageImage(String name, PageImage pageImage) throws IOException {
-			if (!name.startsWith(this.docId))
+			if (!name.startsWith(this.doc.docId))
 				return false;
-			String piPageIdStr = name.substring(this.docId.length() + ".".length());
+			String piPageIdStr = name.substring(this.doc.docId.length() + ".".length());
 			name = ("page" + piPageIdStr + "." + IMAGE_FORMAT);
-			OutputStream out = getOutputStream(name, this.cache, this.cacheFolder);
+			OutputStream out = this.doc.getOutputStream(name);
 			pageImage.writeImage(out);
 			out.close();
 			Integer pageId = new Integer(piPageIdStr);
@@ -826,33 +927,70 @@ public class ImfIO implements ImagingConstants {
 	 * constant in the code */
 	private static final byte[] pngSignature = {((byte) 0x89), ((byte) 'P'), ((byte) 'N'), ((byte) 'G')};
 	
-	private static InputStream getInputStream(String name, HashMap cache, File cacheFolder) throws IOException {
-		if (cache == null)
-			return new BufferedInputStream(new FileInputStream(new File(cacheFolder, name)));
-		else if (cache.containsKey(name))
-			return new ByteArrayInputStream((byte[]) cache.get(name));
-		else throw new FileNotFoundException(name);
+	private static InputStream getInputStream(String entryName, HashMap cache, File cacheFolder, File folder, Map imfEntries) throws IOException {
+		
+		//	we're in zip-based im-memory mode
+		if (cache != null) {
+			byte[] entryBytes = ((byte[]) cache.get(entryName));
+			if (entryBytes == null)
+				throw new FileNotFoundException(entryName);
+			else return new ByteArrayInputStream(entryBytes);
+		}
+		
+		//	we're in zip-based folder mode
+		if (cacheFolder != null)
+			return new BufferedInputStream(new FileInputStream(new File(cacheFolder, entryName)));
+		
+		//	we're in folder mode
+		if (folder != null) {
+			ImfEntry imfe = ((ImfEntry) imfEntries.get(entryName));
+			if (imfe == null)
+				throw new FileNotFoundException(entryName);
+			else return new BufferedInputStream(new FileInputStream(new File(folder, imfe.getFileName())));
+		}
+		
+		//	whatever went wrong ...
+		throw new FileNotFoundException(entryName);
 	}
 	
-	private static OutputStream getOutputStream(final String name, final HashMap cache, final File cacheFolder) throws IOException {
-		if (cache == null) {
-			final File newFile = new File(cacheFolder, (name + ".new"));
+	private static OutputStream getOutputStream(final String entryName, final HashMap cache, final File cacheFolder, final File folder, final Map imfEntries) throws IOException {
+		
+		//	we're in zip-based im-memory mode
+		if (cache != null)
+			return new ByteArrayOutputStream() {
+				public void close() throws IOException {
+					super.close();
+					cache.put(entryName, this.toByteArray());
+				}
+			};
+		
+		//	we're in zip-based folder mode
+		if (cacheFolder != null) {
+			final File newFile = new File(cacheFolder, (entryName + ".new"));
 			return new BufferedOutputStream(new FileOutputStream(newFile) {
 				public void close() throws IOException {
 					super.close();
-					File exFile = new File(cacheFolder, name);
-					if (exFile.exists())
-						exFile.renameTo(new File(cacheFolder, (name + "." + System.currentTimeMillis() + ".old")));
-					newFile.renameTo(new File(cacheFolder, name));
+					File exFile = new File(cacheFolder, entryName);
+					if (exFile.exists() && newFile.exists() && newFile.getName().endsWith(".new"))
+						exFile.renameTo(new File(cacheFolder, (entryName + "." + System.currentTimeMillis() + ".old")));
+					newFile.renameTo(new File(cacheFolder, entryName));
 				}
 			});
 		}
-		else return new ByteArrayOutputStream() {
-			public void close() throws IOException {
-				super.close();
-				cache.put(name, this.toByteArray());
-			}
-		};
+		
+		//	we're in folder mode
+		if (folder != null)
+			return new MemoryHashOutputStream(folder, entryName) {
+				public void close() throws IOException {
+					super.flush();
+					super.close();
+					ImfEntry newImfe = new ImfEntry(this.file);
+					imfEntries.put(newImfe.name, newImfe);
+				}
+			};
+		
+		//	whatever went wrong ...
+		throw new FileNotFoundException(entryName);
 	}
 	
 	/**
@@ -861,13 +999,19 @@ public class ImfIO implements ImagingConstants {
 	 * file. If the argument file actually is a folder, on the other hand, this
 	 * method does not zip up the individual entries, but stores them in the
 	 * argument folder as individual files. If the argument file does not
-	 * exist, it is created and treated as a file.
+	 * exist, it is created and treated as a file. When storing to an actual
+	 * file, this method returns null. When storing to a folder, the returned
+	 * array of IMF entries describes the mapping of logical file names (the
+	 * entry names) to physical file names, whose name includes the MD5 of the
+	 * file content. The latter is to avoid duplication to as high a degree as
+	 * possible, while still preserving files that are logically overwritten.
 	 * @param doc the image markup document to store.
 	 * @param file the file or folder to store the document to
+	 * @return an array describing the entries (in folder storage mode)
 	 * @throws IOException
 	 */
-	public static void storeDocument(ImDocument doc, File file) throws IOException {
-		storeDocument(doc, file, null);
+	public static ImfEntry[] storeDocument(ImDocument doc, File file) throws IOException {
+		return storeDocument(doc, file, null);
 	}
 	
 	/**
@@ -876,13 +1020,19 @@ public class ImfIO implements ImagingConstants {
 	 * file. If the argument file actually is a folder, on the other hand, this
 	 * method does not zip up the individual entries, but stores them in the
 	 * argument folder as individual files. If the argument file does not
-	 * exist, it is created and treated as a file.
+	 * exist, it is created and treated as a file. When storing to an actual
+	 * file, this method returns null. When storing to a folder, the returned
+	 * array of IMF entries describes the mapping of logical file names (the
+	 * entry names) to physical file names, whose name includes the MD5 of the
+	 * file content. The latter is to avoid duplication to as high a degree as
+	 * possible, while still preserving files that are logically overwritten.
 	 * @param doc the image markup document to store.
 	 * @param file the file or folder to store the document to
 	 * @param pm a progress monitor to observe the storage process
+	 * @return an array describing the entries (in folder storage mode)
 	 * @throws IOException
 	 */
-	public static void storeDocument(ImDocument doc, File file, ProgressMonitor pm) throws IOException {
+	public static ImfEntry[] storeDocument(ImDocument doc, File file, ProgressMonitor pm) throws IOException {
 		
 		//	file does not exist, create it as a file
 		if (!file.exists()) {
@@ -891,11 +1041,12 @@ public class ImfIO implements ImagingConstants {
 		}
 		
 		//	we have a directory, store document without zipping
-		if (file.isDirectory())
-			storeDocument(doc, null, file, pm);
+		if (file.isDirectory()) {
+			return storeDocument(doc, null, file, pm);
+		}
 		
 		//	we have an actual file (maybe of our own creation), zip up document
-		else storeDocument(doc, new BufferedOutputStream(new FileOutputStream(file)), pm);
+		else return storeDocument(doc, new BufferedOutputStream(new FileOutputStream(file)), null, pm);
 	}
 	
 	/**
@@ -921,14 +1072,15 @@ public class ImfIO implements ImagingConstants {
 		storeDocument(doc, out, null, pm);
 	}
 	
-	private static void storeDocument(ImDocument doc, OutputStream out, File folder, ProgressMonitor pm) throws IOException {
+	private static ImfEntry[] storeDocument(ImDocument doc, OutputStream out, File folder, ProgressMonitor pm) throws IOException {
 		
 		//	check progress monitor
 		if (pm == null)
 			pm = ProgressMonitor.dummy;
 		
-		//	get ready to zip
+		//	get ready to zip, and to collect IMF entries
 		ZipOutputStream zout = ((out == null) ? null : new ZipOutputStream(out));
+		Map imfEntries = ((out == null) ? new LinkedHashMap() : null);
 		BufferedWriter zbw;
 		StringVector keys = new StringVector();
 		
@@ -943,7 +1095,7 @@ public class ImfIO implements ImagingConstants {
 		docsData.addElement(docData);
 		keys.clear();
 		keys.parseAndAddElements((DOCUMENT_ID_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zbw = getWriter(zout, folder, "document.csv");
+		zbw = getWriter(zout, doc, folder, imfEntries, "document.csv");
 		StringRelation.writeCsvData(zbw, docsData, keys);
 		zbw.close();
 		
@@ -1002,7 +1154,7 @@ public class ImfIO implements ImagingConstants {
 		pm.setMaxProgress(12);
 		keys.clear();
 		keys.parseAndAddElements((PAGE_ID_ATTRIBUTE + ";" + BOUNDING_BOX_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zbw = getWriter(zout, folder, "pages.csv");
+		zbw = getWriter(zout, doc, folder, imfEntries, "pages.csv");
 		StringRelation.writeCsvData(zbw, pagesData, keys);
 		zbw.close();
 		
@@ -1012,7 +1164,7 @@ public class ImfIO implements ImagingConstants {
 		pm.setMaxProgress(18);
 		keys.clear();
 		keys.parseAndAddElements((PAGE_ID_ATTRIBUTE + ";" + BOUNDING_BOX_ATTRIBUTE + ";" + STRING_ATTRIBUTE + ";" + ImWord.PREVIOUS_WORD_ATTRIBUTE + ";" + ImWord.NEXT_WORD_ATTRIBUTE + ";" + ImWord.NEXT_RELATION_ATTRIBUTE + ";" + ImWord.TEXT_STREAM_TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zbw = getWriter(zout, folder, "words.csv");
+		zbw = getWriter(zout, doc, folder, imfEntries, "words.csv");
 		StringRelation.writeCsvData(zbw, wordsData, keys);
 		zbw.close();
 		
@@ -1022,7 +1174,7 @@ public class ImfIO implements ImagingConstants {
 		pm.setMaxProgress(20);
 		keys.clear();
 		keys.parseAndAddElements((PAGE_ID_ATTRIBUTE + ";" + BOUNDING_BOX_ATTRIBUTE + ";" + TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zbw = getWriter(zout, folder, "regions.csv");
+		zbw = getWriter(zout, doc, folder, imfEntries, "regions.csv");
 		StringRelation.writeCsvData(zbw, regsData, keys);
 		zbw.close();
 		
@@ -1043,7 +1195,7 @@ public class ImfIO implements ImagingConstants {
 		}
 		keys.clear();
 		keys.parseAndAddElements((ImAnnotation.FIRST_WORD_ATTRIBUTE + ";" + ImAnnotation.LAST_WORD_ATTRIBUTE + ";" + TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zbw = getWriter(zout, folder, "annotations.csv");
+		zbw = getWriter(zout, doc, folder, imfEntries, "annotations.csv");
 		StringRelation.writeCsvData(zbw, annotsData, keys);
 		zbw.close();
 		
@@ -1079,7 +1231,7 @@ public class ImfIO implements ImagingConstants {
 		}
 		keys.clear();
 		keys.parseAndAddElements((ImFont.NAME_ATTRIBUTE + ";" + ImFont.STYLE_ATTRIBUTE + ";" + ImFont.CHARACTER_ID_ATTRIBUTE + ";" + ImFont.CHARACTER_STRING_ATTRIBUTE + ";" + ImFont.CHARACTER_IMAGE_ATTRIBUTE), ";");
-		zbw = getWriter(zout, folder, "fonts.csv");
+		zbw = getWriter(zout, doc, folder, imfEntries, "fonts.csv");
 		StringRelation.writeCsvData(zbw, fontsData, keys);
 		zbw.close();
 		
@@ -1096,15 +1248,15 @@ public class ImfIO implements ImagingConstants {
 			/* we have to write the page image proper if
 			 * - we're zipping up the document
 			 * - the document was loaded via other facilities
-			 * - the page image store has changed
-			 * - the document was loaded from its zipped-up form
-			 * - the document was loaded from a different folder */
-			if ((folder == null) || !(doc instanceof ImfIoDocument) || (((ImfIoDocument) doc).imfIoPis == null) || (((ImfIoDocument) doc).imfIoPis.cacheFolder == null) || !folder.equals(((ImfIoDocument) doc).imfIoPis.cacheFolder)) {
+			 * - the page image store has been replaced
+			 * - the document was loaded from, and is still bound to, its zipped-up form
+			 * - the document was loaded from, and is still bound to, a different folder */
+			if ((folder == null) || !(doc instanceof ImfIoDocument) || (((ImfIoDocument) doc).imfIoPis == null) || (((ImfIoDocument) doc).folder == null) || !folder.equals(((ImfIoDocument) doc).folder)) {
 				PageImageInputStream piis = pages[p].getPageImageAsStream();
 				piAttributes = getPageImageAttributes(piis);
 				String piName = PageImage.getPageImageName(doc.docId, pages[p].pageId);
 				piName = ("page" + piName.substring(doc.docId.length() + ".".length()) + "." + IMAGE_FORMAT);
-				OutputStream piOut = getOutputStream(zout, folder, piName);
+				OutputStream piOut = getOutputStream(zout, doc, folder, imfEntries, piName);
 				byte[] pib = new byte[1024];
 				for (int r; (r = piis.read(pib, 0, pib.length)) != -1;)
 					piOut.write(pib, 0, r);
@@ -1112,7 +1264,7 @@ public class ImfIO implements ImagingConstants {
 				piis.close();
 			}
 			
-			//	otherwise, we only have to get the attributes
+			//	otherwise, we only have to get the attributes (the IMF entry already exists, as otherwise, we'd write the page image)
 			else {
 				PageImageAttributes pia = ((ImfIoDocument) doc).imfIoPis.getPageImageAttributes(new Integer(pages[p].pageId));
 				if (pia == null) {
@@ -1135,7 +1287,7 @@ public class ImfIO implements ImagingConstants {
 		pm.setMaxProgress(80);
 		keys.clear();
 		keys.parseAndAddElements((ImObject.PAGE_ID_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zbw = getWriter(zout, folder, "pageImages.csv");
+		zbw = getWriter(zout, doc, folder, imfEntries, "pageImages.csv");
 		StringRelation.writeCsvData(zbw, pageImagesData, keys);
 		zbw.close();
 		
@@ -1155,7 +1307,7 @@ public class ImfIO implements ImagingConstants {
 		}
 		keys.clear();
 		keys.parseAndAddElements((ImSupplement.ID_ATTRIBUTE + ";" + ImSupplement.TYPE_ATTRIBUTE + ";" + ImSupplement.MIME_TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zbw = getWriter(zout, folder, "supplements.csv");
+		zbw = getWriter(zout, doc, folder, imfEntries, "supplements.csv");
 		StringRelation.writeCsvData(zbw, supplementsData, keys);
 		zbw.close();
 		
@@ -1172,11 +1324,12 @@ public class ImfIO implements ImagingConstants {
 			/* we have to write the supplement proper if
 			 * - we're zipping up the document
 			 * - the document was loaded via other facilities
-			 * - the document was loaded from its zipped-up form
-			 * - the document was loaded from a different folder */
-			if ((folder == null) || !(supplements[s] instanceof ImfIoSupplement) || !folder.equals(((ImfIoSupplement) supplements[s]).getDataCacheFolder())) {
+			 * - the document was loaded from, and is still bound to, its zipped-up form
+			 * - the document was loaded from, and is still bound to, a different folder
+			 * - the supplement was newly added or modified */
+			if ((folder == null) || !(doc instanceof ImfIoDocument) || (((ImfIoDocument) doc).folder == null) || !folder.equals(((ImfIoDocument) doc).folder) || (((ImfIoDocument) doc).getImfEntry(supplements[s]) == null)) {
 				InputStream sdIn = supplements[s].getInputStream();
-				OutputStream sdOut = getOutputStream(zout, folder, sfn);
+				OutputStream sdOut = getOutputStream(zout, doc, folder, imfEntries, sfn);
 				byte[] sdb = new byte[1024];
 				for (int r; (r = sdIn.read(sdb, 0, sdb.length)) != -1;)
 					sdOut.write(sdb, 0, r);
@@ -1187,31 +1340,60 @@ public class ImfIO implements ImagingConstants {
 		
 		//	finally
 		pm.setProgress(100);
+		
+		//	finalize folder storage
+		if (folder != null) {
+			ImfEntry[] imfes = ((ImfEntry[]) imfEntries.values().toArray(new ImfEntry[imfEntries.size()]));
+			
+			//	if the document was loaded here, update IMF entries (both ways), and switch document to folder mode
+			if (doc instanceof ImfIoDocument) {
+				
+				/* bind document to folder (we can update entries in document
+				 * first, as we've externally written to the argument folder
+				 * what was not in the document already, so the files are sure
+				 * to exist) */
+				((ImfIoDocument) doc).bindToFolder(folder, imfEntries);
+				
+				/* update IMF entries (if the document was already bound to the
+				 * argument folder before, we might well have skipped over both
+				 * supplements and page images) */
+				imfEntries.putAll(((ImfIoDocument) doc).imfEntries);
+			}
+			
+			/* write or overwrite 'enries.txt' (specifying document folder as
+			 * 'cache folder' gives us file renaming instead of hashing
+			 * behavior used in zip-based folder mode , which is exactly what
+			 * we need here) */
+			BufferedWriter imfEntryOut = new BufferedWriter(new OutputStreamWriter(getOutputStream("entries.txt", null, folder, null, null), "UTF-8"));
+			for (Iterator enit = imfEntries.keySet().iterator(); enit.hasNext();) {
+				String imfen = ((String) enit.next());
+				ImfEntry imfe = ((ImfEntry) imfEntries.get(imfen));
+				imfEntryOut.write(imfe.toTabString());
+				imfEntryOut.newLine();
+			}
+			imfEntryOut.flush();
+			imfEntryOut.close();
+			
+			//	return entry list for external use
+			return imfes;
+		}
+		
+		//	finalize zip storage
 		if (zout != null) {
 			zout.flush();
 			zout.close();
+			return null;
 		}
+		
+		//	whatever ...
+		return null;
 	}
 	
-	private static OutputStream getOutputStream(final ZipOutputStream zout, final File folder, final String name) throws IOException {
-		if (zout == null) {
-			final File newFile = new File(folder, (name + ".new"));
-			return new BufferedOutputStream(new FileOutputStream(newFile) {
-				private File exFile = new File(folder, name);
-				public void close() throws IOException {
-					if (this.exFile == null)
-						return;
-					super.flush();
-					super.close();
-					if (this.exFile.exists())
-						this.exFile.renameTo(new File(folder, (name + "." + System.currentTimeMillis() + ".old")));
-					this.exFile = null;
-					newFile.renameTo(new File(folder, name));
-				}
-			});
-		}
-		else {
-			zout.putNextEntry(new ZipEntry(name));
+	private static OutputStream getOutputStream(final ZipOutputStream zout, ImDocument doc, final File folder, final Map imfEntries, final String entryName) throws IOException {
+		
+		//	we're zipping up the document, doesn't matter what the document is like
+		if (zout != null) {
+			zout.putNextEntry(new ZipEntry(entryName));
 			return new BufferedOutputStream(zout) {
 				public void close() throws IOException {
 					super.flush();
@@ -1219,10 +1401,134 @@ public class ImfIO implements ImagingConstants {
 				}
 			};
 		}
+		
+		//	document loaded from same folder as argument one
+		if ((doc instanceof ImfIoDocument) && (((ImfIoDocument) doc).folder != null) && ((ImfIoDocument) doc).folder.equals(folder))
+			return ((ImfIoDocument) doc).getOutputStream(entryName);
+		
+		//	document loaded from other facilities, from different folder, or from ZIP
+		if (folder != null)
+			return new DirectHashOutputStream(folder, entryName) {
+				public void close() throws IOException {
+					super.flush();
+					super.close();
+					ImfEntry newImfe = new ImfEntry(this.outFile);
+					imfEntries.put(newImfe.name, newImfe);
+				}
+			};
+		
+		//	whatever went wrong ..
+		throw new FileNotFoundException(entryName);
 	}
 	
-	private static BufferedWriter getWriter(final ZipOutputStream zout, final File folder, final String name) throws IOException {
-		return new BufferedWriter(new OutputStreamWriter(getOutputStream(zout, folder, name), "UTF-8"));
+	private static class DirectHashOutputStream extends BufferedOutputStream {
+		private MessageDigest dataHash = getDataHash();
+		private File outFolder;
+		private String outFileName;
+		private String outFileExtension;
+		private File outFileWriting;
+		File outFile;
+		DirectHashOutputStream(File outFolder, String outEntryName) throws IOException {
+			super(null);
+			this.outFolder = outFolder;
+			if (outEntryName.indexOf('.') == -1) {
+				this.outFileName = outEntryName;
+				this.outFileExtension = null;
+			}
+			else {
+				this.outFileName = outEntryName.substring(0, outEntryName.lastIndexOf('.'));
+				this.outFileExtension = outEntryName.substring(outEntryName.lastIndexOf('.'));
+			}
+			this.outFileWriting = new File(this.outFolder, (this.outFileName + ".writing" + ((this.outFileExtension == null) ? "" : this.outFileExtension)));
+			this.out = new FileOutputStream(this.outFileWriting);
+		}
+		public synchronized void write(int b) throws IOException {
+			super.write(b);
+			this.dataHash.update((byte) b);
+		}
+		public synchronized void write(byte[] b, int off, int len) throws IOException {
+			super.write(b, off, len);
+			this.dataHash.update(b, off, len);
+		}
+		public void close() throws IOException {
+			super.close();
+			
+			//	finalize hash and rename file
+			this.outFile = new File(this.outFolder, (this.outFileName + "." + new String(RandomByteSource.getHexCode(this.dataHash.digest())) + ((this.outFileExtension == null) ? "" : this.outFileExtension)));
+			if (this.outFile.exists())
+				this.outFileWriting.delete();
+			else this.outFileWriting.renameTo(this.outFile);
+			
+			//	return digester to instance pool
+			returnDataHash(this.dataHash);
+			this.dataHash = null;
+		}
+	}
+	
+	private static class MemoryHashOutputStream extends ByteArrayOutputStream {
+		private MessageDigest dataHash = getDataHash();
+		private File folder;
+		private String fileName;
+		private String fileExtension;
+		File file;
+		MemoryHashOutputStream(File folder, String name) {
+			this.folder = folder;
+			if (name.indexOf('.') == -1) {
+				this.fileName = name;
+				this.fileExtension = null;
+			}
+			else {
+				this.fileName = name.substring(0, name.lastIndexOf('.'));
+				this.fileExtension = name.substring(name.lastIndexOf('.'));
+			}
+		}
+		public synchronized void write(int b) {
+			super.write(b);
+			this.dataHash.update((byte) b);
+		}
+		public synchronized void write(byte[] b, int off, int len) {
+			super.write(b, off, len);
+			this.dataHash.update(b, off, len);
+		}
+		public void close() throws IOException {
+			super.close();
+			
+			//	write buffer content to persistent storage only if not already there
+			this.file = new File(this.folder, (this.fileName + "." + new String(RandomByteSource.getHexCode(this.dataHash.digest())) + ((this.fileExtension == null) ? "" : this.fileExtension)));
+			if (!this.file.exists()) {
+				BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(this.file));
+				this.writeTo(out);
+				out.flush();
+				out.close();
+			}
+			
+			//	return digester to instance pool
+			returnDataHash(this.dataHash);
+			this.dataHash = null;
+		}
+	}
+	
+	private static LinkedList dataHashPool = new LinkedList();
+	private static synchronized MessageDigest getDataHash() {
+		if (dataHashPool.size() != 0)
+			return ((MessageDigest) dataHashPool.removeFirst());
+		try {
+			MessageDigest dataHash = MessageDigest.getInstance("MD5");
+			dataHash.reset();
+			return dataHash;
+		}
+		catch (NoSuchAlgorithmException nsae) {
+			System.out.println(nsae.getClass().getName() + " (" + nsae.getMessage() + ") while creating checksum digester.");
+			nsae.printStackTrace(System.out); // should not happen, but Java don't know ...
+			return null;
+		}
+	}
+	private static synchronized void returnDataHash(MessageDigest dataHash) {
+		dataHashPool.addLast(dataHash);
+	}
+	
+	private static BufferedWriter getWriter(final ZipOutputStream zout, ImDocument doc, File folder, Map imfEntries, String name) throws IOException {
+		return new BufferedWriter(new OutputStreamWriter(getOutputStream(zout, doc, folder, imfEntries, name), "UTF-8"));
 	}
 	
 	private static String getAttributesString(ImObject imo) {
