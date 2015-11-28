@@ -228,6 +228,20 @@ public class ImfIO implements ImagingConstants {
 		public int compareTo(Object obj) {
 			return ((obj instanceof ImfEntry) ? this.name.compareTo(((ImfEntry) obj).name) : -1);
 		}
+		
+		/**
+		 * Parse an IMF entry from its tab separated string representation, as
+		 * returned by the <code>toTabString()</code> method.
+		 * @param tabStr the tab separated string representation to parse
+		 * @return the IMF entry parsed from the argument string
+		 */
+		public static ImfEntry fromTabString(String tabStr) {
+			String[] imfEntryData = tabStr.split("\\t");
+			if (imfEntryData.length == 3) try {
+				return new ImfEntry(imfEntryData[0], Long.parseLong(imfEntryData[1]), imfEntryData[2]);
+			} catch (NumberFormatException nfe) {}
+			return null;
+		}
 	}
 	
 	/**
@@ -241,7 +255,25 @@ public class ImfIO implements ImagingConstants {
 	 * @throws IOException
 	 */
 	public static ImDocument loadDocument(File file) throws IOException {
-		return loadDocument(file, null);
+		return loadDocument(file, null, null);
+	}
+	
+	/**
+	 * Load an image markup document. If the argument file is an actual file,
+	 * this method assumes it to be a zipped-up Image Markup File. If the file
+	 * is a folder, however, this method assumes it to be an already un-zipped
+	 * Image Markup File. In the former case, the argument list of IMF entries
+	 * is ignored. In the latter case, if the IMF entry list is null, this
+	 * method expects a list named 'entries.txt' in the argument folder;
+	 * otherwise, it uses the argument list.
+	 * @param file the file to load from
+	 * @param entries an array holding the IMF entries to use
+	 * @return an image markup document representing the content of the
+	 *            argument stream.
+	 * @throws IOException
+	 */
+	public static ImDocument loadDocument(File file, ImfEntry[] entries) throws IOException {
+		return loadDocument(file, entries, null);
 	}
 	
 	/**
@@ -256,15 +288,34 @@ public class ImfIO implements ImagingConstants {
 	 * @throws IOException
 	 */
 	public static ImDocument loadDocument(File file, ProgressMonitor pm) throws IOException {
+		return loadDocument(file, null, pm);
+	}
+	
+	/**
+	 * Load an image markup document. If the argument file is an actual file,
+	 * this method assumes it to be a zipped-up Image Markup File. If the file
+	 * is a folder, however, this method assumes it to be an already un-zipped
+	 * Image Markup File. In the former case, the argument list of IMF entries
+	 * is ignored. In the latter case, if the IMF entry list is null, this
+	 * method expects a list named 'entries.txt' in the argument folder;
+	 * otherwise, it uses the argument list.
+	 * @param in the input stream to load from
+	 * @param entries an array holding the IMF entries to use
+	 * @param pm a progress monitor to observe the loading process
+	 * @return an image markup document representing the content of the
+	 *            argument stream.
+	 * @throws IOException
+	 */
+	public static ImDocument loadDocument(File file, ImfEntry[] entries, ProgressMonitor pm) throws IOException {
 		
 		//	assume folder to be un-zipped IMF
 		if (file.isDirectory())
-			return loadDocument(null, -1, null, file, pm);
+			return loadDocument(null, -1, null, file, entries, pm);
 		
 		//	assume file to be zipped-up IMF
 		else {
 			FileInputStream fis = new FileInputStream(file);
-			ImDocument doc = loadDocument(fis, ((int) file.length()), null, null, pm);
+			ImDocument doc = loadDocument(fis, ((int) file.length()), null, null, null, pm);
 			fis.close();
 			return doc;
 		}
@@ -348,10 +399,10 @@ public class ImfIO implements ImagingConstants {
 	 * @throws IOException
 	 */
 	public static ImDocument loadDocument(InputStream in, File cacheFolder, ProgressMonitor pm, int inLength) throws IOException {
-		return loadDocument(in, inLength, cacheFolder, null, pm);
+		return loadDocument(in, inLength, cacheFolder, null, null, pm);
 	}
 	
-	private static ImDocument loadDocument(InputStream in, int inLength, final File cacheFolder, File folder, ProgressMonitor pm) throws IOException {
+	private static ImDocument loadDocument(InputStream in, int inLength, final File cacheFolder, File folder, ImfEntry[] imfEntryList, ProgressMonitor pm) throws IOException {
 		
 		//	check progress monitor
 		if (pm == null)
@@ -397,14 +448,17 @@ public class ImfIO implements ImagingConstants {
 		
 		//	load 'entries.txt' if loading from folder
 		if (folder != null) {
-			BufferedReader imfEntryIn = new BufferedReader(new InputStreamReader(new FileInputStream(new File(folder, "entries.txt")), "UTF-8"));
-			for (String imfEntryLine; (imfEntryLine = imfEntryIn.readLine()) != null;) {
-				String[] imfEntryData = imfEntryLine.split("\\t");
-				if (imfEntryData.length == 3) try {
-					imfEntries.put(imfEntryData[0], new ImfEntry(imfEntryData[0], Long.parseLong(imfEntryData[1]), imfEntryData[2]));
-				} catch (NumberFormatException nfe) {}
+			if (imfEntryList == null) {
+				BufferedReader imfEntryIn = new BufferedReader(new InputStreamReader(new FileInputStream(new File(folder, "entries.txt")), "UTF-8"));
+				for (String imfEntryLine; (imfEntryLine = imfEntryIn.readLine()) != null;) {
+					ImfEntry imfe = ImfEntry.fromTabString(imfEntryLine);
+					if (imfe != null)
+						imfEntries.put(imfe.name, imfe);
+				}
+				imfEntryIn.close();
 			}
-			imfEntryIn.close();
+			else for (int e = 0; e < imfEntryList.length; e++)
+				imfEntries.put(imfEntryList[e].name, imfEntryList[e]);
 		}
 		
 		//	un-zip data from input stream

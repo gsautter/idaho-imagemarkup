@@ -3015,6 +3015,9 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				ImWord fw = annots[a].getFirstWord();
 				ImWord lw = annots[a].getLastWord();
 				
+				//	TODO move annotation starts and ends out by one extra for paragraph starts and ends ...
+				//	... to not have them overlap with paragraph start and end thickening
+				
 				//	paint opaque kind of square bracket before first and after last word
 				if (fw.pageId == this.page.pageId) {
 					int out = annotStartEndCounts.getCount("S" + fw.getLocalID());
