@@ -805,8 +805,8 @@ public class ImfIO implements ImagingConstants {
 		InputStream getInputStream(String entryName) throws IOException {
 			return ImfIO.getInputStream(entryName, this.cache, this.cacheFolder, this.folder, this.imfEntries);
 		}
-		OutputStream getOutputStream(String entryName) throws IOException {
-			return ImfIO.getOutputStream(entryName, this.cache, this.cacheFolder, this.folder, this.imfEntries);
+		OutputStream getOutputStream(String entryName, boolean writeDirectly) throws IOException {
+			return ImfIO.getOutputStream(entryName, this.cache, this.cacheFolder, this.folder, writeDirectly, this.imfEntries);
 		}
 	}
 	
@@ -858,7 +858,7 @@ public class ImfIO implements ImagingConstants {
 				return false;
 			String piPageIdStr = name.substring(this.doc.docId.length() + ".".length());
 			name = ("page" + piPageIdStr + "." + IMAGE_FORMAT);
-			OutputStream out = this.doc.getOutputStream(name);
+			OutputStream out = this.doc.getOutputStream(name, true);
 			pageImage.writeImage(out);
 			out.close();
 			Integer pageId = new Integer(piPageIdStr);
@@ -1007,7 +1007,7 @@ public class ImfIO implements ImagingConstants {
 		throw new FileNotFoundException(entryName);
 	}
 	
-	private static OutputStream getOutputStream(final String entryName, final HashMap cache, final File cacheFolder, final File folder, final Map imfEntries) throws IOException {
+	private static OutputStream getOutputStream(final String entryName, final HashMap cache, final File cacheFolder, final File folder, boolean writeDirectly, final Map imfEntries) throws IOException {
 		
 		//	we're in zip-based im-memory mode
 		if (cache != null)
@@ -1023,6 +1023,7 @@ public class ImfIO implements ImagingConstants {
 			final File newFile = new File(cacheFolder, (entryName + ".new"));
 			return new BufferedOutputStream(new FileOutputStream(newFile) {
 				public void close() throws IOException {
+					super.flush();
 					super.close();
 					File exFile = new File(cacheFolder, entryName);
 					if (exFile.exists() && newFile.exists() && newFile.getName().endsWith(".new"))
@@ -1032,9 +1033,18 @@ public class ImfIO implements ImagingConstants {
 			});
 		}
 		
-		//	we're in folder mode
-		if (folder != null)
-			return new MemoryHashOutputStream(folder, entryName) {
+		//	we're in folder mode (write directly if told so, e.g. for page images, or if too little memory available for buffering)
+		if (folder != null) {
+			if (writeDirectly)
+				return new DirectHashOutputStream(folder, entryName) {
+					public void close() throws IOException {
+						super.flush();
+						super.close();
+						ImfEntry newImfe = new ImfEntry(this.outFile);
+						imfEntries.put(newImfe.name, newImfe);
+					}
+				};
+			else return new MemoryHashOutputStream(folder, entryName) {
 				public void close() throws IOException {
 					super.flush();
 					super.close();
@@ -1042,6 +1052,7 @@ public class ImfIO implements ImagingConstants {
 					imfEntries.put(newImfe.name, newImfe);
 				}
 			};
+		}
 		
 		//	whatever went wrong ...
 		throw new FileNotFoundException(entryName);
@@ -1132,6 +1143,13 @@ public class ImfIO implements ImagingConstants {
 		if (pm == null)
 			pm = ProgressMonitor.dummy;
 		
+		//	check memory (estimate 100 bytes per word, 1000 words per page, should be on the safe side)
+		boolean lowMemory = (Runtime.getRuntime().freeMemory() < (100 * 1000 * doc.getPageCount()));
+		if (lowMemory) {
+			System.gc();
+			lowMemory = (Runtime.getRuntime().freeMemory() < (100 * 1000 * doc.getPageCount()));
+		}
+		
 		//	get ready to zip, and to collect IMF entries
 		ZipOutputStream zout = ((out == null) ? null : new ZipOutputStream(out));
 		Map imfEntries = ((out == null) ? new LinkedHashMap() : null);
@@ -1142,25 +1160,25 @@ public class ImfIO implements ImagingConstants {
 		pm.setStep("Storing document data");
 		pm.setBaseProgress(0);
 		pm.setMaxProgress(5);
-		StringRelation docsData = new StringRelation();
+		zbw = getWriter(zout, doc, folder, imfEntries, "document.csv", false);
+		keys.clear();
+		keys.parseAndAddElements((DOCUMENT_ID_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
+		writeKeys(keys, zbw);
 		StringTupel docData = new StringTupel();
 		docData.setValue(DOCUMENT_ID_ATTRIBUTE, doc.docId);
 		docData.setValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, getAttributesString(doc));
-		docsData.addElement(docData);
-		keys.clear();
-		keys.parseAndAddElements((DOCUMENT_ID_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zbw = getWriter(zout, doc, folder, imfEntries, "document.csv");
-		StringRelation.writeCsvData(zbw, docsData, keys);
+		writeValues(keys, docData, zbw);
 		zbw.close();
 		
 		//	assemble data for pages, words, and regions
-		pm.setStep("Collecting pages, regions, and words");
+		pm.setStep("Storing page data");
 		pm.setBaseProgress(5);
-		pm.setMaxProgress(10);
-		StringRelation pagesData = new StringRelation();
-		StringRelation wordsData = new StringRelation();
-		StringRelation regsData = new StringRelation();
+		pm.setMaxProgress(8);
 		ImPage[] pages = doc.getPages();
+		zbw = getWriter(zout, doc, folder, imfEntries, "pages.csv", false);
+		keys.clear();
+		keys.parseAndAddElements((PAGE_ID_ATTRIBUTE + ";" + BOUNDING_BOX_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
+		writeKeys(keys, zbw);
 		for (int p = 0; p < pages.length; p++) {
 			pm.setInfo("Page " + p);
 			pm.setProgress((p * 100) / pages.length);
@@ -1170,7 +1188,21 @@ public class ImfIO implements ImagingConstants {
 			pageData.setValue(PAGE_ID_ATTRIBUTE, ("" + pages[p].pageId));
 			pageData.setValue(BOUNDING_BOX_ATTRIBUTE, pages[p].bounds.toString());
 			pageData.setValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, getAttributesString(pages[p]));
-			pagesData.addElement(pageData);
+			writeValues(keys, pageData, zbw);
+		}
+		zbw.close();
+		
+		//	store words
+		pm.setStep("Storing word data");
+		pm.setBaseProgress(8);
+		pm.setMaxProgress(17);
+		zbw = getWriter(zout, doc, folder, imfEntries, "words.csv", lowMemory);
+		keys.clear();
+		keys.parseAndAddElements((PAGE_ID_ATTRIBUTE + ";" + BOUNDING_BOX_ATTRIBUTE + ";" + STRING_ATTRIBUTE + ";" + ImWord.PREVIOUS_WORD_ATTRIBUTE + ";" + ImWord.NEXT_WORD_ATTRIBUTE + ";" + ImWord.NEXT_RELATION_ATTRIBUTE + ";" + ImWord.TEXT_STREAM_TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
+		writeKeys(keys, zbw);
+		for (int p = 0; p < pages.length; p++) {
+			pm.setInfo("Page " + p);
+			pm.setProgress((p * 100) / pages.length);
 			
 			//	data for words
 			ImWord[] pageWords = pages[p].getWords();
@@ -1187,8 +1219,22 @@ public class ImfIO implements ImagingConstants {
 					wordData.setValue(ImWord.NEXT_WORD_ATTRIBUTE, pageWords[w].getNextWord().getLocalID());
 				wordData.setValue(ImWord.NEXT_RELATION_ATTRIBUTE, ("" + pageWords[w].getNextRelation()));
 				wordData.setValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, getAttributesString(pageWords[w]));
-				wordsData.addElement(wordData);
+				writeValues(keys, wordData, zbw);
 			}
+		}
+		zbw.close();
+		
+		//	store regions
+		pm.setStep("Storing region data");
+		pm.setBaseProgress(17);
+		pm.setMaxProgress(20);
+		zbw = getWriter(zout, doc, folder, imfEntries, "regions.csv", lowMemory);
+		keys.clear();
+		keys.parseAndAddElements((PAGE_ID_ATTRIBUTE + ";" + BOUNDING_BOX_ATTRIBUTE + ";" + TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
+		writeKeys(keys, zbw);
+		for (int p = 0; p < pages.length; p++) {
+			pm.setInfo("Page " + p);
+			pm.setProgress((p * 100) / pages.length);
 			
 			//	data for regions
 			ImRegion[] pageRegs = pages[p].getRegions();
@@ -1198,45 +1244,19 @@ public class ImfIO implements ImagingConstants {
 				regData.setValue(BOUNDING_BOX_ATTRIBUTE, pageRegs[r].bounds.toString());
 				regData.setValue(TYPE_ATTRIBUTE, pageRegs[r].getType());
 				regData.setValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, getAttributesString(pageRegs[r]));
-				regsData.addElement(regData);
+				writeValues(keys, regData, zbw);
 			}
 		}
-		
-		//	store pages
-		pm.setStep("Storing page data");
-		pm.setBaseProgress(10);
-		pm.setMaxProgress(12);
-		keys.clear();
-		keys.parseAndAddElements((PAGE_ID_ATTRIBUTE + ";" + BOUNDING_BOX_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zbw = getWriter(zout, doc, folder, imfEntries, "pages.csv");
-		StringRelation.writeCsvData(zbw, pagesData, keys);
-		zbw.close();
-		
-		//	store words
-		pm.setStep("Storing word data");
-		pm.setBaseProgress(12);
-		pm.setMaxProgress(18);
-		keys.clear();
-		keys.parseAndAddElements((PAGE_ID_ATTRIBUTE + ";" + BOUNDING_BOX_ATTRIBUTE + ";" + STRING_ATTRIBUTE + ";" + ImWord.PREVIOUS_WORD_ATTRIBUTE + ";" + ImWord.NEXT_WORD_ATTRIBUTE + ";" + ImWord.NEXT_RELATION_ATTRIBUTE + ";" + ImWord.TEXT_STREAM_TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zbw = getWriter(zout, doc, folder, imfEntries, "words.csv");
-		StringRelation.writeCsvData(zbw, wordsData, keys);
-		zbw.close();
-		
-		//	store regions
-		pm.setStep("Storing region data");
-		pm.setBaseProgress(18);
-		pm.setMaxProgress(20);
-		keys.clear();
-		keys.parseAndAddElements((PAGE_ID_ATTRIBUTE + ";" + BOUNDING_BOX_ATTRIBUTE + ";" + TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zbw = getWriter(zout, doc, folder, imfEntries, "regions.csv");
-		StringRelation.writeCsvData(zbw, regsData, keys);
 		zbw.close();
 		
 		//	store annotations
 		pm.setStep("Storing annotation data");
 		pm.setBaseProgress(20);
 		pm.setMaxProgress(25);
-		StringRelation annotsData = new StringRelation();
+		zbw = getWriter(zout, doc, folder, imfEntries, "annotations.csv", lowMemory);
+		keys.clear();
+		keys.parseAndAddElements((ImAnnotation.FIRST_WORD_ATTRIBUTE + ";" + ImAnnotation.LAST_WORD_ATTRIBUTE + ";" + TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
+		writeKeys(keys, zbw);
 		ImAnnotation[] annots = doc.getAnnotations();
 		for (int a = 0; a < annots.length; a++) {
 			pm.setProgress((a * 100) / annots.length);
@@ -1245,19 +1265,18 @@ public class ImfIO implements ImagingConstants {
 			annotData.setValue(ImAnnotation.LAST_WORD_ATTRIBUTE, annots[a].getLastWord().getLocalID());
 			annotData.setValue(TYPE_ATTRIBUTE, annots[a].getType());
 			annotData.setValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, getAttributesString(annots[a]));
-			annotsData.addElement(annotData);
+			writeValues(keys, annotData, zbw);
 		}
-		keys.clear();
-		keys.parseAndAddElements((ImAnnotation.FIRST_WORD_ATTRIBUTE + ";" + ImAnnotation.LAST_WORD_ATTRIBUTE + ";" + TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zbw = getWriter(zout, doc, folder, imfEntries, "annotations.csv");
-		StringRelation.writeCsvData(zbw, annotsData, keys);
 		zbw.close();
 		
 		//	store fonts (if any)
 		pm.setStep("Storing font data");
 		pm.setBaseProgress(25);
 		pm.setMaxProgress(30);
-		StringRelation fontsData = new StringRelation();
+		zbw = getWriter(zout, doc, folder, imfEntries, "fonts.csv", false);
+		keys.clear();
+		keys.parseAndAddElements((ImFont.NAME_ATTRIBUTE + ";" + ImFont.STYLE_ATTRIBUTE + ";" + ImFont.CHARACTER_ID_ATTRIBUTE + ";" + ImFont.CHARACTER_STRING_ATTRIBUTE + ";" + ImFont.CHARACTER_IMAGE_ATTRIBUTE), ";");
+		writeKeys(keys, zbw);
 		ImFont[] fonts = doc.getFonts();
 		for (int f = 0; f < fonts.length; f++) {
 			pm.setProgress((f * 100) / fonts.length);
@@ -1280,13 +1299,9 @@ public class ImfIO implements ImagingConstants {
 				String charImageHex = fonts[f].getImageHex(charIDs[c]);
 				if (charImageHex != null)
 					charData.setValue(ImFont.CHARACTER_IMAGE_ATTRIBUTE, charImageHex);
-				fontsData.addElement(charData);
+				writeValues(keys, charData, zbw);
 			}
 		}
-		keys.clear();
-		keys.parseAndAddElements((ImFont.NAME_ATTRIBUTE + ";" + ImFont.STYLE_ATTRIBUTE + ";" + ImFont.CHARACTER_ID_ATTRIBUTE + ";" + ImFont.CHARACTER_STRING_ATTRIBUTE + ";" + ImFont.CHARACTER_IMAGE_ATTRIBUTE), ";");
-		zbw = getWriter(zout, doc, folder, imfEntries, "fonts.csv");
-		StringRelation.writeCsvData(zbw, fontsData, keys);
 		zbw.close();
 		
 		//	store page images
@@ -1310,7 +1325,7 @@ public class ImfIO implements ImagingConstants {
 				piAttributes = getPageImageAttributes(piis);
 				String piName = PageImage.getPageImageName(doc.docId, pages[p].pageId);
 				piName = ("page" + piName.substring(doc.docId.length() + ".".length()) + "." + IMAGE_FORMAT);
-				OutputStream piOut = getOutputStream(zout, doc, folder, imfEntries, piName);
+				OutputStream piOut = getOutputStream(zout, doc, folder, imfEntries, piName, true);
 				byte[] pib = new byte[1024];
 				for (int r; (r = piis.read(pib, 0, pib.length)) != -1;)
 					piOut.write(pib, 0, r);
@@ -1339,17 +1354,22 @@ public class ImfIO implements ImagingConstants {
 		pm.setStep("Storing page image data");
 		pm.setBaseProgress(79);
 		pm.setMaxProgress(80);
+		zbw = getWriter(zout, doc, folder, imfEntries, "pageImages.csv", false);
 		keys.clear();
 		keys.parseAndAddElements((ImObject.PAGE_ID_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zbw = getWriter(zout, doc, folder, imfEntries, "pageImages.csv");
-		StringRelation.writeCsvData(zbw, pageImagesData, keys);
+		writeKeys(keys, zbw);
+		for (int p = 0; p < pageImagesData.size(); p++)
+			writeValues(keys, pageImagesData.get(p), zbw);
 		zbw.close();
 		
 		//	store meta data of supplements
 		pm.setStep("Storing supplement data");
 		pm.setBaseProgress(80);
 		pm.setMaxProgress(85);
-		StringRelation supplementsData = new StringRelation();
+		zbw = getWriter(zout, doc, folder, imfEntries, "supplements.csv", false);
+		keys.clear();
+		keys.parseAndAddElements((ImSupplement.ID_ATTRIBUTE + ";" + ImSupplement.TYPE_ATTRIBUTE + ";" + ImSupplement.MIME_TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
+		writeKeys(keys, zbw);
 		ImSupplement[] supplements = doc.getSupplements();
 		for (int s = 0; s < supplements.length; s++) {
 			StringTupel supplementData = new StringTupel();
@@ -1357,12 +1377,8 @@ public class ImfIO implements ImagingConstants {
 			supplementData.setValue(ImSupplement.TYPE_ATTRIBUTE, supplements[s].getType());
 			supplementData.setValue(ImSupplement.MIME_TYPE_ATTRIBUTE, supplements[s].getMimeType());
 			supplementData.setValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, getAttributesString(supplements[s]));
-			supplementsData.addElement(supplementData);
+			writeValues(keys, supplementData, zbw);
 		}
-		keys.clear();
-		keys.parseAndAddElements((ImSupplement.ID_ATTRIBUTE + ";" + ImSupplement.TYPE_ATTRIBUTE + ";" + ImSupplement.MIME_TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		zbw = getWriter(zout, doc, folder, imfEntries, "supplements.csv");
-		StringRelation.writeCsvData(zbw, supplementsData, keys);
 		zbw.close();
 		
 		//	store supplements proper
@@ -1383,7 +1399,7 @@ public class ImfIO implements ImagingConstants {
 			 * - the supplement was newly added or modified */
 			if ((folder == null) || !(doc instanceof ImfIoDocument) || (((ImfIoDocument) doc).folder == null) || !folder.equals(((ImfIoDocument) doc).folder) || (((ImfIoDocument) doc).getImfEntry(supplements[s]) == null)) {
 				InputStream sdIn = supplements[s].getInputStream();
-				OutputStream sdOut = getOutputStream(zout, doc, folder, imfEntries, sfn);
+				OutputStream sdOut = getOutputStream(zout, doc, folder, imfEntries, sfn, true);
 				byte[] sdb = new byte[1024];
 				for (int r; (r = sdIn.read(sdb, 0, sdb.length)) != -1;)
 					sdOut.write(sdb, 0, r);
@@ -1418,7 +1434,7 @@ public class ImfIO implements ImagingConstants {
 			 * 'cache folder' gives us file renaming instead of hashing
 			 * behavior used in zip-based folder mode , which is exactly what
 			 * we need here) */
-			BufferedWriter imfEntryOut = new BufferedWriter(new OutputStreamWriter(getOutputStream("entries.txt", null, folder, null, null), "UTF-8"));
+			BufferedWriter imfEntryOut = new BufferedWriter(new OutputStreamWriter(getOutputStream("entries.txt", null, folder, null, true, null), "UTF-8"));
 			for (Iterator enit = imfEntries.keySet().iterator(); enit.hasNext();) {
 				String imfen = ((String) enit.next());
 				ImfEntry imfe = ((ImfEntry) imfEntries.get(imfen));
@@ -1443,7 +1459,35 @@ public class ImfIO implements ImagingConstants {
 		return null;
 	}
 	
-	private static OutputStream getOutputStream(final ZipOutputStream zout, ImDocument doc, final File folder, final Map imfEntries, final String entryName) throws IOException {
+	private static void writeKeys(StringVector keys, BufferedWriter zbw) throws IOException {
+		for (int k = 0; k < keys.size(); k++) {
+			if (k != 0)
+				zbw.write(',');
+			zbw.write('"');
+			zbw.write(keys.get(k));
+			zbw.write('"');
+		}
+		zbw.newLine();
+	}
+	
+	private static void writeValues(StringVector keys, StringTupel st, BufferedWriter zbw) throws IOException {
+		for (int k = 0; k < keys.size(); k++) {
+			if (k != 0)
+				zbw.write(',');
+			zbw.write('"');
+			String value = st.getValue(keys.get(k), "");
+			for (int c = 0; c < value.length(); c++) {
+				char ch = value.charAt(c);
+				if (ch == '"')
+					zbw.write('"');
+				zbw.write(ch);
+			}
+			zbw.write('"');
+		}
+		zbw.newLine();
+	}
+	
+	private static OutputStream getOutputStream(final ZipOutputStream zout, ImDocument doc, final File folder, final Map imfEntries, final String entryName, boolean writeDirectly) throws IOException {
 		
 		//	we're zipping up the document, doesn't matter what the document is like
 		if (zout != null) {
@@ -1458,7 +1502,7 @@ public class ImfIO implements ImagingConstants {
 		
 		//	document loaded from same folder as argument one
 		if ((doc instanceof ImfIoDocument) && (((ImfIoDocument) doc).folder != null) && ((ImfIoDocument) doc).folder.equals(folder))
-			return ((ImfIoDocument) doc).getOutputStream(entryName);
+			return ((ImfIoDocument) doc).getOutputStream(entryName, writeDirectly);
 		
 		//	document loaded from other facilities, from different folder, or from ZIP
 		if (folder != null)
@@ -1581,8 +1625,8 @@ public class ImfIO implements ImagingConstants {
 		dataHashPool.addLast(dataHash);
 	}
 	
-	private static BufferedWriter getWriter(final ZipOutputStream zout, ImDocument doc, File folder, Map imfEntries, String name) throws IOException {
-		return new BufferedWriter(new OutputStreamWriter(getOutputStream(zout, doc, folder, imfEntries, name), "UTF-8"));
+	private static BufferedWriter getWriter(final ZipOutputStream zout, ImDocument doc, File folder, Map imfEntries, String name, boolean writeDirectly) throws IOException {
+		return new BufferedWriter(new OutputStreamWriter(getOutputStream(zout, doc, folder, imfEntries, name, writeDirectly), "UTF-8"));
 	}
 	
 	private static String getAttributesString(ImObject imo) {
@@ -1680,25 +1724,25 @@ public class ImfIO implements ImagingConstants {
 		}
 		return string.toString();
 	}
-//	
-//	/**
-//	 * @param args
-//	 */
-//	public static void main(String[] args) throws Exception {
-//		final File baseFolder = new File("E:/Testdaten/PdfExtract/");
-//		final String pdfName = "zt00872.pdf";
-//		
-////		ImDocument imDoc = loadDocument(new FileInputStream(new File(baseFolder, (pdfName + ".imf"))));
+	
+	/**
+	 * @param args
+	 */
+	public static void main(String[] args) throws Exception {
+		final File baseFolder = new File("E:/Testdaten/PdfExtract/");
+		final String pdfName = "zt00872.pdf";
+		
+		ImDocument imDoc = loadDocument(new FileInputStream(new File(baseFolder, (pdfName + ".imf"))));
 //		ImDocument imDoc = loadDocument(new File(baseFolder, (pdfName + ".new.imd")));
-////		
-////		File imFile = new File(baseFolder, (pdfName + ".new.imf"));
-////		OutputStream imOut = new BufferedOutputStream(new FileOutputStream(imFile));
-////		storeDocument(imDoc, imOut);
-////		imOut.flush();
-////		imOut.close();
+		
+		File imFile = new File(baseFolder, (pdfName + ".new.imf"));
+		OutputStream imOut = new BufferedOutputStream(new FileOutputStream(imFile));
+		storeDocument(imDoc, imOut);
+		imOut.flush();
+		imOut.close();
 //		
 //		File imFolder = new File(baseFolder, (pdfName + ".new.imd"));
 //		imFolder.mkdirs();
 //		storeDocument(imDoc, imFolder);
-//	}
+	}
 }
