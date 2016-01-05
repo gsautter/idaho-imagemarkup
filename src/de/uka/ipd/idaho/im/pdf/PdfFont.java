@@ -443,30 +443,30 @@ class PdfFont {
 	}
 	private float getCharWidth(char ch, boolean isPrimaryLookup) {
 		if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println("Getting width for '" + ch + "' (" + ((int) ch) + ")");
-		float cw = 0;
-		if (cw == 0) {
+		float cw = -1;
+		if (cw == -1) {
 			Float cwObj = ((Float) this.ccWidths.get(new Integer((int) ch)));
 			if (cwObj != null) {
 				cw = cwObj.floatValue();
 				if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println(" - width from own ur-mapping: " + cw);
 			}
 		}
-		if (cw == 0) {
+		if (cw == -1) {
 			Float cwObj = ((Float) this.cWidths.get(new Character(ch)));
 			if (cwObj != null) {
 				cw = cwObj.floatValue();
 				if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println(" - width from own r-mapping: " + cw);
 			}
 		}
-		if ((cw == 0) && this.ucMappings.containsKey(new Integer(ch))) {
+		if ((cw == -1) && this.ucMappings.containsKey(new Integer(ch))) {
 			cw = this.mCharWidth;
 			if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println(" - mapped fallback default width: " + cw);
 		}
-		if ((cw == 0) && (this.charWidths != null) && (this.firstChar <= ch) && (ch <= this.lastChar)) {
+		if ((cw == -1) && (this.charWidths != null) && (this.firstChar <= ch) && (ch <= this.lastChar)) {
 			cw = this.charWidths[((int) ch) - this.firstChar];
 			if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println(" - width from base array: " + cw);
 		}
-		if ((cw == 0) && (this.baseFont != null)) {
+		if ((cw == -1) && (this.baseFont != null)) {
 			if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println(" - doing base font lookup");
 			Integer chi = new Integer((int) ch);
 			char aCh = ch;
@@ -506,12 +506,12 @@ class PdfFont {
 //				return this.getCharWidth((char) rmCh.intValue());
 //			}
 //		}
-		if (cw == 0) {
+		if (cw == -1) {
 			cw = this.mCharWidth;
 			if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println(" - fallback missing width: " + cw);
 		}
 		
-		if ((cw == 0) && isPrimaryLookup) {
+		if ((cw == -1) && isPrimaryLookup) {
 			Character mCh = ((Character) this.diffMappings.get(new Integer(ch)));
 			if ((mCh != null) && (mCh.charValue() != ch)) {
 				cw = this.getCharWidth(mCh.charValue(), false);
