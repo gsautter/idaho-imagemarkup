@@ -39,6 +39,7 @@ import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
 import java.awt.geom.Rectangle2D.Float;
 import java.awt.image.BufferedImage;
+import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -604,6 +605,66 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	
 	private BufferedImage getFigureImage(ImDocument doc, PFigure pFigure, Document pdfDoc, Page pdfPage, int p, Rectangle2D.Float pdfPageBox, Hashtable xObjects, Map objects, float magnification, ProgressMonitor spm) throws IOException {
 		
+		//	figure consists of sub figures
+		if (pFigure.subFigures != null) {
+			System.out.println("Rendering figure from sub images");
+			
+			//	render sub figures recursively, and compute average resolution
+			//	TODO maybe weight resolution by extent in dimensions, to cushion rounding errors
+			BufferedImage[] pFigureSubImages = new BufferedImage[pFigure.subFigures.length];
+			float widthRatioSum = 0;
+			float heightRatioSum = 0;
+			for (int s = 0; s < pFigure.subFigures.length; s++) {
+				System.out.println(" - rendering sub image " + pFigure.subFigures[s].name);
+				pFigureSubImages[s] = this.getFigureImage(null, pFigure.subFigures[s], pdfDoc, pdfPage, p, pdfPageBox, xObjects, objects, magnification, spm);
+				System.out.println("   - sub image size is " + pFigureSubImages[s].getWidth() + "x" + pFigureSubImages[s].getHeight());
+				float widthRatio = ((float) (((float) pFigureSubImages[s].getWidth()) / pFigure.subFigures[s].bounds.getWidth()));
+				widthRatioSum += widthRatio;
+				float heightRatio = ((float) (((float) pFigureSubImages[s].getHeight()) / pFigure.subFigures[s].bounds.getHeight()));
+				heightRatioSum += heightRatio;
+				float dpiRatio = ((widthRatio + heightRatio) / 2);
+				float rawDpi = dpiRatio * defaultDpi;
+				System.out.println("   - resolution is " + rawDpi + " DPI");
+				BoundingBox dpiBox = this.getBoundingBox(pFigure.subFigures[s].bounds, pdfPageBox, dpiRatio, 0);
+				System.out.println("   - bounding box at DPI is " + dpiBox);
+			}
+			float avgDpiRatio = ((widthRatioSum + heightRatioSum) / (2 * pFigure.subFigures.length));
+			float avgRawDpi = avgDpiRatio * defaultDpi;
+			System.out.println(" - average resolution is " + avgRawDpi + " DPI");
+			BoundingBox avgDpiBox = this.getBoundingBox(pFigure.bounds, pdfPageBox, avgDpiRatio, 0);
+			System.out.println(" - bounding box at DPI is " + avgDpiBox);
+			
+			//	assemble sub figures
+			BufferedImage pFigureImage = new BufferedImage((avgDpiBox.right - avgDpiBox.left), (avgDpiBox.bottom - avgDpiBox.top), BufferedImage.TYPE_INT_ARGB);
+			Graphics2D pFigureGraphics = pFigureImage.createGraphics();
+			for (int s = 0; s < pFigure.subFigures.length; s++) {
+				System.out.println("   - sub image size is " + pFigureSubImages[s].getWidth() + "x" + pFigureSubImages[s].getHeight());
+				BoundingBox dpiBox = this.getBoundingBox(pFigure.subFigures[s].bounds, pdfPageBox, avgDpiRatio, 0);
+				System.out.println("   - bounding box at average DPI is " + dpiBox);
+				pFigureGraphics.drawImage(pFigureSubImages[s], (dpiBox.left - avgDpiBox.left), (dpiBox.top - avgDpiBox.top), null);
+				//	TODO try and stretch sub images to close gaps
+			}
+			System.out.println(" - image rendered, size is " + pFigureImage.getWidth() + "x" + pFigureImage.getHeight());
+			
+			//	compute figure resolution
+			float dpiRatio = ((float) ((((float) pFigureImage.getWidth()) / pFigure.bounds.getWidth()) + (((float) pFigureImage.getHeight()) / pFigure.bounds.getHeight())) / 2);
+			float rawDpi = dpiRatio * defaultDpi;
+			int pFigureDpi = (Math.round(rawDpi / 10) * 10);
+			spm.setInfo(" - resolution computed as " + pFigureDpi + " DPI (" + rawDpi + ")");
+			
+			//	get figure bounds
+			BoundingBox pFigureBox = this.getBoundingBox(pFigure.bounds, pdfPageBox, magnification, 0);
+			spm.setInfo(" - rendering bounds are " + pFigureBox);
+			
+			//	add figures as supplements to document if required (synchronized !!!)
+			if (doc != null) synchronized (doc) {
+				ImSupplement.Figure.createFigure(doc, p, pFigureDpi, pFigureImage, pFigureBox);
+			}
+			
+			//	we're done here
+			return pFigureImage;
+		}
+		
 		//	resolve image names against XObject dictionary
 		Object pFigureKey = xObjects.get(pFigure.name);
 		spm.setInfo("     - reference is " + pFigureKey);
@@ -883,7 +944,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				//	preserve figures embedded in pages
 				if (pData[p].figures.length != 0) {
 					spm.setInfo("Storing figures in page " + p + " of " + pData.length);
-					storeFiguresAsSubblements(doc, pData[p], pdfDoc, objects, magnification, spm);
+					storeFiguresAsSupplements(doc, pData[p], pdfDoc, objects, magnification, spm);
 				}
 			}
 		};
@@ -1982,7 +2043,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		return true;
 	}
 	
-	private void storeFiguresAsSubblements(ImDocument doc, PPageData pData, Document pdfDoc, Map objects, float magnification, ProgressMonitor spm) throws IOException {
+	private void storeFiguresAsSupplements(ImDocument doc, PPageData pData, Document pdfDoc, Map objects, float magnification, ProgressMonitor spm) throws IOException {
 		spm.setInfo(" - storing figures");
 		
 		//	display figures if testing
@@ -4620,6 +4681,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	}
 	
 	private BufferedImage decodeFlate(byte[] stream, Hashtable params, Library library, Resources resources) throws IOException {
+		BufferedImage dRgbBi = this.decodeFlateDeviceRGB(stream, params, library, resources);
+		if (dRgbBi != null)
+			return dRgbBi;
+		
 		SeekableInputConstrainedWrapper streamInputWrapper = new SeekableInputConstrainedWrapper(new SeekableByteArrayInputStream(stream), 0, stream.length, true);
 		Stream str = new Stream(library, params, streamInputWrapper);
 		try {
@@ -4644,6 +4709,96 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			}
 			return null;
 		}
+	}
+	
+	private BufferedImage decodeFlateDeviceRGB(byte[] stream, Hashtable params, Library library, Resources resources) throws IOException {
+		
+		//	test if we can handle this one
+		Object csObj = params.get("ColorSpace");
+		if ((csObj == null) || !"DeviceRGB".equals(csObj.toString()))
+			return null;
+		
+		//	get image size
+		Object widthObj = params.get("Width");
+		int width;
+		if (widthObj instanceof Number)
+			width = ((Number) widthObj).intValue();
+		else return null;
+		Object heightObj = params.get("Height");
+		int height;
+		if (heightObj instanceof Number)
+			height = ((Number) heightObj).intValue();
+		else return null;
+		
+		//	get component depth
+		Object bcpObj = params.get("BitsPerComponent");
+		int bitsPerComponent;
+		if (bcpObj instanceof Number)
+			bitsPerComponent = ((Number) bcpObj).intValue();
+		else return null;
+		
+		//	prepare decoding stream
+		BufferedInputStream fd = new BufferedInputStream(new FlateDecode(library, params, new ByteArrayInputStream(stream)));
+		
+		//	create bit masks
+		int colorComponents = 3; // this is constant for RGB
+		int componentBitMask = 0;
+		for (int b = 0; b < bitsPerComponent; b++) {
+			componentBitMask <<= 1;
+			componentBitMask |= 1;
+		}
+		int bitsPerPixel = (colorComponents * bitsPerComponent);
+		int pixelBitMask = 0;
+		for (int b = 0; b < bitsPerPixel; b++) {
+			pixelBitMask <<= 1;
+			pixelBitMask |= 1;
+		}
+		
+		//	fill image
+		BufferedImage bi = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+		for (int r = 0; r < height; r++) {
+			int bitsRemaining = 0;
+			int bitData = 0;
+			for (int c = 0; c < width; c++) {
+				
+				//	make sure we have enough bits left in window
+				while (bitsRemaining < bitsPerPixel) {
+					int nextByte = fd.read();
+					bitData <<= 8;
+					bitData |= nextByte;
+					bitsRemaining += 8;
+				}
+				
+				//	get component values for pixel
+				int pixelBits = ((bitData >>> (bitsRemaining - bitsPerPixel)) & pixelBitMask);
+				bitsRemaining -= bitsPerPixel;
+				
+				//	extract component values
+				int rpr = ((pixelBits >>> (2 * bitsPerComponent)) & componentBitMask);
+				int rpb = ((pixelBits >>> (1 * bitsPerComponent)) & componentBitMask);
+				int rpg = ((pixelBits >>> (0 * bitsPerComponent)) & componentBitMask);
+				
+				//	normalize to 8 bits
+				int pr = rpr;
+				int pb = rpb;
+				int pg = rpg;
+				for (int b = bitsPerComponent; b < 8; b += bitsPerComponent) {
+					pr <<= bitsPerComponent;
+					pr += rpr;
+					pb <<= bitsPerComponent;
+					pb += rpb;
+					pg <<= bitsPerComponent;
+					pg += rpg;
+				}
+				
+				//	set pixel
+				bi.setRGB(c, r, ((pr << 16) | (pb << 8) | (pg << 0)));
+			}
+		}
+		
+		//	finally ...
+		fd.close();
+		return bi;
 	}
 	
 	private BufferedImage decodeOther(byte[] stream, Hashtable params, String filter, Library library, Resources resources) throws IOException {
@@ -4709,18 +4864,22 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	}
 	
 	private BoundingBox getBoundingBox(Rectangle2D bounds, Rectangle2D.Float pageBounds, float magnification, int rotate) {
-		int left = Math.round(((float) (bounds.getMinX() - pageBounds.getMinX())) * magnification);
+		float fLeft = (((float) (bounds.getMinX() - pageBounds.getMinX())) * magnification);
 		if ((rotate == 270) || (rotate == -90))
-			left += Math.round(pageBounds.width * magnification);
-		int right = Math.round(((float) (bounds.getMaxX() - pageBounds.getMinX()))  * magnification);
+			fLeft += (pageBounds.width * magnification);
+		float fRight = (((float) (bounds.getMaxX() - pageBounds.getMinX()))  * magnification);
 		if ((rotate == 270) || (rotate == -90))
-			right += Math.round(pageBounds.width * magnification);
-		int top = Math.round((pageBounds.height - ((float) (bounds.getMaxY() - ((2 * pageBounds.getMinY()) - pageBounds.getMaxY())))) * magnification);
+			fRight += (pageBounds.width * magnification);
+		float fTop = ((pageBounds.height - ((float) (bounds.getMaxY() - ((2 * pageBounds.getMinY()) - pageBounds.getMaxY())))) * magnification);
 		if ((rotate == 90) || (rotate == -270))
-			top += Math.round(pageBounds.height * magnification);
-		int bottom = Math.round((pageBounds.height - ((float) (bounds.getMinY() - ((2 * pageBounds.getMinY()) - pageBounds.getMaxY())))) * magnification);
+			fTop += (pageBounds.height * magnification);
+		float fBottom = ((pageBounds.height - ((float) (bounds.getMinY() - ((2 * pageBounds.getMinY()) - pageBounds.getMaxY())))) * magnification);
 		if ((rotate == 90) || (rotate == -270))
-			bottom += Math.round(pageBounds.height * magnification);
+			fBottom += (pageBounds.height * magnification);
+		int left = Math.round(fLeft);
+		int right = (left + Math.round(fRight - fLeft));
+		int top = Math.round(fTop);
+		int bottom = (top + Math.round(fBottom - fTop));
 		return new BoundingBox(left, right, top, bottom);
 	}
 	
