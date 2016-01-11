@@ -35,6 +35,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Hashtable;
@@ -1181,12 +1183,46 @@ public class PdfParser {
 		public final double rotation;
 		public final boolean rightSideLeft;
 		public final boolean upsideDown;
+		public final PFigure[] subFigures;
 		PFigure(String name, Rectangle2D bounds, double rotation, boolean rightSideLeft, boolean upsideDown) {
 			this.name = name;
 			this.bounds = bounds;
 			this.rotation = rotation;
 			this.rightSideLeft = rightSideLeft;
 			this.upsideDown = upsideDown;
+			this.subFigures = null;
+		}
+		PFigure(PFigure pf1, PFigure pf2) {
+			ArrayList subFigureList = new ArrayList();
+			addFigure(subFigureList, pf1);
+			addFigure(subFigureList, pf2);
+			this.subFigures = ((PFigure[]) subFigureList.toArray(new PFigure[subFigureList.size()]));
+			
+			StringBuffer name = new StringBuffer("[");
+			float lx = Float.MAX_VALUE;
+			float rx = -Float.MAX_VALUE;
+			float by = Float.MAX_VALUE;
+			float ty = -Float.MAX_VALUE;
+			for (int f = 0; f < this.subFigures.length; f++) {
+				if (f != 0)
+					name.append(" + ");
+				name.append(this.subFigures[f].name);
+				lx = Math.min(lx, ((float) this.subFigures[f].bounds.getMinX()));
+				rx = Math.max(rx, ((float) this.subFigures[f].bounds.getMaxX()));
+				by = Math.min(by, ((float) this.subFigures[f].bounds.getMinY()));
+				ty = Math.max(ty, ((float) this.subFigures[f].bounds.getMaxY()));
+			}
+			this.name = name.append("]").toString();
+			this.bounds = new Rectangle2D.Float(lx, by, (rx - lx), (ty - by));
+			this.rotation = 0;
+			this.rightSideLeft = false;
+			this.upsideDown = false;
+		}
+		private static void addFigure(ArrayList sfs, PFigure f) {
+			if (f.subFigures == null)
+				sfs.add(f);
+			else for (int s = 0; s < f.subFigures.length; s++)
+				addFigure(sfs, f.subFigures[s]);
 		}
 		public String toString() {
 			return (this.name + " [" + Math.round(this.bounds.getMinX()) + "," + Math.round(this.bounds.getMaxX()) + "," + Math.round(this.bounds.getMinY()) + "," + Math.round(this.bounds.getMaxY()) + "]");
@@ -1406,26 +1442,28 @@ public class PdfParser {
 				stack.addLast(obj);
 			}
 		}
-		
-		//	any words to process further?
-		if (words == null)
-			return;
+//		
+//		//	any words to process further?
+//		if (words == null)
+//			return;
 		
 		//	sort out words with invalid bounding boxes, as well as duplicate words
-		if (DEBUG_RENDER_PAGE_CONTENT) System.out.println("Page content processed, got " + words.size() + " words");
-		Set wordBounds = new HashSet();
-		for (int w = 0; w < words.size(); w++) {
-			PWord pw = ((PWord) words.get(w));
-			if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" - '" + pw.str + "' @ " + pw.bounds);
-			if ((pw.bounds.getWidth() <= 0) || (pw.bounds.getHeight() <= 0)) {
-				if (DEBUG_RENDER_PAGE_CONTENT)
-					System.out.println(" --> removed for invalid bounds");
-				words.remove(w--);
-			}
-			else if (!wordBounds.add(pw.bounds.toString())) {
-				if (DEBUG_RENDER_PAGE_CONTENT)
-					System.out.println(" --> removed as duplicate");
-				words.remove(w--);
+		if (words != null) {
+			if (DEBUG_RENDER_PAGE_CONTENT) System.out.println("Page content processed, got " + words.size() + " words");
+			Set wordBounds = new HashSet();
+			for (int w = 0; w < words.size(); w++) {
+				PWord pw = ((PWord) words.get(w));
+				if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" - '" + pw.str + "' @ " + pw.bounds);
+				if ((pw.bounds.getWidth() <= 0) || (pw.bounds.getHeight() <= 0)) {
+					if (DEBUG_RENDER_PAGE_CONTENT)
+						System.out.println(" --> removed for invalid bounds");
+					words.remove(w--);
+				}
+				else if (!wordBounds.add(pw.bounds.toString())) {
+					if (DEBUG_RENDER_PAGE_CONTENT)
+						System.out.println(" --> removed as duplicate");
+					words.remove(w--);
+				}
 			}
 		}
 		
@@ -1450,29 +1488,31 @@ public class PdfParser {
 					pgh = ((Number) pghObj).floatValue();
 			}
 			if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" - page width is " + pgw + ", page height is " + pgh);
-			for (int w = 0; w < words.size(); w++) {
-				PWord pw = ((PWord) words.get(w));
-				if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" - '" + pw.str + "' @ " + pw.bounds + " directed " + pw.fontDirection);
-				int rfd = pw.fontDirection;
-				if ((rotate == 90) || (rotate == -270))
-					rfd--;
-				else if ((rotate == 270) || (rotate == -90))
-					rfd++;
-				PWord rpw = new PWord(pw.charCodes, pw.str, rotateBounds(pw.bounds, pgw, pgh, rotate), pw.fontSize, rfd, pw.font);
-				if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" --> '" + rpw.str + "' @ " + rpw.bounds + " directed " + rpw.fontDirection);
-				words.set(w, rpw);
-			}
-			for (int f = 0; f < figures.size(); f++) {
-				PFigure pf = ((PFigure) figures.get(f));
-				if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" - '" + pf.name + "' @ " + pf.bounds);
-				PFigure rpf = new PFigure(pf.name, rotateBounds(pf.bounds, pgw, pgh, rotate), pf.rotation, pf.rightSideLeft, pf.upsideDown);
-				if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" --> '" + rpf.name + "' @ " + rpf.bounds);
-				figures.set(f, rpf);
-			}
+			if (words != null)
+				for (int w = 0; w < words.size(); w++) {
+					PWord pw = ((PWord) words.get(w));
+					if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" - '" + pw.str + "' @ " + pw.bounds + " directed " + pw.fontDirection);
+					int rfd = pw.fontDirection;
+					if ((rotate == 90) || (rotate == -270))
+						rfd--;
+					else if ((rotate == 270) || (rotate == -90))
+						rfd++;
+					PWord rpw = new PWord(pw.charCodes, pw.str, rotateBounds(pw.bounds, pgw, pgh, rotate), pw.fontSize, rfd, pw.font);
+					if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" --> '" + rpw.str + "' @ " + rpw.bounds + " directed " + rpw.fontDirection);
+					words.set(w, rpw);
+				}
+			if (figures != null)
+				for (int f = 0; f < figures.size(); f++) {
+					PFigure pf = ((PFigure) figures.get(f));
+					if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" - '" + pf.name + "' @ " + pf.bounds);
+					PFigure rpf = new PFigure(pf.name, rotateBounds(pf.bounds, pgw, pgh, rotate), pf.rotation, pf.rightSideLeft, pf.upsideDown);
+					if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" --> '" + rpf.name + "' @ " + rpf.bounds);
+					figures.set(f, rpf);
+				}
 		}
 		
 		//	join words with extremely close or overlapping bounding boxes (can be split due to in-word font changes, for instance)
-		if ((words.size() > 1) && (tokenizer != null)) {
+		if ((words != null) && (words.size() > 1) && (tokenizer != null)) {
 			PWord lastWord = ((PWord) words.get(0));
 			double lastWordMiddleX = ((lastWord.bounds.getMinX() + lastWord.bounds.getMaxX()) / 2);
 			double lastWordMiddleY = ((lastWord.bounds.getMinY() + lastWord.bounds.getMaxY()) / 2);
@@ -1585,7 +1625,7 @@ public class PdfParser {
 		}
 		
 		//	un-tangle overlapping bounding boxes that did not merge
-		if ((words.size() > 1) && (tokenizer != null)) {
+		if ((words != null) && (words.size() > 1) && (tokenizer != null)) {
 			PWord lastWord = ((PWord) words.get(0));
 			for (int w = 1; w < words.size(); w++) {
 				PWord word = ((PWord) words.get(w));
@@ -1650,6 +1690,98 @@ public class PdfParser {
 				lastWord = word;
 			}
 		}
+		
+		//	TODO combine figures that are adjacent in one dimension and identical in the other
+		
+		//	TODO do so recursively, both top-down and left-right, to also catch weirdly tiled images
+		while ((figures != null) && (figures.size() > 1)) {
+			int figureCount = figures.size();
+			
+			//	try merging left to right
+			Collections.sort(figures, leftRightFigureOrder);
+			for (int f = 0; f < figures.size(); f++) {
+				PFigure pf = ((PFigure) figures.get(f));
+				if (DEBUG_RENDER_PAGE_CONTENT) System.out.println("Checking image " + pf + " for left-right mergers");
+				PFigure mpf = null;
+				for (int cf = (f+1); cf < figures.size(); cf++) {
+					PFigure cpf = ((PFigure) figures.get(cf));
+					if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" - comparing to image " + cpf);
+					if (!figureEdgeMatch(pf.bounds.getMaxY(), cpf.bounds.getMaxY())) {
+						if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" ==> top edge mismatch");
+						continue;
+					}
+					if (!figureEdgeMatch(pf.bounds.getMinY(), cpf.bounds.getMinY())) {
+						if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" ==> bottom edge mismatch");
+						continue;
+					}
+					if (!figureEdgeMatch(pf.bounds.getMaxX(), cpf.bounds.getMinX())) {
+						if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" ==> not adjacent (" + pf.bounds.getMaxX() + " != " + cpf.bounds.getMinX() + ")");
+						continue;
+					}
+					mpf = new PFigure(pf, cpf);
+					figures.remove(cf);
+					if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" ==> got merged figure " + mpf);
+					break;
+				}
+				if (mpf != null)
+					figures.set(f--, mpf);
+			}
+			
+			//	try merging top down
+			Collections.sort(figures, topDownFigureOrder);
+			for (int f = 0; f < figures.size(); f++) {
+				PFigure pf = ((PFigure) figures.get(f));
+				if (DEBUG_RENDER_PAGE_CONTENT) System.out.println("Checking image " + pf + " for top-down mergers");
+				PFigure mpf = null;
+				for (int cf = (f+1); cf < figures.size(); cf++) {
+					PFigure cpf = ((PFigure) figures.get(cf));
+					if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" - comparing to image " + cpf);
+					if (!figureEdgeMatch(pf.bounds.getMinX(), cpf.bounds.getMinX())) {
+						if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" ==> left edge mismatch");
+						continue;
+					}
+					if (!figureEdgeMatch(pf.bounds.getMaxX(), cpf.bounds.getMaxX())) {
+						if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" ==> right edge mismatch");
+						continue;
+					}
+					if (!figureEdgeMatch(pf.bounds.getMinY(), cpf.bounds.getMaxY())) {
+						if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" ==> not adjacent (" + pf.bounds.getMinY() + " != " + cpf.bounds.getMaxY() + ")");
+						continue;
+					}
+					mpf = new PFigure(pf, cpf);
+					figures.remove(cf);
+					if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" ==> got merged figure " + mpf);
+					break;
+				}
+				if (mpf != null)
+					figures.set(f--, mpf);
+			}
+			
+			//	nothing merged in either direction, we're done
+			if (figures.size() == figureCount)
+				break;
+		}
+	}
+	
+	private static final Comparator leftRightFigureOrder = new Comparator() {
+		public int compare(Object obj1, Object obj2) {
+			PFigure pf1 = ((PFigure) obj1);
+			PFigure pf2 = ((PFigure) obj2);
+			int c = Double.compare(pf1.bounds.getMinX(), pf2.bounds.getMinX());
+			return ((c == 0) ? Double.compare(pf2.bounds.getMaxX(), pf1.bounds.getMaxX()) : c);
+		}
+	};
+	private static final Comparator topDownFigureOrder = new Comparator() {
+		public int compare(Object obj1, Object obj2) {
+			PFigure pf1 = ((PFigure) obj1);
+			PFigure pf2 = ((PFigure) obj2);
+			int c = Double.compare(pf2.bounds.getMaxY(), pf1.bounds.getMaxY());
+			return ((c == 0) ? Double.compare(pf1.bounds.getMinY(), pf2.bounds.getMinY()) : c);
+		}
+	};
+	private static final boolean figureEdgeMatch(double e1, double e2) {
+//		return (e1 == e2); // TODO use this to see individual values
+		return (Math.abs(e1 - e2) < 0.001); // TODO adjust this threshold
 	}
 	
 	private static Rectangle2D rotateBounds(Rectangle2D bounds, float pw, float ph, int rotate) {
