@@ -2434,7 +2434,7 @@ FontFile2=65 0R
 				}
 				Object tuObj = PdfParser.dereference(fontData.get("ToUnicode"), objects);
 				if (tuObj instanceof PStream)
-					PdfParser.decodeObjectStream(((PStream) tuObj), objects, true);
+					PdfParser.decodeObjectStream(null, ((PStream) tuObj), objects, true, null);
 				else if (DEBUG_LOAD_FONTS) System.out.println(" --> to unicode: " + tuObj);
 				return null;
 			}

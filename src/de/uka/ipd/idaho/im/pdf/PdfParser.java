@@ -83,10 +83,11 @@ public class PdfParser {
 	 * the parsed objects, the keys being the object numbers together with the
 	 * generation numbers.
 	 * @param bytes the binary PDF file to parse
+	 * @param sm a security manager to use on encrypted object streams
 	 * @return a Map holding the objects parsed from the PDF file
 	 * @throws IOException
 	 */
-	public static HashMap getObjects(byte[] bytes) throws IOException {
+	public static HashMap getObjects(byte[] bytes, SecurityManager sm) throws IOException {
 		PdfLineInputStream lis = new PdfLineInputStream(new ByteArrayInputStream(bytes));
 		HashMap objects = new HashMap() {
 			public Object put(Object key, Object value) {
@@ -117,10 +118,15 @@ public class PdfParser {
 				
 				//	decode object streams
 				if (obj instanceof PStream) {
-					PStream sObj = ((PStream) obj);
-					Object type = sObj.params.get("Type");
-					if ((type != null) && "ObjStm".equals(type.toString()))
-						decodeObjectStream(sObj, objects, false);
+					Object type = ((PStream) obj).params.get("Type");
+					if ((type != null) && "ObjStm".equals(type.toString())) {
+						Reference sObjRef = null;
+						if (sm != null) {
+							String[] objIdNrs = objId.split("[^0-9]+");
+							sObjRef = new Reference(Integer.parseInt(objIdNrs[0]), Integer.parseInt(objIdNrs[1]));
+						}
+						decodeObjectStream(sObjRef, ((PStream) obj), objects, false, sm);
+					}
 				}
 			}
 		}
@@ -129,7 +135,12 @@ public class PdfParser {
 		return objects;
 	}
 	
-	static void decodeObjectStream(PStream objStream, Map objects, boolean forInfo) throws IOException {
+	static void decodeObjectStream(Reference objStreamRef, PStream objStream, Map objects, boolean forInfo, SecurityManager sm) throws IOException {
+		if ((objStreamRef != null) && (sm != null)) {
+			decryptObject(objStreamRef, objStream.params, sm);
+			decryptBytes(objStreamRef, objStream.bytes, sm);
+		}
+		
 		Object fObj = objStream.params.get("First");
 		int f = ((fObj == null) ? 0 : Integer.parseInt(fObj.toString()));
 		Object filter = objStream.params.get("Filter");
@@ -143,6 +154,7 @@ public class PdfParser {
 			return;
 		}
 		//	TODO_ne work on bytes UNNECESSARY, as offsets don't change, and actual decoding works on bytes further down the road
+		
 		String[] sObjIdsAndOffsets = (new String(decodedStream, 0, f)).split("\\s++");
 		ArrayList sObjList = new ArrayList();
 		for (int o = 0; o < sObjIdsAndOffsets.length; o += 2)
@@ -399,8 +411,11 @@ public class PdfParser {
 			System.out.println(obj);
 		}
 		if (obj instanceof PStream) {
-			decryptObject(objRef, ((PStream) obj).params, sm);
-			decryptBytes(objRef, ((PStream) obj).bytes, sm);
+			Object type = ((PStream) obj).params.get("Type"); // object streams are decrypted on reading, so we can omit them here
+			if ((type == null) || !"ObjStm".equals(type.toString())) {
+				decryptObject(objRef, ((PStream) obj).params, sm);
+				decryptBytes(objRef, ((PStream) obj).bytes, sm);
+			}
 		}
 		else if (obj instanceof Hashtable) {
 			Hashtable dict = ((Hashtable) obj);

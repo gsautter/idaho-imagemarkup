@@ -332,20 +332,6 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		
 		//	finally ...
 		return this.doLoadGenericPdf(doc, pdfDoc, pdfBytes, scaleFactor, pm);
-//		
-//		/*
-//		 * try image loading first, and use text loading only if image loading
-//		 * fails, as if both images and text are present, the text may well be
-//		 * some crude OCR we do not want.
-//		 */
-//		try {
-//			return this.loadImagePdf(doc, pdfDoc, pdfBytes, true, scaleFactor, pm);
-//		}
-//		catch (IOException ioe) {
-//			ioe.printStackTrace(System.out);
-//			pm.setInfo("Could not find images for all pages, loading PDF as text");
-//			return this.loadTextPdf(doc, pdfDoc, pdfBytes, pm);
-//		}
 	}
 	
 	private ImDocument doLoadGenericPdf(final ImDocument doc, final Document pdfDoc, byte[] pdfBytes, int scaleFactor, ProgressMonitor pm) throws IOException {
@@ -357,7 +343,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		Catalog catalog = pdfDoc.getCatalog();
 		
 		//	parse PDF
-		HashMap objects = PdfParser.getObjects(pdfBytes);
+		HashMap objects = PdfParser.getObjects(pdfBytes, pdfDoc.getSecurityManager());
 		
 		//	decrypt streams and strings
 		PdfParser.decryptObjects(objects, pdfDoc.getSecurityManager());
@@ -889,19 +875,19 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	private ImDocument doLoadTextPdf(final ImDocument doc, final Document pdfDoc, byte[] pdfBytes, ProgressMonitor pm) throws IOException {
 		
 		//	build progress monitor with synchronized methods instead of synchronizing in-code
-		final SynchronizedProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? ((SynchronizedProgressMonitor) pm) : new SynchronizedProgressMonitor(pm));
+		SynchronizedProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? ((SynchronizedProgressMonitor) pm) : new SynchronizedProgressMonitor(pm));
 		
 		//	load document structure (IcePDF is better at that ...)
-		final Catalog catalog = pdfDoc.getCatalog();
+		Catalog catalog = pdfDoc.getCatalog();
 		
 		//	parse PDF
-		final HashMap objects = PdfParser.getObjects(pdfBytes);
+		HashMap objects = PdfParser.getObjects(pdfBytes, pdfDoc.getSecurityManager());
 		
 		//	decrypt streams and strings
 		PdfParser.decryptObjects(objects, pdfDoc.getSecurityManager());
 		
 		//	get basic page data (takes progress to 30%)
-		final PPageData[] pData = this.getPdfPageData(doc, true, catalog.getPageTree(), objects, spm);
+		PPageData[] pData = this.getPdfPageData(doc, true, catalog.getPageTree(), objects, spm);
 		
 		//	fill pages
 		this.addTextPdfPages(doc, pData, pdfDoc, objects, spm);
@@ -3155,7 +3141,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		PageTree pageTree = catalog.getPageTree();
 		
 		//	parse PDF
-		HashMap objects = PdfParser.getObjects(pdfBytes);
+		HashMap objects = PdfParser.getObjects(pdfBytes, pdfDoc.getSecurityManager());
 		
 		//	decrypt streams and strings
 		PdfParser.decryptObjects(objects, pdfDoc.getSecurityManager());
@@ -3845,7 +3831,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		PageTree pageTree = catalog.getPageTree();
 		
 		//	parse PDF
-		HashMap objects = PdfParser.getObjects(pdfBytes);
+		HashMap objects = PdfParser.getObjects(pdfBytes, pdfDoc.getSecurityManager());
 		
 		//	decrypt streams and strings
 		PdfParser.decryptObjects(objects, pdfDoc.getSecurityManager());
@@ -4146,10 +4132,13 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					spm.setInfo(" - getting image data ...");
 					PageImageInputStream piis = imageStore.getPageImageAsStream(doc.docId, (p - pDelta));
 					piis.close();
-					int dpi = piis.currentDpi;
-					pageBoxes[p] = new BoundingBox(0, ((piis.originalWidth * piis.currentDpi) / piis.originalDpi), 0, ((piis.originalHeight * piis.currentDpi) / piis.originalDpi));
-					spm.setInfo(" - resolution is " + dpi + " DPI, page bounds are " + pageBoxes[p].toString());
-					return;
+					
+					//	check DPI to exclude page images from earlier text based import import (can happen due to embedded OCR)
+					if (piis.currentDpi != defaultTextPdfPageImageDpi) {
+						pageBoxes[p] = new BoundingBox(0, ((piis.originalWidth * piis.currentDpi) / piis.originalDpi), 0, ((piis.originalHeight * piis.currentDpi) / piis.originalDpi));
+						spm.setInfo(" - resolution is " + piis.currentDpi + " DPI, page bounds are " + pageBoxes[p].toString());
+						return;
+					}
 				}
 				
 				//	get raw image
@@ -4288,15 +4277,17 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					spm.setInfo(" - getting image data ...");
 					PageImageInputStream piisLeft = imageStore.getPageImageAsStream(doc.docId, ((pp * 2) - ppDelta));
 					piisLeft.close();
-					int dpiLeft = piisLeft.currentDpi;
-					pageBoxes[pp * 2] = new BoundingBox(0, ((piisLeft.originalWidth * piisLeft.currentDpi) / piisLeft.originalDpi), 0, ((piisLeft.originalHeight * piisLeft.currentDpi) / piisLeft.originalDpi));
-					spm.setInfo(" - resolution left is " + dpiLeft + " DPI, page bounds are " + pageBoxes[pp * 2].toString());
 					PageImageInputStream piisRight = imageStore.getPageImageAsStream(doc.docId, ((pp * 2) - ppDelta + 1));
 					piisRight.close();
-					int dpiRight = piisRight.currentDpi;
-					pageBoxes[(pp * 2) + 1] = new BoundingBox(0, ((piisRight.originalWidth * piisRight.currentDpi) / piisRight.originalDpi), 0, ((piisRight.originalHeight * piisRight.currentDpi) / piisRight.originalDpi));
-					spm.setInfo(" - resolution right is " + dpiRight + " DPI, page bounds are " + pageBoxes[(pp * 2) + 1].toString());
-					return;
+					
+					//	check DPI to exclude page images from earlier text based import import (can happen due to embedded OCR)
+					if ((piisLeft.currentDpi != defaultTextPdfPageImageDpi) && (piisRight.currentDpi != defaultTextPdfPageImageDpi)) {
+						pageBoxes[pp * 2] = new BoundingBox(0, ((piisLeft.originalWidth * piisLeft.currentDpi) / piisLeft.originalDpi), 0, ((piisLeft.originalHeight * piisLeft.currentDpi) / piisLeft.originalDpi));
+						spm.setInfo(" - resolution left is " + piisLeft.currentDpi + " DPI, page bounds are " + pageBoxes[pp * 2].toString());
+						pageBoxes[(pp * 2) + 1] = new BoundingBox(0, ((piisRight.originalWidth * piisRight.currentDpi) / piisRight.originalDpi), 0, ((piisRight.originalHeight * piisRight.currentDpi) / piisRight.originalDpi));
+						spm.setInfo(" - resolution right is " + piisRight.currentDpi + " DPI, page bounds are " + pageBoxes[(pp * 2) + 1].toString());
+						return;
+					}
 				}
 				
 				//	get raw image
@@ -4493,6 +4484,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	private static final boolean overlapsConsiderably(Rectangle2D rect1, Rectangle2D rect2) {
 		if (!rect1.intersects(rect2))
 			return false;
+		if (rect1.contains(rect2) || rect2.contains(rect1))
+			return true;
 		Rectangle2D uRect = new Rectangle2D.Float();
 		Rectangle2D.union(rect1, rect2, uRect);
 		Rectangle2D iRect = new Rectangle2D.Float();
