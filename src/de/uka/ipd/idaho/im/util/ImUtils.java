@@ -931,6 +931,34 @@ public class ImUtils implements ImagingConstants {
 	}
 	
 	/**
+	 * Compare the positions of a caption and a target area (the bounding box
+	 * of what the caption refers to) in a page. In particular, this method
+	 * checks if the caption is beside the target, with at most one inch of
+	 * horizontal distance in between, and if the vertical center of each of
+	 * the two arguments lies within the other one.
+	 * @param captionBox the caption bounding box
+	 * @param targetBox the target area bounding box
+	 * @param dpi the resolution of the underlying page image
+	 * @return true if caption and target match in terms of relative position
+	 */
+	public static boolean isCaptionBesideTargetMatch(BoundingBox captionBox, BoundingBox targetBox, int dpi) {
+		
+		//	compute heights and overlap
+		int captionBoxHeight = (captionBox.bottom - captionBox.top);
+		int targetBoxHeight = (targetBox.bottom - targetBox.top);
+		int overlapHeight = (Math.min(captionBox.bottom, targetBox.bottom) - Math.max(captionBox.top, targetBox.top));
+		
+		//	80% overlap of narrower in wider part should do
+		if ((overlapHeight * 5) < (Math.min(captionBoxHeight, targetBoxHeight) * 4))
+			return false;
+		
+		//	check distance (less than an inch)
+		int captionOnLeftDist = Math.abs(targetBox.left - captionBox.right);
+		int captionOnRightDist = Math.abs(captionBox.left - targetBox.right);
+		return (Math.min(captionOnLeftDist, captionOnRightDist) <= dpi);
+	}
+	
+	/**
 	 * Retrieve the rows of a table. If table rows are already marked, this
 	 * method simply returns them. If no rows are marked, this method tries to
 	 * generate them. If generation fails, e.g. if the argument region does not
@@ -1204,20 +1232,77 @@ public class ImUtils implements ImagingConstants {
 	 * @return true if the rows of the argument tables are compatible
 	 */
 	public static boolean areTableRowsCompatible(ImRegion table1, ImRegion table2) {
-		return areTableRowsCompatible(table1, table2, false);
+//		return areTableRowsCompatible(table1, table2, false);
+		return areTableRowsCompatible(table1, table2, true);
 	}
+//	
+//	/**
+//	 * Test if the rows of two tables are compatible. In particular, this means
+//	 * that (a) the tables have the same number of rows, and (b) the rows have
+//	 * the same leading labels. In addition, both tables have to be attached to
+//	 * their pages.
+//	 * @param table1 the first table
+//	 * @param table2 the second table
+//	 * @param fuzzyLabels allow some degree of mismatch in row labels?
+//	 * @return true if the rows of the argument tables are compatible
+//	 */
+//	public static boolean areTableRowsCompatible(ImRegion table1, ImRegion table2, boolean fuzzyLabels) {
+//		if ((table1.getPage() == null) || (table2.getPage() == null))
+//			return false;
+//		
+//		//	get cells
+//		ImRegion[][] cells1 = getTableCells(table1, null, null);
+//		if (cells1 == null)
+//			return false;
+//		ImRegion[][] cells2 = getTableCells(table2, null, null);
+//		if (cells2 == null)
+//			return false;
+//		
+//		//	do we have the same number of rows?
+//		if (cells1.length != cells2.length)
+//			return false;
+//		
+//		//	compare row labels (safe for header row)
+//		int labelMatchCount = 0;
+//		int labelMismatchCount = 0;
+//		for (int r = 1; r < cells1.length; r++) {
+//			ImWord[] words1 = cells1[r][0].getWords();
+//			ImWord[] words2 = cells2[r][0].getWords();
+//			if (words1.length != words2.length) {
+//				if (fuzzyLabels) {
+//					labelMismatchCount++;
+//					continue;
+//				}
+//				else return false;
+//			}
+//			if (words1.length == 0)
+//				continue;
+//			Arrays.sort(words1, textStreamOrder);
+//			String label1 = getString(words1[0], words1[words1.length-1], true);
+//			Arrays.sort(words2, textStreamOrder);
+//			String label2 = getString(words2[0], words2[words2.length-1], true);
+//			if (label1.equals(label2))
+//				labelMatchCount++;
+//			else if (fuzzyLabels)
+//				labelMismatchCount++;
+//			else return false;
+//		}
+//		
+//		//	(majority of) row labels match
+//		return ((labelMatchCount == 0) ? (labelMismatchCount == 0) : (labelMatchCount > labelMismatchCount));
+//	}
 	
 	/**
 	 * Test if the rows of two tables are compatible. In particular, this means
-	 * that (a) the tables have the same number of rows, and (b) the rows have
-	 * the same leading labels. In addition, both tables have to be attached to
-	 * their pages.
+	 * that (a) the tables have the same number of rows, and (b, if desired)
+	 * the rows have the same leading labels. In addition, both tables have to
+	 * be attached to their pages.
 	 * @param table1 the first table
 	 * @param table2 the second table
-	 * @param fuzzyLabels allow some degree of mismatch in row labels?
+	 * @param compareLabels compare row labels?
 	 * @return true if the rows of the argument tables are compatible
 	 */
-	public static boolean areTableRowsCompatible(ImRegion table1, ImRegion table2, boolean fuzzyLabels) {
+	public static boolean areTableRowsCompatible(ImRegion table1, ImRegion table2, boolean compareLabels) {
 		if ((table1.getPage() == null) || (table2.getPage() == null))
 			return false;
 		
@@ -1229,38 +1314,60 @@ public class ImUtils implements ImagingConstants {
 		if (cells2 == null)
 			return false;
 		
-		//	do we have the same number of rows
+		//	do we have the same number of rows?
 		if (cells1.length != cells2.length)
 			return false;
 		
-		//	compare row labels (safe for header row)
-		int labelMatchCount = 0;
-		int labelMismatchCount = 0;
-		for (int r = 1; r < cells1.length; r++) {
-			ImWord[] words1 = cells1[r][0].getWords();
-			ImWord[] words2 = cells2[r][0].getWords();
-			if (words1.length != words2.length) {
-				if (fuzzyLabels) {
-					labelMismatchCount++;
-					continue;
-				}
-				else return false;
-			}
-			if (words1.length == 0)
-				continue;
-			Arrays.sort(words1, textStreamOrder);
-			String label1 = getString(words1[0], words1[words1.length-1], true);
-			Arrays.sort(words2, textStreamOrder);
-			String label2 = getString(words2[0], words2[words2.length-1], true);
-			if (label1.equals(label2))
-				labelMatchCount++;
-			else if (fuzzyLabels)
-				labelMismatchCount++;
-			else return false;
+		//	if we're not comparing row labels, we're done
+		if (!compareLabels)
+			return true;
+		
+		//	get and compare row labels
+		String[] labels1 = ImUtils.getTableRowLabels(cells1);
+		String[] labels2 = ImUtils.getTableRowLabels(cells2);
+		if ((labels1 == null) || (labels2 == null) || (labels1.length != labels2.length))
+			return false;
+		for (int l = 1; l < labels1.length; l++) {
+			if (!labels1[l].equals(labels2[l]))
+				return false;
 		}
 		
-		//	(majority of) row labels match
-		return ((labelMatchCount == 0) ? (labelMismatchCount == 0) : (labelMatchCount > labelMismatchCount));
+		//	we're OK
+		return true;
+	}
+	
+	/**
+	 * Obtain the row labels of a table. If the argument table is not attached
+	 * to its page, this method returns null. The length of the returned array
+	 * is exactly the number of rows in the argument table, with empty labels
+	 * represented by empty strings; no array entry is null.
+	 * @param table the table to obtain the row labels for
+	 * @return an array holding the row labels
+	 */
+	public static String[] getTableRowLabels(ImRegion table) {
+		if (table.getPage() == null)
+			return null;
+		
+		//	get cells
+		ImRegion[][] cells = getTableCells(table, null, null);
+		if (cells == null)
+			return null;
+		
+		//	return row labels
+		return getTableRowLabels(cells);
+	}
+	private static String[] getTableRowLabels(ImRegion[][] cells) {
+		String[] rowLabels = new String[cells.length];
+		for (int r = 0; r < cells.length; r++) {
+			ImWord[] words = cells[r][0].getWords();
+			if (words.length == 0)
+				rowLabels[r] = "";
+			else {
+				Arrays.sort(words, textStreamOrder);
+				rowLabels[r] = getString(words[0], words[words.length-1], true);
+			}
+		}
+		return rowLabels;
 	}
 	
 	/**
@@ -1298,22 +1405,79 @@ public class ImUtils implements ImagingConstants {
 	 * @return true if the columns of the argument tables are compatible
 	 */
 	public static boolean areTableColumnsCompatible(ImRegion table1, ImRegion table2) {
-		return areTableColumnsCompatible(table1, table2, false);
+//		return areTableColumnsCompatible(table1, table2, false);
+		return areTableColumnsCompatible(table1, table2, true);
 	}
+//	
+//	/**
+//	 * Test if the columns of two tables are compatible. In particular, this
+//	 * means that (a) the tables have the same number of columns, and (b) the
+//	 * columns have the same headers. In addition, both tables have to be
+//	 * attached to their pages. If <code>fuzzyHeaders</code> is
+//	 * <code>true</code>, the majority of the column headers has to match
+//	 * instead of all of them.
+//	 * @param table1 the first table
+//	 * @param table2 the second table
+//	 * @param fuzzyHeaders allow some degree of mismatch in column headers?
+//	 * @return true if the columns of the argument tables are compatible
+//	 */
+//	public static boolean areTableColumnsCompatible(ImRegion table1, ImRegion table2, boolean fuzzyHeaders) {
+//		if ((table1.getPage() == null) || (table2.getPage() == null))
+//			return false;
+//		
+//		//	get cells
+//		ImRegion[][] cells1 = getTableCells(table1, null, null);
+//		if (cells1 == null)
+//			return false;
+//		ImRegion[][] cells2 = getTableCells(table2, null, null);
+//		if (cells2 == null)
+//			return false;
+//		
+//		//	do we have the same number of columns
+//		if (cells1[0].length != cells2[0].length)
+//			return false;
+//		
+//		//	compare column headers (safe for label column)
+//		int headerMatchCount = 0;
+//		int headerMismatchCount = 0;
+//		for (int c = 1; c < cells1[0].length; c++) {
+//			ImWord[] words1 = cells1[0][c].getWords();
+//			ImWord[] words2 = cells2[0][c].getWords();
+//			if (words1.length != words2.length) {
+//				if (fuzzyHeaders) {
+//					headerMismatchCount++;
+//					continue;
+//				}
+//				else return false;
+//			}
+//			if (words1.length == 0)
+//				continue;
+//			Arrays.sort(words1, textStreamOrder);
+//			String header1 = getString(words1[0], words1[words1.length-1], true);
+//			Arrays.sort(words2, textStreamOrder);
+//			String header2 = getString(words2[0], words2[words2.length-1], true);
+//			if (header1.equals(header2))
+//				headerMatchCount++;
+//			else if (fuzzyHeaders)
+//				headerMismatchCount++;
+//			else return false;
+//		}
+//		
+//		//	(majority of) column headers match
+//		return ((headerMatchCount == 0) ? (headerMismatchCount == 0) : (headerMatchCount > headerMismatchCount));
+//	}
 	
 	/**
 	 * Test if the columns of two tables are compatible. In particular, this
-	 * means that (a) the tables have the same number of columns, and (b) the
-	 * columns have the same headers. In addition, both tables have to be
-	 * attached to their pages. If <code>fuzzyHeaders</code> is
-	 * <code>true</code>, the majority of the column headers has to match
-	 * instead of all of them.
+	 * means that (a) the tables have the same number of columns, and (b, if
+	 * desired) the columns have the same headers. In addition, both tables
+	 * have to be attached to their pages.
 	 * @param table1 the first table
 	 * @param table2 the second table
-	 * @param fuzzyHeaders allow some degree of mismatch in column headers?
+	 * @param compareHeaders compare row labels?
 	 * @return true if the columns of the argument tables are compatible
 	 */
-	public static boolean areTableColumnsCompatible(ImRegion table1, ImRegion table2, boolean fuzzyHeaders) {
+	public static boolean areTableColumnsCompatible(ImRegion table1, ImRegion table2, boolean compareHeaders) {
 		if ((table1.getPage() == null) || (table2.getPage() == null))
 			return false;
 		
@@ -1329,34 +1493,56 @@ public class ImUtils implements ImagingConstants {
 		if (cells1[0].length != cells2[0].length)
 			return false;
 		
-		//	compare column headers (safe for label column)
-		int headerMatchCount = 0;
-		int headerMismatchCount = 0;
-		for (int c = 1; c < cells1[0].length; c++) {
-			ImWord[] words1 = cells1[0][c].getWords();
-			ImWord[] words2 = cells2[0][c].getWords();
-			if (words1.length != words2.length) {
-				if (fuzzyHeaders) {
-					headerMismatchCount++;
-					continue;
-				}
-				else return false;
-			}
-			if (words1.length == 0)
-				continue;
-			Arrays.sort(words1, textStreamOrder);
-			String header1 = getString(words1[0], words1[words1.length-1], true);
-			Arrays.sort(words2, textStreamOrder);
-			String header2 = getString(words2[0], words2[words2.length-1], true);
-			if (header1.equals(header2))
-				headerMatchCount++;
-			else if (fuzzyHeaders)
-				headerMismatchCount++;
-			else return false;
+		//	if we're not comparing row labels, we're done
+		if (!compareHeaders)
+			return true;
+		
+		//	get and compare column headers
+		String[] labels1 = ImUtils.getTableColumnHeaders(cells1);
+		String[] labels2 = ImUtils.getTableColumnHeaders(cells2);
+		if ((labels1 == null) || (labels2 == null) || (labels1.length != labels2.length))
+			return false;
+		for (int l = 1; l < labels1.length; l++) {
+			if (!labels1[l].equals(labels2[l]))
+				return false;
 		}
 		
-		//	(majority of) column headers match
-		return ((headerMatchCount == 0) ? (headerMismatchCount == 0) : (headerMatchCount > headerMismatchCount));
+		//	we're OK
+		return true;
+	}
+	
+	/**
+	 * Obtain the row labels of a table. If the argument table is not attached
+	 * to its page, this method returns null. The length of the returned array
+	 * is exactly the number of rows in the argument table, with empty labels
+	 * represented by empty strings; no array entry is null.
+	 * @param table the table to obtain the row labels for
+	 * @return an array holding the row labels
+	 */
+	public static String[] getTableColumnHeaders(ImRegion table) {
+		if (table.getPage() == null)
+			return null;
+		
+		//	get cells
+		ImRegion[][] cells = getTableCells(table, null, null);
+		if (cells == null)
+			return null;
+		
+		//	return column headers
+		return getTableColumnHeaders(cells);
+	}
+	private static String[] getTableColumnHeaders(ImRegion[][] cells) {
+		String[] colHeaders = new String[cells[0].length];
+		for (int c = 0; c < cells.length; c++) {
+			ImWord[] words = cells[0][c].getWords();
+			if (words.length == 0)
+				colHeaders[c] = "";
+			else {
+				Arrays.sort(words, textStreamOrder);
+				colHeaders[c] = getString(words[0], words[words.length-1], true);
+			}
+		}
+		return colHeaders;
 	}
 	
 	/**
