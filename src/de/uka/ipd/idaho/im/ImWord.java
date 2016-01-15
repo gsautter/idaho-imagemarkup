@@ -313,6 +313,9 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	/** the text stream type indicating a text stream is a table */
 	public static final String TEXT_STREAM_TYPE_TABLE = "table";
 	
+	/** the text stream type indicating a text stream is note associated with a table */
+	public static final String TEXT_STREAM_TYPE_TABLE_NOTE = "tableNote";
+	
 	/** the text stream type indicating a text stream is a page title (i.e., a
 	 * page header or footer) */
 	public static final String TEXT_STREAM_TYPE_PAGE_TITLE = LiteratureConstants.PAGE_TITLE_TYPE;
@@ -671,6 +674,8 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	 * @param nextRelation the new relation to the next word
 	 */
 	public void setNextRelation(char nextRelation) {
+		if (nextRelation == this.nextRelation)
+			return;
 		char oldNextRelation = this.nextRelation;
 		if ((NEXT_RELATION_CONTINUE == nextRelation) || (NEXT_RELATION_HYPHENATED == nextRelation) || (NEXT_RELATION_PARAGRAPH_END == nextRelation))
 			this.nextRelation = nextRelation;

@@ -433,12 +433,15 @@ public class PdfExtractorTest implements ImagingConstants {
 //		pdfName = "Zootaxa/zt00094.pdf"; // same problem, same fix
 		
 		//	figure problems
-		pdfName = "390-715-1-PB.pdf"; // TODO supplements for figures on page 3 come up blank ==> found "Unsupported color conversion request"
+//		pdfName = "390-715-1-PB.pdf"; // TODO_ne supplements for figures on page 3 come up blank ==> found "Unsupported color conversion request", now re-rendering via IcePDF
 		
+		//	figure and font problems
+		pdfName = "Neumeyer et al. 2015.pdf"; // TODO figures embedded as stripes, require assembling, pages 2, 3, 4, 5, 7
+		pdfName = "367-370_Loebl.pdf"; // TODO image on page 2 comes up black
 		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
-		aimAtPage = 3; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
+		aimAtPage = 2; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
 		//	TODO try pages 12, 13, 16, 17, and 21 of Prasse 1979
 		System.out.println("Aiming at page " + aimAtPage);
 		final PdfExtractor pdfExtractor = new PdfExtractor(pdfDataPath, pis, true);
@@ -495,8 +498,8 @@ public class PdfExtractorTest implements ImagingConstants {
 //			doc = pdfExtractor.loadImagePdf(doc, pdfDoc, bytes, true, scaleFactor, null);
 //			doc = pdfExtractor.loadImagePdfBlocks(doc, pdfDoc, bytes, scaleFactor, null);
 //			doc = pdfExtractor.loadImagePdfPages(doc, pdfDoc, bytes, true, scaleFactor, null);
-			doc = pdfExtractor.loadTextPdf(doc, pdfDoc, bytes, pdm);
-//			doc = pdfExtractor.loadGenericPdf(doc, pdfDoc, bytes, scaleFactor, null);
+//			doc = pdfExtractor.loadTextPdf(doc, pdfDoc, bytes, pdm);
+			doc = pdfExtractor.loadGenericPdf(doc, pdfDoc, bytes, scaleFactor, null);
 			
 //			ProcessStatusMonitor psm = new ProcessStatusMonitor() {
 //				public void setStep(String step) {

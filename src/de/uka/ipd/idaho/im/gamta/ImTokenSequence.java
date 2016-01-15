@@ -438,7 +438,7 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 	private ArrayList tokens = new ArrayList();
 	private HashMap imWordTokens = new HashMap();
 	
-	//	these two are for internal use only, namely for sub sequences, and for wrapping regions
+	//	this one is for internal use only, namely for sub sequences, and for wrapping regions
 	ImTokenSequence(Tokenizer tokenizer) {
 		this(tokenizer, new ImWord[0], NORMALIZATION_LEVEL_STREAMS);
 	}

@@ -1541,6 +1541,7 @@ P(t)=P0(1-t)2+P1t(1-t)+P2t2
 			 */
 			//	TODO measure where curve is going, length, angle, etc.
 			//	TODO and, for heaven's sake, measure only how high up spline really goes, not middle point !!!
+			//	TODO ==> copy that stuff from PDF Font.
 		}
 		void closePath() {}
 		void closePath(int dx, int dy) {

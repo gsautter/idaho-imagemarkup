@@ -232,6 +232,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		this.setTextStreamTypeColor(ImWord.TEXT_STREAM_TYPE_MAIN_TEXT, Color.LIGHT_GRAY);
 		this.setTextStreamTypeColor(ImWord.TEXT_STREAM_TYPE_PAGE_TITLE, Color.BLUE);
 		this.setTextStreamTypeColor(ImWord.TEXT_STREAM_TYPE_TABLE, Color.PINK);
+		this.setTextStreamTypeColor(ImWord.TEXT_STREAM_TYPE_TABLE_NOTE, Color.CYAN);
 		
 		ImPage[] pages = this.document.getPages();
 		this.pagePanels = new ImPageMarkupPanel[pages.length];
