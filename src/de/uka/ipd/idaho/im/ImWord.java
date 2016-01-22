@@ -576,6 +576,15 @@ public class ImWord extends ImRegion implements ImAnnotation {
 			if (prevOldNext != null)
 				this.getDocument().notifyAttributeChanged(prevOldNext, PREVIOUS_WORD_ATTRIBUTE, this.prevWord);
 		}
+		
+		/* TODO consider registering as text stream head with
+		 * - page if predecessor is null or on other page
+		 * - document if predecessor is null
+		 * ==> on getting text stream heads
+		 *   - use registered words only
+		 *   - and sort out ones that ceased to be text stream heads
+		 * ==> way lower effort for getting text stream heads
+		 */
 	}
 	
 	/**
@@ -649,6 +658,15 @@ public class ImWord extends ImRegion implements ImAnnotation {
 			if (nextOldPrev != null)
 				this.getDocument().notifyAttributeChanged(nextOldPrev, NEXT_WORD_ATTRIBUTE, this.nextWord);
 		}
+		
+		/* TODO consider registering old successor as text stream head with
+		 * - page if new predecessor is null or on other page
+		 * - document if new predecessor is null
+		 * ==> on getting text stream heads
+		 *   - use registered words only
+		 *   - and sort out ones that ceased to be text stream heads
+		 * ==> way lower effort for getting text stream heads
+		 */
 	}
 	
 	/**

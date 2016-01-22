@@ -1002,37 +1002,81 @@ public class ImUtils implements ImagingConstants {
 		ImRegion[] tableRows = getRegionsInside(page, table.bounds, ImRegion.TABLE_ROW_TYPE, false);
 		
 		//	generate rows if none exist
-		if (tableRows.length == 0) {
-			
-			//	get words
-			ImWord[] tableWords = page.getWordsInside(table.bounds);
-			if (tableWords.length == 0)
-				return null;
-			
-			//	assess column occupancy
-			int[] rowWordCols = new int[table.bounds.bottom - table.bounds.top];
-			Arrays.fill(rowWordCols, 0);
-			for (int w = 0; w < tableWords.length; w++) {
-				for (int r = Math.max(table.bounds.top, tableWords[w].bounds.top); r < Math.min(table.bounds.bottom, tableWords[w].bounds.bottom); r++)
-					rowWordCols[r - table.bounds.top] += (tableWords[w].bounds.right - tableWords[w].bounds.left);
-			}
-			
-			//	collect row gaps
-			ArrayList rowGaps = new ArrayList();
-			TreeSet rowGapWidths = new TreeSet(Collections.reverseOrder());
-			collectGaps(rowGaps, rowGapWidths, rowWordCols, minRowMargin, (minRowCount - 1));
-			
-			//	do we have anything to work with?
-			if (rowGaps.isEmpty())
-				return null;
-			
-			//	create row regions
-			tableRows = new ImRegion[rowGaps.size() + 1];
-			for (int g = 0; g <= rowGaps.size(); g++) {
-				int tableRowTop = table.bounds.top + ((g == 0) ? 0 : ((Gap) rowGaps.get(g-1)).end);
-				int tableRowBottom = ((g == rowGaps.size()) ? table.bounds.bottom : (table.bounds.top + ((Gap) rowGaps.get(g)).start));
-				tableRows[g] = new ImRegion(table.getDocument(), table.pageId, new BoundingBox(table.bounds.left, table.bounds.right, tableRowTop, tableRowBottom), ImRegion.TABLE_ROW_TYPE);
-			}
+		if (tableRows.length == 0)
+			tableRows = createTableRows(table, minRowMargin, minRowCount);
+		
+		//	finally ...
+		return tableRows;
+	}
+	
+	/**
+	 * Create the rows of a table. This method always tries to generate table
+	 * rows, ignoring any existing ones. If generation fails, e.g. if the
+	 * argument region does not contain any words, or if no row gaps exist,
+	 * this method returns null. The generated table rows are not attached to
+	 * the page.
+	 * @param table the table whose rows to retrieve
+	 * @param minColumnMargin the minimum margin between two columns
+	 * @param minColumnCount the minimum number of columns
+	 * @return an array holding the table rows
+	 */
+	public static ImRegion[] createTableRows(ImRegion table) {
+		
+		//	get page
+		ImPage page = table.getPage();
+		if (page == null)
+			page = table.getDocument().getPage(table.pageId);
+		
+		//	estimate minimums and get columns
+		return createTableRows(table,  (page.getImageDPI() / 50) /* about 0.5mm */, 0);
+	}
+	
+	/**
+	 * Create the rows of a table. This method always tries to generate table
+	 * rows, ignoring any existing ones. If generation fails, e.g. if the
+	 * argument region does not contain any words, or if no row gaps exist,
+	 * this method returns null. The generated table rows are not attached to
+	 * the page.
+	 * @param table the table whose rows to retrieve
+	 * @param minRowMargin the minimum margin between two rows
+	 * @param minRowCount the minimum number of rows
+	 * @return an array holding the table rows
+	 */
+	public static ImRegion[] createTableRows(ImRegion table, int minRowMargin, int minRowCount) {
+		
+		//	get page
+		ImPage page = table.getPage();
+		if (page == null)
+			page = table.getDocument().getPage(table.pageId);
+		
+		//	get words
+		ImWord[] tableWords = page.getWordsInside(table.bounds);
+		if (tableWords.length == 0)
+			return null;
+		
+		//	assess column occupancy
+		int[] rowWordCols = new int[table.bounds.bottom - table.bounds.top];
+		Arrays.fill(rowWordCols, 0);
+		for (int w = 0; w < tableWords.length; w++) {
+			for (int r = Math.max(table.bounds.top, tableWords[w].bounds.top); r < Math.min(table.bounds.bottom, tableWords[w].bounds.bottom); r++)
+				rowWordCols[r - table.bounds.top] += (tableWords[w].bounds.right - tableWords[w].bounds.left);
+		}
+		
+		//	collect row gaps
+		ArrayList rowGaps = new ArrayList();
+		TreeSet rowGapWidths = new TreeSet(Collections.reverseOrder());
+		collectGaps(rowGaps, rowGapWidths, rowWordCols, minRowMargin, (minRowCount - 1));
+		
+		//	do we have anything to work with?
+		if (rowGaps.isEmpty())
+			return null;
+		
+		//	create row regions
+		ImRegion[] tableRows = new ImRegion[rowGaps.size() + 1];
+		for (int g = 0; g <= rowGaps.size(); g++) {
+			int tableRowTop = table.bounds.top + ((g == 0) ? 0 : ((Gap) rowGaps.get(g-1)).end);
+			int tableRowBottom = ((g == rowGaps.size()) ? table.bounds.bottom : (table.bounds.top + ((Gap) rowGaps.get(g)).start));
+			tableRows[g] = new ImRegion(table.getDocument(), table.pageId, new BoundingBox(table.bounds.left, table.bounds.right, tableRowTop, tableRowBottom), ImRegion.TABLE_ROW_TYPE);
 		}
 		
 		//	finally ...
@@ -1081,37 +1125,79 @@ public class ImUtils implements ImagingConstants {
 		ImRegion[] tableCols = getRegionsInside(page, table.bounds, ImRegion.TABLE_COL_TYPE, false);
 		
 		//	generate columns if none exist
-		if (tableCols.length == 0) {
-			
-			//	get words
-			ImWord[] tableWords = page.getWordsInside(table.bounds);
-			if (tableWords.length == 0)
-				return null;
-			
-			//	assess row occupancy
-			int[] colWordRows = new int[table.bounds.right - table.bounds.left];
-			Arrays.fill(colWordRows, 0);
-			for (int w = 0; w < tableWords.length; w++) {
-				for (int c = Math.max(table.bounds.left, tableWords[w].bounds.left); c < Math.min(table.bounds.right, tableWords[w].bounds.right); c++)
-					colWordRows[c - table.bounds.left] += (tableWords[w].bounds.bottom - tableWords[w].bounds.top);
-			}
-			
-			//	collect column gaps
-			ArrayList colGaps = new ArrayList();
-			TreeSet colGapWidths = new TreeSet(Collections.reverseOrder());
-			collectGaps(colGaps, colGapWidths, colWordRows, minColumnMargin, (minColumnCount - 1));
-			
-			//	do we have anything to work with?
-			if (colGaps.isEmpty())
-				return null;
-			
-			//	create column regions
-			tableCols = new ImRegion[colGaps.size() + 1];
-			for (int g = 0; g <= colGaps.size(); g++) {
-				int tableColLeft = table.bounds.left + ((g == 0) ? 0 : ((Gap) colGaps.get(g-1)).end);
-				int tableColRight = ((g == colGaps.size()) ? table.bounds.right : (table.bounds.left + ((Gap) colGaps.get(g)).start));
-				tableCols[g] = new ImRegion(tableWords[0].getDocument(), tableWords[0].pageId, new BoundingBox(tableColLeft, tableColRight, table.bounds.top, table.bounds.bottom), ImRegion.TABLE_COL_TYPE);
-			}
+		if (tableCols.length == 0)
+			tableCols = createTableColumns(table, minColumnMargin, minColumnCount);
+		
+		//	finally ...
+		return tableCols;
+	}
+	
+	/**
+	 * Create the columns of a table. This method always tries to generate
+	 * table columns, ignoring any existing ones. If generation fails, e.g. if
+	 * the argument region does not contain any words, or if no column gaps
+	 * exist, this method returns null. The generated table columns are not
+	 * attached to the page.
+	 * @param table the table whose columns to retrieve
+	 * @return an array holding the table columns
+	 */
+	public static ImRegion[] createTableColumns(ImRegion table) {
+		
+		//	get page
+		ImPage page = table.getPage();
+		if (page == null)
+			page = table.getDocument().getPage(table.pageId);
+		
+		//	estimate minimums and get columns
+		return createTableColumns(table, (page.getImageDPI() / 30) /* less than 1mm */, 0);
+	}
+	
+	/**
+	 * Create the columns of a table. This method always tries to generate
+	 * table columns, ignoring any existing ones. If generation fails, e.g. if
+	 * the argument region does not contain any words, or if no column gaps
+	 * exist, this method returns null. The generated table columns are not
+	 * attached to the page.
+	 * @param table the table whose columns to retrieve
+	 * @param minColumnMargin the minimum margin between two columns
+	 * @param minColumnCount the minimum number of columns
+	 * @return an array holding the table columns
+	 */
+	public static ImRegion[] createTableColumns(ImRegion table, int minColumnMargin, int minColumnCount) {
+		
+		//	get page
+		ImPage page = table.getPage();
+		if (page == null)
+			page = table.getDocument().getPage(table.pageId);
+		
+		//	get words
+		ImWord[] tableWords = page.getWordsInside(table.bounds);
+		if (tableWords.length == 0)
+			return null;
+		
+		//	assess row occupancy
+		int[] colWordRows = new int[table.bounds.right - table.bounds.left];
+		Arrays.fill(colWordRows, 0);
+		for (int w = 0; w < tableWords.length; w++) {
+			for (int c = Math.max(table.bounds.left, tableWords[w].bounds.left); c < Math.min(table.bounds.right, tableWords[w].bounds.right); c++)
+				colWordRows[c - table.bounds.left] += (tableWords[w].bounds.bottom - tableWords[w].bounds.top);
+		}
+		
+		//	collect column gaps
+		ArrayList colGaps = new ArrayList();
+		TreeSet colGapWidths = new TreeSet(Collections.reverseOrder());
+		collectGaps(colGaps, colGapWidths, colWordRows, minColumnMargin, (minColumnCount - 1));
+		
+		//	do we have anything to work with?
+		if (colGaps.isEmpty())
+			return null;
+		
+		//	create column regions
+		ImRegion[] tableCols = new ImRegion[colGaps.size() + 1];
+		for (int g = 0; g <= colGaps.size(); g++) {
+			int tableColLeft = table.bounds.left + ((g == 0) ? 0 : ((Gap) colGaps.get(g-1)).end);
+			int tableColRight = ((g == colGaps.size()) ? table.bounds.right : (table.bounds.left + ((Gap) colGaps.get(g)).start));
+			tableCols[g] = new ImRegion(tableWords[0].getDocument(), tableWords[0].pageId, new BoundingBox(tableColLeft, tableColRight, table.bounds.top, table.bounds.bottom), ImRegion.TABLE_COL_TYPE);
 		}
 		
 		//	finally ...
