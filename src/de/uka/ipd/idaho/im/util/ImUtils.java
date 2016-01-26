@@ -1619,7 +1619,7 @@ public class ImUtils implements ImagingConstants {
 	}
 	private static String[] getTableColumnHeaders(ImRegion[][] cells) {
 		String[] colHeaders = new String[cells[0].length];
-		for (int c = 0; c < cells.length; c++) {
+		for (int c = 0; c < cells[0].length; c++) {
 			ImWord[] words = cells[0][c].getWords();
 			if (words.length == 0)
 				colHeaders[c] = "";
