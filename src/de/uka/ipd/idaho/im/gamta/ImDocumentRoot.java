@@ -72,8 +72,8 @@ import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.ImPage;
 import de.uka.ipd.idaho.im.ImRegion;
 import de.uka.ipd.idaho.im.ImWord;
+import de.uka.ipd.idaho.im.util.ImDocumentIO;
 import de.uka.ipd.idaho.im.util.ImUtils;
-import de.uka.ipd.idaho.im.util.ImfIO;
 
 /**
  * Implementation of a GAMTA document wrapped around an Image Markup document.
@@ -548,7 +548,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		}
 		
 		public int length() {
-			return (this.base.getEndIndex() - this.base.getStartIndex());
+			return (this.base.getEndOffset() - this.base.getStartOffset());
 		}
 		public char charAt(int index) {
 			return this.base.charAt(index);
@@ -1902,6 +1902,25 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	}
 	private static final String hexDigits = "0123456789ABCDEF";
 	
+	/**
+	 * Retrieve the type of the annotations that regions of a given type show
+	 * up as in the wrapper. This method mainly maps table related region types
+	 * to respective annotation types, which are kept HTML compliant. If regions
+	 * of the argument type are not mapped to annotations at all, this method
+	 * returns null.
+	 * @param regType the region type to map
+	 * @return the corresponding annotation type
+	 */
+	public static String getRegionAnnotationType(String regType) {
+		if (ImRegion.TABLE_CELL_TYPE.equals(regType))
+			return TABLE_CELL_ANNOTATION_TYPE;
+		else if (ImRegion.TABLE_ROW_TYPE.equals(regType))
+			return TABLE_ROW_ANNOTATION_TYPE;
+		else if (ImRegion.TABLE_COL_TYPE.equals(regType))
+			return null;
+		else return regType;
+	}
+	
 	//	!!! TEST ONLY !!!
 	public static void main(String[] args) throws Exception {
 		try {
@@ -1918,7 +1937,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		
 		//	load document
 		InputStream docIn = new BufferedInputStream(new FileInputStream(new File(imfDataPath, docName)));
-		ImDocument doc = ImfIO.loadDocument(docIn);
+		ImDocument doc = ImDocumentIO.loadDocument(docIn);
 		docIn.close();
 		ImPage[] pages = doc.getPages();
 		System.out.println("Got document with " + pages.length + " pages");
