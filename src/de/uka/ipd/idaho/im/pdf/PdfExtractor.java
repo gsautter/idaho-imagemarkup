@@ -44,6 +44,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -910,6 +911,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		spm.setBaseProgress(30);
 		spm.setProgress(0);
 		spm.setMaxProgress(35);
+		final Set[] pInFigureWords = new Set[pData.length];
 		pf = new ParallelFor() {
 			public void doFor(int p) throws Exception {
 				
@@ -931,6 +933,20 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				if (pData[p].figures.length != 0) {
 					spm.setInfo("Storing figures in page " + p + " of " + pData.length);
 					storeFiguresAsSupplements(doc, pData[p], pdfDoc, objects, magnification, spm);
+				}
+				
+				//	collect words that lie inside images
+				if (pData[p].figures.length != 0) {
+					spm.setInfo("Getting in-figures words in page " + p + " of " + pData.length);
+					for (int f = 0; f < pData[p].figures.length; f++) {
+						for (int w = 0; w < pData[p].words.length; w++)
+							if (pData[p].figures[f].bounds.intersects(pData[p].words[w].bounds)) {
+								if (pInFigureWords[p] == null)
+									pInFigureWords[p] = new HashSet();
+								pInFigureWords[p].add(pData[p].words[w]);
+							}
+					}
+					spm.setInfo("Found " + ((pInFigureWords[p] == null) ? "no" : ("" + pInFigureWords[p].size())) + " in-figures words in page " + p + " of " + pData.length);
 				}
 			}
 		};
@@ -1157,6 +1173,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 							float splitTokenWidth = ((pWordWidth * splitTokenWidths[s]) / splitTokenWidthSum);
 							PWord spWord = new PWord(splitCharCodes[s], splitTokens[s], new Rectangle2D.Float(splitTokenLeft, ((float) pData[p].words[w].bounds.getMinY()), splitTokenWidth, ((float) pData[p].words[w].bounds.getHeight())), pData[p].words[w].fontSize, pData[p].words[w].fontDirection, pData[p].words[w].font);
 							pWordList.add(spWord);
+							if ((pInFigureWords[p] != null) && pInFigureWords[p].contains(pData[p].words[w]))
+								pInFigureWords[p].add(spWord);
 							splitTokenLeft += splitTokenWidth;
 							System.out.println(" --> split word part " + spWord.str + ", bounds are " + spWord.bounds);
 						}
@@ -1172,6 +1190,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 							float splitTokenWidth = ((pWordWidth * splitTokenWidths[s]) / splitTokenWidthSum);
 							PWord spWord = new PWord(splitCharCodes[s], splitTokens[s], new Rectangle2D.Float(((float) pData[p].words[w].bounds.getMinX()), splitTokenLeft, ((float) pData[p].words[w].bounds.getWidth()), splitTokenWidth), pData[p].words[w].fontSize, pData[p].words[w].fontDirection, pData[p].words[w].font);
 							pWordList.add(spWord);
+							if ((pInFigureWords[p] != null) && pInFigureWords[p].contains(pData[p].words[w]))
+								pInFigureWords[p].add(spWord);
 							splitTokenLeft += splitTokenWidth;
 							System.out.println(" --> split word part " + spWord.str + ", bounds are " + spWord.bounds);
 						}
@@ -1187,6 +1207,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 							float splitTokenWidth = ((pWordWidth * splitTokenWidths[s]) / splitTokenWidthSum);
 							PWord spWord = new PWord(splitCharCodes[s], splitTokens[s], new Rectangle2D.Float(((float) pData[p].words[w].bounds.getMinX()), (splitTokenLeft - splitTokenWidth), ((float) pData[p].words[w].bounds.getWidth()), splitTokenWidth), pData[p].words[w].fontSize, pData[p].words[w].fontDirection, pData[p].words[w].font);
 							pWordList.add(spWord);
+							if ((pInFigureWords[p] != null) && pInFigureWords[p].contains(pData[p].words[w]))
+								pInFigureWords[p].add(spWord);
 							splitTokenLeft -= splitTokenWidth;
 							System.out.println(" --> split word part " + spWord.str + ", bounds are " + spWord.bounds);
 						}
@@ -1197,6 +1219,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				if (pWordList.size() != pData[p].words.length)
 					pData[p].words = ((PWord[]) pWordList.toArray(new PWord[pWordList.size()]));
 				pWordList = null;
+				
+				//	give status update
 				if (pData[p].words.length == 0)
 					spm.setInfo(" --> empty page");
 				else spm.setInfo(" --> got " + pData[p].words.length + " words in PDF");
@@ -1313,6 +1337,17 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						for (int w = 0; w < pdfLineWords.size(); w++) {
 							WordText pdfWordText = ((WordText) pdfLineWords.get(w));
 							
+							//	skip over in-figure words
+							if (pData[p].figures.length != 0) {
+								for (int f = 0; f < pData[p].figures.length; f++)
+									if (pData[p].figures[f].bounds.intersects(pdfWordText.getBounds())) {
+										pdfWordText = null;
+										break;
+									}
+								if (pdfWordText == null)
+									continue;
+							}
+							
 							//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
 							BoundingBox wb = getBoundingBox(pdfWordText.getBounds(), pData[p].pdfPageBox, magnification, 0);
 							rg.fillRect((wb.left - (cleaningTolerance / 2)), (wb.top - (cleaningTolerance / 2)), (wb.right - wb.left + cleaningTolerance), (wb.bottom - wb.top + cleaningTolerance));
@@ -1332,6 +1367,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					
 					//	clean all own words
 					for (int w = 0; w < pData[p].words.length; w++) {
+						
+						//	don't clean in-figure words, as that destroys figure images
+						if ((pInFigureWords[p] != null) && pInFigureWords[p].contains(pData[p].words[w]))
+							continue;
 						
 						//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
 						BoundingBox wb = getBoundingBox(pData[p].words[w].bounds, pData[p].pdfPageBox, magnification, pData[p].rotate);
@@ -1364,7 +1403,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					
 					//	TODO if whole page to flip, flip page image as well
 					
-					//	paint own words
+					//	paint own words (_including_ in-figure words, as IcePDF might have messed up)
 					for (int w = 0; w < pData[p].words.length; w++) {
 						
 						//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
@@ -1456,6 +1495,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				
 				//	add words to page
 				for (int w = 0; w < pData[p].words.length; w++) {
+					
+					//	skip over in-figure words
+					if ((pInFigureWords[p] != null) && pInFigureWords[p].contains(pData[p].words[w]))
+						continue;
 					
 					//	make sure word has some minimum width
 					BoundingBox wb = getBoundingBox(pData[p].words[w].bounds, pData[p].pdfPageBox, magnification, pData[p].rotate);
@@ -1630,7 +1673,6 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				}
 				
 				//	obtain visual page structure
-//				Region pageRootRegion = PageImageAnalysis.getPageRegion(api, imageDPIs[p], false, spm);
 				Region pageRootRegion = PageImageAnalysis.getPageRegion(api, imageDPIs[p], minColumnMargin, minBlockMargin, columnAreas, false, spm);
 				
 				//	add page content to document
@@ -1638,6 +1680,11 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				
 				//	add any figures
 				if (pData[p].figures.length != 0) {
+					
+					//	get any images marked in page structure
+					ImRegion[] pageStructImages = pages[p].getRegions(ImRegion.IMAGE_TYPE);
+					int[] pageStructImageCoverage = new int[pageStructImages.length];
+					Arrays.fill(pageStructImageCoverage, 0);
 					
 					//	re-wrap page image, so brightness is re-computed
 					api = Imaging.wrapImage(pageImage, null);
@@ -1711,9 +1758,38 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 								break;
 						}
 						
-						//	add image region
-						if ((fLeft < fRight) && (fTop < fBottom))
-							new ImRegion(pages[p], new BoundingBox(fLeft, fRight, fTop, fBottom), ImRegion.IMAGE_TYPE);
+						//	add image region (and replace almost-duplicates from page structuring)
+						if ((fLeft < fRight) && (fTop < fBottom)) {
+							BoundingBox fBounds = new BoundingBox(fLeft, fRight, fTop, fBottom);
+							
+							//	test if image region already exists
+							for (int i = 0; i < pageStructImages.length; i++)
+								if (pageStructImages[i].bounds.equals(fBounds)) {
+									fBounds = null;
+									break;
+								}
+							if (fBounds == null)
+								continue;
+							
+							//	mark image region
+							new ImRegion(pages[p], fBounds, ImRegion.IMAGE_TYPE);
+							
+							//	count overlap with images marked by page structuring
+							for (int i = 0; i < pageStructImages.length; i++) {
+								if (fBounds.overlaps(pageStructImages[i].bounds))
+									pageStructImageCoverage[i] += (
+											(Math.min(fBounds.right, pageStructImages[i].bounds.right) - Math.max(fBounds.left, pageStructImages[i].bounds.left))
+											*
+											(Math.min(fBounds.bottom, pageStructImages[i].bounds.bottom) - Math.max(fBounds.top, pageStructImages[i].bounds.top))
+										);
+							}
+						}
+					}
+					
+					//	remove image regions from structuring replaced by (presumably more accurate ones) from embedded figures
+					for (int i = 0; i < pageStructImages.length; i++) {
+						if ((pageStructImageCoverage[i] * 5) > (((pageStructImages[i].bounds.right - pageStructImages[i].bounds.left) * (pageStructImages[i].bounds.bottom - pageStructImages[i].bounds.top)) * 4))
+							pages[p].removeRegion(pageStructImages[i]);
 					}
 				}
 				
@@ -4674,7 +4750,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	}
 	
 	private BufferedImage decodeFlate(byte[] stream, Hashtable params, Library library, Resources resources) throws IOException {
-		BufferedImage dRgbBi = this.decodeFlateDeviceRGB(stream, params, library, resources);
+		BufferedImage dRgbBi = this.decodeDeviceRGB(stream, "FlateDecode", params, library, resources);
 		if (dRgbBi != null)
 			return dRgbBi;
 		
@@ -4704,7 +4780,29 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		}
 	}
 	
-	private BufferedImage decodeFlateDeviceRGB(byte[] stream, Hashtable params, Library library, Resources resources) throws IOException {
+	private BufferedImage decodeOther(byte[] stream, Hashtable params, String filter, Library library, Resources resources) throws IOException {
+		BufferedImage dRgbBi = this.decodeDeviceRGB(stream, null, params, library, resources);
+		if (dRgbBi != null)
+			return dRgbBi;
+		
+		SeekableInputConstrainedWrapper streamInputWrapper = new SeekableInputConstrainedWrapper(new SeekableByteArrayInputStream(stream), 0, stream.length, true);
+		Stream str = new Stream(library, params, streamInputWrapper);
+		try {
+			Color biBackgroundColor = this.getBackgroundColor(params);
+			BufferedImage bi = str.getImage(biBackgroundColor, resources, false);
+			if (bi != null)
+				System.out.println(" ==> got image, size is " + bi.getWidth() + " x " + bi.getHeight());
+			else System.out.println(" ==> Could not decode image");
+			return bi;
+		}
+		catch (Exception e) {
+			System.out.println(" ==> Could not decode image: " + e.getMessage());
+			e.printStackTrace(System.out);
+			return null;
+		}
+	}
+	
+	private BufferedImage decodeDeviceRGB(byte[] stream, String filter, Hashtable params, Library library, Resources resources) throws IOException {
 		
 		//	test if we can handle this one
 		Object csObj = params.get("ColorSpace");
@@ -4730,8 +4828,11 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			bitsPerComponent = ((Number) bcpObj).intValue();
 		else return null;
 		
-		//	prepare decoding stream
-		BufferedInputStream fd = new BufferedInputStream(new FlateDecode(library, params, new ByteArrayInputStream(stream)));
+		//	prepare decoding stream TODO observe filter
+		InputStream biIn;
+		if ("FlateDecode".equals(filter))
+			biIn = new BufferedInputStream(new FlateDecode(library, params, new ByteArrayInputStream(stream)));
+		else biIn = new ByteArrayInputStream(stream);
 		
 		//	create bit masks
 		int colorComponents = 3; // this is constant for RGB
@@ -4756,7 +4857,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				
 				//	make sure we have enough bits left in window
 				while (bitsRemaining < bitsPerPixel) {
-					int nextByte = fd.read();
+					int nextByte = biIn.read();
 					bitData <<= 8;
 					bitData |= nextByte;
 					bitsRemaining += 8;
@@ -4789,27 +4890,11 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			}
 		}
 		
+		//	TODO consider modifying stream, including parameters, so IcePDF creates a nice page image, including the figure
+		
 		//	finally ...
-		fd.close();
+		biIn.close();
 		return bi;
-	}
-	
-	private BufferedImage decodeOther(byte[] stream, Hashtable params, String filter, Library library, Resources resources) throws IOException {
-		SeekableInputConstrainedWrapper streamInputWrapper = new SeekableInputConstrainedWrapper(new SeekableByteArrayInputStream(stream), 0, stream.length, true);
-		Stream str = new Stream(library, params, streamInputWrapper);
-		try {
-			Color biBackgroundColor = this.getBackgroundColor(params);
-			BufferedImage bi = str.getImage(biBackgroundColor, resources, false);
-			if (bi != null)
-				System.out.println(" ==> got image, size is " + bi.getWidth() + " x " + bi.getHeight());
-			else System.out.println(" ==> Could not decode image");
-			return bi;
-		}
-		catch (Exception e) {
-			System.out.println(" ==> Could not decode image: " + e.getMessage());
-			e.printStackTrace(System.out);
-			return null;
-		}
 	}
 	
 	private Color getBackgroundColor(Hashtable params) {

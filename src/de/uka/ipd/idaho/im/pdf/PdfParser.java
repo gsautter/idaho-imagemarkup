@@ -1660,31 +1660,72 @@ public class PdfParser {
 					continue;
 				}
 				
-				//	check if words on same line
+				//	check if words on same line, last word starts before current one, and vertical overlap sufficient
 				if (word.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) {
-					float lwCenterY = ((float) ((lastWord.bounds.getMinY() + lastWord.bounds.getMaxY()) / 2));
-					float wCenterY = ((float) ((word.bounds.getMinY() + word.bounds.getMaxY()) / 2));
-					if ((lwCenterY < word.bounds.getMaxY()) && (lwCenterY > word.bounds.getMinY())) { /* last word center Y inside word height */ }
-					else if ((wCenterY < lastWord.bounds.getMaxY()) && (wCenterY > lastWord.bounds.getMinY())) { /* word center Y inside last word height */ }
-					else {
+					if (lastWord.bounds.getMinX() > word.bounds.getMinX()) {
 						lastWord = word;
-						if (DEBUG_JOIN_WORDS) System.out.println(" --> different lines");
+						if (DEBUG_JOIN_WORDS) System.out.println(" --> inverse overlap");
 						continue;
+					}
+					if (word.fontSize == lastWord.fontSize) {
+						float uTop = ((float) Math.max(lastWord.bounds.getMaxY(), word.bounds.getMaxY()));
+						float iTop = ((float) Math.min(lastWord.bounds.getMaxY(), word.bounds.getMaxY()));
+						float iBottom = ((float) Math.max(lastWord.bounds.getMinY(), word.bounds.getMinY()));
+						float uBottom = ((float) Math.min(lastWord.bounds.getMinY(), word.bounds.getMinY()));
+						if (((iTop - iBottom) * 10) < ((uTop - uBottom) * 9)) {
+							lastWord = word;
+							if (DEBUG_JOIN_WORDS) System.out.println(" --> different lines");
+							continue;
+						}
+					}
+					else {
+						float lwCenterY = ((float) ((lastWord.bounds.getMinY() + lastWord.bounds.getMaxY()) / 2));
+						float wCenterY = ((float) ((word.bounds.getMinY() + word.bounds.getMaxY()) / 2));
+						if ((lwCenterY < word.bounds.getMaxY()) && (lwCenterY > word.bounds.getMinY())) { /* last word center Y inside word height */ }
+						else if ((wCenterY < lastWord.bounds.getMaxY()) && (wCenterY > lastWord.bounds.getMinY())) { /* word center Y inside last word height */ }
+						else {
+							lastWord = word;
+							if (DEBUG_JOIN_WORDS) System.out.println(" --> different lines");
+							continue;
+						}
 					}
 				}
 				else {
-					float lwMinX = ((float) Math.min(lastWord.bounds.getMinX(), lastWord.bounds.getMaxX()));
-					float lwMaxX = ((float) Math.max(lastWord.bounds.getMinX(), lastWord.bounds.getMaxX()));
-					float lwCenterX = ((float) ((lastWord.bounds.getMinX() + lastWord.bounds.getMaxX()) / 2));
-					float wMinX = ((float) Math.min(word.bounds.getMinX(), word.bounds.getMaxX()));
-					float wMaxX = ((float) Math.max(word.bounds.getMinX(), word.bounds.getMaxX()));
-					float wCenterX = ((float) ((word.bounds.getMinX() + word.bounds.getMaxX()) / 2));
-					if ((lwCenterX < wMaxX) && (lwCenterX > wMinX)) { /* last word center Y inside word height (turned by 90°) */ }
-					else if ((wCenterX < lwMaxX) && (wCenterX > lwMinX)) { /* word center Y inside last word height (turned by 90°) */ }
-					else {
+					if ((word.fontDirection == PWord.BOTTOM_UP_FONT_DIRECTION) && (lastWord.bounds.getMinY() > word.bounds.getMinY())) {
 						lastWord = word;
-						if (DEBUG_JOIN_WORDS) System.out.println(" --> different lines");
+						if (DEBUG_JOIN_WORDS) System.out.println(" --> inverse overlap");
 						continue;
+					}
+					else if ((word.fontDirection == PWord.TOP_DOWN_FONT_DIRECTION) && (lastWord.bounds.getMaxY() < word.bounds.getMaxY())) {
+						lastWord = word;
+						if (DEBUG_JOIN_WORDS) System.out.println(" --> inverse overlap");
+						continue;
+					}
+					if (word.fontSize == lastWord.fontSize) {
+						float uLeft = ((float) Math.min(lastWord.bounds.getMinX(), word.bounds.getMinX()));
+						float iLeft = ((float) Math.max(lastWord.bounds.getMinX(), word.bounds.getMinX()));
+						float iRight = ((float) Math.max(lastWord.bounds.getMaxX(), word.bounds.getMaxX()));
+						float uRight = ((float) Math.min(lastWord.bounds.getMaxX(), word.bounds.getMaxX()));
+						if (((iRight - iLeft) * 10) < ((uRight - uLeft) * 9)) {
+							lastWord = word;
+							if (DEBUG_JOIN_WORDS) System.out.println(" --> different lines");
+							continue;
+						}
+					}
+					else {
+						float lwMinX = ((float) Math.min(lastWord.bounds.getMinX(), lastWord.bounds.getMaxX()));
+						float lwMaxX = ((float) Math.max(lastWord.bounds.getMinX(), lastWord.bounds.getMaxX()));
+						float lwCenterX = ((float) ((lastWord.bounds.getMinX() + lastWord.bounds.getMaxX()) / 2));
+						float wMinX = ((float) Math.min(word.bounds.getMinX(), word.bounds.getMaxX()));
+						float wMaxX = ((float) Math.max(word.bounds.getMinX(), word.bounds.getMaxX()));
+						float wCenterX = ((float) ((word.bounds.getMinX() + word.bounds.getMaxX()) / 2));
+						if ((lwCenterX < wMaxX) && (lwCenterX > wMinX)) { /* last word center Y inside word height (turned by 90°) */ }
+						else if ((wCenterX < lwMaxX) && (wCenterX > lwMinX)) { /* word center Y inside last word height (turned by 90°) */ }
+						else {
+							lastWord = word;
+							if (DEBUG_JOIN_WORDS) System.out.println(" --> different lines");
+							continue;
+						}
 					}
 				}
 				
@@ -1706,9 +1747,9 @@ public class PdfParser {
 			}
 		}
 		
-		//	TODO combine figures that are adjacent in one dimension and identical in the other
+		//	combine figures that are adjacent in one dimension and identical in the other
 		
-		//	TODO do so recursively, both top-down and left-right, to also catch weirdly tiled images
+		//	do so recursively, both top-down and left-right, to also catch weirdly tiled images
 		while ((figures != null) && (figures.size() > 1)) {
 			int figureCount = figures.size();
 			
@@ -1924,7 +1965,7 @@ public class PdfParser {
 	}
 	
 	private static final boolean DEBUG_RENDER_PAGE_CONTENT = true;
-	private static final boolean DEBUG_JOIN_WORDS = false;
+	private static final boolean DEBUG_JOIN_WORDS = true;
 	
 	//	observe <userSpace> = <textSpace> * <textMatrix> * <transformationMatrix>
 	private static float[] transform(float x, float y, float z, float[][] matrix) {
@@ -2602,7 +2643,7 @@ public class PdfParser {
 				this.startLine();
 				
 				//	render char sequence
-				String rStr = this.renderCharSequence(str);
+				String rStr = this.renderCharSequence(str, 0.0f, 0.0f);
 				
 				//	finish line, remembering any last word
 				this.endLine();
@@ -2644,6 +2685,8 @@ public class PdfParser {
 			this.startLine();
 			
 			//	handle array entries
+			float prevShift = 0.0f;
+			float nextShift = 0.0f;
 			for (int s = 0; s < stros.size(); s++) {
 				Object o = stros.get(s);
 				if (o instanceof CharSequence) {
@@ -2653,7 +2696,20 @@ public class PdfParser {
 							totalRendered.append(str);
 					}
 					else {
-						String rStr = this.renderCharSequence(str);
+						
+						if (s == 0)
+							prevShift = 0.0f;
+						else if (stros.get(s-1) instanceof Number)
+							prevShift = (((Number) stros.get(s-1)).floatValue() / 1000);
+						else prevShift = 0.0f;
+						
+						if ((s+1) == stros.size())
+							nextShift = 0.0f;
+						else if (stros.get(s+1) instanceof Number)
+							nextShift = (((Number) stros.get(s+1)).floatValue() / 1000);
+						else nextShift = 0.0f;
+						
+						String rStr = this.renderCharSequence(str, prevShift, nextShift);
 						totalRendered.append(rStr);
 					}
 				}
@@ -2685,7 +2741,7 @@ public class PdfParser {
 		private float[] top;
 		private float[] bottom;
 		
-		private String renderCharSequence(CharSequence cs) {
+		private String renderCharSequence(CharSequence cs, float prevShift, float nextShift) {
 			StringBuffer rendered = new StringBuffer();
 			
 			//	put characters in array to facilitate modification
@@ -2726,8 +2782,28 @@ public class PdfParser {
 				
 				//	whitespace char, remember end of previous word (if any)
 				if (isSpace) {
-					this.endWord();
-					rendered.append(' ');
+					//	compute effective space width and effective last shift (only at start and end of char sequence, though)
+					//	copy from width computation resulting from drawChar()
+					float spaceWidth = ((((this.pwrFont.getCharWidth(ch) * this.pwrFontSize) + (this.pwrWordSpacing * 1000)) * this.pwrHorizontalScaling) / (1000 * 100));
+					//	copy from width computation resulting from array shift
+					float prevShiftWidth = ((c == 0) ? (prevShift * this.pwrFontSize) : 0.0f);
+					float nextShiftWidth = (((c+1) == cscs.length) ? (nextShift * this.pwrFontSize) : 0.0f);
+//					
+//					System.out.println("space width is " + spaceWidth + ", previous shift was " + prevShiftWidth + ", next shift is " + nextShiftWidth);
+//					System.out.println("char width is " + this.pwrFont.getCharWidth(ch));
+//					System.out.println("word spacing is " + this.pwrWordSpacing);
+//					System.out.println("horizontal scaling is " + this.pwrHorizontalScaling);
+//					System.out.println("previous shift is " + prevShift);
+					
+					//	end word if space not compensated (to at least 95%) by previous left (positive) shift
+					if ((spaceWidth * 19) > ((prevShiftWidth + nextShiftWidth) * 20)) {
+						System.out.println(" ==> space accepted");
+						this.endWord();
+						rendered.append(' ');
+					}
+					else System.out.println(" ==> space rejected as compensated by shifts");
+//					this.endWord();
+//					rendered.append(' ');
 				}
 				
 				//	non-whitespace char, remember start of word

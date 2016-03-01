@@ -59,7 +59,7 @@ import de.uka.ipd.idaho.im.ImPage;
 import de.uka.ipd.idaho.im.ImRegion;
 import de.uka.ipd.idaho.im.ImWord;
 import de.uka.ipd.idaho.im.pdf.PdfExtractor;
-import de.uka.ipd.idaho.im.util.ImfIO;
+import de.uka.ipd.idaho.im.util.ImDocumentIO;
 import de.uka.ipd.idaho.im.utilities.ImageDisplayDialog;
 
 /**
@@ -438,10 +438,21 @@ public class PdfExtractorTest implements ImagingConstants {
 		//	figure and font problems
 		pdfName = "Neumeyer et al. 2015.pdf"; // TODO figures embedded as stripes, require assembling, pages 2, 3, 4, 5, 7
 		pdfName = "367-370_Loebl.pdf"; // TODO image on page 2 comes up black
+		pdfName = "AP_54-4_289-294.pdf"; // TODO find problem in page 1
+//		
+//		//	old (<50) ZooKeys volumes, with font and text-in-figure issues
+//		pdfName = "ZooKeys/ZK_article_1939.pdf"; // TODO_ne spaces after ligatures compensated by text-from-array shifts
+//		pdfName = "ZooKeys/ZK_article_1939.pdf"; // TODO_ne words rendered inside figures
+		
+		//	very weird stuff ... from Donat, of course ...
+//		pdfName = "295-306_Disney & Prescher.pdf"; // TODO_ne reversed word on page 4
+//		pdfName = "295-306_Disney & Prescher.pdf"; // TODO_ne distorted headings on page 11
+//		pdfName = "295-306_Disney & Prescher.pdf"; // TODO mingled words 'A male' on page 6
+//		pdfName = "295-306_Disney & Prescher.pdf"; // TODO_ne mis-decoded 1-bit RGB bitmap on page 4
 		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
-		aimAtPage = 2; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
+		aimAtPage = 4; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
 		//	TODO try pages 12, 13, 16, 17, and 21 of Prasse 1979
 		System.out.println("Aiming at page " + aimAtPage);
 		final PdfExtractor pdfExtractor = new PdfExtractor(pdfDataPath, pis, true);
@@ -470,7 +481,7 @@ public class PdfExtractorTest implements ImagingConstants {
 		ImDocument doc;
 		if (docFile.exists() && (aimAtPage == -1)) {
 			BufferedInputStream docIn = new BufferedInputStream(new FileInputStream(docFile));
-			doc = ImfIO.loadDocument(docIn);
+			doc = ImDocumentIO.loadDocument(docIn);
 			docIn.close();
 			doc.setDocumentProperty("docId", pdfName);
 		}
@@ -523,7 +534,7 @@ public class PdfExtractorTest implements ImagingConstants {
 			
 			if (aimAtPage == -1) {
 				BufferedOutputStream docOut = new BufferedOutputStream(new FileOutputStream(docFile));
-				ImfIO.storeDocument(doc, docOut);
+				ImDocumentIO.storeDocument(doc, docOut);
 				docOut.flush();
 				docOut.close();
 			}
