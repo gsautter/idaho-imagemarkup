@@ -650,6 +650,186 @@ public abstract class ImDocumentData {
 					putEntry(new ImDocumentEntry(entryName, System.currentTimeMillis(), this.getDataHash()));
 				}
 			};
+//			else return new DataHashOutputStream(new ByteArrayBuffer()) {
+//				public void close() throws IOException {
+//					super.flush();
+//					super.close();
+//					
+//					//	write buffer content to persistent storage only if not already there
+//					File entryDataFile = new File(entryDataFolder, (entryDataFileName + "." + this.getDataHash() + entryDataFileExtension));
+//					if (!entryDataFile.exists()) {
+//						BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(entryDataFile));
+//						((ByteArrayBuffer) this.out).writeTo(out);
+//						out.flush();
+//						out.close();
+//					}
+//					
+//					//	update entry list
+//					putEntry(new ImDocumentEntry(entryName, System.currentTimeMillis(), this.getDataHash()));
+//				}
+//			};
 		}
 	}
+	
+//	/* 
+//	 * Test against ByteArrayOutputStream / ByteArrayInputStream found buffer
+//	 * to not be any faster, and consume _more_ memory before GC. Afterward,
+//	 * the two are about the same. But lacking advantages, we can just keep on
+//	 * using the built-in Java facilities.
+//	 */
+//	
+//	/**
+//	 * Buffer for byte data. As opposed to pairs of ByteArrayOutputStream and
+//	 * ByteArrayInputStream, instances of this class share their internal data
+//	 * structures with input streams obtained from the
+//	 * <code>getInputStream()</code> method, saving considerable copying
+//	 * overhead. On top of this, instances of this class store data in a
+//	 * two-dimensional array (instead of a linear one) and instantiate the
+//	 * second dimension step by step as more data comes in. This saves the
+//	 * lion's share of the overhead incurred by repeatedly doubling the size of
+//	 * a linear array, both in terms of copying and unused space.
+//	 * 
+//	 * @author sautter
+//	 */
+//	public static class ByteArrayBuffer extends OutputStream {
+//		private static final int defaultDataRowLength = 16192;
+//		
+//		private final int dataRowLength;
+//		private int size = 0; // total number of bytes written so far
+//		private byte[][] data = new byte[10][];
+//		private int dataOffset = 0; // index of row currently writing to
+//		private byte[] dataRow = null;
+//		private int dataRowOffset = 0; // index of next byte to write in current row
+//		
+//		/** Constructor
+//		 */
+//		public ByteArrayBuffer() {
+//			this(defaultDataRowLength);
+//		}
+//		
+//		/**
+//		 * Constructor
+//		 * @param dataRowLength the length of individual data rows
+//		 */
+//		public ByteArrayBuffer(int dataRowLength) {
+//			this.dataRowLength = dataRowLength;
+//			this.dataRow = new byte[this.dataRowLength];
+//			this.data[0] = this.dataRow;
+//		}
+//		
+//		/**
+//		 * Retrieve an input stream that reads the data in the buffer from the
+//		 * beginning. If further data is written to the buffer after the input
+//		 * stream is retrieved from this method, the input stream will include
+//		 * the latter data as well.
+//		 * @return an input stream reading the buffered bytes
+//		 */
+//		public InputStream getInputStream() {
+//			return new InputStream() {
+//				private int pos = 0; // total number of bytes read so far
+//				private int dataPos = 0; // index of row currently reading from
+//				private byte[] dataRow = data[this.dataPos];
+//				private int dataRowPos = 0; // index of next byte in row to read
+//				
+//				/* (non-Javadoc)
+//				 * @see java.io.InputStream#available()
+//				 */
+//				public int available() throws IOException {
+//					return (size - this.pos);
+//				}
+//				
+//				/* (non-Javadoc)
+//				 * @see java.io.InputStream#read()
+//				 */
+//				public int read() throws IOException {
+//					if (size <= this.pos)
+//						return -1;
+//					int b = (this.dataRow[this.dataRowPos] & 0xFF);
+//					this.dataRowPos++;
+//					this.pos++;
+//					if (this.dataRowPos == dataRowLength) {
+//						this.dataPos++;
+//						this.dataRow = data[this.dataPos];
+//						this.dataRowPos = 0;
+//					}
+//					return b;
+//				}
+//				
+//				/* (non-Javadoc)
+//				 * @see java.io.InputStream#read(byte[], int, int)
+//				 */
+//				public int read(byte[] buffer, int off, int len) throws IOException {
+//					if (size <= this.pos)
+//						return -1;
+//					int read = 0;
+//					while (len > 0) {
+//						int drLen = Math.min(len, (((this.dataPos < dataOffset) ? dataRowLength : dataRowOffset) - this.dataRowPos));
+//						System.arraycopy(this.dataRow, this.dataRowPos, buffer, off, drLen);
+//						read += drLen;
+//						off += drLen;
+//						len -= drLen;
+//						this.dataRowPos += drLen;
+//						this.pos += drLen;
+//						if (this.pos == size)
+//							break;
+//						if (this.dataRowPos == dataRowLength) {
+//							this.dataPos++;
+//							this.dataRow = data[this.dataPos];
+//							this.dataRowPos = 0;
+//						}
+//					}
+//					return ((read == 0) ? -1 : read);
+//				}
+//			};
+//		}
+//		
+//		/**
+//		 * Write the current content of the buffer to an output stream.
+//		 * @param out the output stream to write to
+//		 * @throws IOException
+//		 */
+//		public void writeTo(OutputStream out) throws IOException {
+//			for (int r = 0; r <= this.dataOffset; r++)
+//				out.write(this.data[r], 0, ((r == this.dataOffset) ? this.dataRowOffset : this.dataRowLength));
+//		}
+//		
+//		/* (non-Javadoc)
+//		 * @see java.io.OutputStream#write(int)
+//		 */
+//		public void write(int b) {
+//			this.ensureCapacity();
+//			this.dataRow[this.dataRowOffset] = ((byte) b);
+//			this.dataRowOffset += 1;
+//			this.size += 1;
+//		}
+//		
+//		/* (non-Javadoc)
+//		 * @see java.io.OutputStream#write(byte[], int, int)
+//		 */
+//		public void write(byte[] buffer, int off, int len) {
+//			while (len > 0) {
+//				this.ensureCapacity();
+//				int drLen = Math.min(len, (this.dataRowLength - this.dataRowOffset));
+//				System.arraycopy(buffer, off, this.dataRow, this.dataRowOffset, drLen);
+//				off += drLen;
+//				len -= drLen;
+//				this.dataRowOffset += drLen;
+//				this.size += drLen;
+//			}
+//		}
+//		
+//		private void ensureCapacity() {
+//			if (this.dataRowOffset < this.dataRow.length)
+//				return;
+//			if ((this.dataOffset + 1) == this.data.length) {
+//				byte[][] data = new byte[this.data.length * 2][];
+//				System.arraycopy(this.data, 0, data, 0, this.data.length);
+//				this.data = data;
+//			}
+//			this.dataRowOffset = 0;
+//			this.dataRow = new byte[this.dataRowLength];
+//			this.dataOffset++;
+//			this.data[this.dataOffset] = this.dataRow;
+//		}
+//	}
 }

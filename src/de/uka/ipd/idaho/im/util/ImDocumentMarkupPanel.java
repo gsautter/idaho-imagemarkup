@@ -53,8 +53,6 @@ import java.awt.event.ItemEvent;
 import java.awt.event.ItemListener;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
-import java.awt.event.WindowAdapter;
-import java.awt.event.WindowEvent;
 import java.awt.font.LineMetrics;
 import java.awt.font.TextLayout;
 import java.awt.image.BufferedImage;
@@ -121,6 +119,7 @@ import de.uka.ipd.idaho.im.analysis.Imaging;
 import de.uka.ipd.idaho.im.util.ImDocumentMarkupPanel.ImDocumentViewControl.AnnotControl;
 import de.uka.ipd.idaho.im.util.ImDocumentMarkupPanel.ImDocumentViewControl.RegionControl;
 import de.uka.ipd.idaho.im.util.ImImageEditorPanel.ImImageEditTool;
+import de.uka.ipd.idaho.stringUtils.StringUtils;
 
 /**
  * Display widget for image markup documents. Instances of this class are best
@@ -1675,8 +1674,11 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		if (this.textStringPercentage == textStringPercentage)
 			return;
 		this.textStringPercentage = textStringPercentage;
-		this.textStringBackground = new Color(Color.WHITE.getRed(), Color.WHITE.getGreen(), Color.WHITE.getBlue(), ((this.textStringPercentage * 255) / 100));
-//		this.textStringForeground = new Color(Color.BLACK.getRed(), Color.BLACK.getGreen(), Color.BLACK.getBlue(), ((this.textStringPercentage * 255) / 100));
+		
+		//	limit background opacity to 80%, so to not completely obfuscate word selection highlighting
+		this.textStringBackground = new Color(Color.WHITE.getRed(), Color.WHITE.getGreen(), Color.WHITE.getBlue(), ((this.textStringPercentage * 255) / 125));
+		
+		//	compute text string opacity
 		int tsfRed;
 		int tsfGreen;
 		int tsfBlue;
@@ -1693,12 +1695,18 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			tsfBlue = 0;
 		}
 		this.textStringForeground = new Color(tsfRed, tsfGreen, tsfBlue, ((this.textStringPercentage * 255) / 100));
+		
+		//	create color model
 		this.textStringColorModel = createTextStringColorModel(this.textStringBackground, this.textStringForeground);
+		
+		//	update display only if visible
 		if (this.isVisible()) {
 			this.textStringPercentageModCount++;
 			this.validate();
 			this.repaint();
 		}
+		
+		//	update display control if change didn't come from there
 		if (isApiCall && (this.idvc != null))
 			this.idvc.wordControl.textStringPercentage.setValue(this.textStringPercentage);
 	}
@@ -1983,7 +1991,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		//	paint trans page word connections
 		if (this.areTextStreamsPainted()) {
 			Color preTpwcColor = graphics.getColor();
-			for (Iterator wcit = transPageWordConnections.iterator(); wcit.hasNext();) {
+			for (Iterator wcit = this.transPageWordConnections.iterator(); wcit.hasNext();) {
 				TransPageWordConnection tpwc = ((TransPageWordConnection) wcit.next());
 				 
 				//	get connector line sequence (zoomed)
@@ -1992,11 +2000,16 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				//	anything to draw?
 				if (cls == null)
 					continue;
-				 
+				
 				//	paint connector line sequence (zoomed)
 				graphics.setColor(getTextStreamTypeColor(tpwc.fromWord.getTextStreamType(), true));
-				for (int p = 0; p < (cls.length-1); p++)
+				for (int p = 0; p < (cls.length-1); p++) {
 					graphics.drawLine(cls[p].x, cls[p].y, cls[p+1].x, cls[p+1].y);
+					if (cls[p].x == cls[p+1].x)
+						graphics.drawLine((cls[p].x + 1), cls[p].y, (cls[p+1].x + 1), cls[p+1].y);
+					else if (cls[p].y == cls[p+1].y)
+						graphics.drawLine(cls[p].x, (cls[p].y + 1), cls[p+1].x, (cls[p+1].y + 1));
+				}
 			}
 			graphics.setColor(preTpwcColor);
 		}
@@ -2138,16 +2151,36 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 * @param word the word to edit
 	 */
 	public void editWord(ImWord word) {
-		this.editWord(word, this.pagePanels[word.pageId]);
+		this.editWord(word, false);
 	}
 	
-	private void editWord(final ImWord word, ImPageMarkupPanel ipmp) {
+	/**
+	 * Open a properties editor for a given word, to modify its string and font
+	 * properties. If the <code>waitForResult</code> argument is false, this
+	 * method returns false immediately after opening the word editor. Client
+	 * code that calls this method as part of a larger action whose outcome
+	 * depends upon the result of calling this method thus has to set it to
+	 * true to work properly.
+	 * @param word the word to edit
+	 * @param waitForResult wait for the word editor to be closed, or return
+	 *            false right away?
+	 * @return true if awaitResult is true and the word editor was closed with
+	 *            its OK button
+	 */
+	public boolean editWord(ImWord word, boolean waitForResult) {
+		return this.editWord(word, this.pagePanels[word.pageId], waitForResult);
+	}
+	
+	private void editWord(ImWord word, ImPageMarkupPanel ipmp) {
+		this.editWord(word, ipmp, false);
+	}
+	private boolean editWord(ImWord word, ImPageMarkupPanel ipmp, boolean awaitResult) {
 		this.editWordPage = ipmp;
 		
 		Component comp = ipmp;
 		Window w = DialogFactory.getTopWindow();
 		if (w == null)
-			return;
+			return false;
 		int xOff = 0;
 		int yOff = 0;
 		while (comp != null) {
@@ -2166,36 +2199,52 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		int y = (Math.round(zoom * word.bounds.top) + this.editWordPage.getTopOffset());
 		IdmpEditWordDialog ewd;
 		if (w instanceof Frame)
-			ewd = new IdmpEditWordDialog(((Frame) w), word);
+			ewd = new IdmpEditWordDialog(((Frame) w), word, awaitResult);
 		else if (w instanceof Dialog)
-			ewd = new IdmpEditWordDialog(((Dialog) w), word);
-		else return;
+			ewd = new IdmpEditWordDialog(((Dialog) w), word, awaitResult);
+		else return false;
 		this.editWordDialog = ewd;
-		if (this.editWordPage != null)
+		if (!awaitResult && (word.getPage() != null))
 			this.beginAtomicAction("Edit Word '" + word.getString() + "'");
 		ewd.setLocation((x + xOff + w.getLocation().x), (y + yOff + w.getLocation().y));
 		ewd.setVisible(true);
+		return ewd.isCommitted();
 	}
+	
+	/* TODO
+ImDocumentMarkupPanel:
+- enable selection action providers to specify likelihood of action to be used:
+  - add isLikely() method to selection actions ...
+  - ... and show ones that return false from that method only on "More"
+  ==> facilitates providing more actions ...
+  ==> ... without cluttering context menu
+
+WordEditDialog: make it volatile dialog (just like word occurrence list), saves tons of effort in ImDocumentMarkupPanel
+	 */
 	
 	private class IdmpEditWordDialog extends EditWordDialog {
 		private ImWord word;
-		IdmpEditWordDialog(Dialog owner, ImWord word) {
-			super(owner, word, getLayoutObjectColor(WORD_ANNOTATION_TYPE, true), false);
+		IdmpEditWordDialog(Dialog owner, ImWord word, boolean modal) {
+			super(owner, word, getLayoutObjectColor(WORD_ANNOTATION_TYPE, true), modal);
 			this.word = word;
 		}
-		IdmpEditWordDialog(Frame owner, ImWord word) {
-			super(owner, word, getLayoutObjectColor(WORD_ANNOTATION_TYPE, true), false);
+		IdmpEditWordDialog(Frame owner, ImWord word, boolean modal) {
+			super(owner, word, getLayoutObjectColor(WORD_ANNOTATION_TYPE, true), modal);
 			this.word = word;
 		}
 		public void dispose() {
 			cleanupSelection();
 			super.dispose();
+			
+			//	clean up internal shortcuts (only if word is attached, though)
 			editWordDialog = null;
-			if (editWordPage != null) {
+			if ((editWordPage != null) && (this.word.getPage() != null)) {
 				editWordPage.textStringImages = null;
-				editWordPage = null;
 				ImDocumentMarkupPanel.this.repaint();
 			}
+			editWordPage = null;
+			
+			//	handle commits
 			if (this.isCommitted()) {
 				String str = this.getString();
 				
@@ -2203,13 +2252,13 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				if (str.length() == 0) {
 					ImWord[] words = {this.word};
 					ImUtils.makeStream(words, ImWord.TEXT_STREAM_TYPE_DELETED, null);
-					if (editWordPage != null)
+					if (!this.isModal() && (this.word.getPage() != null))
 						endAtomicAction();
 					return;
 				}
 				
 				//	test tokenization consistency if in main panel
-				if (editWordPage != null) {
+				if (this.word.getPage() != null) {
 					Tokenizer tokenizer = ((Tokenizer) document.getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER));
 					TokenSequence wordTokens = tokenizer.tokenize(str);
 					if (wordTokens.size() > 1) {
@@ -2238,7 +2287,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				}
 				
 				//	indicate change only if one actually happened (might just have been visual verification)
-				if (updated && (editWordPage != null))
+				if (updated && !this.isModal() && (this.word.getPage() != null))
 					endAtomicAction();
 			}
 		}
@@ -2459,8 +2508,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 * @param type the type of object whose attribute to edit
 	 * @param value the textual value of the object whose attribute to edit
 	 */
-	public void editAttributes(Attributed attributed, final String type, String value) {
-		
+	public void editAttributes(Attributed attributed, String type, String value) {
 		Attributed[] context;
 		if (attributed instanceof ImWord)
 			context = this.document.getPage(((ImWord) attributed).pageId).getWords();
@@ -2470,15 +2518,74 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			context = this.document.getPage(((ImRegion) attributed).pageId).getRegions(((ImRegion) attributed).getType());
 		else context = null;
 		
-		final AttributeEditor aePanel = new AttributeEditor(attributed, type, value, context);
-		
-		final JDialog aeDialog = DialogFactory.produceDialog("Edit Attributes", true);
-		aeDialog.addWindowListener(new WindowAdapter() {
-			public void windowClosed(WindowEvent e) {
-				attributeEditorDialogSize = aeDialog.getSize();
-				attributeEditorDialogLocation = aeDialog.getLocation(attributeEditorDialogLocation);
+		while (attributed != null) {
+			if (attributed instanceof ImWord) {
+				type = ((ImWord) attributed).getType();
+				value = (((ImWord) attributed).getString() + " at " + ((ImWord) attributed).bounds.toString() + " on page " + (((ImWord) attributed).pageId + 1));
 			}
-		});
+			else if (attributed instanceof ImAnnotation) {
+				type = ((ImAnnotation) attributed).getType();
+				value = getAnnotationValue((ImAnnotation) attributed);
+			}
+			else if (attributed instanceof ImRegion) {
+				type = ((ImRegion) attributed).getType();
+				value = (((ImRegion) attributed).getType() + " at " + ((ImRegion) attributed).bounds.toString() + " on page " + (((ImRegion) attributed).pageId + 1));
+			}
+			attributed = this.editAttributes(attributed, context, type, value);
+		}
+	}
+	
+	private String getAnnotationValue(ImAnnotation annot) {
+		
+		//	count out annotation length
+		int annotChars = 0;
+		for (ImWord imw = annot.getFirstWord(); imw != null; imw = imw.getNextWord()) {
+			annotChars += imw.getString().length();
+			if (imw == annot.getLastWord())
+				break;
+		}
+		
+		//	this one's short enough
+		if (annotChars <= 40)
+			return ImUtils.getString(annot.getFirstWord(), annot.getLastWord(), true);
+		
+		//	get end of head
+		ImWord headEnd = annot.getFirstWord();
+		int headChars = 0;
+		for (; headEnd != null; headEnd = headEnd.getNextWord()) {
+			headChars += headEnd.getString().length();
+			if (headChars >= 20)
+				break;
+			if (headEnd == annot.getLastWord())
+				break;
+		}
+		
+		//	get start of tail
+		ImWord tailStart = annot.getLastWord();
+		int tailChars = 0;
+		for (; tailStart != null; tailStart = tailStart.getPreviousWord()) {
+			tailChars += tailStart.getString().length();
+			if (tailChars >= 20)
+				break;
+			if (tailStart == annot.getFirstWord())
+				break;
+			if (tailStart == headEnd)
+				break;
+		}
+		
+		//	met in the middle, use whole string
+		if ((headEnd == tailStart) || (headEnd.getNextWord() == tailStart) || (headEnd.getNextWord() == tailStart.getPreviousWord()))
+			return ImUtils.getString(annot.getFirstWord(), annot.getLastWord(), true);
+		
+		//	give head and tail only if annotation too long
+		else return (ImUtils.getString(annot.getFirstWord(), headEnd, true) + " ... " + ImUtils.getString(tailStart, annot.getLastWord(), true));
+	}
+	
+	private Attributed editAttributes(Attributed attributed, Attributed[] context, final String type, String value) {
+		
+		final AttributeEditor aePanel = new AttributeEditor(attributed, type, value, context);
+		final JDialog aeDialog = DialogFactory.produceDialog("Edit Attributes", true);
+		final Attributed[] nextToOpen = {null};
 		
 		JButton commit = new JButton("OK");
 		commit.setBorder(BorderFactory.createRaisedBevelBorder());
@@ -2487,6 +2594,8 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			public void actionPerformed(ActionEvent ae) {
 				beginAtomicAction("Edit " + type + " Attributes");
 				aePanel.writeChanges();
+				attributeEditorDialogSize = aeDialog.getSize();
+				attributeEditorDialogLocation = aeDialog.getLocation(attributeEditorDialogLocation);
 				aeDialog.dispose();
 				endAtomicAction();
 			}
@@ -2496,12 +2605,83 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		cancel.setPreferredSize(new Dimension(80, 21));
 		cancel.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent ae) {
+				attributeEditorDialogSize = aeDialog.getSize();
+				attributeEditorDialogLocation = aeDialog.getLocation(attributeEditorDialogLocation);
 				aeDialog.dispose();
 			}
 		});
+		
+		JButton previous = null;
+		JButton next = null;
+		if (context != null) {
+			Attributed previousAttributed = null;
+			Attributed nextAttributed = null;
+			if (attributed instanceof ImWord) {
+				previousAttributed = ((ImWord) attributed).getPreviousWord();
+				nextAttributed = ((ImWord) attributed).getNextWord();
+			}
+			else if (attributed instanceof ImAnnotation) {
+				for (int c = 0; c < context.length; c++)
+					if (context[c] == attributed) {
+						previousAttributed = ((c == 0) ? null: context[c-1]);
+						nextAttributed = (((c+1) == context.length) ? null: context[c+1]);
+						break;
+					}
+			}
+			else if (attributed instanceof ImRegion) {
+				Arrays.sort(context, ImUtils.topDownOrder);
+				for (int c = 0; c < context.length; c++)
+					if (context[c] == attributed) {
+						previousAttributed = ((c == 0) ? null: context[c-1]);
+						nextAttributed = (((c+1) == context.length) ? null: context[c+1]);
+						break;
+					}
+			}
+			
+			if (previousAttributed != null) {
+				final Attributed fPreviousAttributed = previousAttributed;
+				previous = new JButton("Previous");
+				previous.setBorder(BorderFactory.createRaisedBevelBorder());
+				previous.setPreferredSize(new Dimension(80, 21));
+				previous.addActionListener(new ActionListener() {
+					public void actionPerformed(ActionEvent ae) {
+						beginAtomicAction("Edit " + type + " Attributes");
+						aePanel.writeChanges();
+						attributeEditorDialogSize = aeDialog.getSize();
+						attributeEditorDialogLocation = aeDialog.getLocation(attributeEditorDialogLocation);
+						aeDialog.dispose();
+						endAtomicAction();
+						nextToOpen[0] = fPreviousAttributed;
+					}
+				});
+			}
+			
+			if (nextAttributed != null) {
+				final Attributed fNextAttributed = nextAttributed;
+				next = new JButton("Next");
+				next.setBorder(BorderFactory.createRaisedBevelBorder());
+				next.setPreferredSize(new Dimension(80, 21));
+				next.addActionListener(new ActionListener() {
+					public void actionPerformed(ActionEvent ae) {
+						beginAtomicAction("Edit " + type + " Attributes");
+						aePanel.writeChanges();
+						attributeEditorDialogSize = aeDialog.getSize();
+						attributeEditorDialogLocation = aeDialog.getLocation(attributeEditorDialogLocation);
+						aeDialog.dispose();
+						endAtomicAction();
+						nextToOpen[0] = fNextAttributed;
+					}
+				});
+			}
+		}
+		
 		JPanel aeButtons = new JPanel(new FlowLayout(FlowLayout.CENTER));
+		if (previous != null)
+			aeButtons.add(previous);
 		aeButtons.add(commit);
 		aeButtons.add(cancel);
+		if (next != null)
+			aeButtons.add(next);
 		
 		aeDialog.getContentPane().setLayout(new BorderLayout());
 		aeDialog.getContentPane().add(aePanel, BorderLayout.CENTER);
@@ -2513,6 +2693,8 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			aeDialog.setLocationRelativeTo(DialogFactory.getTopWindow());
 		else aeDialog.setLocation(attributeEditorDialogLocation);
 		aeDialog.setVisible(true);
+		
+		return nextToOpen[0];
 	}
 	private static Dimension attributeEditorDialogSize = new Dimension(400, 300);
 	private static Point attributeEditorDialogLocation = null;
@@ -2531,7 +2713,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		pdfName = "3868.pdf";
 //		pdfName = "MEZ_909-919.pdf";
 		
-		ImDocument imDoc = ImfIO.loadDocument(new FileInputStream(new File(baseFolder, (pdfName + ".imf"))));
+		ImDocument imDoc = ImDocumentIO.loadDocument(new FileInputStream(new File(baseFolder, (pdfName + ".imf"))));
 //		ImPage[] imPages = imDoc.getPages();
 //		System.out.println("Document loaded, got " + imPages.length + " pages");
 //		for (int p = 0; p < imPages.length; p++) {
@@ -2761,7 +2943,14 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 					Font rf;
 					
 					//	get word baseline
-					int imwBaseline = ((documentBornDigital || (line == null)) ? -1 : Integer.parseInt((String) line.getAttribute(BASELINE_ATTRIBUTE, "-1")));
+//					int imwBaseline = ((documentBornDigital || (line == null)) ? -1 : Integer.parseInt((String) line.getAttribute(BASELINE_ATTRIBUTE, "-1")));
+					int imwBaseline = -1;
+					if (!documentBornDigital) {
+						if ((imwBaseline == -1) && imw.hasAttribute(BASELINE_ATTRIBUTE))
+							imwBaseline = Integer.parseInt((String) line.getAttribute(BASELINE_ATTRIBUTE, "-1"));
+						if ((imwBaseline == -1) && (line != null) && line.hasAttribute(BASELINE_ATTRIBUTE))
+							imwBaseline = Integer.parseInt((String) line.getAttribute(BASELINE_ATTRIBUTE, "-1"));
+					}
 					if (imwBaseline < imw.centerY)
 						imwBaseline = -1;
 					
@@ -2783,7 +2972,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 						fontSize = estimatedWordFontSize;
 						rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
 						TextLayout wtl = new TextLayout(imwString, rf, tsig.getFontRenderContext());
-						imwHasDescent = ((Math.abs(wtl.getBounds().getY()) * 10) < (Math.abs(wtl.getBounds().getHeight()) * 9));
+						imwHasDescent = (this.isDecendingString(imwString, imw.hasAttribute(ITALICS_ATTRIBUTE)) || ((Math.abs(wtl.getBounds().getY()) * 10) < (Math.abs(wtl.getBounds().getHeight()) * 9)));
 //						System.out.println("Adjusting font size for '" + imw.getString() + "', initial bounds are " + wtl.getBounds());
 						while ((wtl.getBounds().getHeight() < (((imwHasDescent || (imwBaseline < 1)) ? imw.bounds.bottom : (imwBaseline + 1)) - imw.bounds.top)) || ((0 < imwBaseline) && (Math.abs(wtl.getBounds().getY()) < ((imwBaseline + 1) - imw.bounds.top)))) {
 							fontSize++;
@@ -2812,7 +3001,22 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 					tsig.translate(-wtl.getBounds().getMinX(), 0);
 					if (hScale != 1)
 						tsig.scale(hScale, 1);
-					tsig.drawString(imwString, 0, ((imwBaseline < 1) ? ((imw.bounds.bottom - imw.bounds.top) - ((documentBornDigital || imwHasDescent) ? Math.round(wlm.getDescent()) : 0)) : (imwBaseline - imw.bounds.top + 1)));
+					tsig.drawString(imwString, 0, (
+								(imwBaseline < 1)
+								?
+								(
+									(imw.bounds.bottom - imw.bounds.top) - (
+										(documentBornDigital || imwHasDescent)
+										?
+										Math.round(wlm.getDescent())
+										:
+										0
+									)
+								)
+								:
+								(imwBaseline - imw.bounds.top + 1)
+							)
+						);
 					
 					//	finally ...
 					tsig.dispose();
@@ -2845,6 +3049,17 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			for (int c = 0; c < str.length(); c++) {
 				if (".,:;°_-~*+'´`\"\u2012\u2013\u2014\u2015\u2212".indexOf(str.charAt(c)) == -1)
 					return false;
+			}
+			return false;
+		}
+		
+		private boolean isDecendingString(String str, boolean italics) {
+			for (int c = 0; c < str.length(); c++) {
+				char bch = StringUtils.getBaseChar(str.charAt(c));
+				if ("gjpqy".indexOf(bch) != -1)
+					return true;
+				else if (italics && (bch == 'f'))
+					return true;
 			}
 			return true;
 		}

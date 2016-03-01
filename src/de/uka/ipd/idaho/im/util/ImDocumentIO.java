@@ -366,10 +366,14 @@ public class ImDocumentIO implements ImagingConstants {
 			if (entry == null)
 				throw new FileNotFoundException(entryName);
 			if (this.entryDataCacheFolder == null) {
-				byte[] entryData = ((byte[]) this.entryDataCache.get(entryName));
+				final byte[] entryData = ((byte[]) this.entryDataCache.get(entryName));
 				if (entryData == null)
 					throw new FileNotFoundException(entryName);
 				else return new ByteArrayInputStream(entryData);
+//				ByteArrayBuffer entryData = ((ByteArrayBuffer) this.entryDataCache.get(entryName));
+//				if (entryData == null)
+//					throw new FileNotFoundException(entryName);
+//				else return entryData.getInputStream();
 			}
 			else {
 				File entryDataFile = new File(this.entryDataCacheFolder, entry.getFileName());
@@ -387,6 +391,12 @@ public class ImDocumentIO implements ImagingConstants {
 						entryDataCache.put(entryName, this.toByteArray());
 					}
 				};
+//				out = new ByteArrayBuffer() {
+//					public void close() throws IOException {
+//						super.close();
+//						entryDataCache.put(entryName, this);
+//					}
+//				};
 			
 			//	we do have a cache folder, use it
 			else {
@@ -1491,25 +1501,31 @@ public class ImDocumentIO implements ImagingConstants {
 		}
 		return string.toString();
 	}
-	
-	/**
-	 * @param args
-	 */
-	public static void main(String[] args) throws Exception {
-		final File baseFolder = new File("E:/Testdaten/PdfExtract/");
-		final String pdfName = "zt00872.pdf";
-		
-		ImDocument imDoc = loadDocument(new FileInputStream(new File(baseFolder, (pdfName + ".imf"))));
-//		ImDocument imDoc = loadDocument(new File(baseFolder, (pdfName + ".new.imd")));
-		
-		File imFile = new File(baseFolder, (pdfName + ".widd.imf"));
-		OutputStream imOut = new BufferedOutputStream(new FileOutputStream(imFile));
-		storeDocument(imDoc, imOut);
-		imOut.flush();
-		imOut.close();
+//	
+//	/**
+//	 * @param args
+//	 */
+//	public static void main(String[] args) throws Exception {
+//		final File baseFolder = new File("E:/Testdaten/PdfExtract/");
+//		final String pdfName = "zt00872.pdf";
 //		
-//		File imFolder = new File(baseFolder, (pdfName + ".widd.imd"));
-//		imFolder.mkdirs();
-//		storeDocument(imDoc, imFolder);
-	}
+//		long startTime = System.currentTimeMillis();
+//		long startMem = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory());
+//		ImDocument imDoc = loadDocument(new FileInputStream(new File(baseFolder, (pdfName + ".imf"))));
+//		System.out.println("LOAD TIME: " + (System.currentTimeMillis() - startTime));
+//		System.out.println("LOAD MEMORY: " + ((Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) - startMem));
+//		System.gc();
+//		System.out.println("LOAD MEMORY GC: " + ((Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) - startMem));
+////		ImDocument imDoc = loadDocument(new File(baseFolder, (pdfName + ".new.imd")));
+//		
+////		File imFile = new File(baseFolder, (pdfName + ".widd.imf"));
+////		OutputStream imOut = new BufferedOutputStream(new FileOutputStream(imFile));
+////		storeDocument(imDoc, imOut);
+////		imOut.flush();
+////		imOut.close();
+////		
+////		File imFolder = new File(baseFolder, (pdfName + ".widd.imd"));
+////		imFolder.mkdirs();
+////		storeDocument(imDoc, imFolder);
+//	}
 }
