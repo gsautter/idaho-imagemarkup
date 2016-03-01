@@ -268,9 +268,18 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			}
 		}
 		private int compare(ImDocumentAnnotation annot1, ImDocumentAnnotation annot2) {
-			if (annot1.firstWord.pageId == annot2.firstWord.pageId)
-				return (annot2.lastWord.pageId - annot1.lastWord.pageId);
-			else return (annot1.firstWord.pageId - annot2.firstWord.pageId);
+			int c = ImUtils.textStreamOrder.compare(annot1.firstWord, annot2.firstWord);
+			if (c != 0)
+				return c;
+			c = ImUtils.textStreamOrder.compare(annot2.lastWord, annot1.lastWord);
+			if (c != 0)
+				return c;
+			return ((int) (annot1.createTime - annot2.createTime));
+			
+//			if (annot1.firstWord.pageId == annot2.firstWord.pageId)
+//				return (annot2.lastWord.pageId - annot1.lastWord.pageId);
+//			else return (annot1.firstWord.pageId - annot2.firstWord.pageId);
+			
 //			int c = 0;
 //			if (annot1 == annot2)
 //				return c;
@@ -290,7 +299,6 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 //			if (c != 0)
 //				return c;
 //			return ((int) (annot1.createTime - annot2.createTime));
-//			//	TODO introduce annotation nesting order
 		}
 		ImAnnotation[] toAnnotArray() {
 			return ((ImAnnotation[]) this.toArray(new ImAnnotation[this.size()]));
