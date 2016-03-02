@@ -73,7 +73,7 @@ import de.uka.ipd.idaho.stringUtils.csvHandler.StringTupel;
  * 
  * @author sautter
  */
-public abstract class ImDocumentData implements Attributed {
+public abstract class ImDocumentData {
 	
 	/**
 	 * Metadata of a single entry in an Image Markup document.
@@ -358,78 +358,53 @@ public abstract class ImDocumentData implements Attributed {
 	
 	private Attributed attributes = null;
 	private boolean attributeLoadError = false;
-	private boolean ensureAttributesLoaded() {
+	private void ensureAttributesLoaded() {
 		if ((this.attributes == null) && !this.attributeLoadError) try {
 			this.attributes = ImDocumentIO.loadDocumentAttributes(this);
 		}
 		catch (IOException ioe) {
 			this.attributeLoadError = true;
 		}
-		return (this.attributes != null);
 	}
 	
-	/* (non-Javadoc)
-	 * @see de.uka.ipd.idaho.gamta.Attributed#setAttribute(java.lang.String)
+	/**
+	 * Retrieve the attributes of the document. This method is a shorthand for
+	 * <code>ImDocumentIO.loadDocumentAttributes(this)</code>. The returned
+	 * object is immutable.
+	 * @return the document attributes
 	 */
-	public void setAttribute(String name) { /* we're read-only for now */ }
-	
-	/* (non-Javadoc)
-	 * @see de.uka.ipd.idaho.gamta.Attributed#setAttribute(java.lang.String, java.lang.Object)
-	 */
-	public Object setAttribute(String name, Object value) {
-		return value; // we're read-only for now
+	public Attributed getDocumentAttributes() {
+		this.ensureAttributesLoaded();
+		return new Attributed() {
+			public void setAttribute(String name) { /* we're read-only for now */ }
+			public Object setAttribute(String name, Object value) {
+				return value; // we're read-only for now
+			}
+			public void copyAttributes(Attributed source) { /* we're read-only for now */ }
+			public Object getAttribute(String name) {
+				return this.getAttribute(name, null);
+			}
+			public Object getAttribute(String name, Object def) {
+				if (attributes == null)
+					return def;
+				else return attributes.getAttribute(name, def);
+			}
+			public boolean hasAttribute(String name) {
+				if (attributes == null)
+					return false;
+				else return attributes.hasAttribute(name);
+			}
+			public String[] getAttributeNames() {
+				if (attributes == null)
+					return new String[0];
+				else return attributes.getAttributeNames();
+			}
+			public Object removeAttribute(String name) {
+				return null; // we're read-only for now
+			}
+			public void clearAttributes() { /* we're read-only for now */ }
+		};
 	}
-	
-	/* (non-Javadoc)
-	 * @see de.uka.ipd.idaho.gamta.Attributed#copyAttributes(de.uka.ipd.idaho.gamta.Attributed)
-	 */
-	public void copyAttributes(Attributed source) { /* we're read-only for now */ }
-	
-	/* (non-Javadoc)
-	 * @see de.uka.ipd.idaho.gamta.Attributed#getAttribute(java.lang.String)
-	 */
-	public Object getAttribute(String name) {
-		return this.getAttribute(name, null);
-	}
-	
-	/* (non-Javadoc)
-	 * @see de.uka.ipd.idaho.gamta.Attributed#getAttribute(java.lang.String, java.lang.Object)
-	 */
-	public Object getAttribute(String name, Object def) {
-		if (this.ensureAttributesLoaded())
-			return this.attributes.getAttribute(name, def);
-		else return def;
-	}
-	
-	/* (non-Javadoc)
-	 * @see de.uka.ipd.idaho.gamta.Attributed#hasAttribute(java.lang.String)
-	 */
-	public boolean hasAttribute(String name) {
-		if (this.ensureAttributesLoaded())
-			return this.attributes.hasAttribute(name);
-		else return false;
-	}
-	
-	/* (non-Javadoc)
-	 * @see de.uka.ipd.idaho.gamta.Attributed#getAttributeNames()
-	 */
-	public String[] getAttributeNames() {
-		if (this.ensureAttributesLoaded())
-			return this.attributes.getAttributeNames();
-		else return new String[0];
-	}
-	
-	/* (non-Javadoc)
-	 * @see de.uka.ipd.idaho.gamta.Attributed#removeAttribute(java.lang.String)
-	 */
-	public Object removeAttribute(String name) {
-		return null; // we're read-only for now
-	}
-	
-	/* (non-Javadoc)
-	 * @see de.uka.ipd.idaho.gamta.Attributed#clearAttributes()
-	 */
-	public void clearAttributes() { /* we're read-only for now */ }
 	
 	private TreeMap supplementsById = null;
 	private boolean supplementLoadError = false;
