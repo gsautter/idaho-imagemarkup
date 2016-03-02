@@ -409,12 +409,11 @@ public abstract class ImDocumentData {
 	private TreeMap supplementsById = null;
 	private boolean supplementLoadError = false;
 	private boolean ensureSupplementsLoaded() {
-		if (this.supplementLoadError)
-			return false;
-		if (this.supplementsById == null) try {
+		if ((this.supplementsById == null) && !this.supplementLoadError) try {
 			InputStream supplementsIn = this.getInputStream("supplements.csv");
 			StringRelation supplementsData = StringRelation.readCsvData(new InputStreamReader(supplementsIn, "UTF-8"), true, null);
 			supplementsIn.close();
+			this.supplementsById = new TreeMap();
 			for (int s = 0; s < supplementsData.size(); s++) {
 				StringTupel supplementData = supplementsData.get(s);
 				final String sid = supplementData.getValue(ImSupplement.ID_ATTRIBUTE);
@@ -449,6 +448,7 @@ public abstract class ImDocumentData {
 					}
 				};
 				ImDocumentIO.setAttributes(supplement, supplementData.getValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, ""));
+				this.supplementsById.put(supplement.getId(), supplement);
 			}
 		}
 		catch (IOException ioe) {
