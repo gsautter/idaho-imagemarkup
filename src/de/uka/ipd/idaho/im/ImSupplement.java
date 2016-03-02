@@ -170,21 +170,21 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 	 * @see de.uka.ipd.idaho.im.ImObject#getDocumentProperty(java.lang.String)
 	 */
 	public String getDocumentProperty(String propertyName) {
-		return this.doc.getDocumentProperty(propertyName);
+		return ((this.doc == null) ? null : this.doc.getDocumentProperty(propertyName));
 	}
 	
 	/* (non-Javadoc)
 	 * @see de.uka.ipd.idaho.im.ImObject#getDocumentProperty(java.lang.String, java.lang.String)
 	 */
 	public String getDocumentProperty(String propertyName, String defaultValue) {
-		return this.doc.getDocumentProperty(propertyName, defaultValue);
+		return ((this.doc == null) ? defaultValue : this.doc.getDocumentProperty(propertyName, defaultValue));
 	}
 	
 	/* (non-Javadoc)
 	 * @see de.uka.ipd.idaho.im.ImObject#getDocumentPropertyNames()
 	 */
 	public String[] getDocumentPropertyNames() {
-		return this.doc.getDocumentPropertyNames();
+		return ((this.doc == null) ? new String[0] : this.doc.getDocumentPropertyNames());
 	}
 	
 	/**
@@ -225,7 +225,8 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		 */
 		public Source(ImDocument doc, String mimeType) {
 			super(doc, SOURCE_TYPE, mimeType);
-			doc.addSupplement(this);
+			if (doc != null)
+				doc.addSupplement(this);
 		}
 		
 		/* (non-Javadoc)
@@ -406,7 +407,8 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		 */
 		public Scan(ImDocument doc, String mimeType, int pageId, int dpi) {
 			super(doc, SCAN_TYPE, mimeType, pageId, dpi);
-			doc.addSupplement(this);
+			if (doc != null)
+				doc.addSupplement(this);
 		}
 		
 		/* (non-Javadoc)
@@ -475,7 +477,8 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			this.pageId = pageId;
 			this.dpi = dpi;
 			this.bounds = bounds;
-			doc.addSupplement(this);
+			if (doc != null)
+				doc.addSupplement(this);
 		}
 		
 		/* (non-Javadoc)

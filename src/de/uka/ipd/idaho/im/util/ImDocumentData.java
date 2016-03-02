@@ -47,19 +47,33 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
+import java.util.TreeMap;
 import java.util.zip.ZipEntry;
 
 import de.uka.ipd.idaho.easyIO.util.RandomByteSource;
+import de.uka.ipd.idaho.gamta.Attributed;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
 import de.uka.ipd.idaho.im.ImDocument;
+import de.uka.ipd.idaho.im.ImObject;
+import de.uka.ipd.idaho.im.ImSupplement;
+import de.uka.ipd.idaho.stringUtils.csvHandler.StringRelation;
+import de.uka.ipd.idaho.stringUtils.csvHandler.StringTupel;
 
 /**
  * A object providing and storing the data for an Image Markup document, to
- * abstract from different ways of storing Image Markup documents.
+ * abstract from different ways of storing Image Markup documents.<br>
+ * The attributes of the Image Markup document represented by the underlying
+ * data are accessible in a read-only fashion via this object. This is to avoid
+ * loading the entire document before being able to decide whether or not some
+ * action is to be taken.<br>
+ * Likewise, the supplements belonging to the Image Markup document represented
+ * by the underlying data are also accessible in a read-only fashion via this
+ * object. This is to allow, for instance, loading a page image without having
+ * to load the entire document.
  * 
  * @author sautter
  */
-public abstract class ImDocumentData {
+public abstract class ImDocumentData implements Attributed {
 	
 	/**
 	 * Metadata of a single entry in an Image Markup document.
@@ -340,6 +354,162 @@ public abstract class ImDocumentData {
 	 */
 	public ImDocument getDocument(ProgressMonitor pm) throws IOException {
 		return (this.canLoadDocument() ? ImDocumentIO.loadDocument(this, pm) : null);
+	}
+	
+	private Attributed attributes = null;
+	private boolean attributeLoadError = false;
+	private boolean ensureAttributesLoaded() {
+		if ((this.attributes == null) && !this.attributeLoadError) try {
+			this.attributes = ImDocumentIO.loadDocumentAttributes(this);
+		}
+		catch (IOException ioe) {
+			this.attributeLoadError = true;
+		}
+		return (this.attributes != null);
+	}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.gamta.Attributed#setAttribute(java.lang.String)
+	 */
+	public void setAttribute(String name) { /* we're read-only for now */ }
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.gamta.Attributed#setAttribute(java.lang.String, java.lang.Object)
+	 */
+	public Object setAttribute(String name, Object value) {
+		return value; // we're read-only for now
+	}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.gamta.Attributed#copyAttributes(de.uka.ipd.idaho.gamta.Attributed)
+	 */
+	public void copyAttributes(Attributed source) { /* we're read-only for now */ }
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.gamta.Attributed#getAttribute(java.lang.String)
+	 */
+	public Object getAttribute(String name) {
+		return this.getAttribute(name, null);
+	}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.gamta.Attributed#getAttribute(java.lang.String, java.lang.Object)
+	 */
+	public Object getAttribute(String name, Object def) {
+		if (this.ensureAttributesLoaded())
+			return this.attributes.getAttribute(name, def);
+		else return def;
+	}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.gamta.Attributed#hasAttribute(java.lang.String)
+	 */
+	public boolean hasAttribute(String name) {
+		if (this.ensureAttributesLoaded())
+			return this.attributes.hasAttribute(name);
+		else return false;
+	}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.gamta.Attributed#getAttributeNames()
+	 */
+	public String[] getAttributeNames() {
+		if (this.ensureAttributesLoaded())
+			return this.attributes.getAttributeNames();
+		else return new String[0];
+	}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.gamta.Attributed#removeAttribute(java.lang.String)
+	 */
+	public Object removeAttribute(String name) {
+		return null; // we're read-only for now
+	}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.gamta.Attributed#clearAttributes()
+	 */
+	public void clearAttributes() { /* we're read-only for now */ }
+	
+	private TreeMap supplementsById = null;
+	private boolean supplementLoadError = false;
+	private boolean ensureSupplementsLoaded() {
+		if (this.supplementLoadError)
+			return false;
+		if (this.supplementsById == null) try {
+			InputStream supplementsIn = this.getInputStream("supplements.csv");
+			StringRelation supplementsData = StringRelation.readCsvData(new InputStreamReader(supplementsIn, "UTF-8"), true, null);
+			supplementsIn.close();
+			for (int s = 0; s < supplementsData.size(); s++) {
+				StringTupel supplementData = supplementsData.get(s);
+				final String sid = supplementData.getValue(ImSupplement.ID_ATTRIBUTE);
+				String st = supplementData.getValue(ImSupplement.TYPE_ATTRIBUTE);
+				String smt = supplementData.getValue(ImSupplement.MIME_TYPE_ATTRIBUTE);
+				final String sfn = (sid + "." + smt.substring(smt.lastIndexOf('/') + "/".length()));
+				ImSupplement supplement;
+				if (ImSupplement.SOURCE_TYPE.equals(st))
+					supplement = new ImSupplement.Source(null, smt) {
+						public InputStream getInputStream() throws IOException {
+							return ImDocumentData.this.getInputStream(sfn);
+						}
+					};
+				else if (ImSupplement.SCAN_TYPE.equals(st))
+					supplement = new ImSupplement.Scan(null, smt) {
+						public InputStream getInputStream() throws IOException {
+							return ImDocumentData.this.getInputStream(sfn);
+						}
+					};
+				else if (ImSupplement.FIGURE_TYPE.equals(st))
+					supplement = new ImSupplement.Figure(null, smt) {
+						public InputStream getInputStream() throws IOException {
+							return ImDocumentData.this.getInputStream(sfn);
+						}
+					};
+				else supplement = new ImSupplement(null, st, smt) {
+					public String getId() {
+						return sid;
+					}
+					public InputStream getInputStream() throws IOException {
+						return ImDocumentData.this.getInputStream(sfn);
+					}
+				};
+				ImDocumentIO.setAttributes(supplement, supplementData.getValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, ""));
+			}
+		}
+		catch (IOException ioe) {
+			this.supplementLoadError = true;
+		}
+		return (this.supplementsById != null);
+	}
+	
+	/**
+	 * Retrieve a document supplement by its ID.
+	 * @param sid the ID of the required supplement
+	 */
+	public ImSupplement getSupplement(String sid) {
+		if (this.ensureSupplementsLoaded())
+			return ((sid == null) ? null : ((ImSupplement) this.supplementsById.get(sid)));
+		else return null;
+	}
+	
+	/**
+	 * Retrieve the IDs of the document supplements.
+	 * @return an array holding the supplement IDs
+	 */
+	public String[] getSupplementIDs() {
+		if (this.ensureSupplementsLoaded())
+			return ((String[]) this.supplementsById.keySet().toArray(new String[this.supplementsById.size()]));
+		else return new String[0];
+	}
+	
+	/**
+	 * Retrieve the document supplements proper.
+	 * @return an array holding the supplements
+	 */
+	public ImSupplement[] getSupplements() {
+		if (this.ensureSupplementsLoaded())
+			return ((ImSupplement[]) this.supplementsById.values().toArray(new ImSupplement[this.supplementsById.size()]));
+		else return new ImSupplement[0];
 	}
 	
 	/**
