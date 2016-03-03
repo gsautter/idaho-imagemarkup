@@ -73,6 +73,7 @@ public class OcrEngine implements ImagingConstants {
 	
 	private File basePath;
 	private File tessPath;
+	private File cachePath;
 	
 	private TreeSet langs = new TreeSet(String.CASE_INSENSITIVE_ORDER);
 	
@@ -86,7 +87,7 @@ public class OcrEngine implements ImagingConstants {
 	 * @param basePath the root path of the individual Tesseract binary folders
 	 */
 	public OcrEngine(File basePath) {
-		this(basePath, 0);
+		this(basePath, null, 0);
 	}
 	
 	/**
@@ -96,6 +97,26 @@ public class OcrEngine implements ImagingConstants {
 	 *            than two deactivate the instance pool altogether)
 	 */
 	public OcrEngine(File basePath, int maxInstances) {
+		this(basePath, null, maxInstances);
+	}
+	
+	/**
+	 * Constructor (uses single-instance mode)
+	 * @param basePath the root path of the individual Tesseract binary folders
+	 * @param cachePath the folder to use for image caching
+	 */
+	public OcrEngine(File basePath, File cachePath) {
+		this(basePath, cachePath, 0);
+	}
+	
+	/**
+	 * Constructor
+	 * @param basePath the root path of the individual Tesseract binary folders
+	 * @param cachePath the folder to use for image caching
+	 * @param maxInstances the maximum size of the instance pool (values less
+	 *            than two deactivate the instance pool altogether)
+	 */
+	public OcrEngine(File basePath, File cachePath, int maxInstances) {
 		this.basePath = ("OcrEngine".equals(basePath.getName()) ? basePath : new File(basePath, "OcrEngine"));
 		if (!this.basePath.exists())
 			this.basePath.mkdirs();
@@ -103,6 +124,7 @@ public class OcrEngine implements ImagingConstants {
 		this.tessPath = new File(this.basePath, "StreamTess");
 		if (!this.tessPath.exists())
 			this.tessPath.mkdirs();
+		this.cachePath = cachePath;
 		this.maxInstances = Math.max(1, maxInstances);
 	}
 	
@@ -198,7 +220,7 @@ public class OcrEngine implements ImagingConstants {
 	}
 	
 	private PooledOcrInstance produceOcrInstance() throws IOException {
-		PooledOcrInstance poi = new PooledOcrInstance(new OcrInstance(this.tessPath, this.getLangsString()));
+		PooledOcrInstance poi = new PooledOcrInstance(new OcrInstance(this.tessPath, this.cachePath, this.getLangsString()));
 		this.allInstances.addLast(poi);
 		return poi;
 	}

@@ -103,6 +103,12 @@ public class PdfImageDecoder {
 			fileOut.close();
 			fileIn.close();
 			System.out.println(" ==> installed successfully");
+			
+			if (fileName.endsWith("-linux") || fileName.endsWith("-mac")) {
+				Runtime.getRuntime().exec(("chmod -R 777 " + this.imPath.getAbsolutePath()), new String[0], this.imPath);
+				System.out.println(" ==> execution permissions obtained successfully");
+			}
+			
 			return true;
 		}
 		catch (IOException ioe) {

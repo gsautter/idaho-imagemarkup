@@ -174,7 +174,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @param imageStore the page image store to store extracted page images in
 	 */
 	public PdfExtractor(File basePath, PageImageStore imageStore) {
-		this(basePath, imageStore, false, -1);
+		this(basePath, null, imageStore, false, -1);
 	}
 	
 	/**
@@ -184,7 +184,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @param textPdfPageImageDpi the resolution for rendering text PDFs
 	 */
 	public PdfExtractor(File basePath, PageImageStore imageStore, int textPdfPageImageDpi) {
-		this(basePath, imageStore, false, textPdfPageImageDpi);
+		this(basePath, null, imageStore, false, textPdfPageImageDpi);
 	}
 	
 	/**
@@ -195,7 +195,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 *            possible (i.e., if multiple cores available)?
 	 */
 	public PdfExtractor(File basePath, PageImageStore imageStore, boolean useMultipleCores) {
-		this(basePath, imageStore, useMultipleCores, -1);
+		this(basePath, null, imageStore, useMultipleCores, -1);
 	}
 	
 	/**
@@ -207,6 +207,52 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @param textPdfPageImageDpi the resolution for rendering text PDFs
 	 */
 	public PdfExtractor(File basePath, PageImageStore imageStore, boolean useMultipleCores, int textPdfPageImageDpi) {
+		this(basePath, null, imageStore, useMultipleCores, textPdfPageImageDpi);
+	}
+	
+	/**
+	 * Constructor
+	 * @param basePath the folder holding the binaries
+	 * @param cachePath the folder to use for data caching
+	 * @param imageStore the page image store to store extracted page images in
+	 */
+	public PdfExtractor(File basePath, File cachePath, PageImageStore imageStore) {
+		this(basePath, cachePath, imageStore, false, -1);
+	}
+	
+	/**
+	 * Constructor
+	 * @param basePath the folder holding the binaries
+	 * @param cachePath the folder to use for data caching
+	 * @param imageStore the page image store to store extracted page images in
+	 * @param textPdfPageImageDpi the resolution for rendering text PDFs
+	 */
+	public PdfExtractor(File basePath, File cachePath, PageImageStore imageStore, int textPdfPageImageDpi) {
+		this(basePath, cachePath, imageStore, false, textPdfPageImageDpi);
+	}
+	
+	/**
+	 * Constructor
+	 * @param basePath the folder holding the binaries
+	 * @param cachePath the folder to use for data caching
+	 * @param imageStore the page image store to store extracted page images in
+	 * @param useMultipleCores use multiple CPU cores for PDF extraction if
+	 *            possible (i.e., if multiple cores available)?
+	 */
+	public PdfExtractor(File basePath, File cachePath, PageImageStore imageStore, boolean useMultipleCores) {
+		this(basePath, cachePath, imageStore, useMultipleCores, -1);
+	}
+	
+	/**
+	 * Constructor
+	 * @param basePath the folder holding the binaries
+	 * @param cachePath the folder to use for data caching
+	 * @param imageStore the page image store to store extracted page images in
+	 * @param useMultipleCores use multiple CPU cores for PDF extraction if
+	 *            possible (i.e., if multiple cores available)?
+	 * @param textPdfPageImageDpi the resolution for rendering text PDFs
+	 */
+	public PdfExtractor(File basePath, File cachePath, PageImageStore imageStore, boolean useMultipleCores, int textPdfPageImageDpi) {
 		this.basePath = basePath;
 		this.imageStore = imageStore;
 		try {
@@ -217,7 +263,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			e.printStackTrace(System.out);
 		}
 		try {
-			this.ocrEngine = new OcrEngine(this.basePath, Math.max(1, (Runtime.getRuntime().availableProcessors()-1)));
+			this.ocrEngine = new OcrEngine(this.basePath, ((cachePath == null) ? null : new File(cachePath, "OcrEngine")), (useMultipleCores ? Math.max(1, (Runtime.getRuntime().availableProcessors()-1)) : 1));
 			this.ocrEngine.addLangs("deu+eng+fra+por+spa"); // basically Latin letters with any derived diacritics occurring in western European languages, and thus colonial names and last names
 		}
 		catch (Exception e) {
@@ -4828,7 +4874,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			bitsPerComponent = ((Number) bcpObj).intValue();
 		else return null;
 		
-		//	prepare decoding stream TODO observe filter
+		//	prepare decoding stream
 		InputStream biIn;
 		if ("FlateDecode".equals(filter))
 			biIn = new BufferedInputStream(new FlateDecode(library, params, new ByteArrayInputStream(stream)));

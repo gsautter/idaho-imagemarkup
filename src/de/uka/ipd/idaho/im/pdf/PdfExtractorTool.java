@@ -56,7 +56,7 @@ import de.uka.ipd.idaho.gamta.util.imaging.PageImageStore.AbstractPageImageStore
 import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.ImSupplement;
 import de.uka.ipd.idaho.im.gamta.ImDocumentRoot;
-import de.uka.ipd.idaho.im.util.ImfIO;
+import de.uka.ipd.idaho.im.util.ImDocumentIO;
 
 /**
  * Command line wrapper for PDF extractor class.
@@ -75,6 +75,7 @@ public class PdfExtractorTool {
 		String logPath = "S";
 		String outPath = "S";
 		String cacheBasePath = ".";
+		String cpuMode = "M";
 		String mode = "A";
 		for (int a = 0; a < args.length;) {
 			/* source parameter -s
@@ -84,11 +85,18 @@ public class PdfExtractorTool {
 				sourcePath = args[a+1];
 				a += 2;
 			}
-			/* path parameter -p
+			/* path parameter -c
 			 * - missing or set to .: execution folder
 			 * - set to folder path: cache folder */
-			else if ("-p".equalsIgnoreCase(args[a]) && ((a+1) < args.length)) {
+			else if ("-c".equalsIgnoreCase(args[a]) && ((a+1) < args.length)) {
 				cacheBasePath = args[a+1];
+				a += 2;
+			}
+			/* path parameter -p
+			 * - missing or set to M: multiple processors
+			 * - set to S: single processor */
+			else if ("-p".equalsIgnoreCase(args[a]) && ((a+1) < args.length)) {
+				cpuMode = args[a+1];
 				a += 2;
 			}
 			/* source type parameter -t
@@ -115,17 +123,19 @@ public class PdfExtractorTool {
 				a += 2;
 			}
 			/* output parameter -o
-			 * - missing of S: write IMF to file (named after source file, or doc ID on System.in source)
+			 * - missing or S: write IMF to file (named after source file, or doc ID on System.in source)
 			 * - set to O: write IMF to System.out
 			 * - set to file path: write to that file
-			 * - set to folder path: write data to that file */
+			 * - set to folder path: write data to that folder */
 			else if ("-o".equalsIgnoreCase(args[a]) && ((a+1) < args.length)) {
 				outPath = args[a+1];
 				a += 2;
 			}
 			/* mode parameter -m
-			 * - missing or set to A: convert entire PDF
+			 * - missing or set to A: convert entire PDF, store as IMF
+			 * - set to D: convert entire PDF, store as IMD (better for file system based hand-over to master process if runninf as slave)
 			 * - set to F: extract figures only (requires output set to file path)
+			 * - set to R: extract text only, output as raw XML
 			 * - set to X: extract text only, output as XML
 			 * - set to T: extract text only, output plain text */
 			else if ("-m".equalsIgnoreCase(args[a]) && ((a+1) < args.length)) {
@@ -133,7 +143,7 @@ public class PdfExtractorTool {
 				a += 2;
 			}
 			/* help parameter -? / -h
-			 * - set: print about this mail */
+			 * - set: print help and exit */
 			else if ("-?".equalsIgnoreCase(args[a]) || "-h".equalsIgnoreCase(args[a])) {
 				printHelp();
 				return;
@@ -150,8 +160,12 @@ public class PdfExtractorTool {
 			printError("Invalid source type '" + sourceType + "'");
 			return;
 		}
-		if (("AXTF".indexOf(mode) == -1) || (mode.length() != 1)) {
+		if (("ADRXTF".indexOf(mode) == -1) || (mode.length() != 1)) {
 			printError("Invalid conversion mode '" + mode + "'");
+			return;
+		}
+		if (("MS".indexOf(cpuMode) == -1) || (cpuMode.length() != 1)) {
+			printError("Invalid CPU usage mode '" + mode + "'");
 			return;
 		}
 		if ("F".equals(mode) && !"D".equals(sourceType)) {
@@ -176,7 +190,9 @@ public class PdfExtractorTool {
 		String outFileExt;
 		if ("A".equals(mode))
 			outFileExt = "imf";
-		else if ("X".equals(mode))
+		else if ("D".equals(mode))
+			outFileExt = "imd";
+		else if ("R".equals(mode) || "X".equals(mode))
 			outFileExt = "xml";
 		else if ("T".equals(mode))
 			outFileExt = "txt";
@@ -193,11 +209,11 @@ public class PdfExtractorTool {
 			outFile = null;
 		else {
 			outFile = new File(outPath);
-			if ("F".equals(mode) && (!outFile.exists() || !outFile.isDirectory())) {
-				printError("Output destination '" + outPath + "' is invalid for mode 'F'");
+			if (("F".equals(mode) || "D".equals(mode)) && (!outFile.exists() || !outFile.isDirectory())) {
+				printError("Output destination '" + outPath + "' is invalid for mode '" + mode + "'");
 				return;
 			}
-			else if (!"F".equals(mode) && outFile.exists() && outFile.isDirectory())
+			else if (!"F".equals(mode) && !"D".equals(mode) && outFile.exists() && outFile.isDirectory())
 				outFile = new File(outFile, ("./pdf.converted." + outFileExt));
 		}
 		
@@ -328,11 +344,11 @@ public class PdfExtractorTool {
 		};
 		
 		//	create PDF extractor
-		final File supplementImageFolder = new File(cacheBasePath + "/SupplementImages");
+		final File supplementImageFolder = new File(cacheBasePath + "/Supplements/");
 		if (!supplementImageFolder.exists())
 			supplementImageFolder.mkdirs();
 		PageImage.addPageImageSource(pis);
-		PdfExtractor pdfExtractor = new PdfExtractor(new File("."), pis, true) {
+		PdfExtractor pdfExtractor = new PdfExtractor(new File("."), new File(cacheBasePath), pis, "M".equals(cpuMode)) {
 			protected ImDocument createDocument(String docId) {
 				return new ImDocument(docId) {
 					private long inMemorySupplementBytes = 0;
@@ -460,13 +476,17 @@ public class PdfExtractorTool {
 				outFile.createNewFile();
 				imfOut = new BufferedOutputStream(new FileOutputStream(outFile));
 			}
-			ImfIO.storeDocument(imDoc, imfOut, ProgressMonitor.dummy);
+			ImDocumentIO.storeDocument(imDoc, imfOut, pm);
 			imfOut.flush();
 			imfOut.close();
 		}
 		
+		//	write output IMD
+		else if ("D".equals(mode))
+			ImDocumentIO.storeDocument(imDoc, outFile, pm);
+		
 		//	write output XML
-		else if ("X".equals(mode)) {
+		else if ("R".equals(mode) || "X".equals(mode)) {
 			BufferedWriter xmlOut;
 			if (outFile == null) {
 				sysOut.println("XML DATA");
@@ -476,7 +496,7 @@ public class PdfExtractorTool {
 				outFile.createNewFile();
 				xmlOut = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(outFile), "UTF-8"));
 			}
-			ImDocumentRoot xmlDoc = new ImDocumentRoot(imDoc, ImDocumentRoot.NORMALIZATION_LEVEL_RAW);
+			ImDocumentRoot xmlDoc = new ImDocumentRoot(imDoc, ("R".equals(mode) ? ImDocumentRoot.NORMALIZATION_LEVEL_RAW : ImDocumentRoot.NORMALIZATION_LEVEL_PARAGRAPHS));
 			AnnotationUtils.writeXML(xmlDoc, xmlOut);
 			xmlOut.flush();
 			xmlOut.close();
@@ -533,9 +553,12 @@ public class PdfExtractorTool {
 				"\r\n\t- M: log to System.out with leading progress monitor tags" +
 				"\r\n\t- <logFileName>: log to <logFileName>" +
 				"\r\n\t- S: silent, don't log (the default)");
-		System.out.println("-p <cacheBaseFolder>\tSet the cache base folder:" +
+		System.out.println("-c <cacheBaseFolder>\tSet the cache base folder:" +
 				"\r\n\t- .: cache in sub folders of execution folder (the default)" +
 				"\r\n\t- <cacheBaseFolder>: cache in folders under <cacheBaseFolder>");
+		System.out.println("-p <cpuMode>\tSet the CPU usage mode:" +
+				"\r\n\t- M: use all available CPU cores for fast decoding (the default)" +
+				"\r\n\t- S: use a single CPU core");
 		System.out.println("-o <outputDestination>\tSelect where to write the converted data:" +
 				"\r\n\t- S: write IMF to file named after source file (creates <docId>.imf if" +
 				"\r\n\t     input comes from System.in)" +
@@ -545,9 +568,11 @@ public class PdfExtractorTool {
 				"\r\n\t                   exist, required in mode F)");
 		System.out.println("-m <mode>\tSelect the conversion mode:" +
 				"\r\n\t- T: extract only text, output as plain text" +
-				"\r\n\t- X: extract only text, output as XML" +
+				"\r\n\t- R: extract only text, output as raw XML" +
+				"\r\n\t- X: extract only text, output as paragraph-normalized XML" +
 				"\r\n\t- F: extract figures only (requires -o set to existing folder)" +
-				"\r\n\t- A: convert complete PDF into IMF (the default)");
+				"\r\n\t- A: convert complete PDF into IMF (the default)" +
+				"\r\n\t- D: convert complete PDF into IMD (exploded IMF)");
 	}
 	
 	private static void printError(String error) {

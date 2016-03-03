@@ -102,14 +102,13 @@ public class OcrInstance {
 	private File cachePath;
 	private boolean streamImages = false;
 	
-	
 	/** Constructor (determines Tesseract command from <code>os.name</code>
 	 * system property, initially loads English, French, and German)
 	 * @param tessPath the folder to work in
 	 * @throws IOException
 	 */
 	public OcrInstance(File tessPath) throws IOException {
-		this(null, tessPath, null, null);
+		this(null, tessPath, null, null, null);
 	}
 	
 	/** Constructor (determines Tesseract command from <code>os.name</code>
@@ -119,7 +118,7 @@ public class OcrInstance {
 	 * @throws IOException
 	 */
 	public OcrInstance(File tessPath, String langs) throws IOException {
-		this(null, tessPath, langs, null);
+		this(null, tessPath, null, langs, null);
 	}
 	
 	/** Constructor (determines Tesseract command from <code>os.name</code>
@@ -130,7 +129,7 @@ public class OcrInstance {
 	 * @throws IOException
 	 */
 	public OcrInstance(File tessPath, String langs, String version) throws IOException {
-		this(null, tessPath, langs, version);
+		this(null, tessPath, null, langs, version);
 	}
 	
 	/** Constructor (initially loads English, French, and German)
@@ -139,7 +138,7 @@ public class OcrInstance {
 	 * @throws IOException
 	 */
 	public OcrInstance(String tessCommand, File tessPath) throws IOException {
-		this(tessCommand, tessPath, null, null);
+		this(tessCommand, tessPath, null, null, null);
 	}
 	
 	/** Constructor
@@ -149,7 +148,7 @@ public class OcrInstance {
 	 * @throws IOException
 	 */
 	public OcrInstance(String tessCommand, File tessPath, String langs) throws IOException {
-		this(tessCommand, tessPath, langs, null);
+		this(tessCommand, tessPath, null, langs, null);
 	}
 	
 	/** Constructor
@@ -160,12 +159,78 @@ public class OcrInstance {
 	 * @throws IOException
 	 */
 	public OcrInstance(String tessCommand, File tessPath, String langs, String version) throws IOException {
+		this(tessCommand, tessPath, null, langs, version);
+	}
+	
+	/** Constructor (determines Tesseract command from <code>os.name</code>
+	 * system property, initially loads English, French, and German)
+	 * @param tessPath the folder to work in
+	 * @param cachePath the folder to use for image caching
+	 * @throws IOException
+	 */
+	public OcrInstance(File tessPath, File cachePath) throws IOException {
+		this(null, tessPath, cachePath, null, null);
+	}
+	
+	/** Constructor (determines Tesseract command from <code>os.name</code>
+	 * system property)
+	 * @param tessPath the folder to work in
+	 * @param cachePath the folder to use for image caching
+	 * @param langs the languages to load initially, separated by '+'
+	 * @throws IOException
+	 */
+	public OcrInstance(File tessPath, File cachePath, String langs) throws IOException {
+		this(null, tessPath, cachePath, langs, null);
+	}
+	
+	/** Constructor (determines Tesseract command from <code>os.name</code>
+	 * system property)
+	 * @param tessPath the folder to work in
+	 * @param cachePath the folder to use for image caching
+	 * @param langs the languages to load initially, separated by '+'
+	 * @param version the version string to use in the language data path
+	 * @throws IOException
+	 */
+	public OcrInstance(File tessPath, File cachePath, String langs, String version) throws IOException {
+		this(null, tessPath, cachePath, langs, version);
+	}
+	
+	/** Constructor (initially loads English, French, and German)
+	 * @param tessCommand the name of the Tesseract binary to use
+	 * @param tessPath the folder to work in
+	 * @param cachePath the folder to use for image caching
+	 * @throws IOException
+	 */
+	public OcrInstance(String tessCommand, File tessPath, File cachePath) throws IOException {
+		this(tessCommand, tessPath, cachePath, null, null);
+	}
+	
+	/** Constructor
+	 * @param tessCommand the name of the Tesseract binary to use
+	 * @param tessPath the folder to work in
+	 * @param cachePath the folder to use for image caching
+	 * @param langs the languages to load initially, separated by '+'
+	 * @throws IOException
+	 */
+	public OcrInstance(String tessCommand, File tessPath, File cachePath, String langs) throws IOException {
+		this(tessCommand, tessPath, cachePath, langs, null);
+	}
+	
+	/** Constructor
+	 * @param tessCommand the name of the Tesseract binary to use
+	 * @param tessPath the folder to work in
+	 * @param cachePath the folder to use for image caching
+	 * @param langs the languages to load initially, separated by '+'
+	 * @param version the version string to use in the language data path
+	 * @throws IOException
+	 */
+	public OcrInstance(String tessCommand, File tessPath, File cachePath, String langs, String version) throws IOException {
 		this.tessCommand = ((tessCommand == null) ? getTessCommand() : tessCommand);
 		this.tessVersion = ((version == null) ? "" : version.trim());
 		this.tessPath = tessPath;
 		if (!this.tessPath.exists())
 			this.tessPath.mkdirs();
-		this.cachePath = new File(this.tessPath, "cache");
+		this.cachePath = ((cachePath == null) ? new File(this.tessPath, "cache") : cachePath);
 		if (!this.cachePath.exists())
 			this.cachePath.mkdirs();
 		
@@ -222,6 +287,12 @@ public class OcrInstance {
 			fileOut.close();
 			fileIn.close();
 			System.out.println(" ==> installed successfully");
+			
+			if (fileName.endsWith("-linux") || fileName.endsWith("-mac")) {
+				Runtime.getRuntime().exec(("chmod -R 777 " + this.tessPath.getAbsolutePath()), new String[0], this.tessPath);
+				System.out.println(" ==> execution permissions obtained successfully");
+			}
+			
 			return true;
 		}
 		catch (IOException ioe) {
@@ -330,7 +401,7 @@ public class OcrInstance {
 	/**
 	 * Run an image through Tesseract. If the <code>streamTransfer</code>
 	 * argument is false, the argument image is written to a cache file and
-	 * loaded back by Tesseract for processing. Wrd bounding boxes are in the
+	 * loaded back by Tesseract for processing. Word bounding boxes are in the
 	 * <code>title</code> attribute of spans marking individual words in the
 	 * result. They take the form <code>bbox &lt;left&gt; &lt;top&gt;
 	 * &lt;right&gt; &lt;bottom&gt;</code>.
