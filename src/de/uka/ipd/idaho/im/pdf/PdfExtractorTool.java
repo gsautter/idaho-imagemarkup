@@ -165,7 +165,7 @@ public class PdfExtractorTool {
 			return;
 		}
 		if (("MS".indexOf(cpuMode) == -1) || (cpuMode.length() != 1)) {
-			printError("Invalid CPU usage mode '" + mode + "'");
+			printError("Invalid CPU usage mode '" + cpuMode + "'");
 			return;
 		}
 		if ("F".equals(mode) && !"D".equals(sourceType)) {
@@ -304,151 +304,14 @@ public class PdfExtractorTool {
 		
 		//	create page image store
 		ImageIO.setUseCache(false);
-		final File pisDataPath = new File(cacheBasePath + "/PageImages/");
-		final AnalyzerDataProvider pisDataProvider = new AnalyzerDataProviderFileBased(pisDataPath);
-		PageImageStore pis = new AbstractPageImageStore() {
-			HashMap byteCache = new HashMap();
-			public boolean isPageImageAvailable(String name) {
-				if (!name.endsWith(IMAGE_FORMAT))
-					name += ("." + IMAGE_FORMAT);
-				if (pisDataProvider.isDataAvailable(name))
-					return true;
-				else return this.byteCache.containsKey(name);
-			}
-			public PageImageInputStream getPageImageAsStream(String name) throws IOException {
-				if (!name.endsWith(IMAGE_FORMAT))
-					name += ("." + IMAGE_FORMAT);
-				if (pisDataProvider.isDataAvailable(name))
-					return new PageImageInputStream(pisDataProvider.getInputStream(name), this);
-				else if (this.byteCache.containsKey(name))
-					return new PageImageInputStream(new ByteArrayInputStream((byte[]) this.byteCache.get(name)), this);
-				else return null;
-			}
-			public boolean storePageImage(String name, PageImage pageImage) throws IOException {
-				if (!name.endsWith(IMAGE_FORMAT))
-					name += ("." + IMAGE_FORMAT);
-				try {
-					OutputStream imageOut = pisDataProvider.getOutputStream(name);
-					pageImage.write(imageOut);
-					imageOut.close();
-					return true;
-				}
-				catch (IOException ioe) {
-					ioe.printStackTrace(System.out);
-					return false;
-				}
-			}
-			public int getPriority() {
-				return 0; // we're a general page image store, yield to specific ones
-			}
-		};
+		PageImageStore pis = new PetPageImageStore(new File(cacheBasePath + "/PageImages/"));
+		PageImage.addPageImageSource(pis);
 		
 		//	create PDF extractor
-		final File supplementImageFolder = new File(cacheBasePath + "/Supplements/");
-		if (!supplementImageFolder.exists())
-			supplementImageFolder.mkdirs();
-		PageImage.addPageImageSource(pis);
-		PdfExtractor pdfExtractor = new PdfExtractor(new File("."), new File(cacheBasePath), pis, "M".equals(cpuMode)) {
-			protected ImDocument createDocument(String docId) {
-				return new ImDocument(docId) {
-					private long inMemorySupplementBytes = 0;
-					public ImSupplement addSupplement(ImSupplement ims) {
-						
-						//	store known type supplements on disc if there are too many or too large
-						if ((ims instanceof ImSupplement.Figure) || (ims instanceof ImSupplement.Scan) || (ims instanceof ImSupplement.Source)) try {
-							
-							//	threshold already exceeded, disc cache right away
-							if (this.inMemorySupplementBytes > maxInMemoryImageSupplementBytes)
-								ims = this.createDiscSupplement(ims, null);
-							
-							//	still below threshold, check source
-							else {
-								InputStream sis = ims.getInputStream();
-								
-								//	this one resides in memory, count it
-								if (sis instanceof ByteArrayInputStream)
-									this.inMemorySupplementBytes += sis.available();
-								
-								//	threshold just exceeded
-								if (this.inMemorySupplementBytes > maxInMemoryImageSupplementBytes) {
-									
-									//	disc cache all existing image supplements
-									ImSupplement[] imss = this.getSupplements();
-									for (int s = 0; s < imss.length; s++) {
-										if ((imss[s] instanceof ImSupplement.Figure) || (imss[s] instanceof ImSupplement.Scan))
-											super.addSupplement(this.createDiscSupplement(imss[s], null));
-									}
-									
-									//	disc cache argument supplement
-									ims = this.createDiscSupplement(ims, sis);
-								}
-							}
-						}
-						catch (IOException ioe) {
-							System.out.println("Error caching supplement '" + ims.getId() + "': " + ioe.getMessage());
-							ioe.printStackTrace(System.out);
-						}
-						
-						//	store (possibly modified) supplement
-						return super.addSupplement(ims);
-					}
-					
-					private ImSupplement createDiscSupplement(ImSupplement ims, InputStream sis) throws IOException {
-						
-						//	get input stream if not already done
-						if (sis == null)
-							sis = ims.getInputStream();
-						
-						//	this one's not in memory, close input stream and we're done
-						if (!(sis instanceof ByteArrayInputStream)) {
-							sis.close();
-							return ims;
-						}
-						
-						//	get file name and extension
-						String sDataName = ims.getId().replaceAll("[^a-zA-Z0-9]", "_");
-						String sDataType = ims.getMimeType();
-						if (sDataType.indexOf('/') != -1)
-							sDataType = sDataType.substring(sDataType.indexOf('/') + "/".length());
-						
-						//	create file
-						final File sFile = new File(supplementImageFolder, (this.docId + "." + sDataName + "." + sDataType));
-						
-						//	store supplement in file (if not done in previous run)
-						if (!sFile.exists()) {
-							sFile.createNewFile();
-							OutputStream sos = new BufferedOutputStream(new FileOutputStream(sFile));
-							byte[] sBuffer = new byte[1024];
-							for (int r; (r = sis.read(sBuffer, 0, sBuffer.length)) != -1;)
-								sos.write(sBuffer, 0, r);
-							sos.flush();
-							sos.close();
-						}
-						
-						//	replace supplement with disc based one
-						if (ims instanceof ImSupplement.Figure)
-							return new ImSupplement.Figure(this, ims.getMimeType(), ((ImSupplement.Figure) ims).getPageId(), ((ImSupplement.Figure) ims).getDpi(), ((ImSupplement.Figure) ims).getBounds()) {
-								public InputStream getInputStream() throws IOException {
-									return new BufferedInputStream(new FileInputStream(sFile));
-								}
-							};
-						else if (ims instanceof ImSupplement.Scan)
-							return new ImSupplement.Scan(this, ims.getMimeType(), ((ImSupplement.Scan) ims).getPageId(), ((ImSupplement.Scan) ims).getDpi()) {
-								public InputStream getInputStream() throws IOException {
-									return new BufferedInputStream(new FileInputStream(sFile));
-								}
-							};
-						else if (ims instanceof ImSupplement.Source)
-							return new ImSupplement.Source(this, ims.getMimeType()) {
-								public InputStream getInputStream() throws IOException {
-									return new BufferedInputStream(new FileInputStream(sFile));
-								}
-							};
-						else return ims; // never gonna happen, but Java don't know
-					}
-				};
-			}
-		};
+		final File supplementFolder = new File(cacheBasePath + "/Supplements/");
+		if (!supplementFolder.exists())
+			supplementFolder.mkdirs();
+		PdfExtractor pdfExtractor = new PetPdfExtractor(new File("."), new File(cacheBasePath), pis, "M".equals(cpuMode), supplementFolder);
 		
 		//	decode input PDF
 		ImDocument imDoc;
@@ -535,6 +398,162 @@ public class PdfExtractorTool {
 					figOut.flush();
 					figOut.close();
 				}
+		}
+	}
+	
+	private static class PetPageImageStore extends AbstractPageImageStore {
+		private AnalyzerDataProvider pisDataProvider;
+		private HashMap byteCache = new HashMap();
+		PetPageImageStore(File pisDataPath) {
+			this.pisDataProvider = new AnalyzerDataProviderFileBased(pisDataPath);
+		}
+		public boolean isPageImageAvailable(String name) {
+			if (!name.endsWith(IMAGE_FORMAT))
+				name += ("." + IMAGE_FORMAT);
+			if (pisDataProvider.isDataAvailable(name))
+				return true;
+			else return this.byteCache.containsKey(name);
+		}
+		public PageImageInputStream getPageImageAsStream(String name) throws IOException {
+			if (!name.endsWith(IMAGE_FORMAT))
+				name += ("." + IMAGE_FORMAT);
+			if (pisDataProvider.isDataAvailable(name))
+				return new PageImageInputStream(pisDataProvider.getInputStream(name), this);
+			else if (this.byteCache.containsKey(name))
+				return new PageImageInputStream(new ByteArrayInputStream((byte[]) this.byteCache.get(name)), this);
+			else return null;
+		}
+		public boolean storePageImage(String name, PageImage pageImage) throws IOException {
+			if (!name.endsWith(IMAGE_FORMAT))
+				name += ("." + IMAGE_FORMAT);
+			try {
+				OutputStream imageOut = pisDataProvider.getOutputStream(name);
+				pageImage.write(imageOut);
+				imageOut.close();
+				return true;
+			}
+			catch (IOException ioe) {
+				ioe.printStackTrace(System.out);
+				return false;
+			}
+		}
+		public int getPriority() {
+			return 0; // we're a general page image store, yield to specific ones
+		}
+	};
+	
+	private static class PetPdfExtractor extends PdfExtractor {
+		private File supplementFolder;
+		PetPdfExtractor(File basePath, File cachePath, PageImageStore imageStore, boolean useMultipleCores, File supplementFolder) {
+			super(basePath, cachePath, imageStore, useMultipleCores);
+			this.supplementFolder = supplementFolder;
+		}
+		protected ImDocument createDocument(String docId) {
+			return new PetImDocument(docId, this.supplementFolder);
+		}
+	}
+	
+	private static class PetImDocument extends ImDocument {
+		private File supplementFolder;
+		PetImDocument(String docId, File supplementFolder) {
+			super(docId);
+			this.supplementFolder = supplementFolder;
+		}
+		
+		private long inMemorySupplementBytes = 0;
+		public ImSupplement addSupplement(ImSupplement ims) {
+			
+			//	store known type supplements on disc if there are too many or too large
+			if ((ims instanceof ImSupplement.Figure) || (ims instanceof ImSupplement.Scan) || (ims instanceof ImSupplement.Source)) try {
+				
+				//	threshold already exceeded, disc cache right away
+				if (this.inMemorySupplementBytes > maxInMemoryImageSupplementBytes)
+					ims = this.createDiscSupplement(ims, null);
+				
+				//	still below threshold, check source
+				else {
+					InputStream sis = ims.getInputStream();
+					
+					//	this one resides in memory, count it
+					if (sis instanceof ByteArrayInputStream)
+						this.inMemorySupplementBytes += sis.available();
+					
+					//	threshold just exceeded
+					if (this.inMemorySupplementBytes > maxInMemoryImageSupplementBytes) {
+						
+						//	disc cache all existing image supplements
+						ImSupplement[] imss = this.getSupplements();
+						for (int s = 0; s < imss.length; s++) {
+							if ((imss[s] instanceof ImSupplement.Figure) || (imss[s] instanceof ImSupplement.Scan))
+								super.addSupplement(this.createDiscSupplement(imss[s], null));
+						}
+						
+						//	disc cache argument supplement
+						ims = this.createDiscSupplement(ims, sis);
+					}
+				}
+			}
+			catch (IOException ioe) {
+				System.out.println("Error caching supplement '" + ims.getId() + "': " + ioe.getMessage());
+				ioe.printStackTrace(System.out);
+			}
+			
+			//	store (possibly modified) supplement
+			return super.addSupplement(ims);
+		}
+		
+		private ImSupplement createDiscSupplement(ImSupplement ims, InputStream sis) throws IOException {
+			
+			//	get input stream if not already done
+			if (sis == null)
+				sis = ims.getInputStream();
+			
+			//	this one's not in memory, close input stream and we're done
+			if (!(sis instanceof ByteArrayInputStream)) {
+				sis.close();
+				return ims;
+			}
+			
+			//	get file name and extension
+			String sDataName = ims.getId().replaceAll("[^a-zA-Z0-9]", "_");
+			String sDataType = ims.getMimeType();
+			if (sDataType.indexOf('/') != -1)
+				sDataType = sDataType.substring(sDataType.indexOf('/') + "/".length());
+			
+			//	create file
+			final File sFile = new File(supplementFolder, (this.docId + "." + sDataName + "." + sDataType));
+			
+			//	store supplement in file (if not done in previous run)
+			if (!sFile.exists()) {
+				sFile.createNewFile();
+				OutputStream sos = new BufferedOutputStream(new FileOutputStream(sFile));
+				byte[] sBuffer = new byte[1024];
+				for (int r; (r = sis.read(sBuffer, 0, sBuffer.length)) != -1;)
+					sos.write(sBuffer, 0, r);
+				sos.flush();
+				sos.close();
+			}
+			
+			//	replace supplement with disc based one
+			if (ims instanceof ImSupplement.Figure)
+				return new ImSupplement.Figure(this, ims.getMimeType(), ((ImSupplement.Figure) ims).getPageId(), ((ImSupplement.Figure) ims).getDpi(), ((ImSupplement.Figure) ims).getBounds()) {
+					public InputStream getInputStream() throws IOException {
+						return new BufferedInputStream(new FileInputStream(sFile));
+					}
+				};
+			else if (ims instanceof ImSupplement.Scan)
+				return new ImSupplement.Scan(this, ims.getMimeType(), ((ImSupplement.Scan) ims).getPageId(), ((ImSupplement.Scan) ims).getDpi()) {
+					public InputStream getInputStream() throws IOException {
+						return new BufferedInputStream(new FileInputStream(sFile));
+					}
+				};
+			else if (ims instanceof ImSupplement.Source)
+				return new ImSupplement.Source(this, ims.getMimeType()) {
+					public InputStream getInputStream() throws IOException {
+						return new BufferedInputStream(new FileInputStream(sFile));
+					}
+				};
+			else return ims; // never gonna happen, but Java don't know
 		}
 	}
 	
