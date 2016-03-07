@@ -691,6 +691,10 @@ public class ImDocumentIO implements ImagingConstants {
 				doc.addSupplement(supplement, false);
 			}
 		} catch (IOException ioe) { /* we might not have supplements ... */ }
+		/* We need to do this explicitly because supplements add themselves to
+		 * their document upon creation via the normal addSupplement() method,
+		 * marking themselves as dirty in our data bound document. */
+		doc.markSupplementsNotDirty();
 		
 		//	create page image source
 		pm.setStep("Creating page image source");
@@ -750,6 +754,9 @@ public class ImDocumentIO implements ImagingConstants {
 		}
 		boolean isSupplementDirty(String sfn) {
 			return this.dirtySupplementNames.contains(sfn);
+		}
+		void markSupplementsNotDirty() {
+			this.dirtySupplementNames.clear();
 		}
 		void bindToData(ImDocumentData docData) {
 			this.docData = docData;
@@ -1058,32 +1065,32 @@ public class ImDocumentIO implements ImagingConstants {
 		}
 		
 		//	get ready to zip, and to collect IMF entries
-		BufferedWriter zbw;
+		BufferedWriter bw;
 		StringVector keys = new StringVector();
 		
 		//	store document meta data
 		pm.setStep("Storing document data");
 		pm.setBaseProgress(0);
 		pm.setMaxProgress(5);
-		zbw = getWriter(data, "document.csv", false);
+		bw = getWriter(data, "document.csv", false);
 		keys.clear();
 		keys.parseAndAddElements((DOCUMENT_ID_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		writeKeys(keys, zbw);
+		writeKeys(keys, bw);
 		StringTupel docData = new StringTupel();
 		docData.setValue(DOCUMENT_ID_ATTRIBUTE, doc.docId);
 		docData.setValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, getAttributesString(doc));
-		writeValues(keys, docData, zbw);
-		zbw.close();
+		writeValues(keys, docData, bw);
+		bw.close();
 		
 		//	assemble data for pages, words, and regions
 		pm.setStep("Storing page data");
 		pm.setBaseProgress(5);
 		pm.setMaxProgress(8);
 		ImPage[] pages = doc.getPages();
-		zbw = getWriter(data, "pages.csv", false);
+		bw = getWriter(data, "pages.csv", false);
 		keys.clear();
 		keys.parseAndAddElements((PAGE_ID_ATTRIBUTE + ";" + BOUNDING_BOX_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		writeKeys(keys, zbw);
+		writeKeys(keys, bw);
 		for (int p = 0; p < pages.length; p++) {
 			pm.setInfo("Page " + p);
 			pm.setProgress((p * 100) / pages.length);
@@ -1093,18 +1100,18 @@ public class ImDocumentIO implements ImagingConstants {
 			pageData.setValue(PAGE_ID_ATTRIBUTE, ("" + pages[p].pageId));
 			pageData.setValue(BOUNDING_BOX_ATTRIBUTE, pages[p].bounds.toString());
 			pageData.setValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, getAttributesString(pages[p]));
-			writeValues(keys, pageData, zbw);
+			writeValues(keys, pageData, bw);
 		}
-		zbw.close();
+		bw.close();
 		
 		//	store words
 		pm.setStep("Storing word data");
 		pm.setBaseProgress(8);
 		pm.setMaxProgress(17);
-		zbw = getWriter(data, "words.csv", lowMemory);
+		bw = getWriter(data, "words.csv", lowMemory);
 		keys.clear();
 		keys.parseAndAddElements((PAGE_ID_ATTRIBUTE + ";" + BOUNDING_BOX_ATTRIBUTE + ";" + STRING_ATTRIBUTE + ";" + ImWord.PREVIOUS_WORD_ATTRIBUTE + ";" + ImWord.NEXT_WORD_ATTRIBUTE + ";" + ImWord.NEXT_RELATION_ATTRIBUTE + ";" + ImWord.TEXT_STREAM_TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		writeKeys(keys, zbw);
+		writeKeys(keys, bw);
 		for (int p = 0; p < pages.length; p++) {
 			pm.setInfo("Page " + p);
 			pm.setProgress((p * 100) / pages.length);
@@ -1124,19 +1131,19 @@ public class ImDocumentIO implements ImagingConstants {
 					wordData.setValue(ImWord.NEXT_WORD_ATTRIBUTE, pageWords[w].getNextWord().getLocalID());
 				wordData.setValue(ImWord.NEXT_RELATION_ATTRIBUTE, ("" + pageWords[w].getNextRelation()));
 				wordData.setValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, getAttributesString(pageWords[w]));
-				writeValues(keys, wordData, zbw);
+				writeValues(keys, wordData, bw);
 			}
 		}
-		zbw.close();
+		bw.close();
 		
 		//	store regions
 		pm.setStep("Storing region data");
 		pm.setBaseProgress(17);
 		pm.setMaxProgress(20);
-		zbw = getWriter(data, "regions.csv", lowMemory);
+		bw = getWriter(data, "regions.csv", lowMemory);
 		keys.clear();
 		keys.parseAndAddElements((PAGE_ID_ATTRIBUTE + ";" + BOUNDING_BOX_ATTRIBUTE + ";" + TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		writeKeys(keys, zbw);
+		writeKeys(keys, bw);
 		for (int p = 0; p < pages.length; p++) {
 			pm.setInfo("Page " + p);
 			pm.setProgress((p * 100) / pages.length);
@@ -1149,19 +1156,19 @@ public class ImDocumentIO implements ImagingConstants {
 				regData.setValue(BOUNDING_BOX_ATTRIBUTE, pageRegs[r].bounds.toString());
 				regData.setValue(TYPE_ATTRIBUTE, pageRegs[r].getType());
 				regData.setValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, getAttributesString(pageRegs[r]));
-				writeValues(keys, regData, zbw);
+				writeValues(keys, regData, bw);
 			}
 		}
-		zbw.close();
+		bw.close();
 		
 		//	store annotations
 		pm.setStep("Storing annotation data");
 		pm.setBaseProgress(20);
 		pm.setMaxProgress(25);
-		zbw = getWriter(data, "annotations.csv", lowMemory);
+		bw = getWriter(data, "annotations.csv", lowMemory);
 		keys.clear();
 		keys.parseAndAddElements((ImAnnotation.FIRST_WORD_ATTRIBUTE + ";" + ImAnnotation.LAST_WORD_ATTRIBUTE + ";" + TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		writeKeys(keys, zbw);
+		writeKeys(keys, bw);
 		ImAnnotation[] annots = doc.getAnnotations();
 		for (int a = 0; a < annots.length; a++) {
 			pm.setProgress((a * 100) / annots.length);
@@ -1170,18 +1177,18 @@ public class ImDocumentIO implements ImagingConstants {
 			annotData.setValue(ImAnnotation.LAST_WORD_ATTRIBUTE, annots[a].getLastWord().getLocalID());
 			annotData.setValue(TYPE_ATTRIBUTE, annots[a].getType());
 			annotData.setValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, getAttributesString(annots[a]));
-			writeValues(keys, annotData, zbw);
+			writeValues(keys, annotData, bw);
 		}
-		zbw.close();
+		bw.close();
 		
 		//	store fonts (if any)
 		pm.setStep("Storing font data");
 		pm.setBaseProgress(25);
 		pm.setMaxProgress(30);
-		zbw = getWriter(data, "fonts.csv", lowMemory);
+		bw = getWriter(data, "fonts.csv", lowMemory);
 		keys.clear();
 		keys.parseAndAddElements((ImFont.NAME_ATTRIBUTE + ";" + ImFont.STYLE_ATTRIBUTE + ";" + ImFont.CHARACTER_ID_ATTRIBUTE + ";" + ImFont.CHARACTER_STRING_ATTRIBUTE + ";" + ImFont.CHARACTER_IMAGE_ATTRIBUTE), ";");
-		writeKeys(keys, zbw);
+		writeKeys(keys, bw);
 		ImFont[] fonts = doc.getFonts();
 		for (int f = 0; f < fonts.length; f++) {
 			pm.setProgress((f * 100) / fonts.length);
@@ -1204,10 +1211,10 @@ public class ImDocumentIO implements ImagingConstants {
 				String charImageHex = fonts[f].getImageHex(charIDs[c]);
 				if (charImageHex != null)
 					charData.setValue(ImFont.CHARACTER_IMAGE_ATTRIBUTE, charImageHex);
-				writeValues(keys, charData, zbw);
+				writeValues(keys, charData, bw);
 			}
 		}
-		zbw.close();
+		bw.close();
 		
 		//	store page images
 		pm.setStep("Storing page images");
@@ -1226,7 +1233,7 @@ public class ImDocumentIO implements ImagingConstants {
 			 * - the document was loaded from, and is still bound to, its zipped-up form
 			 * - the document was loaded from, and is still bound to, a different folder */
 			boolean writePi = false;
-			if (!(data instanceof FolderImDocumentData))
+			if (data instanceof ZipOutImDocumentData)
 				writePi = true;
 			else if (!(doc instanceof DataBoundImDocument))
 				writePi = true;
@@ -1272,22 +1279,22 @@ public class ImDocumentIO implements ImagingConstants {
 		pm.setStep("Storing page image data");
 		pm.setBaseProgress(79);
 		pm.setMaxProgress(80);
-		zbw = getWriter(data, "pageImages.csv", false);
+		bw = getWriter(data, "pageImages.csv", false);
 		keys.clear();
 		keys.parseAndAddElements((ImObject.PAGE_ID_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		writeKeys(keys, zbw);
+		writeKeys(keys, bw);
 		for (int p = 0; p < pageImagesData.size(); p++)
-			writeValues(keys, pageImagesData.get(p), zbw);
-		zbw.close();
+			writeValues(keys, pageImagesData.get(p), bw);
+		bw.close();
 		
 		//	store meta data of supplements
 		pm.setStep("Storing supplement data");
 		pm.setBaseProgress(80);
 		pm.setMaxProgress(85);
-		zbw = getWriter(data, "supplements.csv", false);
+		bw = getWriter(data, "supplements.csv", false);
 		keys.clear();
 		keys.parseAndAddElements((ImSupplement.ID_ATTRIBUTE + ";" + ImSupplement.TYPE_ATTRIBUTE + ";" + ImSupplement.MIME_TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
-		writeKeys(keys, zbw);
+		writeKeys(keys, bw);
 		ImSupplement[] supplements = doc.getSupplements();
 		for (int s = 0; s < supplements.length; s++) {
 			StringTupel supplementData = new StringTupel();
@@ -1295,9 +1302,9 @@ public class ImDocumentIO implements ImagingConstants {
 			supplementData.setValue(ImSupplement.TYPE_ATTRIBUTE, supplements[s].getType());
 			supplementData.setValue(ImSupplement.MIME_TYPE_ATTRIBUTE, supplements[s].getMimeType());
 			supplementData.setValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, getAttributesString(supplements[s]));
-			writeValues(keys, supplementData, zbw);
+			writeValues(keys, supplementData, bw);
 		}
-		zbw.close();
+		bw.close();
 		
 		//	store supplements proper
 		pm.setStep("Storing supplements");
@@ -1316,7 +1323,7 @@ public class ImDocumentIO implements ImagingConstants {
 			 * - the document was loaded from, and is still bound to, a different folder
 			 * - the supplement was newly added or modified */
 			boolean writeSd = false;
-			if (!(data instanceof FolderImDocumentData))
+			if (data instanceof ZipOutImDocumentData)
 				writeSd = true;
 			else if (!(doc instanceof DataBoundImDocument))
 				writeSd = true;
