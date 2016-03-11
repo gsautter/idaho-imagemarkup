@@ -987,6 +987,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					for (int f = 0; f < pData[p].figures.length; f++) {
 						for (int w = 0; w < pData[p].words.length; w++)
 							if (pData[p].figures[f].bounds.intersects(pData[p].words[w].bounds)) {
+								if (pData[p].words[w].bounds.getMaxY() > pData[p].figures[f].bounds.getMaxY())
+									continue; // word reached atop figure might be caption (especially in line drawing)
+								if (pData[p].words[w].bounds.getMinY() < pData[p].figures[f].bounds.getMinY())
+									continue; // word reached below figure might be caption (especially in line drawing)
 								if (pInFigureWords[p] == null)
 									pInFigureWords[p] = new HashSet();
 								pInFigureWords[p].add(pData[p].words[w]);
