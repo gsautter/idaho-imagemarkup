@@ -376,7 +376,7 @@ public class ImDocumentIO implements ImagingConstants {
 //				else return entryData.getInputStream();
 			}
 			else {
-				File entryDataFile = new File(this.entryDataCacheFolder, entry.getFileName());
+				File entryDataFile = new File(this.entryDataCacheFolder, entryName);
 				return new BufferedInputStream(new FileInputStream(entryDataFile));
 			}
 		}
