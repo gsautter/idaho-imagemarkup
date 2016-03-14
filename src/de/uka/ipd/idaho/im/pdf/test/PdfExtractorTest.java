@@ -452,6 +452,7 @@ public class PdfExtractorTest implements ImagingConstants {
 		
 		//	caption figure overlap problem with in-figure word cleanup (one of many ...)
 		pdfName = "Zootaxa/zt00386.pdf"; // TODO test page 3
+		//pdfName = "Zootaxa/zt04091p001.pdf"; // TODO test page 10
 		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
@@ -596,6 +597,10 @@ public class PdfExtractorTest implements ImagingConstants {
 //			for (int c = 0; c < cells.length; c++)
 //				paintBox(bi, scaleDown, cells[c], Color.RED.getRGB(), imageMargin, 1);
 //			
+			ImRegion[] images = pages[p].getRegions(ImRegion.IMAGE_TYPE);
+			for (int i = 0; i < images.length; i++)
+				paintBox(bi, scaleDown, images[i], Color.PINK.getRGB(), imageMargin, 3);
+			
 			ImRegion[] blocks = pages[p].getRegions(BLOCK_ANNOTATION_TYPE);
 			for (int b = 0; b < blocks.length; b++)
 				paintBox(bi, scaleDown, blocks[b], Color.BLUE.getRGB(), imageMargin, 3);

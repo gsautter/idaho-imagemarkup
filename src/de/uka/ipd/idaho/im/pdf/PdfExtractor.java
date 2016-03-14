@@ -636,7 +636,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		return pData;
 	}
 	
-	private BufferedImage getFigureImage(ImDocument doc, PFigure pFigure, Document pdfDoc, Page pdfPage, int p, Rectangle2D.Float pdfPageBox, Hashtable xObjects, Map objects, float magnification, ProgressMonitor spm) throws IOException {
+	private BufferedImage getFigureImage(ImDocument doc, PFigure pFigure, boolean isMainFigure, Document pdfDoc, Page pdfPage, int p, Rectangle2D.Float pdfPageBox, Hashtable xObjects, Map objects, float magnification, ProgressMonitor spm) throws IOException {
 		
 		//	figure consists of sub figures
 		if (pFigure.subFigures != null) {
@@ -649,7 +649,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			float heightRatioSum = 0;
 			for (int s = 0; s < pFigure.subFigures.length; s++) {
 				System.out.println(" - rendering sub image " + pFigure.subFigures[s].name);
-				pFigureSubImages[s] = this.getFigureImage(null, pFigure.subFigures[s], pdfDoc, pdfPage, p, pdfPageBox, xObjects, objects, magnification, spm);
+				pFigureSubImages[s] = this.getFigureImage(null, pFigure.subFigures[s], false, pdfDoc, pdfPage, p, pdfPageBox, xObjects, objects, magnification, spm);
 				System.out.println("   - sub image size is " + pFigureSubImages[s].getWidth() + "x" + pFigureSubImages[s].getHeight());
 				float widthRatio = ((float) (((float) pFigureSubImages[s].getWidth()) / pFigure.subFigures[s].bounds.getWidth()));
 				widthRatioSum += widthRatio;
@@ -684,6 +684,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			float rawDpi = dpiRatio * defaultDpi;
 			int pFigureDpi = (Math.round(rawDpi / 10) * 10);
 			spm.setInfo(" - resolution computed as " + pFigureDpi + " DPI (" + rawDpi + ")");
+//			
+//			//	adjust figure bounds (not for sub figures, though)
+//			if (isMainFigure)
+//				this.cutFigureMargins(pFigure, pFigureImage);
 			
 			//	get figure bounds
 			BoundingBox pFigureBox = this.getBoundingBox(pFigure.bounds, pdfPageBox, magnification, 0);
@@ -730,8 +734,31 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		
 		//	interpret figure rotation (if above some 0.1°)
 		else if (Math.abs(pFigure.rotation) > 0.0005) {
-			pFigureImage = Imaging.rotateImage(pFigureImage, pFigure.rotation);
+			BufferedImage rImage;
+			
+			//	rotation somewhere around 90° or -90°, have to flip dimensions
+			if ((Math.abs(pFigure.rotation / Math.PI) > 0.25) && (Math.abs(pFigure.rotation / Math.PI) < 0.75))
+				rImage = new BufferedImage(pFigureImage.getHeight(), pFigureImage.getWidth(), ((pFigureImage.getType() == BufferedImage.TYPE_CUSTOM) ? BufferedImage.TYPE_INT_ARGB : pFigureImage.getType()));
+			
+			//	rotation somewhere around 270° or -270°, have to flip dimensions
+			else if ((Math.abs(pFigure.rotation / Math.PI) > 1.25) && (Math.abs(pFigure.rotation / Math.PI) < 1.75))
+				rImage = new BufferedImage(pFigureImage.getHeight(), pFigureImage.getWidth(), ((pFigureImage.getType() == BufferedImage.TYPE_CUSTOM) ? BufferedImage.TYPE_INT_ARGB : pFigureImage.getType()));
+			
+			//	figure rather upright, retain dimensions
+			else rImage = new BufferedImage(pFigureImage.getWidth(), pFigureImage.getHeight(), ((pFigureImage.getType() == BufferedImage.TYPE_CUSTOM) ? BufferedImage.TYPE_INT_ARGB : pFigureImage.getType()));
+			
+			//	perform rotation
+			Graphics2D rImageGraphics = rImage.createGraphics();
+			rImageGraphics.setColor(Color.WHITE);
+			rImageGraphics.fillRect(0, 0, rImage.getWidth(), rImage.getHeight());
+			rImageGraphics.translate(((rImage.getWidth() - pFigureImage.getWidth()) / 2), ((rImage.getHeight() - pFigureImage.getHeight()) / 2));
+			rImageGraphics.rotate(pFigure.rotation, (pFigureImage.getWidth() / 2), (pFigureImage.getHeight() / 2));
+			rImageGraphics.drawRenderedImage(pFigureImage, null);
+			rImageGraphics.dispose();
+			pFigureImage = rImage;
+//			pFigureImage = Imaging.rotateImage(pFigureImage, pFigure.rotation);
 			spm.setInfo("     - figure rotated by " + ((180.0 / Math.PI) * pFigure.rotation) + "°");
+			spm.setInfo("     - figure sized " + pFigureImage.getWidth() + " x " + pFigureImage.getHeight() + " now, type is " + pFigureImage.getType());
 		}
 		
 		//	correct right side left ...
@@ -789,10 +816,6 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			spm.setInfo("     --> blank decoded figure re-rendered as part of page image");
 		}
 		
-		//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
-		BoundingBox pFigureBox = this.getBoundingBox(pFigure.bounds, pdfPageBox, magnification, rotate);
-		spm.setInfo("     - rendering bounds are " + pFigureBox);
-		
 		Object csObj = PdfParser.dereference(((PStream) pFigureData).params.get("ColorSpace"), objects);
 		if (csObj != null) {
 			spm.setInfo("     - color space is " + csObj.toString());
@@ -832,6 +855,14 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		
 		//	if we're grayscale and extremely dark, invert white on black
 		this.correctInvertedGaryscale(pFigureImage);
+//		
+//		//	adjust figure bounds (not for sub figures, though)
+//		if (isMainFigure)
+//			this.cutFigureMargins(pFigure, pFigureImage);
+		
+		//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
+		BoundingBox pFigureBox = this.getBoundingBox(pFigure.bounds, pdfPageBox, magnification, rotate);
+		spm.setInfo("     - rendering bounds are " + pFigureBox);
 		
 		//	add figures as supplements to document if required (synchronized !!!)
 		if (doc != null) synchronized (doc) {
@@ -841,6 +872,17 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		//	finally ...
 		return pFigureImage;
 	}
+//	
+//	private void cutFigureMargins(PFigure pFigure, BufferedImage pFigureImage) {
+//		ImagePartRectangle pFigureContentBounds = Imaging.getContentBox(Imaging.wrapImage(pFigureImage, null));
+//		if ((pFigureContentBounds.getTopRow() > 0) || (pFigureContentBounds.getBottomRow() < pFigureImage.getHeight())) {
+//			float topCut = (((float) (pFigureContentBounds.getTopRow() * pFigure.bounds.getHeight())) / pFigureImage.getHeight());
+//			System.out.println("Top cut is " + topCut);
+//			float bottomCut = (((float) ((pFigureImage.getHeight() - pFigureContentBounds.getBottomRow()) * pFigure.bounds.getHeight())) / pFigureImage.getHeight());
+//			System.out.println("Bottom cut is " + bottomCut);
+//			pFigure.bounds.setRect(pFigure.bounds.getX(), (pFigure.bounds.getY() + bottomCut), pFigure.bounds.getWidth(), (pFigure.bounds.getHeight() - bottomCut - topCut));
+//		}
+//	}
 	
 	private static final int defaultDpi = 72; // default according to PDF specification
 	
@@ -985,16 +1027,71 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				if (pData[p].figures.length != 0) {
 					spm.setInfo("Getting in-figures words in page " + p + " of " + pData.length);
 					for (int f = 0; f < pData[p].figures.length; f++) {
+						
+						//	get top and bottom, and observe inversions
+						int figTop = ((int) Math.ceil(Math.max(pData[p].figures[f].bounds.getMinY(), pData[p].figures[f].bounds.getMaxY())));
+						int figBottom = ((int) Math.floor(Math.min(pData[p].figures[f].bounds.getMinY(), pData[p].figures[f].bounds.getMaxY())));
+						
+						//	count words per pixel line
+						boolean figureClear = true;
+						int[] rowWordPixels = new int[figTop + 1 - figBottom];
+						Arrays.fill(rowWordPixels, 0);
 						for (int w = 0; w < pData[p].words.length; w++)
 							if (pData[p].figures[f].bounds.intersects(pData[p].words[w].bounds)) {
-								if (pData[p].words[w].bounds.getMaxY() > pData[p].figures[f].bounds.getMaxY())
-									continue; // word reached atop figure might be caption (especially in line drawing)
-								if (pData[p].words[w].bounds.getMinY() < pData[p].figures[f].bounds.getMinY())
-									continue; // word reached below figure might be caption (especially in line drawing)
+								figureClear = false;
+								for (int r = ((int) Math.floor(pData[p].words[w].bounds.getMinY())); r < Math.ceil(pData[p].words[w].bounds.getMaxY()); r++) {
+									if (r < figBottom)
+										continue;
+									if (r >= figTop)
+										continue;
+									rowWordPixels[r - figBottom] += ((int) Math.round(pData[p].words[w].bounds.getWidth()));
+									
+								}
+							}
+						
+						//	do we need to look any further?
+						if (figureClear)
+							continue;
+						
+						//	check words, and compute image margin
+						double wFigTop = Math.max(pData[p].figures[f].bounds.getMinY(), pData[p].figures[f].bounds.getMaxY());
+						double wFigBottom = Math.min(pData[p].figures[f].bounds.getMinY(), pData[p].figures[f].bounds.getMaxY());
+						for (int w = 0; w < pData[p].words.length; w++)
+							if (pData[p].figures[f].bounds.intersects(pData[p].words[w].bounds)) {
+								
+								//	count word density inside image
+								int wordRowCount = 0;
+								int wordRowPixelCount = 0;
+								for (int r = ((int) Math.floor(pData[p].words[w].bounds.getMinY())); r < Math.ceil(pData[p].words[w].bounds.getMaxY()); r++) {
+									if (r < figBottom)
+										continue;
+									if (r >= figTop)
+										continue;
+									wordRowCount++;
+									wordRowPixelCount += rowWordPixels[r - figBottom];
+								}
+								
+								//	overlap is marginal, ignore word
+								if (wordRowCount == 0)
+									continue;
+								
+								//	over 50% of word row occupied with words, likely text rather than numbering
+								if (((wordRowPixelCount / wordRowCount) * 2) > Math.abs(pData[p].figures[f].bounds.getWidth())) {
+									if (pData[p].words[w].bounds.getMaxY() < ((figTop + figBottom) / 2))
+										wFigBottom = Math.max(wFigBottom, (pData[p].words[w].bounds.getMaxY() + 0.5));
+									if (pData[p].words[w].bounds.getMinY() > ((figTop + figBottom) / 2))
+										wFigTop = Math.min(wFigTop, (pData[p].words[w].bounds.getMinY() - 0.5));
+									continue;
+								}
+								
+								//	mark word for removal
 								if (pInFigureWords[p] == null)
 									pInFigureWords[p] = new HashSet();
 								pInFigureWords[p].add(pData[p].words[w]);
 							}
+						
+						//	cut top and bottom of figure bounds (figure proper was stored above)
+						pData[p].figures[f].bounds.setRect(pData[p].figures[f].bounds.getMinX(), wFigBottom, pData[p].figures[f].bounds.getWidth(), (wFigTop - wFigBottom));
 					}
 					spm.setInfo("Found " + ((pInFigureWords[p] == null) ? "no" : ("" + pInFigureWords[p].size())) + " in-figures words in page " + p + " of " + pData.length);
 				}
@@ -2175,7 +2272,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				spm.setInfo("   - " + pFigure);
 				
 				//	get image
-				BufferedImage pFigureImage = this.getFigureImage(doc, pFigure, pdfDoc, pData.pdfPage, pData.p, pData.pdfPageBox, xObjects, objects, magnification, spm);
+				BufferedImage pFigureImage = this.getFigureImage(doc, pFigure, true, pdfDoc, pData.pdfPage, pData.p, pData.pdfPageBox, xObjects, objects, magnification, spm);
 				
 				//	display figures if testing
 				if ((fdd != null) && (pFigureImage != null)) {
