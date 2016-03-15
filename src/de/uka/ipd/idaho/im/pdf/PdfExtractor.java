@@ -445,7 +445,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		//	fill pages
 		if (isTextPdf)
 			this.addTextPdfPages(doc, pData, pdfDoc, objects, spm);
-		else this.addImagePdfPages(doc, pData, pdfDoc, catalog.getPageTree(), objects, true, scaleFactor, spm);
+		else this.addImagePdfPages(doc, pData, pdfDoc, catalog.getPageTree(), objects, true, (wordInFigureCount > (pageCount * 25)), scaleFactor, spm);
 		
 		//	finally ...
 		return doc;
@@ -459,6 +459,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		final Hashtable pdfPageResources;
 		PWord[] words = null;
 		PFigure[] figures = null;
+		float rawPageImageDpi = -1;
+		int rightPageOffset = 0;
 		PPageData(int p, Page pdfPage, Float pdfPageBox, int rotate, Hashtable pdfPageResources, PWord[] words, PFigure[] figures) {
 			this.p = p;
 			this.pdfPage = pdfPage;
@@ -954,15 +956,6 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		//	preserve source PDF in supplement
 		ImSupplement.Source.createSource(doc, "application/pdf", pdfBytes);
 		
-		//	finally ...
-		return this.doLoadTextPdf(doc, pdfDoc, pdfBytes, pm);
-	}
-	
-	private static final boolean DEBUG_EXTRACT_FIGURES = true;
-	private static final boolean DEBUG_MERGE_WORDS = false;
-	
-	private ImDocument doLoadTextPdf(final ImDocument doc, final Document pdfDoc, byte[] pdfBytes, ProgressMonitor pm) throws IOException {
-		
 		//	build progress monitor with synchronized methods instead of synchronizing in-code
 		SynchronizedProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? ((SynchronizedProgressMonitor) pm) : new SynchronizedProgressMonitor(pm));
 		
@@ -984,6 +977,9 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		//	finally ...
 		return doc;
 	}
+	
+	private static final boolean DEBUG_EXTRACT_FIGURES = true;
+	private static final boolean DEBUG_MERGE_WORDS = true;
 	
 	private void addTextPdfPages(final ImDocument doc, final PPageData[] pData, final Document pdfDoc, final Map objects, final SynchronizedProgressMonitor spm) throws IOException {
 		final float magnification = (((float) this.textPdfPageImageDpi) / defaultDpi);
@@ -1146,122 +1142,13 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		spm.setBaseProgress(35);
 		spm.setProgress(0);
 		spm.setMaxProgress(36);
-		int decimalDotCount = 0;
-		int decimalCommaCount = 0;
-		int thousandDotCount = 0;
-		int thousandCommaCount = 0;
-		for (int p = 0; p < pData.length; p++) {
-			
-			//	nothing to work with
-			if ((pData[p] == null) || (pData[p].words == null) || (pData[p].words.length == 0))
-				continue;
-			
-			//	check word by word
-			for (int w = 0; w < pData[p].words.length; w++) {
-				
-				//	skip over non-numbers
-				if (!Gamta.isNumber(pData[p].words[w].str))
-					continue;
-				
-				//	skip over numbers without punctuation
-				if (pData[p].words[w].str.matches("[0-9]+"))
-					continue;
-				
-				//	count thousand dots ...
-				if (pData[p].words[w].str.matches("[0-9]{1,3}(\\.[0-9]{3})+\\,[0-9]+")) {
-					thousandDotCount++;
-					decimalCommaCount++;
-					spm.setInfo("  thousand dot & decimal comma in " + pData[p].words[w].str + " (page " + p + ")");
-				}
-				
-				//	as well as thousand commas ...
-				else if (pData[p].words[w].str.matches("[0-9]{1,3}(\\,[0-9]{3})+\\.[0-9]+")) {
-					thousandCommaCount++;
-					decimalDotCount++;
-					spm.setInfo("  thousand comma & decimal dot in " + pData[p].words[w].str + " (page " + p + ")");
-				}
-				
-				//	count decimal dots ...
-				else if (pData[p].words[w].str.matches(".*[0-9]\\.[0-9]+")) {
-					decimalDotCount++;
-					spm.setInfo("  decimal dot in " + pData[p].words[w].str + " (page " + p + ")");
-				}
-				
-				//	as well as decimal commas ...
-				else if (pData[p].words[w].str.matches(".*[0-9]\\,[0-9]+")) {
-					decimalCommaCount++;
-					spm.setInfo("  decimal comma in " + pData[p].words[w].str + " (page " + p + ")");
-				}
-			}
-		}
-		spm.setInfo("Found " + decimalDotCount + " decimal dots and " + decimalCommaCount + " decimal commas");
-		spm.setInfo("Found " + thousandDotCount + " thousand dots and " + thousandCommaCount + " thousand commas");
+		final Tokenizer numberTokenizer = getNumberTokenizer(pData, tokenizer, spm);
 		
 		//	split words only now
 		spm.setStep("Splitting page words");
 		spm.setBaseProgress(36);
 		spm.setProgress(0);
 		spm.setMaxProgress(40);
-		final Tokenizer numberTokenizer;
-		if ((decimalDotCount > thousandDotCount) && (decimalDotCount > decimalCommaCount)) {
-			if ((thousandCommaCount == 0) && (decimalCommaCount == 0))
-				numberTokenizer = new RegExTokenizer(
-						"(" +
-							"(" +
-								"([1-9][0-9]*)" +
-								"|" +
-								"0" +
-							")" +
-							"(\\.[0-9]+)?" +
-						")" +
-						"|\\,|\\.");
-			else numberTokenizer = new RegExTokenizer(
-					"(" +
-						"(" +
-							"(" +
-								"[1-9]" +
-								"(" +
-									"[0-9]" +
-									"|" +
-									"(\\,[0-9]{3})" +
-								")*" +
-							")" +
-							"|" +
-							"0" +
-						")" +
-						"(\\.[0-9]+)?" +
-					")|\\,|\\.");
-		}
-		else if ((decimalCommaCount > thousandCommaCount) && (decimalCommaCount > decimalDotCount)) {
-			if ((thousandDotCount == 0) && (decimalDotCount == 0))
-				numberTokenizer = new RegExTokenizer(
-						"(" +
-							"(" +
-								"([1-9][0-9]*)" +
-								"|" +
-								"0" +
-							")" +
-							"(\\,[0-9]+)?" +
-						")" +
-						"|\\.|\\,");
-			else numberTokenizer = new RegExTokenizer(
-					"(" +
-						"(" +
-							"(" +
-								"[1-9]" +
-								"(" +
-									"[0-9]" +
-									"|" +
-									"(\\.[0-9]{3})" +
-								")*" +
-							")" +
-							"|" +
-							"0)" +
-						"(\\,[0-9]+)?" +
-					")" +
-					"|\\.|\\,");
-		}
-		else numberTokenizer = tokenizer;
 		pf = new ParallelFor() {
 			public void doFor(int p) throws Exception {
 				
@@ -2001,7 +1888,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		spm.setInfo(" - word sequence analysis done");
 	}
 	
-	private void checkPageWords(PPageData pData, Tokenizer tokenizer, ProgressMonitor spm) {
+	private static void checkPageWords(PPageData pData, Tokenizer tokenizer, ProgressMonitor spm) {
 		
 		//	shrink word bounding boxes to actual word size
 		BufferedImage mbi = new BufferedImage(1, 1, BufferedImage.TYPE_BYTE_GRAY);
@@ -2153,6 +2040,122 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		if (pData.words.length == 0)
 			spm.setInfo(" --> empty page");
 		else spm.setInfo(" --> got " + pData.words.length + " words in PDF");
+	}
+	
+	private static Tokenizer getNumberTokenizer(PPageData[] pData, Tokenizer tokenizer, ProgressMonitor spm) {
+		
+		//	assess number punctuation
+		int decimalDotCount = 0;
+		int decimalCommaCount = 0;
+		int thousandDotCount = 0;
+		int thousandCommaCount = 0;
+		for (int p = 0; p < pData.length; p++) {
+			
+			//	nothing to work with
+			if ((pData[p] == null) || (pData[p].words == null) || (pData[p].words.length == 0))
+				continue;
+			
+			//	check word by word
+			for (int w = 0; w < pData[p].words.length; w++) {
+				
+				//	skip over non-numbers
+				if (!Gamta.isNumber(pData[p].words[w].str))
+					continue;
+				
+				//	skip over numbers without punctuation
+				if (pData[p].words[w].str.matches("[0-9]+"))
+					continue;
+				
+				//	count thousand dots ...
+				if (pData[p].words[w].str.matches("[0-9]{1,3}(\\.[0-9]{3})+\\,[0-9]+")) {
+					thousandDotCount++;
+					decimalCommaCount++;
+					spm.setInfo("  thousand dot & decimal comma in " + pData[p].words[w].str + " (page " + p + ")");
+				}
+				
+				//	as well as thousand commas ...
+				else if (pData[p].words[w].str.matches("[0-9]{1,3}(\\,[0-9]{3})+\\.[0-9]+")) {
+					thousandCommaCount++;
+					decimalDotCount++;
+					spm.setInfo("  thousand comma & decimal dot in " + pData[p].words[w].str + " (page " + p + ")");
+				}
+				
+				//	count decimal dots ...
+				else if (pData[p].words[w].str.matches(".*[0-9]\\.[0-9]+")) {
+					decimalDotCount++;
+					spm.setInfo("  decimal dot in " + pData[p].words[w].str + " (page " + p + ")");
+				}
+				
+				//	as well as decimal commas ...
+				else if (pData[p].words[w].str.matches(".*[0-9]\\,[0-9]+")) {
+					decimalCommaCount++;
+					spm.setInfo("  decimal comma in " + pData[p].words[w].str + " (page " + p + ")");
+				}
+			}
+		}
+		spm.setInfo("Found " + decimalDotCount + " decimal dots and " + decimalCommaCount + " decimal commas");
+		spm.setInfo("Found " + thousandDotCount + " thousand dots and " + thousandCommaCount + " thousand commas");
+		
+		//	return tokenizer based on findings
+		if ((decimalDotCount > thousandDotCount) && (decimalDotCount > decimalCommaCount)) {
+			if ((thousandCommaCount == 0) && (decimalCommaCount == 0))
+				return new RegExTokenizer(
+						"(" +
+							"(" +
+								"([1-9][0-9]*)" +
+								"|" +
+								"0" +
+							")" +
+							"(\\.[0-9]+)?" +
+						")" +
+						"|\\,|\\.");
+			else return new RegExTokenizer(
+					"(" +
+						"(" +
+							"(" +
+								"[1-9]" +
+								"(" +
+									"[0-9]" +
+									"|" +
+									"(\\,[0-9]{3})" +
+								")*" +
+							")" +
+							"|" +
+							"0" +
+						")" +
+						"(\\.[0-9]+)?" +
+					")|\\,|\\.");
+		}
+		else if ((decimalCommaCount > thousandCommaCount) && (decimalCommaCount > decimalDotCount)) {
+			if ((thousandDotCount == 0) && (decimalDotCount == 0))
+				return new RegExTokenizer(
+						"(" +
+							"(" +
+								"([1-9][0-9]*)" +
+								"|" +
+								"0" +
+							")" +
+							"(\\,[0-9]+)?" +
+						")" +
+						"|\\.|\\,");
+			else return new RegExTokenizer(
+					"(" +
+						"(" +
+							"(" +
+								"[1-9]" +
+								"(" +
+									"[0-9]" +
+									"|" +
+									"(\\.[0-9]{3})" +
+								")*" +
+							")" +
+							"|" +
+							"0)" +
+						"(\\,[0-9]+)?" +
+					")" +
+					"|\\.|\\,");
+		}
+		else return tokenizer;
 	}
 	
 	private static boolean areWordsMergeable(PWord lpWord, TokenSequence lpWordTokens, PWord pWord, TokenSequence pWordTokens, double maxMergeMargin10pt, Tokenizer tokenizer) {
@@ -3226,7 +3229,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdf(byte[] pdfBytes, ProgressMonitor pm) throws IOException {
-		return this.loadImagePdf(null, null, pdfBytes, false, 1, pm);
+		return this.loadImagePdf(null, null, pdfBytes, false, false, 1, pm);
 	}
 	
 	/**
@@ -3236,13 +3239,30 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @param doc the document to store the structural information in
 	 * @param pdfDoc the PDF document to parse
 	 * @param pdfBytes the raw binary data the the PDF document was parsed from
-	 * @param metaPages expect born-digital meta pages at start of end of PDF?
+	 * @param metaPages expect born-digital meta pages at start or end of PDF?
 	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 * @return the image markup document
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdf(byte[] pdfBytes, boolean metaPages, ProgressMonitor pm) throws IOException {
-		return this.loadImagePdf(null, null, pdfBytes, metaPages, 1, pm);
+		return this.loadImagePdf(null, null, pdfBytes, metaPages, false, 1, pm);
+	}
+	
+	/**
+	 * Load a document from an OCR PDF. Page images are stored in the page image
+	 * store handed to the constructor. The document structure is stored in the
+	 * returned image markup document, including word bounding boxes.
+	 * @param doc the document to store the structural information in
+	 * @param pdfDoc the PDF document to parse
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param metaPages expect born-digital meta pages at start or end of PDF?
+	 * @param useEmbeddedOCR use embedded OCR if available?
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadImagePdf(byte[] pdfBytes, boolean metaPages, boolean useEmbeddedOCR, ProgressMonitor pm) throws IOException {
+		return this.loadImagePdf(null, null, pdfBytes, metaPages, useEmbeddedOCR, 1, pm);
 	}
 	
 	/**
@@ -3259,7 +3279,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdf(ImDocument doc, Document pdfDoc, byte[] pdfBytes, ProgressMonitor pm) throws IOException {
-		return this.loadImagePdf(doc, pdfDoc, pdfBytes, false, 1, pm);
+		return this.loadImagePdf(doc, pdfDoc, pdfBytes, false, false, 1, pm);
 	}
 	
 	/**
@@ -3271,13 +3291,32 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @param doc the document to store the structural information in
 	 * @param pdfDoc the PDF document to parse
 	 * @param pdfBytes the raw binary data the the PDF document was parsed from
-	 * @param metaPages expect born-digital meta pages at start of end of PDF?
+	 * @param metaPages expect born-digital meta pages at start or end of PDF?
 	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 * @return the argument image markup document
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdf(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, ProgressMonitor pm) throws IOException {
-		return this.loadImagePdf(doc, pdfDoc, pdfBytes, metaPages, 1, pm);
+		return this.loadImagePdf(doc, pdfDoc, pdfBytes, metaPages, false, 1, pm);
+	}
+	
+	/**
+	 * Load a document from an OCR PDF. Page images are stored in the page image
+	 * store handed to the constructor. The document structure is stored in the
+	 * argument image markup document, including word bounding boxes. If the
+	 * argument ImDocument is null, this method creates a new one with the MD5
+	 * checksum of the argument PDF bytes as the ID.
+	 * @param doc the document to store the structural information in
+	 * @param pdfDoc the PDF document to parse
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param metaPages expect born-digital meta pages at start or end of PDF?
+	 * @param useEmbeddedOCR use embedded OCR if available?
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the argument image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadImagePdf(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, boolean useEmbeddedOCR, ProgressMonitor pm) throws IOException {
+		return this.loadImagePdf(doc, pdfDoc, pdfBytes, metaPages, useEmbeddedOCR, 1, pm);
 	}
 	
 	/**
@@ -3301,7 +3340,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdf(ImDocument doc, Document pdfDoc, byte[] pdfBytes, int scaleFactor, ProgressMonitor pm) throws IOException {
-		return this.loadImagePdf(doc, pdfDoc, pdfBytes, false, scaleFactor, pm);
+		return this.loadImagePdf(doc, pdfDoc, pdfBytes, false, false, scaleFactor, pm);
 	}
 	
 	/**
@@ -3318,7 +3357,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @param doc the document to store the structural information in
 	 * @param pdfDoc the PDF document to parse
 	 * @param pdfBytes the raw binary data the the PDF document was parsed from
-	 * @param metaPages expect born-digital meta pages at start of end of PDF?
+	 * @param metaPages expect born-digital meta pages at start or end of PDF?
 	 * @param scaleFactor the scale factor for image PDFs, to correct PDFs that
 	 *            are set too small (DPI number is divided by this factor)
 	 * @param pm a monitor object for reporting progress, e.g. to a UI
@@ -3326,6 +3365,32 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdf(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, int scaleFactor, ProgressMonitor pm) throws IOException {
+		return this.loadImagePdf(pdfBytes, metaPages, false, pm);
+	}
+	
+	/**
+	 * Load a document from an OCR PDF. Page images are stored in the page image
+	 * store handed to the constructor. The document structure is stored in the
+	 * argument image markup document, including word bounding boxes. The scale
+	 * factor helps with PDFs whose page boundaries (media boxes) are set too
+	 * small. This can be recognized in any PDF viewer by the fact that the
+	 * document is tiny and the writing very small at 100% size display. It can
+	 * also be detected automatically, e.g. by means of examining the average
+	 * height of lines in comparison to the DPI number. If the argument
+	 * ImDocument is null, this method creates a new one with the MD5 checksum
+	 * of the argument PDF bytes as the ID.
+	 * @param doc the document to store the structural information in
+	 * @param pdfDoc the PDF document to parse
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param metaPages expect born-digital meta pages at start or end of PDF?
+	 * @param useEmbeddedOCR use embedded OCR if available?
+	 * @param scaleFactor the scale factor for image PDFs, to correct PDFs that
+	 *            are set too small (DPI number is divided by this factor)
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the argument image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadImagePdf(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, boolean useEmbeddedOCR, int scaleFactor, ProgressMonitor pm) throws IOException {
 		
 		//	check arguments
 		if (doc == null)
@@ -3346,14 +3411,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		//	preserve source PDF in supplement
 		ImSupplement.Source.createSource(doc, "application/pdf", pdfBytes);
 		
-		//	load PDF
-		return this.doLoadImagePdf(doc, pdfDoc, pdfBytes, metaPages, scaleFactor, pm);
-	}
-	
-	private ImDocument doLoadImagePdf(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, int scaleFactor, ProgressMonitor pm) throws IOException {
-		
 		//	test if we can OCR
-		if (this.ocrEngine == null)
+		if ((this.ocrEngine == null) && !useEmbeddedOCR)
 			throw new RuntimeException("OCR Engine unavailable, check startup log.");
 		
 		//	build progress monitor with synchronized methods instead of synchronizing in-code
@@ -3370,19 +3429,19 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		PdfParser.decryptObjects(objects, pdfDoc.getSecurityManager());
 		
 		//	get basic page data (takes progress to 30%)
-		PPageData[] pData = this.getPdfPageData(doc, false, pageTree, objects, spm);
+		PPageData[] pData = this.getPdfPageData(doc, useEmbeddedOCR, pageTree, objects, spm);
 		
 		//	add page content
-		this.addImagePdfPages(doc, pData, pdfDoc, pageTree, objects, metaPages, scaleFactor, spm);
+		this.addImagePdfPages(doc, pData, pdfDoc, pageTree, objects, metaPages, useEmbeddedOCR, scaleFactor, spm);
 		
 		//	finally ...
 		return doc;
 	}
 	
-	private void addImagePdfPages(ImDocument doc, PPageData[] pData, Document pdfDoc, PageTree pageTree, Map objects, boolean metaPages, int scaleFactor, SynchronizedProgressMonitor spm) throws IOException {
+	private void addImagePdfPages(ImDocument doc, PPageData[] pData, Document pdfDoc, PageTree pageTree, Map objects, boolean metaPages, boolean useEmbeddedOCR, int scaleFactor, SynchronizedProgressMonitor spm) throws IOException {
 		
 		//	test if we can OCR
-		if (this.ocrEngine == null)
+		if ((this.ocrEngine == null) && !useEmbeddedOCR)
 			throw new RuntimeException("OCR Engine unavailable, check startup log.");
 		
 		//	more pages than we can process in parallel, don't cache at all to save memory
@@ -3415,11 +3474,11 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		Map pageRegionCache = Collections.synchronizedMap(new HashMap());
 		
 		//	fill in blocks and do OCR
-		spm.setStep("Extracting blocks & doing OCR");
+		spm.setStep("Extracting blocks & " + (useEmbeddedOCR ? "embedded " : "doing ") + "OCR");
 		spm.setBaseProgress(40);
 		spm.setProgress(0);
 		spm.setMaxProgress(70);
-		this.addImagePdfPageBlocks(doc, spm, pageImageCache, pageRegionCache);
+		this.addImagePdfPageBlocks(doc, (useEmbeddedOCR ? pData : null), spm, pageImageCache, pageRegionCache);
 		
 		//	analyze block structure and layout
 		spm.setStep("Analyzing page text structure");
@@ -3597,13 +3656,29 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * constructor. The document structure is analyzed and represented to the
 	 * text block level, but not below. 
 	 * @param pdfBytes the raw binary data the the PDF document was parsed from
-	 * @param metaPages expect born-digital meta pages at start of end of PDF?
+	 * @param metaPages expect born-digital meta pages at start or end of PDF?
 	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 * @return the image markup document
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdfBlocks(byte[] pdfBytes, boolean metaPages, ProgressMonitor pm) throws IOException {
 		return this.loadImagePdfBlocks(null, null, pdfBytes, metaPages, 1, pm);
+	}
+	
+	/**
+	 * Load the pages of a document from an OCR PDF, including their block
+	 * structure. Page images are stored in the page image store handed to the
+	 * constructor. The document structure is analyzed and represented to the
+	 * text block level, but not below. 
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param metaPages expect born-digital meta pages at start or end of PDF?
+	 * @param useEmbeddedOCR use embedded OCR instead of running internal one?
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadImagePdfBlocks(byte[] pdfBytes, boolean metaPages, boolean useEmbeddedOCR, ProgressMonitor pm) throws IOException {
+		return this.loadImagePdfBlocks(null, null, pdfBytes, metaPages, useEmbeddedOCR, 1, pm);
 	}
 	
 	/**
@@ -3634,13 +3709,33 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @param doc the document to store the structural information in
 	 * @param pdfDoc the PDF document to parse
 	 * @param pdfBytes the raw binary data the the PDF document was parsed from
-	 * @param metaPages expect born-digital meta pages at start of end of PDF?
+	 * @param metaPages expect born-digital meta pages at start or end of PDF?
 	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 * @return the argument image markup document
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdfBlocks(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, ProgressMonitor pm) throws IOException {
 		return this.loadImagePdfBlocks(doc, pdfDoc, pdfBytes, metaPages, 1, pm);
+	}
+	
+	/**
+	 * Load the pages of a document from an OCR PDF, including their block
+	 * structure. Page images are stored in the page image store handed to the
+	 * constructor. The document structure is analyzed and represented to the
+	 * text block level, but not below.  If the argument ImDocument is null,
+	 * this method creates a new one with the MD5 checksum of the argument PDF
+	 * bytes as the ID.
+	 * @param doc the document to store the structural information in
+	 * @param pdfDoc the PDF document to parse
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param metaPages expect born-digital meta pages at start or end of PDF?
+	 * @param useEmbeddedOCR use embedded OCR instead of running internal one?
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the argument image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadImagePdfBlocks(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, boolean useEmbeddedOCR, ProgressMonitor pm) throws IOException {
+		return this.loadImagePdfBlocks(doc, pdfDoc, pdfBytes, metaPages, useEmbeddedOCR, 1, pm);
 	}
 	
 	/**
@@ -3681,7 +3776,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @param doc the document to store the structural information in
 	 * @param pdfDoc the PDF document to parse
 	 * @param pdfBytes the raw binary data the the PDF document was parsed from
-	 * @param metaPages expect born-digital meta pages at start of end of PDF?
+	 * @param metaPages expect born-digital meta pages at start or end of PDF?
 	 * @param scaleFactor the scale factor for image PDFs, to correct PDFs that
 	 *            are set too small (DPI number is divided by this factor)
 	 * @param pm a monitor object for reporting progress, e.g. to a UI
@@ -3689,6 +3784,32 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdfBlocks(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, int scaleFactor, ProgressMonitor pm) throws IOException {
+		return this.loadImagePdfBlocks(doc, pdfDoc, pdfBytes, metaPages, false, scaleFactor, pm);
+	}
+	
+	/**
+	 * Load the pages of a document from an OCR PDF, including their block
+	 * structure. Page images are stored in the page image store handed to the
+	 * constructor. The document structure is analyzed and represented to the
+	 * text block level, but not below. The scale factor helps with PDFs whose
+	 * page boundaries (media boxes) are set too small. This can be recognized
+	 * in any PDF viewer by the fact that the document is tiny and the writing
+	 * very small at 100% size display. It can also be detected automatically,
+	 * e.g. by means of examining the average height of lines in comparison to
+	 * the DPI number. If the argument ImDocument is null, this method creates
+	 * a new one with the MD5 checksum of the argument PDF bytes as the ID.
+	 * @param doc the document to store the structural information in
+	 * @param pdfDoc the PDF document to parse
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param metaPages expect born-digital meta pages at start or end of PDF?
+	 * @param useEmbeddedOCR use embedded OCR instead of running internal one?
+	 * @param scaleFactor the scale factor for image PDFs, to correct PDFs that
+	 *            are set too small (DPI number is divided by this factor)
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the argument image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadImagePdfBlocks(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, boolean useEmbeddedOCR, int scaleFactor, ProgressMonitor pm) throws IOException {
 		
 		//	check arguments
 		if (doc == null)
@@ -3707,7 +3828,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			pm = ProgressMonitor.dummy;
 		
 		//	test if we can OCR
-		if (this.ocrEngine == null)
+		if ((this.ocrEngine == null) && !useEmbeddedOCR)
 			throw new RuntimeException("OCR Engine unavailable, check startup log.");
 		
 		//	more pages than we can process in parallel, don't cache at all to save memory
@@ -3729,31 +3850,186 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			}
 		});
 		
+		//	build progress monitor with synchronized methods instead of synchronizing in-code
+		SynchronizedProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? ((SynchronizedProgressMonitor) pm) : new SynchronizedProgressMonitor(pm));
+		
+		//	load document structure (IcePDF is better at that ...)
+		Catalog catalog = pdfDoc.getCatalog();
+		PageTree pageTree = catalog.getPageTree();
+		
+		//	parse PDF
+		HashMap objects = PdfParser.getObjects(pdfBytes, pdfDoc.getSecurityManager());
+		
+		//	decrypt streams and strings
+		PdfParser.decryptObjects(objects, pdfDoc.getSecurityManager());
+		
+		//	get basic page data (takes progress to 30%)
+		PPageData[] pData = this.getPdfPageData(doc, useEmbeddedOCR, pageTree, objects, spm);
+		
 		//	load pages
 		pm.setStep("Loading document page images");
 		pm.setBaseProgress(0);
 		pm.setProgress(0);
 		pm.setMaxProgress(40);
-		this.addImagePdfPages(doc, pdfDoc, pdfBytes, metaPages, scaleFactor, pm, pageImageCache);
+//		this.addImagePdfPages(doc, pdfDoc, pdfBytes, metaPages, scaleFactor, spm, pageImageCache);
+		this.addImagePdfPages(doc, pData, pdfDoc, pageTree, objects, metaPages, scaleFactor, spm, pageImageCache);
 		
 		//	preserve source PDF in supplement
 		ImSupplement.Source.createSource(doc, "application/pdf", pdfBytes);
 		
 		//	fill in blocks and do OCR
-		pm.setStep("Extracting blocks & doing OCR");
+		pm.setStep("Extracting blocks & " + (useEmbeddedOCR ? "embedded " : "doing ") + "OCR");
 		pm.setBaseProgress(40);
 		pm.setProgress(0);
 		pm.setMaxProgress(100);
-		this.addImagePdfPageBlocks(doc, pm, pageImageCache, null);
+		this.addImagePdfPageBlocks(doc, (useEmbeddedOCR ? pData : null), spm, pageImageCache, null);
 		
 		//	finally ...
 		return doc;
 	}
 	
-	private void addImagePdfPageBlocks(final ImDocument doc, ProgressMonitor pm, final Map pageImageCache, final Map pageRegionCache) throws IOException {
+	private void addImagePdfPageBlocks(final ImDocument doc, final PPageData[] pData, ProgressMonitor pm, final Map pageImageCache, final Map pageRegionCache) throws IOException {
 		
 		//	build progress monitor with synchronized methods instead of synchronizing in-code
 		final ProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? pm : new SynchronizedProgressMonitor(pm));
+		
+		//	get tokenizer to check and split words with
+		final Tokenizer tokenizer = ((Tokenizer) doc.getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER));
+		
+		//	set up running in parallel
+		ParallelFor pf;
+		
+		//	sanitize embedded OCR words (if any)
+		if (pData != null) {
+			final ProgressMonitor cpm = new CascadingProgressMonitor(spm);
+			
+			/* no need for word merging here, as good OCR keeps word together
+			 * pretty well, as opposed to obfuscated born-digital PDFs, so
+			 * merging would do more harm than good */
+			
+			//	assess number punctuation
+			cpm.setStep("Assessing number punctuation");
+			cpm.setBaseProgress(0);
+			cpm.setProgress(0);
+			cpm.setMaxProgress(3);
+			final Tokenizer numberTokenizer = getNumberTokenizer(pData, tokenizer, cpm);
+			
+			//	split words
+			cpm.setStep("Splitting page words");
+			cpm.setBaseProgress(3);
+			cpm.setProgress(0);
+			cpm.setMaxProgress(10);
+			pf = new ParallelFor() {
+				public void doFor(int p) throws Exception {
+					
+					//	nothing to work with
+					if ((pData[p] == null) || (pData[p].words == null) || (pData[p].words.length == 0))
+						return;
+					
+					//	update status display (might be inaccurate, but better than lock escalation)
+					cpm.setInfo("Splitting embedded OCR words in page " + p + " of " + pData.length);
+					cpm.setProgress((p * 100) / pData.length);
+					
+					//	split words that tokenize apart, splitting bounding box based on font measurement
+					ArrayList pWordList = new ArrayList();
+					for (int w = 0; w < pData[p].words.length; w++) {
+						
+						//	check tokenization
+						TokenSequence pWordTokens = (Gamta.isNumber(pData[p].words[w].str) ? numberTokenizer.tokenize(pData[p].words[w].str) : tokenizer.tokenize(pData[p].words[w].str));
+						if (pWordTokens.size() < 2) {
+							pWordList.add(pData[p].words[w]);
+							continue;
+						}
+						System.out.println(" - splitting " + pData[p].words[w].str);
+						
+						//	get width for each token at word font size
+						String[] splitCharCodes = new String[pWordTokens.size()];
+						String[] splitTokens = new String[pWordTokens.size()];
+						float[] splitTokenWidths = new float[pWordTokens.size()];
+						int fontStyle = Font.PLAIN;
+						if (pData[p].words[w].bold)
+							fontStyle = (fontStyle | Font.BOLD);
+						if (pData[p].words[w].italics)
+							fontStyle = (fontStyle | Font.ITALIC);
+						Font pWordFont = getFont(pData[p].words[w].font.name, fontStyle, pData[p].words[w].serif, Math.round(((float) pData[p].words[w].fontSize)));
+						float splitTokenWidthSum = 0;
+						int splitCharCodeStart = 0;
+						for (int s = 0; s < splitTokens.length; s++) {
+							splitTokens[s] = pWordTokens.valueAt(s);
+							splitCharCodes[s] = ""; // have to do it this way, as char code string might have different length than Unicode string
+							for (int splitCharCodeLength = 0; splitCharCodeLength < splitTokens[s].length();) {
+								char charCode = pData[p].words[w].charCodes.charAt(splitCharCodeStart++);
+								splitCharCodes[s] += ("" + charCode);
+								splitCharCodeLength += (((int) charCode) / 256);
+							}
+							TextLayout tl = new TextLayout(splitTokens[s], pWordFont, new FontRenderContext(null, false, true));
+							splitTokenWidths[s] = ((float) tl.getBounds().getWidth());
+							splitTokenWidthSum += splitTokenWidths[s];
+						}
+						
+						//	left-right words
+						if (pData[p].words[w].fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) {
+							
+							//	store split result, splitting word bounds accordingly
+							float pWordWidth = ((float) (pData[p].words[w].bounds.getMaxX() - pData[p].words[w].bounds.getMinX()));
+							float splitTokenLeft = ((float) pData[p].words[w].bounds.getMinX());
+							for (int s = 0; s < splitTokens.length; s++) {
+								float splitTokenWidth = ((pWordWidth * splitTokenWidths[s]) / splitTokenWidthSum);
+								PWord spWord = new PWord(splitCharCodes[s], splitTokens[s], new Rectangle2D.Float(splitTokenLeft, ((float) pData[p].words[w].bounds.getMinY()), splitTokenWidth, ((float) pData[p].words[w].bounds.getHeight())), pData[p].words[w].fontSize, pData[p].words[w].fontDirection, pData[p].words[w].font);
+								pWordList.add(spWord);
+								splitTokenLeft += splitTokenWidth;
+								System.out.println(" --> split word part " + spWord.str + ", bounds are " + spWord.bounds);
+							}
+						}
+						
+						//	bottom-up words
+						else if (pData[p].words[w].fontDirection == PWord.BOTTOM_UP_FONT_DIRECTION) {
+							
+							//	store split result, splitting word bounds accordingly
+							float pWordWidth = ((float) (pData[p].words[w].bounds.getMaxY() - pData[p].words[w].bounds.getMinY()));
+							float splitTokenLeft = ((float) pData[p].words[w].bounds.getMinY());
+							for (int s = 0; s < splitTokens.length; s++) {
+								float splitTokenWidth = ((pWordWidth * splitTokenWidths[s]) / splitTokenWidthSum);
+								PWord spWord = new PWord(splitCharCodes[s], splitTokens[s], new Rectangle2D.Float(((float) pData[p].words[w].bounds.getMinX()), splitTokenLeft, ((float) pData[p].words[w].bounds.getWidth()), splitTokenWidth), pData[p].words[w].fontSize, pData[p].words[w].fontDirection, pData[p].words[w].font);
+								pWordList.add(spWord);
+								splitTokenLeft += splitTokenWidth;
+								System.out.println(" --> split word part " + spWord.str + ", bounds are " + spWord.bounds);
+							}
+						}
+						
+						//	top-down words
+						else if (pData[p].words[w].fontDirection == PWord.TOP_DOWN_FONT_DIRECTION) {
+							
+							//	store split result, splitting word bounds accordingly
+							float pWordWidth = ((float) (pData[p].words[w].bounds.getMaxY() - pData[p].words[w].bounds.getMinY()));
+							float splitTokenLeft = ((float) pData[p].words[w].bounds.getMaxY());
+							for (int s = 0; s < splitTokens.length; s++) {
+								float splitTokenWidth = ((pWordWidth * splitTokenWidths[s]) / splitTokenWidthSum);
+								PWord spWord = new PWord(splitCharCodes[s], splitTokens[s], new Rectangle2D.Float(((float) pData[p].words[w].bounds.getMinX()), (splitTokenLeft - splitTokenWidth), ((float) pData[p].words[w].bounds.getWidth()), splitTokenWidth), pData[p].words[w].fontSize, pData[p].words[w].fontDirection, pData[p].words[w].font);
+								pWordList.add(spWord);
+								splitTokenLeft -= splitTokenWidth;
+								System.out.println(" --> split word part " + spWord.str + ", bounds are " + spWord.bounds);
+							}
+						}
+					}
+					
+					//	refresh PWord array
+					if (pWordList.size() != pData[p].words.length)
+						pData[p].words = ((PWord[]) pWordList.toArray(new PWord[pWordList.size()]));
+					pWordList = null;
+					
+					//	give status update
+					if (pData[p].words.length == 0)
+						cpm.setInfo(" --> empty page");
+					else cpm.setInfo(" --> got " + pData[p].words.length + " words in PDF");
+				}
+			};
+			ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pData.length : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
+			cpm.setProgress(100);
+			
+			//	update progress in main monitor
+			spm.setBaseProgress(45);
+		}
 		
 		//	get document pages
 		final ImPage[] pages = doc.getPages();
@@ -3763,7 +4039,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		final DocumentStyle docLayout = docStyle.getSubset("layout");
 		
 		//	do high level structure analysis (down to blocks) and OCR
-		ParallelFor pf = new ParallelFor() {
+		pf = new ParallelFor() {
 			public void doFor(int p) throws Exception {
 				
 				//	update status display (might be inaccurate, but better than lock escalation)
@@ -3808,11 +4084,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					}
 				}
 				
-				//	compute page structure
-				
 				//	obtain higher level page structure
 				AnalysisImage api = Imaging.wrapImage(pi.image, null);
-//				Region pageRootRegion = PageImageAnalysis.getPageRegion(api, pi.currentDpi, false, spm);
 				Region pageRootRegion = PageImageAnalysis.getPageRegion(api, pi.currentDpi, minColumnMargin, minBlockMargin, columnAreas, false, spm);
 				addRegionBlocks(pages[p], pageRootRegion, pi.currentDpi, spm);
 				if (pageRegionCache != null)
@@ -3820,16 +4093,64 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						pageRegionCache.put(pages[p], pageRootRegion);
 					}
 				
-				//	do OCR (might have to try multiple times if for some reason OCR instance pool is smaller than number of parallel threads trying to use it)
-				spm.setInfo(" - doing OCR");
-				for (int attempts = 0; attempts < 16; attempts++) try {
-					ocrEngine.doBlockOcr(pages[p], pi, new CascadingProgressMonitor(spm));
-					break;
+				//	add embedded OCR if (a) asked to do so and (b) available
+				if ((pData != null) && (pData[pages[p].pageId] != null) && (pData[pages[p].pageId].words != null) && (pData[pages[p].pageId].words.length != 0)) {
+					
+					//	compute word scale factor
+					float magnification = (pData[pages[p].pageId].rawPageImageDpi / defaultDpi);
+					
+					//	add words to page
+					spm.setInfo("Adding embedded OCR words to page " + p + " of " + pData.length);
+					for (int w = 0; w < pData[pages[p].pageId].words.length; w++) {
+						
+						//	make sure word has some minimum width
+						BoundingBox wb = getBoundingBox(pData[pages[p].pageId].words[w].bounds, pData[pages[p].pageId].pdfPageBox, magnification, pData[pages[p].pageId].rotate);
+						if ((wb.right - wb.left) < 4)
+							wb = new BoundingBox(wb.left, (wb.left + 4), wb.top, wb.bottom);
+						
+						//	if we're on the right half of a double page, shift words to left
+						if (((p % 2) == 1) && (pData[pages[p].pageId].rightPageOffset != 0))
+							wb = new BoundingBox((wb.left - pData[pages[p].pageId].rightPageOffset), (wb.right - pData[pages[p].pageId].rightPageOffset), wb.top, wb.bottom);
+						
+						//	add word to page
+						ImWord word = new ImWord(pages[p], wb, pData[pages[p].pageId].words[w].str);
+						
+						//	set layout attributes
+						if ((pData[pages[p].pageId].words[w].font != null) && (pData[pages[p].pageId].words[w].font.name != null))
+							word.setAttribute(FONT_NAME_ATTRIBUTE, pData[pages[p].pageId].words[w].font.name);
+						if (pData[pages[p].pageId].words[w].fontSize != -1)
+							word.setAttribute(FONT_SIZE_ATTRIBUTE, ("" + pData[pages[p].pageId].words[w].fontSize));
+						if (pData[pages[p].pageId].words[w].bold)
+							word.setAttribute(BOLD_ATTRIBUTE);
+						if (pData[pages[p].pageId].words[w].italics)
+							word.setAttribute(ITALICS_ATTRIBUTE);
+						
+						//	add font char ID string
+						StringBuffer charCodesHex = new StringBuffer();
+						for (int c = 0; c < pData[pages[p].pageId].words[w].charCodes.length(); c++) {
+							String charCodeHex = Integer.toString((((int) pData[pages[p].pageId].words[w].charCodes.charAt(c)) & 255), 16).toUpperCase();
+							if (charCodeHex.length() < 2)
+								charCodesHex.append("0");
+							charCodesHex.append(charCodeHex);
+						}
+						word.setAttribute(ImFont.CHARACTER_CODE_STRING_ATTRIBUTE, charCodesHex.toString());
+					}
 				}
-				catch (OcrInstanceUnavailableException oiue) {
-					spm.setInfo(" - re-attempting (" + (attempts+1) + ") OCR for page " + p);
+				
+				//	do OCR if (a) none embedded or (b) asked to do so
+				else {
+					
+					//	do OCR (might have to try multiple times if for some reason OCR instance pool is smaller than number of parallel threads trying to use it)
+					spm.setInfo(" - doing OCR");
+					for (int attempts = 0; attempts < 16; attempts++) try {
+						ocrEngine.doBlockOcr(pages[p], pi, new CascadingProgressMonitor(spm));
+						break;
+					}
+					catch (OcrInstanceUnavailableException oiue) {
+						spm.setInfo(" - re-attempting (" + (attempts+1) + ") OCR for page " + p);
+					}
+					spm.setInfo(" - OCR done");
 				}
-				spm.setInfo(" - OCR done");
 				
 				//	clean up regions and mark images
 				cleanUpRegions(pages[p]);
@@ -3881,7 +4202,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdfPages(byte[] pdfBytes, ProgressMonitor pm) throws IOException {
-		return this.loadImagePdfPages(null, null, pdfBytes, false, 1, pm);
+		return this.loadImagePdfPages(null, null, pdfBytes, false, false, 1, pm);
 	}
 	
 	/**
@@ -3894,13 +4215,33 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * automatically, e.g. by means of examining the average height of lines in
 	 * comparison to the DPI number.
 	 * @param pdfBytes the raw binary data the the PDF document was parsed from
-	 * @param metaPages expect born-digital meta pages at start of end of PDF?
+	 * @param metaPages expect born-digital meta pages at start or end of PDF?
 	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 * @return the image markup document
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdfPages(byte[] pdfBytes, boolean metaPages, ProgressMonitor pm) throws IOException {
-		return this.loadImagePdfPages(null, null, pdfBytes, metaPages, 1, pm);
+		return this.loadImagePdfPages(null, null, pdfBytes, metaPages, false, 1, pm);
+	}
+	
+	/**
+	 * Load the pages of a document from an OCR PDF. Page images are stored in
+	 * the page image store handed to the constructor. The document structure is
+	 * not analyzed or represented beyond the page level. The scale factor helps
+	 * with PDFs whose page boundaries (media boxes) are set too small. This can
+	 * be recognized in any PDF viewer by the fact that the document is tiny and
+	 * the writing very small at 100% size display. It can also be detected
+	 * automatically, e.g. by means of examining the average height of lines in
+	 * comparison to the DPI number.
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param metaPages expect born-digital meta pages at start or end of PDF?
+	 * @param useEmbeddedOCR use embedded OCR instead of running internal one?
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadImagePdfPages(byte[] pdfBytes, boolean metaPages, boolean useEmbeddedOCR, ProgressMonitor pm) throws IOException {
+		return this.loadImagePdfPages(null, null, pdfBytes, metaPages, useEmbeddedOCR, 1, pm);
 	}
 	
 	/**
@@ -3922,7 +4263,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdfPages(ImDocument doc, Document pdfDoc, byte[] pdfBytes, ProgressMonitor pm) throws IOException {
-		return this.loadImagePdfPages(doc, pdfDoc, pdfBytes, false, 1, pm);
+		return this.loadImagePdfPages(doc, pdfDoc, pdfBytes, false, false, 1, pm);
 	}
 	
 	/**
@@ -3939,13 +4280,37 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @param doc the document to store the structural information in
 	 * @param pdfDoc the PDF document to parse
 	 * @param pdfBytes the raw binary data the the PDF document was parsed from
-	 * @param metaPages expect born-digital meta pages at start of end of PDF?
+	 * @param metaPages expect born-digital meta pages at start or end of PDF?
 	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 * @return the argument image markup document
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdfPages(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, ProgressMonitor pm) throws IOException {
-		return this.loadImagePdfPages(doc, pdfDoc, pdfBytes, metaPages, 1, pm);
+		return this.loadImagePdfPages(doc, pdfDoc, pdfBytes, metaPages, false, 1, pm);
+	}
+	
+	/**
+	 * Load the pages of a document from an OCR PDF. Page images are stored in
+	 * the page image store handed to the constructor. The document structure is
+	 * not analyzed or represented beyond the page level. The scale factor helps
+	 * with PDFs whose page boundaries (media boxes) are set too small. This can
+	 * be recognized in any PDF viewer by the fact that the document is tiny and
+	 * the writing very small at 100% size display. It can also be detected
+	 * automatically, e.g. by means of examining the average height of lines in
+	 * comparison to the DPI number. If the argument ImDocument is null, this
+	 * method creates a new one with the MD5 checksum of the argument PDF bytes
+	 * as the ID.
+	 * @param doc the document to store the structural information in
+	 * @param pdfDoc the PDF document to parse
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param metaPages expect born-digital meta pages at start or end of PDF?
+	 * @param useEmbeddedOCR use embedded OCR instead of running internal one?
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the argument image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadImagePdfPages(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, boolean useEmbeddedOCR, ProgressMonitor pm) throws IOException {
+		return this.loadImagePdfPages(doc, pdfDoc, pdfBytes, metaPages, useEmbeddedOCR, 1, pm);
 	}
 	
 	/**
@@ -3969,7 +4334,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdfPages(ImDocument doc, Document pdfDoc, byte[] pdfBytes, int scaleFactor, ProgressMonitor pm) throws IOException {
-		return this.loadImagePdfPages(doc, pdfDoc, pdfBytes, false, scaleFactor, pm);
+		return this.loadImagePdfPages(doc, pdfDoc, pdfBytes, false, false, scaleFactor, pm);
 	}
 	
 	/**
@@ -3986,7 +4351,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @param doc the document to store the structural information in
 	 * @param pdfDoc the PDF document to parse
 	 * @param pdfBytes the raw binary data the the PDF document was parsed from
-	 * @param metaPages expect born-digital meta pages at start of end of PDF?
+	 * @param metaPages expect born-digital meta pages at start or end of PDF?
 	 * @param scaleFactor the scale factor for image PDFs, to correct PDFs that
 	 *            are set too small (DPI number is divided by this factor)
 	 * @param pm a monitor object for reporting progress, e.g. to a UI
@@ -3994,6 +4359,32 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdfPages(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, int scaleFactor, ProgressMonitor pm) throws IOException {
+		return this.loadImagePdf(doc, pdfDoc, pdfBytes, metaPages, false, scaleFactor, pm);
+	}
+	
+	/**
+	 * Load the pages of a document from an OCR PDF. Page images are stored in
+	 * the page image store handed to the constructor. The document structure is
+	 * not analyzed or represented beyond the page level. The scale factor helps
+	 * with PDFs whose page boundaries (media boxes) are set too small. This can
+	 * be recognized in any PDF viewer by the fact that the document is tiny and
+	 * the writing very small at 100% size display. It can also be detected
+	 * automatically, e.g. by means of examining the average height of lines in
+	 * comparison to the DPI number. If the argument ImDocument is null, this
+	 * method creates a new one with the MD5 checksum of the argument PDF bytes
+	 * as the ID.
+	 * @param doc the document to store the structural information in
+	 * @param pdfDoc the PDF document to parse
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param metaPages expect born-digital meta pages at start or end of PDF?
+	 * @param useEmbeddedOCR use embedded OCR instead of running internal one?
+	 * @param scaleFactor the scale factor for image PDFs, to correct PDFs that
+	 *            are set too small (DPI number is divided by this factor)
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the argument image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadImagePdfPages(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, boolean useEmbeddedOCR, int scaleFactor, ProgressMonitor pm) throws IOException {
 		
 		//	check arguments
 		if (doc == null)
@@ -4044,7 +4435,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		}
 	}
 	
-	private void addImagePdfPages(final ImDocument doc, final Document pdfDoc, final byte[] pdfBytes, final boolean metaPages, final int scaleFactor, ProgressMonitor pm, Map pageImageCache) throws IOException {
+	private void addImagePdfPages(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, int scaleFactor, ProgressMonitor pm, Map pageImageCache) throws IOException {
 		
 		//	build progress monitor with synchronized methods instead of synchronizing in-code
 		SynchronizedProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? ((SynchronizedProgressMonitor) pm) : new SynchronizedProgressMonitor(pm));
@@ -4113,7 +4504,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					//	store figures / figure parts
 					for (int f = 0; f < pData[p].figures.length; f++) {
 						spm.setInfo("   - " + pData[p].figures[f]);
-						this.addPImagePart(p, xObjects, pData[p].pdfPageBox, pData[p].rotate, pData[p].figures[f], pageImageParts[p], spm);
+						this.addPageImagePart(p, xObjects, pData[p].pdfPageBox, pData[p].rotate, pData[p].figures[f], pageImageParts[p], spm);
 					}
 					
 					//	assess extent and area of page image parts
@@ -4152,7 +4543,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				else spm.setInfo(" ==> XObject dictionary not found, cannot decode images");
 			}
 			
-			private void addPImagePart(int pageId, Hashtable xObjects, Rectangle2D.Float pageBounds, int rotate, PFigure pFigure, ArrayList pImageParts, ProgressMonitor pm) throws IOException {
+			private void addPageImagePart(int pageId, Hashtable xObjects, Rectangle2D.Float pageBounds, int rotate, PFigure pFigure, ArrayList pImageParts, ProgressMonitor pm) throws IOException {
 				
 				//	resolve image names against XObject dictionary
 				Object pFigureKey = xObjects.get(pFigure.name);
@@ -4192,13 +4583,13 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					String pMaskFigureName = (pFigure.name + "_mask");
 					xObjects.put(pMaskFigureName, pFigureData.params.get("Mask"));
 					pm.setInfo("   - adding mask figure");
-					this.addPImagePart(pageId, xObjects, pageBounds, rotate, new PFigure(pMaskFigureName, pFigure.bounds, pFigure.rotation, pFigure.rightSideLeft, pFigure.upsideDown), pImageParts, pm);
+					this.addPageImagePart(pageId, xObjects, pageBounds, rotate, new PFigure(pMaskFigureName, pFigure.bounds, pFigure.rotation, pFigure.rightSideLeft, pFigure.upsideDown), pImageParts, pm);
 				}
 				if (pFigureData.params.containsKey("SMask")) {
 					String pMaskFigureName = (pFigure.name + "_smask");
 					xObjects.put(pMaskFigureName, pFigureData.params.get("SMask"));
 					pm.setInfo("   - adding smask figure");
-					this.addPImagePart(pageId, xObjects, pageBounds, rotate, new PFigure(pMaskFigureName, pFigure.bounds, pFigure.rotation, pFigure.rightSideLeft, pFigure.upsideDown), pImageParts, pm);
+					this.addPageImagePart(pageId, xObjects, pageBounds, rotate, new PFigure(pMaskFigureName, pFigure.bounds, pFigure.rotation, pFigure.rightSideLeft, pFigure.upsideDown), pImageParts, pm);
 				}
 			}
 		};
@@ -4318,8 +4709,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		
 		//	extract & save page images
 		if (portraitPageCount < landscapePageCount)
-			this.addImagePdfPagesDouble(doc, scaleFactor, pdfDoc, pdfPages, pdfPageBoxes, sPdfPageBoxes, pageImageParts, noImagePageIDs, objects, pageImageCache, spm);
-		else this.addImagePdfPagesSingle(doc, scaleFactor, pdfDoc, pdfPages, pdfPageBoxes, sPdfPageBoxes, pageImageParts, noImagePageIDs, objects, pageImageCache, spm);
+			this.addImagePdfPagesDouble(doc, scaleFactor, pdfDoc, pdfPages, pdfPageBoxes, sPdfPageBoxes, pData, pageImageParts, noImagePageIDs, objects, pageImageCache, spm);
+		else this.addImagePdfPagesSingle(doc, scaleFactor, pdfDoc, pdfPages, pdfPageBoxes, sPdfPageBoxes, pData, pageImageParts, noImagePageIDs, objects, pageImageCache, spm);
 		
 		//	check errors
 		this.checkException(pf);
@@ -4328,7 +4719,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		System.gc();
 	}
 	
-	private void addImagePdfPagesSingle(final ImDocument doc, final int scaleFactor, final Document pdfDoc, final Page[] pdfPages, final Rectangle2D.Float[] pdfPageBoxes, final Rectangle2D.Float[] sPdfPageBoxes, final ArrayList[] pageImageParts, final Set noImagePageIDs, final Map objects, final Map pageImageCache, final SynchronizedProgressMonitor spm) throws IOException {
+	private void addImagePdfPagesSingle(final ImDocument doc, final int scaleFactor, final Document pdfDoc, final Page[] pdfPages, final Rectangle2D.Float[] pdfPageBoxes, final Rectangle2D.Float[] sPdfPageBoxes, final PPageData[] pData, final ArrayList[] pageImageParts, final Set noImagePageIDs, final Map objects, final Map pageImageCache, final SynchronizedProgressMonitor spm) throws IOException {
 		
 		//	extract & save page images
 		final BoundingBox[] pageBoxes = new BoundingBox[pdfPages.length];
@@ -4384,7 +4775,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				float dpiRatio = ((dpiRatioWidth + dpiRatioHeight) / 2);
 				float rawDpi = dpiRatio * defaultDpi;
 				int dpi = ((Math.round(rawDpi / 10) * 10) / dpiScaleFactor);
-				spm.setInfo(" - resolution computed as " + dpi + " DPI");
+				spm.setInfo(" - resolution computed as " + dpi + " DPI (" + rawDpi + ")");
+				
+				//	store raw (accurate) DPI with page data
+				pData[p].rawPageImageDpi = rawDpi;
 				
 				//	guess DPI based on page size (minimum page size for (very most) publications should be A5 or so)
 				float a5distWidth = Math.abs((pdfPageBoxes[p].width / defaultDpi) - a5inchWidth);
@@ -4429,8 +4823,6 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				ai = Imaging.correctImage(ai, dpi, spm);
 				pageImage = ai.getImage();
 				
-				//	TODO when splitting OCR words for tokenization, pull up bottom of full words that have no descent
-				
 				//	store image
 				String imageName;
 				synchronized (imageStore) {
@@ -4473,7 +4865,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		spm.setProgress(100);
 	}
 	
-	private void addImagePdfPagesDouble(final ImDocument doc, final int scaleFactor, final Document pdfDoc, final Page[] pdfPages, final Rectangle2D.Float[] pdfPageBoxes, final Rectangle2D.Float[] sPdfPageBoxes, final ArrayList[] pageImageParts, final Set noImagePageIDs, final Map objects, final Map pageImageCache, final SynchronizedProgressMonitor spm) throws IOException {
+	private void addImagePdfPagesDouble(final ImDocument doc, final int scaleFactor, final Document pdfDoc, final Page[] pdfPages, final Rectangle2D.Float[] pdfPageBoxes, final Rectangle2D.Float[] sPdfPageBoxes, final PPageData[] pData, final ArrayList[] pageImageParts, final Set noImagePageIDs, final Map objects, final Map pageImageCache, final SynchronizedProgressMonitor spm) throws IOException {
 		
 		//	extract & save page images
 		final BoundingBox[] pageBoxes = new BoundingBox[pdfPages.length * 2];
@@ -4531,9 +4923,12 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					spm.setInfo(" - using scaled resolution");
 				}
 				float dpiRatio = ((dpiRatioWidth + dpiRatioHeight) / 2);
-				float rawDpi = dpiRatio * defaultDpi;
+				final float rawDpi = dpiRatio * defaultDpi;
 				int dpi = ((Math.round(rawDpi / 10) * 10) / dpiScaleFactor);
 				spm.setInfo(" - resolution computed as " + dpi + " DPI");
+				
+				//	store raw (accurate) DPI with page data
+				pData[pp].rawPageImageDpi = rawDpi;
 				
 				//	guess DPI based on page size (minimum page size for (very most) publications should be A5 or so, twice A5 here)
 				float a5distWidth = Math.abs((pdfPageBoxes[pp].width / defaultDpi) - (a5inchWidth * 2));
@@ -4570,6 +4965,9 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				//	cut double page image into two single pages
 				BufferedImage pageImageLeft = doublePageImage.getSubimage(0, 0, (doublePageImage.getWidth() / 2), doublePageImage.getHeight());
 				BufferedImage pageImageRight = doublePageImage.getSubimage((doublePageImage.getWidth() / 2), 0, (doublePageImage.getWidth() / 2), doublePageImage.getHeight());
+				
+				//	store offset in right page, for positioning embedded OCR
+				pData[pp].rightPageOffset = (doublePageImage.getWidth() / 2);
 				
 				//	preserve original page image halves
 				synchronized (doc) {

@@ -1218,19 +1218,31 @@ public class Imaging {
 				if (retain && ((regionMaxCols[regionCode] - regionMinCols[regionCode] + 1) > ((brightness.length * 7) / 10))) {
 					if (DEBUG_FEATHERDUST) System.out.println(" - page wide");
 					
-					//	test page edges
+					//	test if region close to page edges (outer 3% of page height)
 					int topEdge = 0;
 					int bottomEdge = 0;
 					for (int lc = regionMinCols[regionCode]; lc <= regionMaxCols[regionCode]; lc++) {
-						if (regionCodes[lc][0] == regionCode)
-							topEdge++;
-						if (regionCodes[lc][brightness[lc].length-1] == regionCode)
-							bottomEdge++;
+//						if (regionCodes[lc][0] == regionCode)
+//							topEdge++;
+//						if (regionCodes[lc][brightness[lc].length-1] == regionCode)
+//							bottomEdge++;
+						for (int lr = 0; lr < (brightness[lc].length / 33); lr++)
+							if (regionCodes[lc][lr] == regionCode) {
+								topEdge++;
+								break;
+							}
+						for (int lr = ((brightness[lc].length * 32) / 33); lr < brightness[lc].length; lr++)
+							if (regionCodes[lc][lr] == regionCode) {
+								bottomEdge++;
+								break;
+							}
 					}
 					
 					//	at page edge
-					if (((topEdge + bottomEdge) * 2) > brightness[c].length)
+					if (((topEdge + bottomEdge) * 2) > brightness[c].length) {
 						retain = false;
+						if (DEBUG_FEATHERDUST) System.out.println(" --> removed for page width and edge position");
+					}
 					
 					//	test if at least (dpi/15) wide in most parts, and at least 90% of page width
 					else if (((regionMaxCols[regionCode] - regionMinCols[regionCode] + 1) > ((brightness.length * 9) / 10))) {
@@ -1245,19 +1257,31 @@ public class Imaging {
 				if (retain && ((regionMaxRows[regionCode] - regionMinRows[regionCode] + 1) > ((brightness[0].length * 7) / 10))) {
 					if (DEBUG_FEATHERDUST) System.out.println(" - page high");
 					
-					//	test page edges
+					//	test if region close to page edges (outer 4% of page width)
 					int leftEdge = 0;
 					int rightEdge = 0;
 					for (int lr = regionMinRows[regionCode]; lr <= regionMaxRows[regionCode]; lr++) {
-						if (regionCodes[0][lr] == regionCode)
-							leftEdge++;
-						if (regionCodes[brightness.length-1][lr] == regionCode)
-							rightEdge++;
+//						if (regionCodes[0][lr] == regionCode)
+//							leftEdge++;
+//						if (regionCodes[brightness.length-1][lr] == regionCode)
+//							rightEdge++;
+						for (int lc = 0; lc < (brightness.length / 25); lc++)
+							if (regionCodes[lc][lr] == regionCode) {
+								leftEdge++;
+								break;
+							}
+						for (int lc = ((brightness.length * 24) / 25); lc < brightness.length; lc++)
+							if (regionCodes[lc][lr] == regionCode) {
+								rightEdge++;
+								break;
+							}
 					}
 					
 					//	at page edge
-					if (((leftEdge + rightEdge) * 2) > brightness.length)
+					if (((leftEdge + rightEdge) * 2) > brightness.length) {
 						retain = false;
+						if (DEBUG_FEATHERDUST) System.out.println(" --> removed for page height and edge position");
+					}
 					
 					//	test if at least (dpi/15) wide in most parts, and at least 90% of page height
 					else if (((regionMaxRows[regionCode] - regionMinRows[regionCode] + 1) > ((brightness[0].length * 9) / 10))) {
