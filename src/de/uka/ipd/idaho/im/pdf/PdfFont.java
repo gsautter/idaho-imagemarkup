@@ -2513,7 +2513,7 @@ FontFile2=65 0R
 							char diffCh = StringUtils.getCharForName(diff.toString());
 							if (diffCh != 0) {
 								diffEncodings.put(new Integer(code), new Character(diffCh));
-								diffEncodings.put(new Integer(code), diff.toString());
+								diffEncodingNames.put(new Integer(code), diff.toString());
 							}
 							code++;
 						}
