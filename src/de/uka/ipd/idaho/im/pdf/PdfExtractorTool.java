@@ -103,6 +103,7 @@ public class PdfExtractorTool {
 			 * - missing or set to G: generic PDF
 			 * - set to D: born-digital
 			 * - set to S: scanned
+			 * - set to O: scanned, with embedded OCR
 			 * - set to M: scanned with meta pages */
 			else if ("-t".equalsIgnoreCase(args[a]) && ((a+1) < args.length)) {
 				sourceType = args[a+1];
@@ -156,7 +157,7 @@ public class PdfExtractorTool {
 		}
 		
 		//	check parameters before investing effort in loading data
-		if (("GDSM".indexOf(sourceType) == -1) || (sourceType.length() != 1)) {
+		if (("GDSMO".indexOf(sourceType) == -1) || (sourceType.length() != 1)) {
 			printError("Invalid source type '" + sourceType + "'");
 			return;
 		}
@@ -323,6 +324,8 @@ public class PdfExtractorTool {
 			imDoc = pdfExtractor.loadImagePdf(pdfBytes, false, pm);
 		else if ("M".equals(sourceType))
 			imDoc = pdfExtractor.loadImagePdf(pdfBytes, true, pm);
+		else if ("O".equals(sourceType))
+			imDoc = pdfExtractor.loadImagePdf(pdfBytes, true, true, pm);
 		else imDoc = null;
 		
 		//	shut down PDF extractor
@@ -566,6 +569,7 @@ public class PdfExtractorTool {
 				"\r\n\t- D: born-digital PDF" +
 				"\r\n\t- S: scanned PDF" +
 				"\r\n\t- M: scanned PDF with born-digital meta pages (leading or tailing)" +
+				"\r\n\t- O: scanned PDF with embedded OCR to reuse" +
 				"\r\n\t- G: generic PDF, let converter determine type (the default)");
 		System.out.println("-l <logMode>\tSelect the log mode:" +
 				"\r\n\t- O: log to System.out" +
