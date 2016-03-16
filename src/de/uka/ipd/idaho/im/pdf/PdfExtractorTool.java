@@ -56,6 +56,7 @@ import de.uka.ipd.idaho.gamta.util.imaging.PageImageStore.AbstractPageImageStore
 import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.ImSupplement;
 import de.uka.ipd.idaho.im.gamta.ImDocumentRoot;
+import de.uka.ipd.idaho.im.util.ImDocumentData.ImDocumentEntry;
 import de.uka.ipd.idaho.im.util.ImDocumentIO;
 
 /**
@@ -134,7 +135,7 @@ public class PdfExtractorTool {
 			}
 			/* mode parameter -m
 			 * - missing or set to A: convert entire PDF, store as IMF
-			 * - set to D: convert entire PDF, store as IMD (better for file system based hand-over to master process if runninf as slave)
+			 * - set to D: convert entire PDF, store as IMD (better for file system based hand-over to master process if running as slave)
 			 * - set to F: extract figures only (requires output set to file path)
 			 * - set to R: extract text only, output as raw XML
 			 * - set to X: extract text only, output as XML
@@ -192,11 +193,13 @@ public class PdfExtractorTool {
 		if ("A".equals(mode))
 			outFileExt = "imf";
 		else if ("D".equals(mode))
-			outFileExt = "imd";
+			outFileExt = "imdir";
 		else if ("R".equals(mode) || "X".equals(mode))
 			outFileExt = "xml";
 		else if ("T".equals(mode))
 			outFileExt = "txt";
+		else if ("F".equals(mode))
+			outFileExt = "figures";
 		else outFileExt = null;
 		
 		//	create output destination
@@ -210,11 +213,11 @@ public class PdfExtractorTool {
 			outFile = null;
 		else {
 			outFile = new File(outPath);
-			if (("F".equals(mode) || "D".equals(mode)) && (!outFile.exists() || !outFile.isDirectory())) {
+			if (("F".equals(mode) || "D".equals(mode)) && outFile.exists() && !outFile.isDirectory()) {
 				printError("Output destination '" + outPath + "' is invalid for mode '" + mode + "'");
 				return;
 			}
-			else if (!"F".equals(mode) && !"D".equals(mode) && outFile.exists() && outFile.isDirectory())
+			if (!"F".equals(mode) && !"D".equals(mode) && outFile.exists() && outFile.isDirectory())
 				outFile = new File(outFile, ("./pdf.converted." + outFileExt));
 		}
 		
@@ -348,8 +351,22 @@ public class PdfExtractorTool {
 		}
 		
 		//	write output IMD
-		else if ("D".equals(mode))
-			ImDocumentIO.storeDocument(imDoc, outFile, pm);
+		else if ("D".equals(mode)) {
+			outFile.mkdirs();
+			ImDocumentEntry[] docEntries = ImDocumentIO.storeDocument(imDoc, outFile, pm);
+			
+			String eOutPath = outFile.getAbsolutePath();
+			if (eOutPath.endsWith(".imdir"))
+				eOutPath = eOutPath.substring(0, eOutPath.lastIndexOf('.'));
+			File eOutFile = new File(eOutPath + ".imd");
+			BufferedWriter eOut = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(eOutFile), "UTF-8"));
+			for (int e = 0; e < docEntries.length; e++) {
+				eOut.write(docEntries[e].toTabString());
+				eOut.newLine();
+			}
+			eOut.flush();
+			eOut.close();
+		}
 		
 		//	write output XML
 		else if ("R".equals(mode) || "X".equals(mode)) {
