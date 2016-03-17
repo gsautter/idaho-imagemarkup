@@ -63,7 +63,7 @@ import de.uka.ipd.idaho.stringUtils.StringUtils;
  * 
  * @author sautter
  */
-class PdfFont {
+public class PdfFont {
 	
 	private static final boolean DEBUG_CHAR_HANDLING = true;
 	
@@ -2757,17 +2757,17 @@ FontFile2=65 0R
 			fn = fn.substring(7);
 		BaseFont font = ((BaseFont) builtInFontData.get(fn));
 		if (font == null) {
-			String ppcrn = PdfParser.class.getName().replaceAll("\\.", "/");
-			String afmrn = (ppcrn.substring(0, ppcrn.lastIndexOf('/')) + "/afmRes/" + fn + ".afm");
+			String ppClassResName = PdfParser.class.getName().replaceAll("\\.", "/");
+			String afmResName = (ppClassResName.substring(0, ppClassResName.lastIndexOf('/')) + "/afmRes/" + fn + ".afm");
 			try {
-				InputStream fis = PdfParser.class.getClassLoader().getResourceAsStream(afmrn);
+				InputStream fis = PdfParser.class.getClassLoader().getResourceAsStream(afmResName);
 				BufferedReader fr = new BufferedReader(new InputStreamReader(fis, "UTF-8"));
 				font = readBaseFont(fr);
 				fr.close();
 				builtInFontData.put(fn, font);
 			}
 			catch (Exception e) {
-				System.out.println("PdfParser: could not load built-in font '" + fn + "' from resource '" + afmrn + "'");
+				System.out.println("PdfParser: could not load built-in font '" + fn + "' from resource '" + afmResName + "'");
 				e.printStackTrace(System.out);
 				
 //				String baseName = null;
@@ -2816,8 +2816,8 @@ FontFile2=65 0R
 	public static String getFallbackFontName(String fontName, boolean isSymbolic) {
 		System.out.println("Getting fallback font name for " + fontName);
 		if (fallbackFontNameMappings == null) {
-			String ppcrn = PdfParser.class.getName().replaceAll("\\.", "/");
-			String fmrn = (ppcrn.substring(0, ppcrn.lastIndexOf('/')) + "/afmRes/FallbackMappings.txt");
+			String ppClassResName = PdfParser.class.getName().replaceAll("\\.", "/");
+			String fmResName = (ppClassResName.substring(0, ppClassResName.lastIndexOf('/')) + "/afmRes/FallbackMappings.txt");
 			try {
 				TreeMap fms = new TreeMap(new Comparator() {
 					public int compare(Object o1, Object o2) {
@@ -2826,7 +2826,7 @@ FontFile2=65 0R
 						return ((s1.length() == s2.length()) ? s1.compareTo(s2) : (s2.length() - s1.length()));
 					}
 				});
-				InputStream fmis = PdfParser.class.getClassLoader().getResourceAsStream(fmrn);
+				InputStream fmis = PdfParser.class.getClassLoader().getResourceAsStream(fmResName);
 				BufferedReader fmr = new BufferedReader(new InputStreamReader(fmis, "UTF-8"));
 				String fm;
 				String f = null;

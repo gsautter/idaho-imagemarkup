@@ -63,6 +63,7 @@ import de.uka.ipd.idaho.im.ImPage;
 import de.uka.ipd.idaho.im.ImRegion;
 import de.uka.ipd.idaho.im.ImWord;
 import de.uka.ipd.idaho.im.analysis.PageImageConverter;
+import de.uka.ipd.idaho.im.util.ImFontUtils;
 
 /**
  * Wrapper class for Google's Tesseract OCR engine.
@@ -70,6 +71,11 @@ import de.uka.ipd.idaho.im.analysis.PageImageConverter;
  * @author sautter
  */
 public class OcrEngine implements ImagingConstants {
+	
+	/* make sure we have the fonts we need */
+	static {
+		ImFontUtils.loadFreeFonts();
+	}
 	
 	private File basePath;
 	private File tessPath;
@@ -1335,25 +1341,25 @@ public class OcrEngine implements ImagingConstants {
 		BufferedImage lineSepImage = new BufferedImage(1, 1, BufferedImage.TYPE_BYTE_GRAY);
 		lineSepImage.getGraphics().fillRect(0, 0, lineSepImage.getWidth(), lineSepImage.getHeight());
 		Graphics2D graphics = lineSepImage.createGraphics();
-		graphics.setFont(new Font("Times New Roman", Font.BOLD, sepFontSize));
+		graphics.setFont(new Font("Serif", Font.BOLD, sepFontSize));
 		TextLayout tl = new TextLayout(wordSeparatorString, graphics.getFont(), graphics.getFontRenderContext());
 		Rectangle2D wordBounds = tl.getBounds();
 		if (wordBounds.getHeight() > sepHeight) {
 			while (wordBounds.getHeight() > sepHeight) {
 				sepFontSize--;
-				graphics.setFont(new Font("Times New Roman", Font.BOLD, sepFontSize));
+				graphics.setFont(new Font("Serif", Font.BOLD, sepFontSize));
 				tl = new TextLayout(wordSeparatorString, graphics.getFont(), graphics.getFontRenderContext());
 				wordBounds = tl.getBounds();
 			}
 		}
 		else while (wordBounds.getHeight() <= sepHeight) {
-			graphics.setFont(new Font("Times New Roman", Font.BOLD, (sepFontSize+1)));
+			graphics.setFont(new Font("Serif", Font.BOLD, (sepFontSize+1)));
 			tl = new TextLayout(wordSeparatorString, graphics.getFont(), graphics.getFontRenderContext());
 			wordBounds = tl.getBounds();
 			if (wordBounds.getHeight() <= sepHeight)
 				sepFontSize++;
 		}
-		graphics.setFont(new Font("Times New Roman", Font.BOLD, sepFontSize));
+		graphics.setFont(new Font("Serif", Font.BOLD, sepFontSize));
 		tl = new TextLayout(wordSeparatorString, graphics.getFont(), graphics.getFontRenderContext());
 		wordBounds = tl.getBounds();
 		
@@ -1362,7 +1368,7 @@ public class OcrEngine implements ImagingConstants {
 		graphics.setColor(Color.WHITE);
 		graphics.fillRect(0, 0, lineSepImage.getWidth(), lineSepImage.getHeight());
 		
-		graphics.setFont(new Font("Times New Roman", Font.BOLD, sepFontSize));
+		graphics.setFont(new Font("Serif", Font.BOLD, sepFontSize));
 		graphics.setColor(Color.BLACK);
 		graphics.drawString(wordSeparatorString, 0, (sepHeight));
 		

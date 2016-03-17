@@ -125,6 +125,7 @@ import de.uka.ipd.idaho.im.pdf.PdfParser.PPageContent;
 import de.uka.ipd.idaho.im.pdf.PdfParser.PStream;
 import de.uka.ipd.idaho.im.pdf.PdfParser.PWord;
 import de.uka.ipd.idaho.im.pdf.test.PdfExtractorTest;
+import de.uka.ipd.idaho.im.util.ImFontUtils;
 import de.uka.ipd.idaho.im.utilities.ImageDisplayDialog;
 
 /**
@@ -155,6 +156,11 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		for security reasons, as setting this property is a behavioral thing,
 		not something that any functionality would depend on */ }
 		ImageIO.setUseCache(false);
+	}
+	
+	/* make sure we have the fonts we need */
+	static {
+		ImFontUtils.loadFreeFonts();
 	}
 	
 	private File basePath;
@@ -2576,7 +2582,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		
 		if (name != null) {
 			if (name.matches("[A-Z]+\\+[A-Z][a-z].*"))
-				name = name.substring(name.indexOf('+')+1);
+				name = name.substring(name.indexOf('+') + "+".length());
 			if (name.startsWith("Symbol"))
 				font = new Font("Symbol", style, size);
 			else if (name.startsWith("ZapfDingbats"))
@@ -2587,16 +2593,20 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			String ffn = PdfFont.getFallbackFontName(name, false);
 			System.out.println("==> falling back to " + ffn);
 			if (ffn.startsWith("Helvetica"))
-				font = new Font("Helvetica", style, size);
+//				font = new Font("SansSerif", style, size);
+				font = new Font("FreeSans", style, size);
 			else if (ffn.startsWith("Times"))
-				font = new Font("Times New Roman", style, size);
+//				font = new Font("Serif", style, size);
+				font = new Font("FreeSerif", style, size);
 			else if (ffn.startsWith("Courier"))
-				font = new Font("Courier New", style, size);
+//				font = new Font("Monospaced", style, size);
+				font = new Font("FreeMono", style, size);
 		}
 		
 		if (font == null) {
 			System.out.println("==> base font not found, using Serif fallback");
-			return new Font((serif ? "Serif" : "SansSerif"), style, size);
+//			return new Font((serif ? "Serif" : "SansSerif"), style, size);
+			return new Font((serif ? "FreeSerif" : "FreeSans"), style, size);
 		}
 		fontCache.put(fontKey, font);
 		System.out.println("==> font created");

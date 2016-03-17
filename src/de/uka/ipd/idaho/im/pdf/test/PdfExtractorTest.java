@@ -450,12 +450,15 @@ public class PdfExtractorTest implements ImagingConstants {
 //		pdfName = "295-306_Disney & Prescher.pdf"; // TODO mingled words 'A male' on page 6
 //		pdfName = "295-306_Disney & Prescher.pdf"; // TODO_ne mis-decoded 1-bit RGB bitmap on page 4
 		
-		//	TODO scanned PDF with high-accuracy embedded OCR from ABBYY
-		pdfName = "Flora of Japan 2001 Wakabayashi Mitella_abbyypdf.pdf"; // TODO see why region coloring doesn't remove black page edges
+//		//	scanned PDF with high-accuracy embedded OCR from ABBYY
+//		pdfName = "Flora of Japan 2001 Wakabayashi Mitella_abbyypdf.pdf";
+		
+		//	TODO test free fonts
+		pdfName = "zt00445.pdf";
 		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
-		aimAtPage = -1; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
+		aimAtPage = 0; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
 		//	TODO try pages 12, 13, 16, 17, and 21 of Prasse 1979
 		System.out.println("Aiming at page " + aimAtPage);
 		final PdfExtractor pdfExtractor = new PdfExtractor(pdfDataPath, pis, true);
@@ -509,10 +512,10 @@ public class PdfExtractorTest implements ImagingConstants {
 			pdm.setLocationRelativeTo(null);
 			pdm.popUp(false);
 			
-			doc = pdfExtractor.loadImagePdf(doc, pdfDoc, bytes, true, true, scaleFactor, null);
+//			doc = pdfExtractor.loadImagePdf(doc, pdfDoc, bytes, true, true, scaleFactor, null);
 //			doc = pdfExtractor.loadImagePdfBlocks(doc, pdfDoc, bytes, scaleFactor, null);
 //			doc = pdfExtractor.loadImagePdfPages(doc, pdfDoc, bytes, true, scaleFactor, null);
-//			doc = pdfExtractor.loadTextPdf(doc, pdfDoc, bytes, pdm);
+			doc = pdfExtractor.loadTextPdf(doc, pdfDoc, bytes, pdm);
 //			doc = pdfExtractor.loadGenericPdf(doc, pdfDoc, bytes, scaleFactor, null);
 			
 //			ProcessStatusMonitor psm = new ProcessStatusMonitor() {

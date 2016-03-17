@@ -58,6 +58,7 @@ import de.uka.ipd.idaho.im.ImRegion;
 import de.uka.ipd.idaho.im.ImWord;
 import de.uka.ipd.idaho.im.analysis.Imaging.AnalysisImage;
 import de.uka.ipd.idaho.im.analysis.Imaging.ImagePartRectangle;
+import de.uka.ipd.idaho.im.util.ImFontUtils;
 import de.uka.ipd.idaho.im.util.ImUtils;
 
 /**
@@ -66,6 +67,11 @@ import de.uka.ipd.idaho.im.util.ImUtils;
  * @author sautter
  */
 public class WordImageAnalysis {
+	
+	/* make sure we have the fonts we need */
+	static {
+		ImFontUtils.loadFreeFonts();
+	}
 	
 	/**
 	 * Analyze font metrics in an Image Markup document. This method relies on
@@ -1155,7 +1161,8 @@ public class WordImageAnalysis {
 	 * @return the rendered word image
 	 */
 	public static WordImage renderWordImage(String wordString, BoundingBox wordBounds, int wordBaseline, int fontStyle, int estimatedFontSize, int pageImageDpi, Map cache) {
-		return renderWordImage(wordString, wordBounds, wordBaseline, "Serif", fontStyle, estimatedFontSize, pageImageDpi, cache);
+//		return renderWordImage(wordString, wordBounds, wordBaseline, "Serif", fontStyle, estimatedFontSize, pageImageDpi, cache);
+		return renderWordImage(wordString, wordBounds, wordBaseline, "FreeSerif", fontStyle, estimatedFontSize, pageImageDpi, cache);
 	}
 	
 	/**

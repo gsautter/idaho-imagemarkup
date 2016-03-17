@@ -56,6 +56,7 @@ import de.uka.ipd.idaho.gamta.util.swing.DialogFactory;
 import de.uka.ipd.idaho.im.analysis.Imaging;
 import de.uka.ipd.idaho.im.analysis.Imaging.AnalysisImage;
 import de.uka.ipd.idaho.im.analysis.Imaging.ImagePartRectangle;
+import de.uka.ipd.idaho.im.util.ImFontUtils;
 
 /**
  * This class renders characters and computes a signature, consisting of
@@ -96,11 +97,16 @@ public class PdfCharSignatureGenerator {
 			}
 		});
 		
+		//	make sure we have the fonts we need
+		ImFontUtils.loadFreeFonts();
+		
 		//	collect char metrics for various font faces and styles
 		for (int s = Font.PLAIN; s <= (Font.BOLD | Font.ITALIC); s++) {
-			Font sans = new Font("Sans", s, measurementFontSize);
+//			Font sans = new Font("Sans", s, measurementFontSize);
+			Font sans = new Font("FreeSans", s, measurementFontSize);
 			getCharMetrics(sans, s, charMetrics);
-			Font serif = new Font("Serif", s, measurementFontSize);
+//			Font serif = new Font("Serif", s, measurementFontSize);
+			Font serif = new Font("FreeSerif", s, measurementFontSize);
 			getCharMetrics(serif, ((SERIF_IS_STYLE ? SERIF : 0) | s), charMetrics);
 			for (int f = 0; f < fontNames.length; f++) {
 				Font font = new Font(fontNames[f], s, measurementFontSize);

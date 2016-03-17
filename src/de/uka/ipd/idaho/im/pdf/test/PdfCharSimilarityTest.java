@@ -47,6 +47,7 @@ import java.util.TreeSet;
 import de.uka.ipd.idaho.im.analysis.Imaging;
 import de.uka.ipd.idaho.im.analysis.Imaging.AnalysisImage;
 import de.uka.ipd.idaho.im.analysis.Imaging.ImagePartRectangle;
+import de.uka.ipd.idaho.im.util.ImFontUtils;
 import de.uka.ipd.idaho.stringUtils.StringUtils;
 
 /**
@@ -87,8 +88,11 @@ public class PdfCharSimilarityTest {
 		
 		int charLimit = 0xFFFF;//Integer.MAX_VALUE;
 		
+		ImFontUtils.loadFreeFonts();
+		
 		for (int fs = 0; fs <= (SERIF | (Font.BOLD | Font.ITALIC)); fs++) {
-			Font font = new Font((((fs & SERIF) != 0) ? "Serif" : "Sans"), (fs & (Font.BOLD | Font.ITALIC)), 48);
+//			Font font = new Font((((fs & SERIF) != 0) ? "Serif" : "Sans"), (fs & (Font.BOLD | Font.ITALIC)), 48);
+			Font font = new Font((((fs & SERIF) != 0) ? "FreeSerif" : "FreeSans"), (fs & (Font.BOLD | Font.ITALIC)), 48);
 			
 			Graphics2D gr = (new BufferedImage(1, 1, BufferedImage.TYPE_BYTE_GRAY)).createGraphics();
 			gr.setFont(font);

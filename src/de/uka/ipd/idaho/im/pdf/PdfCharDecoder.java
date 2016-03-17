@@ -59,6 +59,7 @@ import de.uka.ipd.idaho.im.analysis.Imaging.AnalysisImage;
 import de.uka.ipd.idaho.im.analysis.Imaging.ImagePartRectangle;
 import de.uka.ipd.idaho.im.pdf.PdfParser.PStream;
 import de.uka.ipd.idaho.im.pdf.PdfUtils.PdfLineInputStream;
+import de.uka.ipd.idaho.im.util.ImFontUtils;
 import de.uka.ipd.idaho.im.utilities.ImageDisplayDialog;
 import de.uka.ipd.idaho.stringUtils.StringUtils;
 
@@ -67,6 +68,11 @@ import de.uka.ipd.idaho.stringUtils.StringUtils;
  *
  */
 public class PdfCharDecoder {
+	
+	/* make sure we have the fonts we need */
+	static {
+		ImFontUtils.loadFreeFonts();
+	}
 	
 	//	TODO try and cluster characters by similarity
 	//	==> good match yields suggestions for further match attempts
@@ -106,7 +112,8 @@ public class PdfCharDecoder {
 	
 	private static void testCharMatchDiffs(int charLimit) {
 		for (int s = 0; s <= ((Font.BOLD | Font.ITALIC) | (SERIF_IS_STYLE ? SERIF : 0)); s++) {
-			Font font = new Font((((s & SERIF) != 0) ? "Serif" : "Sans"), (s & (Font.BOLD | Font.ITALIC)), 96);
+//			Font font = new Font((((s & SERIF) != 0) ? "Serif" : "Sans"), (s & (Font.BOLD | Font.ITALIC)), 96);
+			Font font = new Font((((s & SERIF) != 0) ? "FreeSerif" : "FreeSans"), (s & (Font.BOLD | Font.ITALIC)), 96);
 			Graphics2D gr = (new BufferedImage(1, 1, BufferedImage.TYPE_BYTE_GRAY)).createGraphics();
 			gr.setFont(font);
 			Rectangle2D fontBox = font.getMaxCharBounds(gr.getFontRenderContext());
@@ -210,7 +217,8 @@ public class PdfCharDecoder {
 	//	!!! TEST ONLY !!!
 	private static ImageDisplayDialog testCharMatchPos(int charLimit, int fontStyle, boolean useFontStyle, ImageDisplayDialog unMatchedCharImages) {
 		float matchQuotientThreshold = 3;
-		Font font = new Font((((fontStyle & SERIF) != 0) ? "Serif" : "Sans"), (fontStyle & (Font.BOLD | Font.ITALIC)), 96);
+//		Font font = new Font((((fontStyle & SERIF) != 0) ? "Serif" : "Sans"), (fontStyle & (Font.BOLD | Font.ITALIC)), 96);
+		Font font = new Font((((fontStyle & SERIF) != 0) ? "FreeSerif" : "FreeSans"), (fontStyle & (Font.BOLD | Font.ITALIC)), 96);
 		Graphics2D gr = (new BufferedImage(1, 1, BufferedImage.TYPE_BYTE_GRAY)).createGraphics();
 		gr.setFont(font);
 		Rectangle2D fontBox = font.getMaxCharBounds(gr.getFontRenderContext());

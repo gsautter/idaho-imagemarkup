@@ -5,7 +5,7 @@
 -->
 
 <project name="dist">
-	<target name="jars" depends="imagemarkupjar,ocrjar,ocrbinjar,pdfjar,pdfbinjar">
+	<target name="jars" depends="imagemarkupjar,imagemarkupbinjar,ocrjar,ocrbinjar,pdfjar,pdfbinjar">
 	</target>
 	
 	<target name="imagemarkupjar">
@@ -22,6 +22,14 @@
 			<fileset dir="${src.home}" includes="**/idaho/im/util/*.java" />
 			<fileset dir="${src.home}" includes="**/idaho/im/util/*.png" />
 			<fileset dir="${src.home}" includes="**/idaho/im/utilities/*.java" />
+			<fileset dir="." includes="LICENSE.txt"/>
+		</jar>
+	</target>
+	
+	<target name="imagemarkupbinjar">
+		<delete file="${jar.imagemarkupbin}" />
+		<jar destfile="${jar.imagemarkupbin}" >
+			<fileset dir="${src.home}" includes="**/idaho/im/util/ttfRes/**" />
 			<fileset dir="." includes="LICENSE.txt"/>
 		</jar>
 	</target>
@@ -48,9 +56,8 @@
 		<jar destfile="${jar.pdf}" manifest="${file.home}/MANIFEST.pdfExtractorTool.MF" >
 			<fileset dir="${build.home}/classes" includes="**/idaho/im/pdf/**" />
 			<fileset dir="${build.home}/classes" includes="**/idaho/im/pdf/test/**" />
-			<fileset dir="${src.home}" includes="**/idaho/im/pdf/**" excludes="**/idaho/im/pdf/**.zip" />
+			<fileset dir="${src.home}" includes="**/idaho/im/pdf/*.java" />
 			<fileset dir="${src.home}" includes="**/idaho/im/pdf/test/**" />
-			<fileset dir="${src.home}" includes="**/idaho/im/pdf/afmRes/**" />
 			<fileset dir="." includes="LICENSE.txt"/>
 		</jar>
 	</target>
@@ -59,6 +66,8 @@
 		<delete file="${jar.pdfbin}" />
 		<jar destfile="${jar.pdfbin}" >
 			<fileset dir="${file.home}" includes="bin/ImageMagick/**" />
+			<fileset dir="${src.home}" includes="**/idaho/im/pdf/*.txt" />
+			<fileset dir="${src.home}" includes="**/idaho/im/pdf/afmRes/**" />
 			<fileset dir="." includes="LICENSE.txt"/>
 		</jar>
 	</target>
