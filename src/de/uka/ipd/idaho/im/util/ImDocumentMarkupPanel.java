@@ -2782,7 +2782,7 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 			super.paint(g);
 			if (this.tcaMessage == null)
 				return;
-			Font f = new Font("Helvetica", Font.PLAIN, 20);
+			Font f = new Font("SansSerif", Font.PLAIN, 20);
 			g.setFont(f);
 			TextLayout wtl = new TextLayout(this.tcaMessage, f, ((Graphics2D) g).getFontRenderContext());
 			g.setColor(halfTransparentRed);

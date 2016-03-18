@@ -453,12 +453,16 @@ public class PdfExtractorTest implements ImagingConstants {
 //		//	scanned PDF with high-accuracy embedded OCR from ABBYY
 //		pdfName = "Flora of Japan 2001 Wakabayashi Mitella_abbyypdf.pdf";
 		
-		//	TODO test free fonts
-		pdfName = "zt00445.pdf";
+		//	TODO problem PDF from DOnat
+		pdfName = "Zootaxa/zt03600p105.pdf"; // TODO use page 73 to assess italics font issues
+//		pdfName = "Zootaxa/zt03616p283.pdf";
+//		pdfName = "Zootaxa/zt03619p074.pdf";
+//		pdfName = "Zootaxa/zt03619p182.pdf";
+//		pdfName = "Zootaxa/zt03619p194.pdf";
 		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
-		aimAtPage = 0; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
+		aimAtPage = 73; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
 		//	TODO try pages 12, 13, 16, 17, and 21 of Prasse 1979
 		System.out.println("Aiming at page " + aimAtPage);
 		final PdfExtractor pdfExtractor = new PdfExtractor(pdfDataPath, pis, true);
@@ -502,6 +506,7 @@ public class PdfExtractorTest implements ImagingConstants {
 				baos.write(buffer, 0, read);
 			bis.close();
 			byte[] bytes = baos.toByteArray();
+			System.out.println("PDF document read, got " + bytes.length + " bytes");
 			
 			doc = new ImDocument(pdfName);
 			doc.setDocumentProperty("docId", pdfName);
@@ -515,8 +520,8 @@ public class PdfExtractorTest implements ImagingConstants {
 //			doc = pdfExtractor.loadImagePdf(doc, pdfDoc, bytes, true, true, scaleFactor, null);
 //			doc = pdfExtractor.loadImagePdfBlocks(doc, pdfDoc, bytes, scaleFactor, null);
 //			doc = pdfExtractor.loadImagePdfPages(doc, pdfDoc, bytes, true, scaleFactor, null);
-			doc = pdfExtractor.loadTextPdf(doc, pdfDoc, bytes, pdm);
-//			doc = pdfExtractor.loadGenericPdf(doc, pdfDoc, bytes, scaleFactor, null);
+//			doc = pdfExtractor.loadTextPdf(doc, pdfDoc, bytes, pdm);
+			doc = pdfExtractor.loadGenericPdf(doc, pdfDoc, bytes, scaleFactor, null);
 			
 //			ProcessStatusMonitor psm = new ProcessStatusMonitor() {
 //				public void setStep(String step) {

@@ -158,9 +158,13 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		ImageIO.setUseCache(false);
 	}
 	
+	//	font preference switch, mainly for testing purposes
+	private static final boolean USE_FREE_FONTS = false;
+	
 	/* make sure we have the fonts we need */
 	static {
-		ImFontUtils.loadFreeFonts();
+		if (USE_FREE_FONTS)
+			ImFontUtils.loadFreeFonts();
 	}
 	
 	private File basePath;
@@ -1449,7 +1453,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
 						BoundingBox wb = getBoundingBox(pData[p].words[w].bounds, pData[p].pdfPageBox, magnification, pData[p].rotate);
 						
-						//	prepare font
+						//	prepare font TODO find out why Free Fonts mess up 'fl' in italics when hScale < 1 !!!
 						rg.setColor(Color.BLACK);
 						int fontStyle = Font.PLAIN;
 						if (pData[p].words[w].bold)
@@ -1469,9 +1473,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						if (hScale < 1)
 							rg.scale(hScale, 1);
 						else leftShift += (((wb.right - wb.left) - wtl.getBounds().getWidth()) / 2);
-						System.out.println("Rendering " + pData[p].words[w].str + ((pData[p].words[w].str.length() == 1) ? (" " + Integer.toString(((int) pData[p].words[w].str.charAt(0)), 16)) : ""));
+						System.out.println("Rendering " + pData[p].words[w].str + ((pData[p].words[w].str.length() == 1) ? (" " + Integer.toString(((int) pData[p].words[w].str.charAt(0)), 16)) : "") + ", hScale is " + hScale);
 						try {
-							rg.drawString(pData[p].words[w].str, leftShift, (wb.bottom - (pData[p].words[w].font.hasDescent ? Math.round(wlm.getDescent()) : 0)));
+							rg.drawGlyphVector(rf.createGlyphVector(new FontRenderContext(rg.getTransform(), true, true), pData[p].words[w].str), leftShift, (wb.bottom - (pData[p].words[w].font.hasDescent ? Math.round(wlm.getDescent()) : 0)));
+//							rg.drawString(pData[p].words[w].str, leftShift, (wb.bottom - (pData[p].words[w].font.hasDescent ? Math.round(wlm.getDescent()) : 0)));
 						} catch (InternalError ie) {}
 						rg.setTransform(at);
 					}
@@ -2593,14 +2598,11 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			String ffn = PdfFont.getFallbackFontName(name, false);
 			System.out.println("==> falling back to " + ffn);
 			if (ffn.startsWith("Helvetica"))
-//				font = new Font("SansSerif", style, size);
-				font = new Font("FreeSans", style, size);
+				font = new Font((USE_FREE_FONTS ? "FreeSans" : "SansSerif"), style, size);
 			else if (ffn.startsWith("Times"))
-//				font = new Font("Serif", style, size);
-				font = new Font("FreeSerif", style, size);
+				font = new Font((USE_FREE_FONTS ? "FreeSerif" : "Serif"), style, size);
 			else if (ffn.startsWith("Courier"))
-//				font = new Font("Monospaced", style, size);
-				font = new Font("FreeMono", style, size);
+				font = new Font((USE_FREE_FONTS ? "FreeMono" : "Monospaced"), style, size);
 		}
 		
 		if (font == null) {

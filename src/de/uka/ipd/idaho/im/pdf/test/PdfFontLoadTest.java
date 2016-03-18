@@ -48,16 +48,16 @@ public class PdfFontLoadTest {
 	public static void main(String[] args) throws Exception {
 		ImFontUtils.loadFreeFonts();
 		
-		int size = 42;
+		int size = 20;
 		int style = Font.BOLD | Font.ITALIC;
 		JPanel fonts = new JPanel(new GridLayout(0, 1));
-		JLabel serif = new JLabel("AbCdEfGhIjKlMnOpQrStUvWxYz ");
+		JLabel serif = new JLabel("AbCdEfGhIjKlMnOpQrStUvWxYz flava");
 		serif.setFont(new Font("FreeSerif", style, size));
 		fonts.add(serif);
-		JLabel sans = new JLabel("AbCdEfGhIjKlMnOpQrStUvWxYz ");
+		JLabel sans = new JLabel("AbCdEfGhIjKlMnOpQrStUvWxYz flava");
 		sans.setFont(new Font("FreeSans", style, size));
 		fonts.add(sans);
-		JLabel mono = new JLabel("AbCdEfGhIjKlMnOpQrStUvWxYz ");
+		JLabel mono = new JLabel("AbCdEfGhIjKlMnOpQrStUvWxYz flava");
 		mono.setFont(new Font("FreeMono", style, size));
 		fonts.add(mono);
 		JOptionPane.showMessageDialog(null, fonts);
