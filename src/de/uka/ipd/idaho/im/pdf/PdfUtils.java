@@ -97,7 +97,7 @@ class PdfUtils {
 			return false;
 		
 		int actualByteCount = bytes.length;
-		while ((actualByteCount > 0) && ((bytes[actualByteCount-1] == '\n') || (bytes[actualByteCount-1] == '\r')))
+		while ((actualByteCount > 0) && ((bytes[actualByteCount-1] == '\n') || (bytes[actualByteCount-1] == '\r') || (bytes[actualByteCount-1] == ' ')))
 			actualByteCount--;
 		if (actualByteCount != str.length())
 			return false;
