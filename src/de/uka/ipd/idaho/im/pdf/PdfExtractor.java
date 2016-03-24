@@ -158,8 +158,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		ImageIO.setUseCache(false);
 	}
 	
-	//	font preference switch, mainly for testing purposes
-	private static final boolean USE_FREE_FONTS = false;
+	//	font preference switch, mainly for testing Liberation Fonts against default system fonts
+	private static final boolean USE_FREE_FONTS = true;
 	
 	/* make sure we have the fonts we need */
 	static {
@@ -1453,7 +1453,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
 						BoundingBox wb = getBoundingBox(pData[p].words[w].bounds, pData[p].pdfPageBox, magnification, pData[p].rotate);
 						
-						//	prepare font TODO find out why Free Fonts mess up 'fl' in italics when hScale < 1 !!!
+						//	prepare font
 						rg.setColor(Color.BLACK);
 						int fontStyle = Font.PLAIN;
 						if (pData[p].words[w].bold)
@@ -1900,6 +1900,20 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	}
 	
 	private static void checkPageWords(PPageData pData, Tokenizer tokenizer, ProgressMonitor spm) {
+		
+		//	sort out words that lie outside the media box (normalize media box beforehand, ignoring orientation)
+		ArrayList pWords = new ArrayList();
+		Rectangle2D pNormBox = new Rectangle2D.Float(0, 0, Math.abs(pData.pdfPageBox.width), Math.abs(pData.pdfPageBox.height));
+		spm.setInfo(" - removing words outside page bounds " + pNormBox);
+		for (int w = 0; w < pData.words.length; w++) {
+			if (pNormBox.contains(pData.words[w].bounds))
+				pWords.add(pData.words[w]);
+			else spm.setInfo("   - removed out-of-page word '" + pData.words[w].str + "' @" + pData.words[w].bounds);
+		}
+		if (pWords.size() < pData.words.length) {
+			spm.setInfo(" ==> removed " + (pData.words.length - pWords.size()) + " out-of-page words");
+			pData.words = ((PWord[]) pWords.toArray(new PWord[pWords.size()]));
+		}
 		
 		//	shrink word bounding boxes to actual word size
 		BufferedImage mbi = new BufferedImage(1, 1, BufferedImage.TYPE_BYTE_GRAY);
@@ -2607,8 +2621,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		
 		if (font == null) {
 			System.out.println("==> base font not found, using Serif fallback");
-//			return new Font((serif ? "Serif" : "SansSerif"), style, size);
-			return new Font((serif ? "FreeSerif" : "FreeSans"), style, size);
+			return new Font((serif ? (USE_FREE_FONTS ? "FreeSerif" : "Serif") : (USE_FREE_FONTS ? "FreeSans" : "SansSerif")), style, size);
 		}
 		fontCache.put(fontKey, font);
 		System.out.println("==> font created");

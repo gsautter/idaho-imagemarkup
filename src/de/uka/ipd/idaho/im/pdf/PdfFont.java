@@ -65,7 +65,7 @@ import de.uka.ipd.idaho.stringUtils.StringUtils;
  */
 public class PdfFont {
 	
-	private static final boolean DEBUG_CHAR_HANDLING = true;
+	private static final boolean DEBUG_CHAR_HANDLING = false;
 	
 	static class BaseFont {
 		Hashtable descriptor;
@@ -324,26 +324,138 @@ public class PdfFont {
 		public abstract void decodeChars(PdfFont font, ProgressMonitor pm) throws IOException;
 	}
 	
+//	String getUnicode(int chb) {
+//		if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println("Resolving " + chb + " ...");
+//		if (chb < 0) {
+//			chb += 256;
+//			if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" - incremented to " + ((int) chb));
+//		}
+//		Integer chi = new Integer(chb);
+//		
+//		//	try direct unicode mapping
+//		String mStr = ((String) this.ucMappings.get(chi));
+//		if (mStr != null) {
+//			if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> UC resolved to " + mStr);
+//			return mStr;
+//		}
+//		
+//		//	try differences mapping
+//		Character mCh = ((Character) this.diffMappings.get(chi));
+//		if (mCh != null) {
+//			if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> Diff resolved to " + mCh);
+//			return ("" + mCh.charValue());
+//		}
+//		
+//		//	check base font if char in range
+//		if ((this.baseFont != null) && ((chb < this.firstChar) || (this.lastChar < chb))) {
+//			char ch = this.baseFont.resolveByte(chb);
+//			if (ch != 0) {
+//				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> base font out of own range resolved to " + ch);
+//				return ("" + ch);
+//			}
+//		}
+//		
+//		//	try default encodings (only bytes less than 256)
+//		if ("AdobeStandardEncoding".equals(this.encoding)) {
+//			mCh = ((Character) standardAdobeMappings.get(chi));
+//			if (mCh != null) {
+//				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> Adobe resolved to " + mCh.charValue());
+//				return ("" + mCh.charValue());
+//			}
+//			else if ((this.firstChar <= chb) && (chb <= this.lastChar)) {
+//				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> Adobe default resolved to " + ((char) chb));
+//				return ("" + ((char) chb));
+//			}
+//		}
+//		else if ("MacRomanEncoding".equals(this.encoding)) {
+//			mCh = ((Character) macRomanMappings.get(chi));
+//			if (mCh != null) {
+//				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> MacRoman resolved to " + mCh.charValue());
+//				return ("" + mCh.charValue());
+//			}
+//			else if ((this.firstChar <= chb) && (chb <= this.lastChar)) {
+//				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> MacRoman default resolved to " + ((char) chb));
+//				return ("" + ((char) chb));
+//			}
+//		}
+//		else if ("MacExpertEncoding".equals(this.encoding)) {
+//			mCh = ((Character) macExpertMappings.get(chi));
+//			if (mCh != null) {
+//				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> MacExpert resolved to " + mCh.charValue());
+//				return ("" + mCh.charValue());
+//			}
+//			else if ((this.firstChar <= chb) && (chb <= this.lastChar)) {
+//				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> MacExpert default resolved to " + ((char) chb));
+//				return ("" + ((char) chb));
+//			}
+//		}
+//		else if ("WinAnsiEncoding".equals(this.encoding) || (this.encoding == null)) {
+//			mCh = ((Character) winAnsiMappings.get(chi));
+//			if (mCh != null) {
+//				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> ANSI resolved to " + mCh.charValue());
+//				return ("" + mCh.charValue());
+//			}
+//			else if ((this.firstChar <= chb) && (chb <= this.lastChar)) {
+//				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> ANSI default resolved to " + ((char) chb));
+//				return ("" + ((char) chb));
+//			}
+//		}
+//		
+//		//	try base font regardless of range
+//		if (this.baseFont != null) {
+//			char ch = this.baseFont.resolveByte(chb);
+//			if (ch != 0) {
+//				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> base font resolved to " + ch);
+//				return ("" + ch);
+//			}
+//		}
+//		
+//		//	resort to ASCII
+//		if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> ASCII resolved to " + ((char) chb));
+//		return ("" + ((char) chb));
+//	}
 	String getUnicode(int chb) {
-		if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println("Resolving " + chb + " ...");
+		if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println("UC-resolving " + chb + " ...");
+		if (chb < 0) {
+			chb += 256;
+			if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" - incremented to " + ((int) chb));
+		}
+		
+		//	try direct Unicode mapping 
+		String mStr = ((String) this.ucMappings.get(new Integer(chb)));
+		if (mStr != null) {
+			if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> UC mapping resolved to " + mStr);
+			return mStr;
+		}
+		
+		//	use font mapping
+		return ("" + this.getChar(chb));
+	}
+	char getChar(int chb) {
+		if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println("Font-resolving " + chb + " ...");
 		if (chb < 0) {
 			chb += 256;
 			if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" - incremented to " + ((int) chb));
 		}
 		Integer chi = new Integer(chb);
 		
-		//	try direct unicode mapping
-		String mStr = ((String) this.ucMappings.get(chi));
-		if (mStr != null) {
-			if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> UC resolved to " + mStr);
-			return mStr;
-		}
+		/* We need to cut this out here, as we need access to the char indicated
+		 * by the font to decide if word spacing or not. That is independent of
+		 * the glyph actually rendered in the process. The latter only comes in
+		 * on string generation */
+//		//	try direct Unicode mapping 
+//		String mStr = ((String) this.ucMappings.get(chi));
+//		if (mStr != null) {
+//			if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> UC resolved to " + mStr);
+//			return mStr;
+//		}
 		
 		//	try differences mapping
 		Character mCh = ((Character) this.diffMappings.get(chi));
 		if (mCh != null) {
 			if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> Diff resolved to " + mCh);
-			return ("" + mCh.charValue());
+//			return ("" + mCh.charValue());
+			return mCh.charValue();
 		}
 		
 		//	check base font if char in range
@@ -351,7 +463,8 @@ public class PdfFont {
 			char ch = this.baseFont.resolveByte(chb);
 			if (ch != 0) {
 				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> base font out of own range resolved to " + ch);
-				return ("" + ch);
+//				return ("" + ch);
+				return ch;
 			}
 		}
 		
@@ -360,44 +473,52 @@ public class PdfFont {
 			mCh = ((Character) standardAdobeMappings.get(chi));
 			if (mCh != null) {
 				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> Adobe resolved to " + mCh.charValue());
-				return ("" + mCh.charValue());
+//				return ("" + mCh.charValue());
+				return mCh.charValue();
 			}
 			else if ((this.firstChar <= chb) && (chb <= this.lastChar)) {
 				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> Adobe default resolved to " + ((char) chb));
-				return ("" + ((char) chb));
+//				return ("" + ((char) chb));
+				return ((char) chb);
 			}
 		}
 		else if ("MacRomanEncoding".equals(this.encoding)) {
 			mCh = ((Character) macRomanMappings.get(chi));
 			if (mCh != null) {
 				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> MacRoman resolved to " + mCh.charValue());
-				return ("" + mCh.charValue());
+//				return ("" + mCh.charValue());
+				return mCh.charValue();
 			}
 			else if ((this.firstChar <= chb) && (chb <= this.lastChar)) {
 				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> MacRoman default resolved to " + ((char) chb));
-				return ("" + ((char) chb));
+//				return ("" + ((char) chb));
+				return ((char) chb);
 			}
 		}
 		else if ("MacExpertEncoding".equals(this.encoding)) {
 			mCh = ((Character) macExpertMappings.get(chi));
 			if (mCh != null) {
 				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> MacExpert resolved to " + mCh.charValue());
-				return ("" + mCh.charValue());
+//				return ("" + mCh.charValue());
+				return mCh.charValue();
 			}
 			else if ((this.firstChar <= chb) && (chb <= this.lastChar)) {
 				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> MacExpert default resolved to " + ((char) chb));
-				return ("" + ((char) chb));
+//				return ("" + ((char) chb));
+				return ((char) chb);
 			}
 		}
 		else if ("WinAnsiEncoding".equals(this.encoding) || (this.encoding == null)) {
 			mCh = ((Character) winAnsiMappings.get(chi));
 			if (mCh != null) {
 				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> ANSI resolved to " + mCh.charValue());
-				return ("" + mCh.charValue());
+//				return ("" + mCh.charValue());
+				return mCh.charValue();
 			}
 			else if ((this.firstChar <= chb) && (chb <= this.lastChar)) {
 				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> ANSI default resolved to " + ((char) chb));
-				return ("" + ((char) chb));
+//				return ("" + ((char) chb));
+				return ((char) chb);
 			}
 		}
 		
@@ -406,13 +527,15 @@ public class PdfFont {
 			char ch = this.baseFont.resolveByte(chb);
 			if (ch != 0) {
 				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> base font resolved to " + ch);
-				return ("" + ch);
+//				return ("" + ch);
+				return ch;
 			}
 		}
 		
 		//	resort to ASCII
 		if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> ASCII resolved to " + ((char) chb));
-		return ("" + ((char) chb));
+//		return ("" + ((char) chb));
+		return ((char) chb);
 	}
 	void mapDifference(Integer ch, Character mCh, String mChName) {
 		if (mCh != null)
@@ -967,7 +1090,7 @@ public class PdfFont {
 		standardAdobeMappings.put(new Integer(251), new Character('\u00DF'));
 	}
 	
-	static final boolean DEBUG_LOAD_FONTS = true;
+	static final boolean DEBUG_LOAD_FONTS = false;
 	
 	static PdfFont readFont(Object fnObj, Hashtable fontData, Map objects, boolean needChars, ProgressMonitor pm) throws IOException {
 		Object ftObj = fontData.get("Subtype");

@@ -453,16 +453,21 @@ public class PdfExtractorTest implements ImagingConstants {
 //		//	scanned PDF with high-accuracy embedded OCR from ABBYY
 //		pdfName = "Flora of Japan 2001 Wakabayashi Mitella_abbyypdf.pdf";
 		
-		//	TODO problem PDF from DOnat
-		pdfName = "Zootaxa/zt03600p105.pdf"; // TODO use page 73 to assess italics font issues
+//		//	TODO problem PDF from Donat
+//		pdfName = "Zootaxa/zt03600p105.pdf";
 //		pdfName = "Zootaxa/zt03616p283.pdf";
 //		pdfName = "Zootaxa/zt03619p074.pdf";
 //		pdfName = "Zootaxa/zt03619p182.pdf";
 //		pdfName = "Zootaxa/zt03619p194.pdf";
 		
+		//	another trouble maker
+//		pdfName = "Zootaxa/zt04093p363.pdf"; // TODOne block flipping trouble in pages 3-7 ==> 3 OK, 4 OK, 5 trouble, 6 OK, 7 OK
+//		pdfName = "Zootaxa/zt04093p363.pdf"; // TODOne block flipping trouble in page 5 ==> removing out-of-page words now
+		pdfName = "Zootaxa/zt04093p363.pdf"; // TODOne spacing problem in last line of table on flipped pages 4 & 5 ==> font indicated char decides on word spacing, not actually rendered glyph
+		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
-		aimAtPage = 73; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
+		aimAtPage = -1; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
 		//	TODO try pages 12, 13, 16, 17, and 21 of Prasse 1979
 		System.out.println("Aiming at page " + aimAtPage);
 		final PdfExtractor pdfExtractor = new PdfExtractor(pdfDataPath, pis, true);

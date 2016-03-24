@@ -2724,6 +2724,8 @@ public class PdfParser {
 					if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
 						System.out.println("Re-positioning by TJ array number " + d + "*" + this.pwrFontSize);
 					updateMatrix(this.lineMatrix, (-d * this.pwrFontSize), 0);
+					if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+						this.printPosition();
 				}
 			}
 			
@@ -2761,78 +2763,73 @@ public class PdfParser {
 						System.out.println("Handling high byte char '" + ch + "' (" + ((int) ch) + ", " + Integer.toString(((int) ch), 16).toUpperCase() + ") for now, coming back for low byte char '" + cscs[c] + "' (" + ((int) cscs[c]) + ", " + Integer.toString(((int) cscs[c]), 16).toUpperCase() + ") next round");
 					c--; // come back for low byte in the next round
 				}
-				String rCh;
-				boolean isSpace;
-				boolean implicitSpace;
+				char fCh = this.pwrFont.getChar((int) ch); // the character the font says we're rendering
+				boolean fIsSpace = (fCh == ' '); // is the font indicated character a space (32, 0x20)?
+				String rCh; // the character actually represented by the glyph we're rendering
+				boolean rIsSpace; // is the actually rendered character as space (<= 32, 0x20)?
+				boolean isImplicitSpace = (this.pwrFont.hasImplicitSpaces || (((this.pwrCharSpacing + (fIsSpace ? this.pwrWordSpacing : 0)) > ((this.pwrFontSpaceWidth * narrowSpaceToleranceFactor) / 1000)))); // do TJ shifts, char or word spacing, or excessive glyph width imply rendering a space?
+				
+				/* When deciding if we're rendering a space, check what current
+				 * font _says_ the char is, not what we've decoded it to ...
+				 * it's char 32 that word spacing applies to, no matter what
+				 * character the glyph assigned to it actually represents */
 				
 				//	we're only collecting chars
 				if (this.words == null) {
 					this.pwrFont.setCharUsed((int) ch);
 					rCh = ("(" + ((int) ch) + ")");
-					isSpace = (("" + ch).trim().length() == 0);
-					implicitSpace = (this.pwrFont.hasImplicitSpaces || ((this.pwrCharSpacing > ((this.pwrFontSpaceWidth * narrowSpaceToleranceFactor) / 1000))));				
+					rIsSpace = (rCh.trim().length() == 0);
 				}
 				
 				//	we're actually extracting words
 				else {
 					rCh = this.pwrFont.getUnicode((int) ch);
-					isSpace = (rCh.trim().length() == 0);
-					implicitSpace = (this.pwrFont.hasImplicitSpaces || ((this.pwrCharSpacing > ((this.pwrFontSpaceWidth * narrowSpaceToleranceFactor) / 1000))));				
+					rIsSpace = (rCh.trim().length() == 0);
 				}
 				
-				//	whitespace char, remember end of previous word (if any)
-				if (isSpace) {
+				//	rendering whitespace char, remember end of previous word (if any)
+				if (rIsSpace) {
 					//	compute effective space width and effective last shift (only at start and end of char sequence, though)
 					//	copy from width computation resulting from drawChar()
-					float spaceWidth = ((((this.pwrFont.getCharWidth(ch) * this.pwrFontSize) + (this.pwrWordSpacing * 1000)) * this.pwrHorizontalScaling) / (1000 * 100));
+					float spaceWidth = ((((this.pwrFont.getCharWidth(ch) * this.pwrFontSize) + ((this.pwrCharSpacing + (fIsSpace ? this.pwrWordSpacing : 0)) * 1000)) * this.pwrHorizontalScaling) / (1000 * 100));
 					//	copy from width computation resulting from array shift
 					float prevShiftWidth = ((c == 0) ? (prevShift * this.pwrFontSize) : 0.0f);
 					float nextShiftWidth = (((c+1) == cscs.length) ? (nextShift * this.pwrFontSize) : 0.0f);
-//					
-//					System.out.println("space width is " + spaceWidth + ", previous shift was " + prevShiftWidth + ", next shift is " + nextShiftWidth);
-//					System.out.println("char width is " + this.pwrFont.getCharWidth(ch));
-//					System.out.println("word spacing is " + this.pwrWordSpacing);
-//					System.out.println("horizontal scaling is " + this.pwrHorizontalScaling);
-//					System.out.println("previous shift is " + prevShift);
 					
-					//	end word if space not compensated (to at least 95%) by previous left (positive) shift
+					//	end word if space not compensated (to at least 95%) by previous left (positive) shift and/or subsequent (positive) left shift
 					if ((spaceWidth * 19) > ((prevShiftWidth + nextShiftWidth) * 20)) {
 						System.out.println(" ==> space accepted");
 						this.endWord();
 						rendered.append(' ');
 					}
 					else System.out.println(" ==> space rejected as compensated by shifts");
-//					this.endWord();
-//					rendered.append(' ');
 				}
 				
-				//	non-whitespace char, remember start of word
+				//	rendering non-whitespace char, remember start of word
 				else {
 					this.startWord();
 					String nrCh = dissolveLigature(rCh);
 					if ((this.wordCharCodes != null) && (this.wordString != null)) {
-//						this.wordCharCodes.append((char) ((rCh.length() * 256) | ((int) ch)));
-//						this.wordString.append(rCh);
 						this.wordCharCodes.append((char) ((nrCh.length() * 256) | ((int) ch)));
 						this.wordString.append(nrCh);
 					}
-//					rendered.append(rCh);
 					rendered.append(nrCh);
 				}
 				
 				//	update state (move caret forward)
-				this.drawChar(ch, isSpace, implicitSpace, rCh);
+				this.drawChar(ch, fIsSpace, isImplicitSpace, rCh);
 				
-				//	extreme char spacing, add space
-				if (implicitSpace) {
-					if (!isSpace)
+				//	extreme char or word spacing, add space
+				if (isImplicitSpace) {
+					if (!rIsSpace)
 						rendered.append(' ');
 					this.endWord();
-//					updateMatrix(this.lineMatrix, this.pwrCharSpacing, 0);
-					float spaceWidth = (this.pwrCharSpacing + (this.pwrFont.hasImplicitSpaces ? ((this.pwrFont.getCharWidth(ch) - this.pwrFont.getMeasuredCharWidth(ch)) / 1000) : 0));
+					float spaceWidth = (((((this.pwrCharSpacing + (fIsSpace ? this.pwrWordSpacing : 0)) * 1000)) * this.pwrHorizontalScaling) / (1000 * 100));
 					if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
 						System.out.println("Drawing implicit space of width " + spaceWidth);
 					updateMatrix(this.lineMatrix, spaceWidth, 0);
+					if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+						this.printPosition();
 				}
 			}
 			
@@ -2840,16 +2837,20 @@ public class PdfParser {
 			return rendered.toString();
 		}
 		
-		private void drawChar(char ch, boolean isSpace, boolean implicitSpace, String rCh) {
-//			float spacing = (isSpace ? this.pwrWordSpacing : (implicitSpace ? 0 : this.pwrCharSpacing));
-			float spacing = (implicitSpace ? 0 : this.pwrCharSpacing);
-			if (isSpace)
-				spacing += this.pwrWordSpacing;
-//			float width = ((((this.pwrFont.getCharWidth(ch) * this.pwrFontSize) + (spacing * 1000)) * this.pwrHorizontalScaling) / (1000 * 100));
+		private void drawChar(char ch, boolean fontIndicatesSpace, boolean implicitSpaceComing, String rCh) {
+			float spacing = (implicitSpaceComing ? 0 : (this.pwrCharSpacing + (fontIndicatesSpace ? this.pwrWordSpacing : 0)));
 			float width = (((((this.pwrFont.hasImplicitSpaces ? this.pwrFont.getMeasuredCharWidth(ch) : this.pwrFont.getCharWidth(ch)) * this.pwrFontSize) + (spacing * 1000)) * this.pwrHorizontalScaling) / (1000 * 100));
 			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
-				System.out.println("Drawing char '" + ch + "' (" + ((int) ch) + ", " + Integer.toString(((int) ch), 16).toUpperCase() + ") ==> '" + rCh + "' (" + ((int) rCh.charAt(0)) + ", '" + dissolveLigature(rCh) + "')");
+				System.out.println("Drawing char '" + ch + "' (" + ((int) ch) + ", " + Integer.toString(((int) ch), 16).toUpperCase() + ") ==> '" + rCh + "' (" + ((int) rCh.charAt(0)) + ", '" + dissolveLigature(rCh) + "') with width " + width);
 			updateMatrix(this.lineMatrix, width, 0);
+			if (DEBUG_RENDER_PAGE_CONTENT && (this.words != null))
+				this.printPosition();
+		}
+		
+		private void printPosition() {
+//			float[] start = transform(0, 0, 1, this.lineMatrix);
+//			start = this.applyTransformationMatrices(start);
+//			System.out.println("NOW AT " + Arrays.toString(start));
 		}
 		
 		private void startLine() {
@@ -2857,7 +2858,6 @@ public class PdfParser {
 				return;
 			if (this.pwrFont == null)
 				return;
-//			this.top = transform(0, (this.pwrFont.capHeight * this.pwrFontSize), 1, this.lineMatrix);
 			this.top = transform(0, (Math.min(this.pwrFont.capHeight, this.pwrFont.ascent) * this.pwrFontSize), 1, this.lineMatrix);
 			this.top = this.applyTransformationMatrices(this.top);
 			this.bottom = transform(0, (this.pwrFont.descent * this.pwrFontSize), 1, this.lineMatrix);

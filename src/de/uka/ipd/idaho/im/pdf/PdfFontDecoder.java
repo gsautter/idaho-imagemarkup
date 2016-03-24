@@ -857,7 +857,7 @@ public class PdfFontDecoder {
 				else bsCh = new Character(bestCims[c].match.ch);
 				
 				//	correct char mapping specified in differences array
-				pFont.mapDifference(chc, bsCh, null);
+//				pFont.mapDifference(chc, bsCh, null);
 				pFont.mapUnicode(chc, StringUtils.getNormalForm(bsCh.charValue()));
 				
 				//	map char named by SID to what image actually displays
@@ -879,7 +879,7 @@ public class PdfFontDecoder {
 				else bsCh = new Character(bestCims[c].match.ch);
 				
 				//	correct char mapping specified in differences array
-				pFont.mapDifference(chc, bsCh, null);
+//				pFont.mapDifference(chc, bsCh, null);
 				pFont.mapUnicode(chc, StringUtils.getNormalForm(bsCh.charValue()));
 				if (DEBUG_TYPE1C_LOADING) System.out.println(" ==> mapped (2) " + chc + " to " + bsCh);
 				
@@ -3478,7 +3478,7 @@ FontName12 38//SID–, FD FontName
 				if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" ==> mapped (1) " + glyph.cid + " to " + bsCh);
 				
 				//	correct char mapping specified in differences array
-				pFont.mapDifference(new Integer(glyph.cid), bsCh, null);
+//				pFont.mapDifference(new Integer(glyph.cid), bsCh, null);
 				pFont.mapUnicode(new Integer(glyph.cid), StringUtils.getNormalForm(bsCh.charValue()));
 				
 				//	store char image
@@ -3502,7 +3502,7 @@ FontName12 38//SID–, FD FontName
 				if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" ==> mapped (2) " + glyph.cid + " to " + bsCh);
 				
 				//	correct char mapping specified in differences array
-				pFont.mapDifference(new Integer(glyph.cid), bsCh, null);
+//				pFont.mapDifference(new Integer(glyph.cid), bsCh, null);
 				pFont.mapUnicode(new Integer(glyph.cid), StringUtils.getNormalForm(bsCh.charValue()));
 				
 				//	store char image
