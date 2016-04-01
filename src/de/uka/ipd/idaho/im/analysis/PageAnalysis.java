@@ -340,9 +340,9 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 				else if (indentationAbove.equals(indentationBelow))
 					indentation = indentationAbove;
 				else {
-					String blockIdAbove = paragraphsToBlocks.getProperty(paragraphs[p-1].bounds.toString());
-					String blockId = paragraphsToBlocks.getProperty(paragraphs[p].bounds.toString());
-					String blockIdBelow = paragraphsToBlocks.getProperty(paragraphs[p+1].bounds.toString());
+					String blockIdAbove = paragraphsToBlocks.getProperty(paragraphs[p-1].bounds.toString(), "ABOVE");
+					String blockId = paragraphsToBlocks.getProperty(paragraphs[p].bounds.toString(), "CURRENT");
+					String blockIdBelow = paragraphsToBlocks.getProperty(paragraphs[p+1].bounds.toString(), "BELOW");
 					if (blockIdAbove.equals(blockIdBelow))
 						indentation = ((exdentCount < plainCount) ? INDENTATION_NONE : INDENTATION_EXDENT);
 					else if (blockId.equals(blockIdAbove))
@@ -366,9 +366,9 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 				else if (textOrientationAbove.equals(textOrientationBelow))
 					textOrientation = textOrientationAbove;
 				else {
-					String blockIdAbove = paragraphsToBlocks.getProperty(paragraphs[p-1].bounds.toString());
-					String blockId = paragraphsToBlocks.getProperty(paragraphs[p].bounds.toString());
-					String blockIdBelow = paragraphsToBlocks.getProperty(paragraphs[p+1].bounds.toString());
+					String blockIdAbove = paragraphsToBlocks.getProperty(paragraphs[p-1].bounds.toString(), "ABOVE");
+					String blockId = paragraphsToBlocks.getProperty(paragraphs[p].bounds.toString(), "CURRENT");
+					String blockIdBelow = paragraphsToBlocks.getProperty(paragraphs[p+1].bounds.toString(), "BELOW");
 					if (blockIdAbove.equals(blockIdBelow))
 						textOrientation = predominantTextOrientation;
 					else if (blockId.equals(blockIdAbove))

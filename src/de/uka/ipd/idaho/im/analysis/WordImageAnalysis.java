@@ -190,6 +190,10 @@ public class WordImageAnalysis {
 			weightRelationWordCount++;
 		}
 		
+		//	anything to work with?
+		if (maxFontSize < minFontSize)
+			return;
+		
 		//	average out image font size weights and stem widths
 		float[] fontSizeWeightRelations = new float[maxFontSize - minFontSize + 1];
 		Arrays.fill(fontSizeWeightRelations, -1);

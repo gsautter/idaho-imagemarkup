@@ -366,7 +366,7 @@ public class ImDocumentIO implements ImagingConstants {
 			if (entry == null)
 				throw new FileNotFoundException(entryName);
 			if (this.entryDataCacheFolder == null) {
-				final byte[] entryData = ((byte[]) this.entryDataCache.get(entryName));
+				byte[] entryData = ((byte[]) this.entryDataCache.get(entryName));
 				if (entryData == null)
 					throw new FileNotFoundException(entryName);
 				else return new ByteArrayInputStream(entryData);

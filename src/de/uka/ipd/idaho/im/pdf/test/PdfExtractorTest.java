@@ -463,11 +463,20 @@ public class PdfExtractorTest implements ImagingConstants {
 		//	another trouble maker
 //		pdfName = "Zootaxa/zt04093p363.pdf"; // TODOne block flipping trouble in pages 3-7 ==> 3 OK, 4 OK, 5 trouble, 6 OK, 7 OK
 //		pdfName = "Zootaxa/zt04093p363.pdf"; // TODOne block flipping trouble in page 5 ==> removing out-of-page words now
-		pdfName = "Zootaxa/zt04093p363.pdf"; // TODOne spacing problem in last line of table on flipped pages 4 & 5 ==> font indicated char decides on word spacing, not actually rendered glyph
+//		pdfName = "Zootaxa/zt04093p363.pdf"; // TODOne spacing problem in last line of table on flipped pages 4 & 5 ==> font indicated char decides on word spacing, not actually rendered glyph
+		
+		//	TODO first PhytoTaxa
+		pdfName = "pt00020p025.pdf";
+		
+		//	different embedded OCR options in ABBYY
+//		pdfName = "ABBYY_Output_Options/seg-001_2013_86_3-4_a_007_d_text_and_pictures_only.pdf"; // loads OK as born-digital, but TODOne figure images come up gray in page images (page 5) ==> IcePDF just cannot handle JPX decode ==> TODO try and modify image format after decoding via ImageMagick
+//		pdfName = "ABBYY_Output_Options/seg-001_2013_86_3-4_a_007_d_text_over_image.pdf"; // comes up without words, even though words are extracted ==> TODOne words intended to be rendered, page image destroyed (cleared of word images)
+//		pdfName = "ABBYY_Output_Options/seg-001_2013_86_3-4_a_007_d_text_under_image.pdf"; // comes up without words, even though words are extracted ==> TODOne find out where wrds get lost ==> words OK now
+		pdfName = "ABBYY_Output_Options/seg-001_2013_86_3-4_a_007_d_text_under_image.pdf"; // pages with figures come up without word images (e.g. page 5) ==> TODOne find out where wrods get lost ==> refined page image selection and overpaint filtering
 		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
-		aimAtPage = -1; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
+		aimAtPage = 2; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
 		//	TODO try pages 12, 13, 16, 17, and 21 of Prasse 1979
 		System.out.println("Aiming at page " + aimAtPage);
 		final PdfExtractor pdfExtractor = new PdfExtractor(pdfDataPath, pis, true);
@@ -522,11 +531,11 @@ public class PdfExtractorTest implements ImagingConstants {
 			pdm.setLocationRelativeTo(null);
 			pdm.popUp(false);
 			
-//			doc = pdfExtractor.loadImagePdf(doc, pdfDoc, bytes, true, true, scaleFactor, null);
+			doc = pdfExtractor.loadImagePdf(doc, pdfDoc, bytes, true, true, scaleFactor, null);
 //			doc = pdfExtractor.loadImagePdfBlocks(doc, pdfDoc, bytes, scaleFactor, null);
 //			doc = pdfExtractor.loadImagePdfPages(doc, pdfDoc, bytes, true, scaleFactor, null);
 //			doc = pdfExtractor.loadTextPdf(doc, pdfDoc, bytes, pdm);
-			doc = pdfExtractor.loadGenericPdf(doc, pdfDoc, bytes, scaleFactor, null);
+//			doc = pdfExtractor.loadGenericPdf(doc, pdfDoc, bytes, scaleFactor, null);
 			
 //			ProcessStatusMonitor psm = new ProcessStatusMonitor() {
 //				public void setStep(String step) {

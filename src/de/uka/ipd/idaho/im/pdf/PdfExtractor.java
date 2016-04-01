@@ -433,7 +433,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			//	assess overlap of words with figures
 			for (int w = 0; w < pData[p].words.length; w++) {
 				for (int f = 0; f < pData[p].figures.length; f++)
-					if (overlapsConsiderably(pData[p].words[w].bounds, pData[p].figures[f].bounds)) {
+					if (liesMostlyIn(pData[p].words[w].bounds, pData[p].figures[f].bounds)) {
 						wordInFigureCount++;
 						break;
 					}
@@ -3928,7 +3928,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		if (pData != null) {
 			final ProgressMonitor cpm = new CascadingProgressMonitor(spm);
 			
-			/* no need for word merging here, as good OCR keeps word together
+			/* no need for word merging here, as good OCR keeps words together
 			 * pretty well, as opposed to obfuscated born-digital PDFs, so
 			 * merging would do more harm than good */
 			
@@ -4109,23 +4109,15 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					}
 				}
 				
-				//	obtain higher level page structure
-				AnalysisImage api = Imaging.wrapImage(pi.image, null);
-				Region pageRootRegion = PageImageAnalysis.getPageRegion(api, pi.currentDpi, minColumnMargin, minBlockMargin, columnAreas, false, spm);
-				addRegionBlocks(pages[p], pageRootRegion, pi.currentDpi, spm);
-				if (pageRegionCache != null)
-					synchronized (pageRegionCache) {
-						pageRegionCache.put(pages[p], pageRootRegion);
-					}
-				
 				//	add embedded OCR if (a) asked to do so and (b) available
 				if ((pData != null) && (pData[pages[p].pageId] != null) && (pData[pages[p].pageId].words != null) && (pData[pages[p].pageId].words.length != 0)) {
 					
 					//	compute word scale factor
-					float magnification = (pData[pages[p].pageId].rawPageImageDpi / defaultDpi);
+					float magnification = (((pData[pages[p].pageId].rawPageImageDpi < 0) ? pi.originalDpi : pData[pages[p].pageId].rawPageImageDpi) / defaultDpi);
 					
 					//	add words to page
 					spm.setInfo("Adding embedded OCR words to page " + p + " of " + pData.length);
+					ArrayList pWords = new ArrayList();
 					for (int w = 0; w < pData[pages[p].pageId].words.length; w++) {
 						
 						//	make sure word has some minimum width
@@ -4137,12 +4129,16 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						if (((p % 2) == 1) && (pData[pages[p].pageId].rightPageOffset != 0))
 							wb = new BoundingBox((wb.left - pData[pages[p].pageId].rightPageOffset), (wb.right - pData[pages[p].pageId].rightPageOffset), wb.top, wb.bottom);
 						
+						//	TODO shrink word bounds to actual word, so OCR overlay rendering stays in bounds
+						
 						//	add word to page
 						ImWord word = new ImWord(pages[p], wb, pData[pages[p].pageId].words[w].str);
+						spm.setInfo(" - " + word.getString() + " @ " + word.bounds.toString() + " / " + pData[pages[p].pageId].words[w].bounds);
+						pWords.add(word);
 						
-						//	set layout attributes
-						if ((pData[pages[p].pageId].words[w].font != null) && (pData[pages[p].pageId].words[w].font.name != null))
-							word.setAttribute(FONT_NAME_ATTRIBUTE, pData[pages[p].pageId].words[w].font.name);
+						//	set layout attributes (no need for font tracking in embedded OCR, should rarely use custom glyphs, let alone obfuscation)
+//						if ((pData[pages[p].pageId].words[w].font != null) && (pData[pages[p].pageId].words[w].font.name != null))
+//							word.setAttribute(FONT_NAME_ATTRIBUTE, pData[pages[p].pageId].words[w].font.name);
 						if (pData[pages[p].pageId].words[w].fontSize != -1)
 							word.setAttribute(FONT_SIZE_ATTRIBUTE, ("" + pData[pages[p].pageId].words[w].fontSize));
 						if (pData[pages[p].pageId].words[w].bold)
@@ -4150,20 +4146,52 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						if (pData[pages[p].pageId].words[w].italics)
 							word.setAttribute(ITALICS_ATTRIBUTE);
 						
-						//	add font char ID string
-						StringBuffer charCodesHex = new StringBuffer();
-						for (int c = 0; c < pData[pages[p].pageId].words[w].charCodes.length(); c++) {
-							String charCodeHex = Integer.toString((((int) pData[pages[p].pageId].words[w].charCodes.charAt(c)) & 255), 16).toUpperCase();
-							if (charCodeHex.length() < 2)
-								charCodesHex.append("0");
-							charCodesHex.append(charCodeHex);
-						}
-						word.setAttribute(ImFont.CHARACTER_CODE_STRING_ATTRIBUTE, charCodesHex.toString());
+						//	TODO add baseline attribute, so OCR overlay rendering stays in bounds
+//						
+//						//	add font char ID string
+//						StringBuffer charCodesHex = new StringBuffer();
+//						for (int c = 0; c < pData[pages[p].pageId].words[w].charCodes.length(); c++) {
+//							String charCodeHex = Integer.toString((((int) pData[pages[p].pageId].words[w].charCodes.charAt(c)) & 255), 16).toUpperCase();
+//							if (charCodeHex.length() < 2)
+//								charCodesHex.append("0");
+//							charCodesHex.append(charCodeHex);
+//						}
+//						word.setAttribute(ImFont.CHARACTER_CODE_STRING_ATTRIBUTE, charCodesHex.toString());
 					}
+					
+					//	wrap page image for analysis
+					AnalysisImage api = Imaging.wrapImage(pi.image, null);
+					
+					//	draw embedded word on page image (or into brightness array) to make sure they are observed in blocking
+					byte[][] apiBrightness = api.getBrightness();
+					for (int w = 0; w < pWords.size(); w++) {
+						ImWord word = ((ImWord) pWords.get(w));
+						for (int c = word.bounds.left; c < word.bounds.right; c++) {
+							for (int r = word.bounds.top; r < word.bounds.bottom; r++)
+								apiBrightness[c][r] = 0;
+						}
+					}
+					
+					//	obtain higher level page structure
+					Region pageRootRegion = PageImageAnalysis.getPageRegion(api, pi.currentDpi, minColumnMargin, minBlockMargin, columnAreas, false, spm);
+					addRegionBlocks(pages[p], pageRootRegion, pi.currentDpi, spm);
+					if (pageRegionCache != null)
+						synchronized (pageRegionCache) {
+							pageRegionCache.put(pages[p], pageRootRegion);
+						}
 				}
 				
 				//	do OCR if (a) none embedded or (b) asked to do so
 				else {
+					
+					//	obtain higher level page structure TODO use embedded OCR words if available (makes sure structure covers words)
+					AnalysisImage api = Imaging.wrapImage(pi.image, null);
+					Region pageRootRegion = PageImageAnalysis.getPageRegion(api, pi.currentDpi, minColumnMargin, minBlockMargin, columnAreas, false, spm);
+					addRegionBlocks(pages[p], pageRootRegion, pi.currentDpi, spm);
+					if (pageRegionCache != null)
+						synchronized (pageRegionCache) {
+							pageRegionCache.put(pages[p], pageRootRegion);
+						}
 					
 					//	do OCR (might have to try multiple times if for some reason OCR instance pool is smaller than number of parallel threads trying to use it)
 					spm.setInfo(" - doing OCR");
@@ -4494,6 +4522,9 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		//	prepare working in parallel
 		ParallelFor pf;
 		
+		//	display figures if testing
+		final ImageDisplayDialog idd = ((DEBUG_EXTRACT_FIGURES && (PdfExtractorTest.aimAtPage >= 0)) ? new ImageDisplayDialog("Images in Page " + PdfExtractorTest.aimAtPage) : null);
+		
 		//	extract page objects
 		spm.setStep("Extracting page figures");
 		spm.setBaseProgress(5);
@@ -4603,6 +4634,12 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				//	store figure for selection and further processing
 				pImageParts.add(new PImagePart(pageId, pFigure.name, pFigure.bounds, pFigure.rotation, pFigureData, pFigureDpi, pFigureBounds));
 				
+				//	show image if testing
+				if (idd != null) {
+					BufferedImage rPip = getPageImagePart(new PImagePart(pageId, pFigure.name, pFigure.bounds, pFigure.rotation, pFigureData, pFigureDpi, pFigureBounds), objects, pdfDoc, pdfDoc.getPageTree().getPage(PdfExtractorTest.aimAtPage, ""), spm);
+					idd.addImage(rPip, pFigure.name);
+				}
+				
 				//	get mask images as well if given (simply recurse)
 				if (pFigureData.params.containsKey("Mask")) {
 					String pMaskFigureName = (pFigure.name + "_mask");
@@ -4623,6 +4660,13 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		
 		//	check errors
 		this.checkException(pf);
+		
+		//	display figures if testing
+		if (idd != null) {
+			idd.setSize(600, 800);
+			idd.setLocationRelativeTo(null);
+			idd.setVisible(true);
+		}
 		
 		//	assess result
 		int minPageImages = Integer.MAX_VALUE;
@@ -5072,7 +5116,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			PImagePart pip = ((PImagePart) pageImageParts.get(p));
 			for (int cp = (p+1); cp < pageImageParts.size(); cp++) {
 				PImagePart cpip = ((PImagePart) pageImageParts.get(cp));
-				if (overlapsConsiderably(pip.pdfBounds, cpip.pdfBounds)) {
+				if (overpaints(cpip.pdfBounds, pip.pdfBounds)) {
 					pageImageParts.remove(p--);
 					spm.setInfo("Excluded page image part for being overpainted by " + cpip.name + "@" + cpip.pdfBounds + ": " + pip.name + "@" + pip.pdfBounds);
 					break;
@@ -5127,15 +5171,27 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		return pageImage;
 	}
 	
-	private static final boolean overlapsConsiderably(Rectangle2D rect1, Rectangle2D rect2) {
-		if (!rect1.intersects(rect2))
+	private static final boolean overpaints(Rectangle2D overpainting, Rectangle2D overpainted) {
+		if (!overpainted.intersects(overpainting))
 			return false;
-		if (rect1.contains(rect2) || rect2.contains(rect1))
+		if (overpainting.contains(overpainted))
 			return true;
 		Rectangle2D uRect = new Rectangle2D.Float();
-		Rectangle2D.union(rect1, rect2, uRect);
+		Rectangle2D.union(overpainted, overpainting, uRect);
 		Rectangle2D iRect = new Rectangle2D.Float();
-		Rectangle2D.intersect(rect1, rect2, iRect);
+		Rectangle2D.intersect(overpainted, overpainting, iRect);
+		return ((getSize(iRect) * 20) > (getSize(uRect) * 19));
+	}
+	
+	private static final boolean liesMostlyIn(Rectangle2D inner, Rectangle2D outer) {
+		if (!inner.intersects(outer))
+			return false;
+		if (outer.contains(inner))
+			return true;
+		Rectangle2D uRect = new Rectangle2D.Float();
+		Rectangle2D.union(inner, outer, uRect);
+		Rectangle2D iRect = new Rectangle2D.Float();
+		Rectangle2D.intersect(inner, outer, iRect);
 		return ((getSize(iRect) * 10) > (getSize(uRect) * 9));
 	}
 	
