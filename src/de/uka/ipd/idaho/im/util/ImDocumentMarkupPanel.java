@@ -43,6 +43,7 @@ import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Point;
 import java.awt.Rectangle;
+import java.awt.RenderingHints;
 import java.awt.Toolkit;
 import java.awt.Window;
 import java.awt.event.ActionEvent;
@@ -612,7 +613,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				}
 			}
 			else if ((object instanceof ImPage) && ImPage.PAGE_IMAGE_ATTRIBUTE.equals(attributeName)) {
-				pagePanels[((ImPage) object).pageId].pageImage = null;
+//				pagePanels[((ImPage) object).pageId].pageImage = null;
 //				pagePanels[((ImPage) object).pageId].backgroundImage = null;
 				pagePanels[((ImPage) object).pageId].backgroundObjects = null;
 //				pagePanels[((ImPage) object).pageId].textStringImage = null;
@@ -2799,7 +2800,7 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 		
 		long docModCount = 0; // changes to the document proper (all we need is the listener)
 		
-		private PageImage pageImage;
+//		private PageImage pageImage;
 		private int pageImageDpi = -1;
 		
 		private int pageWidth;
@@ -2814,18 +2815,18 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 			this.pageHeight = pageHeight;
 			this.pageMarginLeft = ((this.pageWidth - (this.page.bounds.right - this.page.bounds.left)) / 2);
 			this.pageMarginTop = ((this.pageHeight - (this.page.bounds.bottom - this.page.bounds.top)) / 2);
-			Object piDpi = this.page.getAttribute(IMAGE_DPI_ATTRIBUTE);
-			if (piDpi == null) {
+//			Object piDpi = this.page.getAttribute(IMAGE_DPI_ATTRIBUTE);
+//			if (piDpi == null) {
 				this.pageImageDpi = this.page.getImageDPI();
 				System.out.println("Got page image resolution from page image: " + this.pageImageDpi);
-			}
-			else try {
-				this.pageImageDpi = Integer.parseInt(piDpi.toString());
-				System.out.println("Got page image resolution from page attribute: " + this.pageImageDpi);
-			}
-			catch (NumberFormatException nfe) {
-				nfe.printStackTrace(System.out);
-			}
+//			}
+//			else try {
+//				this.pageImageDpi = Integer.parseInt(piDpi.toString());
+//				System.out.println("Got page image resolution from page attribute: " + this.pageImageDpi);
+//			}
+//			catch (NumberFormatException nfe) {
+//				nfe.printStackTrace(System.out);
+//			}
 		}
 		
 		int getLeftOffset() {
@@ -2836,46 +2837,91 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 			return (fixPageMargin + Math.round(((float) (this.pageMarginTop * renderingDpi)) / this.pageImageDpi));
 		}
 		
-		private PageImage getPageImage() {
-			if (this.pageImage == null) {
-				PageImage pi = this.page.getPageImage();
-				
-//				BufferedImage bi = new BufferedImage(pi.image.getWidth(), pi.image.getHeight(), BufferedImage.TYPE_INT_ARGB);
-//				Graphics gr = bi.createGraphics();
-//				gr.drawImage(pi.image, 0, 0, null);
-//				Color col;
-//				float[] hsb = null;
-//				for (int x = 0; x < pi.image.getWidth(); x++) {
-//					for (int y = 0; y < pi.image.getHeight(); y++) {
-//						col = new Color(bi.getRGB(x, y));
-//						hsb = Color.RGBtoHSB(col.getRed(), col.getGreen(), col.getBlue(), hsb);
-//						if (0.99f < hsb[2])
-//							bi.setRGB(x, y, transparentWhite);
-//					}
-//				}
+//		private PageImage getPageImage() {
+//			if (this.pageImage == null) {
+//				PageImage pi = this.page.getPageImage();
 //				
-				BufferedImage bi = new BufferedImage(pi.image.getWidth(), pi.image.getHeight(), BufferedImage.TYPE_BYTE_INDEXED, pageImageColorModel);
-				WritableRaster wr = bi.getRaster();
+//				BufferedImage bi = new BufferedImage(pi.image.getWidth(), pi.image.getHeight(), BufferedImage.TYPE_BYTE_INDEXED, pageImageColorModel);
+//				WritableRaster wr = bi.getRaster();
+//				int rgb, r, g, b;
+//				int[] c = new int[1];
+//				for (int x = 0; x < pi.image.getWidth(); x++)
+//					for (int y = 0; y < pi.image.getHeight(); y++) {
+//						rgb = pi.image.getRGB(x, y);
+//						r = ((rgb & 0x00ff0000) >> 16);
+//						g = ((rgb & 0x0000ff00) >> 8);
+//						b = ((rgb & 0x000000ff) >> 0);
+////						if ((r > 252) || (g > 252) || (b > 252))
+////							c[0] = 255;
+////						else c[0] = ((r + g + b + 1) / 3);
+//						//	based on "C = 0.2126 R + 0.7152 G + 0.0722 B" from http://en.wikipedia.org/wiki/Grayscale#Converting_color_to_grayscale
+//						c[0] = (((21 * r) + (72 * g) + (7 * b)) / 100);
+//						if (c[0] > 252)
+//							c[0] = 255;
+//						wr.setPixel(x, y, c);
+//					}
+//				
+//				this.pageImage = new PageImage(bi, pi.originalWidth, pi.originalHeight, pi.originalDpi, pi.currentDpi, pi.leftEdge, pi.rightEdge, pi.topEdge, pi.bottomEdge, pi.source);
+//				this.pageImageDpi = this.pageImage.currentDpi;
+//			}
+//			return this.pageImage;
+//		}
+		
+		private BufferedImage getScaledPageImage() {
+			if ((this.scaledPageImage == null) || (this.scaledPageImageDpi != renderingDpi)) {
+				PageImage pi = this.page.getImage();
+				BufferedImage bi;
+				
+				//	no need for scaling, we're showing at original resolution
+				if (pi.currentDpi == renderingDpi)
+					bi = pi.image;
+				
+				//	scale original page image via on-board facilities
+				else {
+					int sbiWidth = ((int) Math.ceil(((float) (pi.image.getWidth() * renderingDpi)) / pi.currentDpi));
+					int sbiHeight = ((int) Math.ceil(((float) (pi.image.getHeight() * renderingDpi)) / pi.currentDpi));
+					BufferedImage sbi = new BufferedImage(sbiWidth, sbiHeight, BufferedImage.TYPE_INT_ARGB);
+					Graphics2D sbiGr = sbi.createGraphics();
+					sbiGr.setColor(Color.WHITE);
+					sbiGr.fillRect(0, 0, sbiWidth, sbiHeight);
+					if (renderingDpi < pi.currentDpi)
+						sbiGr.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+					else sbiGr.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+					sbiGr.drawImage(pi.image, 0, 0, sbiWidth, sbiHeight, null);
+					bi = sbi;
+				}
+				
+				//	discretize (possibly scaled) page image
+				BufferedImage pbi = new BufferedImage(bi.getWidth(), bi.getHeight(), BufferedImage.TYPE_BYTE_INDEXED, pageImageColorModel);
+				WritableRaster pwr = pbi.getRaster();
 				int rgb, r, g, b;
 				int[] c = new int[1];
-				for (int x = 0; x < pi.image.getWidth(); x++) {
-					for (int y = 0; y < pi.image.getHeight(); y++) {
-						rgb = pi.image.getRGB(x, y);
+				for (int x = 0; x < bi.getWidth(); x++)
+					for (int y = 0; y < bi.getHeight(); y++) {
+						rgb = bi.getRGB(x, y);
 						r = ((rgb & 0x00ff0000) >> 16);
 						g = ((rgb & 0x0000ff00) >> 8);
 						b = ((rgb & 0x000000ff) >> 0);
-						if ((r > 252) || (g > 252) || (b > 252))
+						//	based on "C = 0.2126 R + 0.7152 G + 0.0722 B" from http://en.wikipedia.org/wiki/Grayscale#Converting_color_to_grayscale
+						c[0] = (((21 * r) + (72 * g) + (7 * b)) / 100);
+						if (c[0] > 252)
 							c[0] = 255;
-						else c[0] = ((r + g + b + 1) / 3);
-						wr.setPixel(x, y, c);
+						pwr.setPixel(x, y, c);
 					}
-				}
 				
-				this.pageImage = new PageImage(bi, pi.originalWidth, pi.originalHeight, pi.originalDpi, pi.currentDpi, pi.leftEdge, pi.rightEdge, pi.topEdge, pi.bottomEdge, pi.source);
-				this.pageImageDpi = this.pageImage.currentDpi;
+				//	activate scaled image
+				this.scaledPageImage = pbi;
+				this.scaledPageImageDpi = renderingDpi;
+				
+				//	make sure to clean up (this way, excess memory usage is restricted to one page at a time)
+				pi = null;
+				bi = null;
+				System.gc();
 			}
-			return this.pageImage;
+			return this.scaledPageImage;
 		}
+		private BufferedImage scaledPageImage = null;
+		private int scaledPageImageDpi = -1;
 		
 		/* (non-Javadoc)
 		 * @see javax.swing.JComponent#getPreferredSize()
@@ -3446,7 +3492,7 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 			graphics.setColor(preBackgroundColor);
 			
 			//	get page image and compute zoom
-			PageImage pi = this.getPageImage();
+//			PageImage pi = this.getPageImage();
 			float zoom = (((float) renderingDpi) / this.pageImageDpi);
 			
 			//	highlight word selection (if any)
@@ -3513,7 +3559,9 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 				}
 			
 			//	paint image only now, putting text on top of highlights (zoomed to size)
-			graphics.drawImage(pi.image, this.getLeftOffset(), this.getTopOffset(), Math.round(zoom * pi.image.getWidth()), Math.round(zoom * pi.image.getHeight()), this);
+//			graphics.drawImage(pi.image, this.getLeftOffset(), this.getTopOffset(), Math.round(zoom * pi.image.getWidth()), Math.round(zoom * pi.image.getHeight()), this);
+			BufferedImage spi = this.getScaledPageImage();
+			graphics.drawImage(spi, this.getLeftOffset(), this.getTopOffset(), spi.getWidth(), spi.getHeight(), this);
 			
 			//	draw text strings on top if activated
 			if (areTextStringsPainted()) {
