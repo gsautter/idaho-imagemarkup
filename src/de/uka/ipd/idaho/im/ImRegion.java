@@ -53,8 +53,11 @@ public class ImRegion extends ImLayoutObject {
 	/** the region type for marking table cells, namely 'tableCell', intentionally distinct from HTML counterpart */
 	public static final String TABLE_CELL_TYPE = "tableCell";
 	
-	/** the region type for marking images, diagrams, maps, etc., namely 'image' */
+	/** the region type for marking bitmap based images, diagrams, maps, etc., namely 'image' */
 	public static final String IMAGE_TYPE = "image";
+	
+	/** the region type for marking vector based drawings and diagrams, namely 'graphics' */
+	public static final String GRAPHICS_TYPE = "graphics";
 	
 	private ImPage page;
 	

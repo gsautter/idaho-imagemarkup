@@ -28,12 +28,19 @@
 package de.uka.ipd.idaho.im;
 
 import java.awt.ComponentOrientation;
+import java.awt.Font;
+import java.awt.Graphics2D;
+import java.awt.font.FontRenderContext;
+import java.awt.font.LineMetrics;
+import java.awt.font.TextLayout;
+import java.awt.geom.AffineTransform;
 import java.util.Comparator;
 
 import de.uka.ipd.idaho.gamta.Gamta;
 import de.uka.ipd.idaho.gamta.util.constants.LiteratureConstants;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
+import de.uka.ipd.idaho.im.pdf.PdfParser.PWord;
 
 /**
  * A single word in an image markup document, i.e., a bounding box enclosing a
@@ -313,8 +320,20 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	/** the text stream type indicating a text stream is a table */
 	public static final String TEXT_STREAM_TYPE_TABLE = "table";
 	
-	/** the text stream type indicating a text stream is note associated with a table */
+	/** the text stream type indicating a text stream is a note associated with a table */
 	public static final String TEXT_STREAM_TYPE_TABLE_NOTE = "tableNote";
+	
+	/** the text stream type indicating a text stream is a label in a bitmap figure or vector graphics */
+	public static final String TEXT_STREAM_TYPE_LABEL = "label";
+	
+	/** the text direction indicating a word written left to right */
+	public static final String TEXT_DIRECTION_LEFT_RIGHT = "lr";
+	
+	/** the text direction indicating a word written bottom up */
+	public static final String TEXT_DIRECTION_BOTTOM_UP = "bu";
+	
+	/** the text direction indicating a word written top down */
+	public static final String TEXT_DIRECTION_TOP_DOWN = "td";
 	
 	/** the text stream type indicating a text stream is a page title (i.e., a
 	 * page header or footer) */
@@ -344,6 +363,13 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	 * virtual attribute via the generic <code>getAttribute()</code> and
 	 * <code>setAttribute()</code> methods */
 	public static final String TEXT_STREAM_TYPE_ATTRIBUTE = "textStreamType";
+	
+	/** the name of the attribute holding the direction a word is written in,
+	 * namely 'textDirection'. Its associated values are 'lr' for left-to-right
+	 * (the default, can be omitted), 'bu' for bottom-up, or 'td' for top-down.
+	 * Other values may be added over time to represent non-Cartesian text
+	 * orientations. */
+	public static final String TEXT_DIRECTION_ATTRIBUTE = "textDirection";
 	
 	/** the horizontal center of the word's bounding box, to speed up inclusion tests */
 	public final int centerX;
@@ -936,4 +962,150 @@ public class ImWord extends ImRegion implements ImAnnotation {
 			str = str.substring(0, (str.length()-1));
 		return str;
 	}
+	
+	/**
+	 * Render a word via a <code>Graphics2D</code> object. The latter argument
+	 * has to be translated to the intended rendering position (bottom left
+	 * corner of word bounding box) before calling this method, and the intended
+	 * rendering color has to be set. However, no scaling is required, as this
+	 * method simply scales the argument word's font size (assumed to be the
+	 * standard 72 DPI) to the argument output DPI number. The rendering font
+	 * is derived from the argument font, based on the font style attributes of
+	 * the argument word.
+	 * @param word the word to render
+	 * @param font the font to derive the rendering font from
+	 * @param renderingDpi the rendering resolution
+	 * @param zoomToBounds adjust rendering position and font size to completely
+	 *            fill the bounding box of the argument word?
+	 * @param renderer the graphics object to use for rendering
+	 */
+	public static void render(ImWord word, Font font, int renderingDpi, boolean zoomToBounds, Graphics2D renderer) {
+		int wordDpi = word.getPage().getImageDPI();
+		BoundingBox renderingBounds = word.bounds.scale(((float) renderingDpi) / wordDpi);
+		
+		//	prepare font
+		Font preFont = renderer.getFont();
+		int wFontSize = -1;
+		try {
+			wFontSize = Integer.parseInt((String) word.getAttribute(ImWord.FONT_SIZE_ATTRIBUTE, "-1"));
+		} catch (NumberFormatException nfe) {}
+		if (wFontSize < 1)
+			wFontSize = 10;
+		int fontSize = Math.round(((float) (wFontSize * renderingDpi)) / 72); // need to scale font size, as we're not scaling renderer proper
+		int fontStyle = Font.PLAIN;
+		if (word.hasAttribute(ImWord.BOLD_ATTRIBUTE))
+			fontStyle = (fontStyle | Font.BOLD);
+		if (word.hasAttribute(ImWord.ITALICS_ATTRIBUTE))
+			fontStyle = (fontStyle | Font.ITALIC);
+		Font renderingFont = font.deriveFont(fontStyle, fontSize);
+		
+		//	get text orientation
+		Object to = word.getAttribute(ImWord.TEXT_DIRECTION_ATTRIBUTE, ImWord.TEXT_DIRECTION_LEFT_RIGHT);
+		
+		//	adjust font size and vertical position
+		int renderingWidth = ((TEXT_DIRECTION_BOTTOM_UP.equals(to) || TEXT_DIRECTION_TOP_DOWN.equals(to)) ? renderingBounds.getHeight() : renderingBounds.getWidth());
+		FontRenderContext fontRenderContext = renderer.getFontRenderContext();
+		LineMetrics lineMetrics = renderingFont.getLineMetrics(word.getString(), fontRenderContext);
+		TextLayout textLayout = new TextLayout(word.getString(), renderingFont, fontRenderContext);
+		if (zoomToBounds) {
+//			while (textLayout.getBounds().getHeight() < (renderingBounds.bottom - renderingBounds.top)) {
+			while (textLayout.getBounds().getHeight() < renderingWidth) {
+				fontSize++;
+				renderingFont = font.deriveFont(fontStyle, fontSize);
+				lineMetrics = renderingFont.getLineMetrics(word.getString(), fontRenderContext);
+				textLayout = new TextLayout(word.getString(), renderingFont, fontRenderContext);
+			}
+//			while ((renderingBounds.bottom - renderingBounds.top) < textLayout.getBounds().getHeight())  {
+			while (renderingWidth < textLayout.getBounds().getHeight())  {
+				fontSize--;
+				renderingFont = font.deriveFont(fontStyle, fontSize);
+				lineMetrics = renderingFont.getLineMetrics(word.getString(), fontRenderContext);
+				textLayout = new TextLayout(word.getString(), renderingFont, fontRenderContext);
+			}
+		}
+		renderer.setFont(renderingFont);
+		
+		//	make sure word fits horizontally
+		AffineTransform preAt = renderer.getTransform();
+//		double hScale = (((double) renderingBounds.getWidth()) / textLayout.getBounds().getWidth());
+//		float leftShift = ((float) -textLayout.getBounds().getMinX());
+//		if (hScale < 1)
+//			renderer.scale(hScale, 1);
+//		else leftShift += ((renderingBounds.getWidth() - textLayout.getBounds().getWidth()) / 2);
+		float leftShift = ((float) -textLayout.getBounds().getMinX());
+		double hScale = 1;
+		
+		//	rotate word if required
+		if (TEXT_DIRECTION_BOTTOM_UP.equals(to)) {
+			renderer.rotate((-Math.PI / 2), (((float) renderingBounds.getWidth()) / 2), -(((float) renderingBounds.getWidth()) / 2));
+			hScale = (((double) renderingBounds.getHeight()) / textLayout.getBounds().getWidth());
+			if (hScale < 1)
+				renderer.scale(1, hScale);
+			else leftShift += ((renderingBounds.getHeight() - textLayout.getBounds().getWidth()) / 2);
+		}
+		else if (TEXT_DIRECTION_TOP_DOWN.equals(to)) {
+			renderer.rotate((Math.PI / 2), (((float) renderingBounds.getHeight()) / 2), -(((float) renderingBounds.getHeight()) / 2));
+			hScale = (((double) renderingBounds.getHeight()) / textLayout.getBounds().getWidth());
+			if (hScale < 1)
+				renderer.scale(1, hScale);
+			else leftShift += ((renderingBounds.getHeight() - textLayout.getBounds().getWidth()) / 2);
+		}
+		else {
+			hScale = (((double) renderingBounds.getWidth()) / textLayout.getBounds().getWidth());
+			if (hScale < 1)
+				renderer.scale(hScale, 1);
+			else leftShift += ((renderingBounds.getWidth() - textLayout.getBounds().getWidth()) / 2);
+		}
+		
+		//	render word
+		try {
+//			renderer.drawGlyphVector(renderingFont.createGlyphVector(new FontRenderContext(preAt, true, true), word.getString()), leftShift, (renderingBounds.getHeight() - Math.round((zoomToBounds && !hasDescender(word)) ? 1 : lineMetrics.getDescent())));
+			renderer.drawGlyphVector(renderingFont.createGlyphVector(new FontRenderContext(preAt, true, true), word.getString()), leftShift, -Math.round((zoomToBounds && !hasDescender(word)) ? 1 : lineMetrics.getDescent()));
+		}
+		catch (InternalError ie) {
+			ie.printStackTrace(System.out);
+		}
+		
+		//	reset renderer
+		renderer.setTransform(preAt);
+		renderer.setFont(preFont);
+	}
+	
+	private static boolean hasDescender(ImWord word) {
+		String str = word.getString();
+		for (int c = 0; c < str.length(); c++) {
+			char ch = str.charAt(c);
+			if ("gjpqy".indexOf(ch) != -1)
+				return true;
+			else if (("f".indexOf(ch) != -1) && word.hasAttribute(ImWord.ITALICS_ATTRIBUTE))
+				return true;
+		}
+		return false;
+	}
+//	
+//	public static void main(String[] args) throws Exception {
+//		ImDocument doc = new ImDocument("test");
+//		ImPage page = new ImPage(doc, 0, new BoundingBox(0, 400, 0, 600)) {
+//			public int getImageDPI() {
+//				return 192;
+//			}
+//		};
+//		ImWord word = new ImWord(page, new BoundingBox(100, 200, 100, 130), "acewxz");
+////		ImWord word = new ImWord(page, new BoundingBox(100, 200, 100, 130), "bdhkl");
+////		ImWord word = new ImWord(page, new BoundingBox(100, 200, 100, 130), "bqdp");
+//		word.setAttribute(ImWord.FONT_SIZE_ATTRIBUTE, "12");
+////		word.setAttribute(ImWord.BOLD_ATTRIBUTE);
+////		word.setAttribute(ImWord.ITALICS_ATTRIBUTE);
+//		BufferedImage bi = new BufferedImage(200, 60, BufferedImage.TYPE_INT_ARGB);
+//		Graphics2D gr = bi.createGraphics();
+//		gr.setColor(Color.WHITE);
+//		gr.fillRect(0, 0, bi.getWidth(), bi.getHeight());
+//		gr.setColor(Color.BLACK);
+//		render(word, new Font("Serif", Font.PLAIN, 1), 384, false, gr);
+//		ImageDisplayDialog idd = new ImageDisplayDialog("the word");
+//		idd.addImage(bi, word.getString());
+//		idd.setSize(400, 400);
+//		idd.setLocationRelativeTo(null);
+//		idd.setVisible(true);
+//	}
 }

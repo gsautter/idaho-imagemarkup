@@ -27,7 +27,6 @@
  */
 package de.uka.ipd.idaho.im;
 
-import de.uka.ipd.idaho.gamta.Attributed;
 import de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
@@ -219,31 +218,31 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 		for (int n = 0; n < oldNames.length; n++)
 			this.removeAttribute(oldNames[n]);
 	}
-	
-	/* (non-Javadoc)
-	 * @see de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed#copyAttributes(de.uka.ipd.idaho.gamta.Attributed)
-	 */
-	public void copyAttributes(Attributed source) {
-		if (source == null)
-			return;
-		if (this.getPage() == null) {
-			super.copyAttributes(source);
-			return;
-		}
-		String[] names = source.getAttributeNames();
-		for (int n = 0; n < names.length; n++)
-			this.setAttribute(names[n], source.getAttribute(names[n]));
-	}
-	
-	/* (non-Javadoc)
-	 * @see de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed#removeAttribute(java.lang.String)
-	 */
-	public Object removeAttribute(String name) {
-		Object oldValue = super.removeAttribute(name);
-		if ((this.getPage() != null) && (oldValue != null))
-			this.doc.notifyAttributeChanged(this, name, oldValue);
-		return oldValue;
-	}
+//	
+//	/* (non-Javadoc)
+//	 * @see de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed#copyAttributes(de.uka.ipd.idaho.gamta.Attributed)
+//	 */
+//	public void copyAttributes(Attributed source) {
+//		if (source == null)
+//			return;
+//		if (this.getPage() == null) {
+//			super.copyAttributes(source);
+//			return;
+//		}
+//		String[] names = source.getAttributeNames();
+//		for (int n = 0; n < names.length; n++)
+//			this.setAttribute(names[n], source.getAttribute(names[n]));
+//	}
+//	
+//	/* (non-Javadoc)
+//	 * @see de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed#removeAttribute(java.lang.String)
+//	 */
+//	public Object removeAttribute(String name) {
+//		Object oldValue = super.removeAttribute(name);
+//		if ((this.getPage() != null) && (oldValue != null))
+//			this.doc.notifyAttributeChanged(this, name, oldValue);
+//		return oldValue;
+//	}
 	
 	/**
 	 * Produce the aggregate bounding box of multiple layout objects, i.e., the

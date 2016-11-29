@@ -121,8 +121,11 @@ public class ImPage extends ImRegion {
 		}
 		void clear() {
 			for (int c = 0; c < this.wirs.length; c++) {
-				for (int r = 0; r < this.wirs[c].length; r++)
-					this.wirs[c][r].clear();
+				if (this.wirs[c] != null)
+					for (int r = 0; r < this.wirs[c].length; r++) {
+						if (this.wirs[c][r] != null)
+							this.wirs[c][r].clear();
+					}
 			}
 		}
 	}

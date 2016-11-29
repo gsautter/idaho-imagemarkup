@@ -276,6 +276,8 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 				return c;
 			return ((int) (annot1.createTime - annot2.createTime));
 			
+			//	TODO compare page IDs first, and text stream IDs only then, so annotations from same page stay together
+			
 //			if (annot1.firstWord.pageId == annot2.firstWord.pageId)
 //				return (annot2.lastWord.pageId - annot1.lastWord.pageId);
 //			else return (annot1.firstWord.pageId - annot2.firstWord.pageId);
@@ -371,7 +373,6 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	private TreeMap pagesById = new TreeMap();
 	
 	private ImDocumentAnnotationList annotations = new ImDocumentAnnotationList();
-//	private TreeMap annotationsById = new TreeMap();
 	private AnnotationIdIndex annotationsById = new AnnotationIdIndex();
 	private TreeMap annotationsByType = new TreeMap();
 	private TreeMap annotationsByFirstWord = new TreeMap();
@@ -474,6 +475,10 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			clearAnnotationIndex(this.annotationsByFirstWord);
 			clearAnnotationIndex(this.annotationsByLastWord);
 		}
+		this.supplementsById.clear();
+		this.fontsByName.clear();
+		this.documentProperties.clear();
+		this.clearAttributes();
 	}
 	private static void clearAnnotationIndex(TreeMap index) {
 		for (Iterator alkit = index.keySet().iterator(); alkit.hasNext();) {
@@ -601,6 +606,22 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	}
 	
 	/**
+	 * Remove a font from the document.
+	 * @param font the font to remove
+	 */
+	public void removeFont(ImFont font) {
+		this.removeFont(font.name);
+	}
+	
+	/**
+	 * Remove a font from the document.
+	 * @param name the name of the font to remove
+	 */
+	public void removeFont(String name) {
+		this.fontsByName.remove(name);
+	}
+	
+	/**
 	 * Add a supplement to the document, or replace one with a newer version.
 	 * @param ims the supplement to add
 	 * @return the supplement replaced by the addition of the argument one
@@ -608,6 +629,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	public ImSupplement addSupplement(ImSupplement ims) {
 		synchronized (this.supplementsById) {
 			return ((ImSupplement) this.supplementsById.put(ims.getId(), ims));
+			//	TODO dispose any replaced supplement
 		}
 	}
 	
@@ -635,10 +657,36 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 		return ((ImSupplement[]) this.supplementsById.values().toArray(new ImSupplement[this.supplementsById.size()]));
 	}
 	
+	/**
+	 * Remove a supplement from the document.
+	 * @param ims the supplement to remove
+	 */
+	public void removeSupplement(ImSupplement ims) {
+		this.removeSupplement(ims.getId());
+		//	TODO dispose any removed supplement
+	}
+	
+	/**
+	 * Remove a supplement from the document.
+	 * @param sid the ID of the supplement to remove
+	 */
+	public void removeSupplement(String sid) {
+		this.supplementsById.remove(sid);
+	}
+	
 	void addPage(ImPage page) {
 		ImPage oldPage = ((ImPage) this.pagesById.put(new Integer(page.pageId), page));
 		if (oldPage != null)
 			oldPage.dispose();
+	}
+	
+	/**
+	 * Retrieve a page by its ID.
+	 * @param pageId the ID of the sought page
+	 * @return the page with the argument ID
+	 */
+	public ImPage getPage(int pageId) {
+		return ((ImPage) this.pagesById.get(new Integer(pageId)));
 	}
 	
 	/**
@@ -675,6 +723,22 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 */
 	public int getPageCount() {
 		return this.pagesById.size();
+	}
+	
+	/**
+	 * Discard a page with a given ID. The discarded page is disposed and
+	 * cannot be used after this method was called. This method is not intended
+	 * for regular back and forth use, but rather for rare situations during
+	 * document generation, where it only becomes clear after loading that some
+	 * pages are actually be obsolete, e.g. some tailing blank pages. This is
+	 * why this method is not named along the lines of the usual add/remove
+	 * method pairs.
+	 * @param pageId the ID of the page to discard
+	 */
+	public void discardPage(int pageId) {
+		ImPage page = ((ImPage) this.pagesById.remove(new Integer(pageId)));
+		if (page != null)
+			page.dispose();
 	}
 	
 	/**
@@ -1228,15 +1292,6 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 */
 	public String[] getAnnotationTypes() {
 		return ((String[]) this.annotationsByType.keySet().toArray(new String[this.annotationsByType.size()]));
-	}
-	
-	/**
-	 * Retrieve a page by its ID.
-	 * @param pageId the ID of the sought page
-	 * @return the page with the argument ID
-	 */
-	public ImPage getPage(int pageId) {
-		return ((ImPage) this.pagesById.get(new Integer(pageId)));
 	}
 	
 	/**

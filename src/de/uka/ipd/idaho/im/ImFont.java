@@ -543,6 +543,7 @@ public class ImFont implements ImObject {
 		sCiGr.scale((32.0 / charImage.getHeight()), (32.0 / charImage.getHeight()));
 		sCiGr.drawImage(charImage, 0, 0, null);
 		sCiGr.dispose();
+//		JOptionPane.showMessageDialog(null, new JLabel(new ImageIcon(charImage)), ("Scaled " + charImage.getWidth() + "x" + charImage.getHeight() + " to " + sCharImage.getWidth() + "x" + sCharImage.getHeight()), JOptionPane.PLAIN_MESSAGE, new ImageIcon(sCharImage));
 		return sCharImage;
 	}
 }
