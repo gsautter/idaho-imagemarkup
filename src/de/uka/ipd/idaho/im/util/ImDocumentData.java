@@ -439,6 +439,12 @@ public abstract class ImDocumentData {
 							return ImDocumentData.this.getInputStream(sfn);
 						}
 					};
+				else if (ImSupplement.GRAPHICS_TYPE.equals(st))
+					supplement = new ImSupplement.Graphics(null) {
+						public InputStream getInputStream() throws IOException {
+							return ImDocumentData.this.getInputStream(sfn);
+						}
+					};
 				else supplement = new ImSupplement(null, st, smt) {
 					public String getId() {
 						return sid;

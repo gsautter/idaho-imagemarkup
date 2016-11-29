@@ -679,6 +679,12 @@ public class ImDocumentIO implements ImagingConstants {
 							return doc.getInputStream(sfn);
 						}
 					};
+				else if (ImSupplement.GRAPHICS_TYPE.equals(st))
+					supplement = new ImSupplement.Graphics(doc) {
+						public InputStream getInputStream() throws IOException {
+							return doc.getInputStream(sfn);
+						}
+					};
 				else supplement = new ImSupplement(doc, st, smt) {
 					public String getId() {
 						return sid;

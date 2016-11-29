@@ -149,6 +149,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	/** indicates if the image markup document displayed in this viewer panel is born digital */
 	public final boolean documentBornDigital;
 	
+	private ImPage[] pages;
 	private ImPageMarkupPanel[] pagePanels;
 	private PageThumbnail[] pageThumbnails;
 	private boolean[] pageVisible;
@@ -210,7 +211,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 * @param document the document to display
 	 */
 	public ImDocumentMarkupPanel(ImDocument document) {
-		this(document, 0, document.getPageCount());
+		this(document, document.getFirstPageId(), document.getPageCount());
 	}
 	
 	/**
@@ -233,26 +234,41 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		this.setTextStreamTypeColor(ImWord.TEXT_STREAM_TYPE_PAGE_TITLE, Color.BLUE);
 		this.setTextStreamTypeColor(ImWord.TEXT_STREAM_TYPE_TABLE, Color.PINK);
 		this.setTextStreamTypeColor(ImWord.TEXT_STREAM_TYPE_TABLE_NOTE, Color.CYAN);
+		this.setTextStreamTypeColor(ImWord.TEXT_STREAM_TYPE_LABEL, Color.YELLOW);
 		
 		ImPage[] pages = this.document.getPages();
-		this.pagePanels = new ImPageMarkupPanel[pages.length];
+		System.out.println("Got " + pages.length + " pages");
+		int minPageId = Integer.MAX_VALUE;
+		int maxPageId = 0;
+		for (int p = 0; p < pages.length; p++) {
+			minPageId = Math.min(minPageId, pages[p].pageId);
+			maxPageId = Math.max(maxPageId, pages[p].pageId);
+		}
+		
+		this.pages = new ImPage[maxPageId + 1];
+		for (int p = 0; p < pages.length; p++)
+			this.pages[pages[p].pageId] = pages[p];
+		this.pagePanels = new ImPageMarkupPanel[this.pages.length];
 		Arrays.fill(this.pagePanels, null);
-		this.pageVisible = new boolean[pages.length];
+		this.pageVisible = new boolean[this.pages.length];
 		Arrays.fill(this.pageVisible, false);
-		this.pageThumbnails = new PageThumbnail[pages.length];
+		this.pageThumbnails = new PageThumbnail[this.pages.length];
 		Arrays.fill(this.pageThumbnails, null);
 		
 //		int minPageWidth = Integer.MAX_VALUE;
 		int minPageHeight = Integer.MAX_VALUE;
 		int wordCount = 0;
 		int fnWordCount = 0;
-		for (int p = 0; p < pages.length; p++) {
+		for (int p = 0; p < this.pages.length; p++) {
+			if (this.pages[p] == null)
+				continue;
+			System.out.println(" - page " + p + " with ID " + this.pages[p].pageId);
 //			minPageWidth = Math.min(minPageWidth, (pages[p].bounds.right - pages[p].bounds.left));
-			this.maxPageWidth = Math.max(this.maxPageWidth, (pages[p].bounds.right - pages[p].bounds.left));
-			minPageHeight = Math.min(minPageHeight, (pages[p].bounds.bottom - pages[p].bounds.top));
-			this.maxPageHeight = Math.max(this.maxPageHeight, (pages[p].bounds.bottom - pages[p].bounds.top));
-			this.maxPageImageDpi = Math.max(this.maxPageImageDpi, pages[p].getImageDPI());
-			ImWord[] pageWords = pages[p].getWords();
+			this.maxPageWidth = Math.max(this.maxPageWidth, (this.pages[p].bounds.right - this.pages[p].bounds.left));
+			minPageHeight = Math.min(minPageHeight, (this.pages[p].bounds.bottom - this.pages[p].bounds.top));
+			this.maxPageHeight = Math.max(this.maxPageHeight, (this.pages[p].bounds.bottom - this.pages[p].bounds.top));
+			this.maxPageImageDpi = Math.max(this.maxPageImageDpi, this.pages[p].getImageDPI());
+			ImWord[] pageWords = this.pages[p].getWords();
 			for (int w = 0; w < pageWords.length; w++) {
 				wordCount++;
 				if (pageWords[w].hasAttribute(ImWord.FONT_NAME_ATTRIBUTE))
@@ -264,8 +280,10 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 //		this.documentBornDigital = (((wordCount * 2) < (fnWordCount * 3)) || ((pages.length > 2) && (minPageHeight == this.maxPageHeight)));
 		this.documentBornDigital = ((wordCount * 2) < (fnWordCount * 3));
 		
-		for (int p = Math.max(0, fvp); p < Math.min(pages.length, (fvp + vpc)); p++) {
-			this.pagePanels[p] = new ImPageMarkupPanel(pages[p], this.maxPageWidth, this.maxPageHeight);
+		for (int p = Math.max(0, fvp); p < Math.min(this.pages.length, (fvp + vpc)); p++) {
+			if (this.pages[p] == null)
+				continue;
+			this.pagePanels[p] = new ImPageMarkupPanel(this.pages[p], this.maxPageWidth, this.maxPageHeight);
 			this.pageVisible[p] = true;
 		}
 		
@@ -460,15 +478,15 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			int y = (Math.round(zoom * (me.getY() - fixPageMargin - ipmpLocation.y)) - ipmp.pageMarginTop);
 			ImWord imw = ipmp.page.getWordAt(x, y);
 			if (imw == null) {
-				boolean inImage = false;
+				boolean inImageOrGraphics = false;
 				boolean inTable = false;
 				boolean inTableRowOrCol = false;
 				ImRegion[] regions = ipmp.page.getRegionsIncluding(new BoundingBox(x, (x+2), y, (y+2)), false);
 				for (int r = 0; r < regions.length; r++) {
 					if (!areRegionsPainted(regions[r].getType()))
 						continue;
-					if (ImRegion.IMAGE_TYPE.equals(regions[r].getType())) {
-						inImage = true;
+					if (ImRegion.IMAGE_TYPE.equals(regions[r].getType()) || ImRegion.GRAPHICS_TYPE.equals(regions[r].getType())) {
+						inImageOrGraphics = true;
 						break;
 					}
 					if (ImRegion.TABLE_TYPE.equals(regions[r].getType()))
@@ -481,7 +499,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				}
 				if (inTableRowOrCol)
 					setCursor(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));
-				else if (inImage || inTable)
+				else if (inImageOrGraphics || inTable)
 					setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 				else setCursor(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));
 			}
@@ -613,10 +631,9 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				}
 			}
 			else if ((object instanceof ImPage) && ImPage.PAGE_IMAGE_ATTRIBUTE.equals(attributeName)) {
-//				pagePanels[((ImPage) object).pageId].pageImage = null;
-//				pagePanels[((ImPage) object).pageId].backgroundImage = null;
+				pagePanels[((ImPage) object).pageId].scaledPageImage = null;
+				pagePanels[((ImPage) object).pageId].scaledPageImageDpi = -1;
 				pagePanels[((ImPage) object).pageId].backgroundObjects = null;
-//				pagePanels[((ImPage) object).pageId].textStringImage = null;
 				pagePanels[((ImPage) object).pageId].textStringImages = null;
 				pagePanels[((ImPage) object).pageId].docModCount++;
 				pagePanels[((ImPage) object).pageId].validate();
@@ -672,11 +689,13 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		HiddenPageBanner hpb = null;
 		
 		for (int p = 0; p < this.pagePanels.length; p++) {
+			if (this.pages[p] == null)
+				continue;
 			if (!this.pageVisible[p]) {
 				if (this.sideBySidePages < 2) {
 					if (hpb == null)
 						hpb = new HiddenPageBanner();
-					hpb.addPage(this.document.getPage(p));
+					hpb.addPage(this.pages[p]);
 				}
 				continue;
 			}
@@ -991,7 +1010,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	
 	/**
 	 * Check if some page is visible.
-	 * @param pageId the ID of the page to check
+	 * @param pageId the index of the page to check
 	 * @return true if the page is visible, false otherwise
 	 */
 	public boolean isPageVisible(int pageId) {
@@ -1017,6 +1036,8 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 //		System.out.println("Setting pages " + fromPageId + "-" + toPageId + " " + (pv ? "visible" : "hidden"));
 		boolean pageVisibilityChanged = false;
 		for (int p = fromPageId; p <= toPageId; p++) {
+			if (this.pages[p] == null)
+				continue;
 			if (this.pageVisible[p] == pv) {
 //				System.out.println(" - page " + p + " already " + (pv ? "visible" : "hidden"));
 				continue;
@@ -1025,7 +1046,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 //			System.out.println(" - setting page " + p + " " + (pv ? "visible" : "hidden"));
 			this.pageVisible[p] = pv;
 			if (this.pageVisible[p] && (this.pagePanels[p] == null)) {
-				this.pagePanels[p] = new ImPageMarkupPanel(this.document.getPage(p), this.maxPageWidth, this.maxPageHeight);
+				this.pagePanels[p] = new ImPageMarkupPanel(this.pages[p], this.maxPageWidth, this.maxPageHeight);
 //				System.out.println(" --> page panel created");
 			}
 		}
@@ -1037,17 +1058,20 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	}
 	
 	/**
-	 * Set the visible pages. This method sets all pages whose ID is contained
-	 * in the argument array to visible, and hides all others.
+	 * Set the visible pages. This method sets all pages whose index is
+	 * contained in the argument array to visible, and hides all others.
 	 * @param visiblePageIDs an array holding the IDs of the pages to set visible
 	 */
 	public void setVisiblePages(int[] visiblePageIDs) {
+		//	TODO track references and see if page IDs used as arguments
 //		System.out.println("Setting visible pages to " + Arrays.toString(visiblePageIDs));
 		HashSet visiblePageIdSet = new HashSet();
 		for (int i = 0; i < visiblePageIDs.length; i++)
 			visiblePageIdSet.add(new Integer(visiblePageIDs[i]));
 		boolean pageVisibilityChanged = false;
 		for (int p = 0; p < this.pagePanels.length; p++) {
+			if (this.pages[p] == null)
+				continue;
 			boolean pv = visiblePageIdSet.contains(new Integer(p));
 			if (this.pageVisible[p] == pv) {
 //				System.out.println(" - page " + p + " already " + (pv ? "visible" : "hidden"));
@@ -1057,7 +1081,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 //			System.out.println(" - setting page " + p + " " + (pv ? "visible" : "hidden"));
 			this.pageVisible[p] = pv;
 			if (this.pageVisible[p] && (this.pagePanels[p] == null)) {
-				this.pagePanels[p] = new ImPageMarkupPanel(this.document.getPage(p), this.maxPageWidth, this.maxPageHeight);
+				this.pagePanels[p] = new ImPageMarkupPanel(this.pages[p], this.maxPageWidth, this.maxPageHeight);
 //				System.out.println(" --> page panel created");
 			}
 		}
@@ -2114,7 +2138,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			this.transPageWordConnections.clear();
 		if (this.pagePanels != null)
 			for (int p = 0; p < this.pagePanels.length; p++) {
-				if (this.pageVisible[p])
+				if (this.pagePanels[p] != null)
 					this.pagePanels[p].validate();
 			}
 		for (Iterator hpbit = this.hiddenPageBanners.iterator(); hpbit.hasNext();)
@@ -2365,7 +2389,8 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 	 *            edit
 	 */
 	public boolean editPage(int pageId, BoundingBox excerptBox) {
-		if ((pageId < 0) || (this.pageVisible.length <= pageId) || !this.pageVisible[pageId])
+		//	TODO track references and see if page IDs used as arguments
+		if ((pageId < 0) || (this.pageVisible.length <= pageId) || !this.pageVisible[pageId] || (this.pagePanels[pageId] == null))
 			return false;
 		return this.editPage(this.pagePanels[pageId], excerptBox);
 	}
@@ -3251,7 +3276,7 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 				regionOutdents[r] *= 2;
 			for (int r = 0; r < regions.length; r++) {
 				Color layoutObjectColor = getLayoutObjectColor(regions[r].getType(), true);
-				if (ImRegion.IMAGE_TYPE.equals(regions[r].getType()))
+				if (ImRegion.IMAGE_TYPE.equals(regions[r].getType()) || ImRegion.GRAPHICS_TYPE.equals(regions[r].getType()))
 					boList.add(new RegionRectangle(regions[r].bounds.left, regions[r].bounds.right, regions[r].bounds.top, regions[r].bounds.bottom, layoutObjectColor, regionOutdents[r]));
 				else boList.add(new RegionRectangle(regions[r].bounds.left - 2, regions[r].bounds.right, regions[r].bounds.top - 2, regions[r].bounds.bottom, layoutObjectColor, regionOutdents[r]));
 			}
@@ -3866,7 +3891,7 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 			this.regionControls.clear();
 			TreeSet regionTypes = new TreeSet();
 			for (int p = 0; p < pagePanels.length; p++) {
-				if (isPageVisible(p))
+				if (isPageVisible(p) && (pagePanels[p] != null))
 					regionTypes.addAll(Arrays.asList(pagePanels[p].page.getRegionTypes()));
 			}
 			for (Iterator rtit = regionTypes.iterator(); rtit.hasNext();) {
