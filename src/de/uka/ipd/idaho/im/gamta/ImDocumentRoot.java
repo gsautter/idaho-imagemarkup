@@ -382,6 +382,9 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		public String toXML() {
 			return (AnnotationUtils.produceStartTag(this, true) + AnnotationUtils.escapeForXml(TokenSequenceUtils.concatTokens(this, true, true)) + AnnotationUtils.produceEndTag(this));
 		}
+		public QueriableAnnotation getDocument() {
+			return ImDocumentRoot.this.getDocument();
+		}
 		
 		public int getAbsoluteStartIndex() {
 			return this.base.getStartIndex();
@@ -729,6 +732,9 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	
 	private ImDocument doc;
 	
+	private int configFlags;
+	private ImDocumentRoot fullDoc;
+	
 	private ArrayList annotations = new ArrayList();
 	private TreeMap annotationsByType = new TreeMap();
 	private HashMap annotationBasesByAnnotations = new HashMap();
@@ -789,6 +795,8 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	public ImDocumentRoot(ImDocument doc, ImWord[] textStreamHeads, int configFlags) {
 		super(((Tokenizer) doc.getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER)), textStreamHeads, configFlags);
 		this.doc = doc;
+		this.configFlags = configFlags;
+		this.fullDoc = this;
 		
 		//	read normalization level
 		int normalizationLevel = (configFlags & NORMALIZATION_LEVEL_STREAMS);
@@ -904,6 +912,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	public ImDocumentRoot(ImWord firstWord, ImWord lastWord, int configFlags) {
 		super(((Tokenizer) firstWord.getDocument().getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER)), firstWord, lastWord);
 		this.doc = firstWord.getDocument();
+		this.configFlags = configFlags;
 		
 		//	read normalization level
 		int normalizationLevel = (configFlags & NORMALIZATION_LEVEL_STREAMS);
@@ -1079,6 +1088,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	public ImDocumentRoot(ImRegion region, int configFlags) {
 		super(((Tokenizer) region.getDocument().getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER)));
 		this.doc = region.getDocument();
+		this.configFlags = configFlags;
 		
 		//	read normalization level
 		int normalizationLevel = (configFlags & NORMALIZATION_LEVEL_STREAMS);
@@ -1193,6 +1203,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	}
 	
 	//	represent a table with annotations
+	//	TODO observe multi-column cells
 	private void annotateTableStructure(ImRegion table) {
 		this.addAnnotation(table);
 		ImRegion[] rows = table.getRegions(ImRegion.TABLE_ROW_TYPE);
@@ -1460,6 +1471,11 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	}
 	public String toXML() {
 		return (AnnotationUtils.produceStartTag(this, true) + TokenSequenceUtils.concatTokens(this, true, true) + AnnotationUtils.produceEndTag(this));
+	}
+	public QueriableAnnotation getDocument() {
+		if (this.fullDoc == null)
+			this.fullDoc = new ImDocumentRoot(this.doc, this.configFlags);
+		return this.fullDoc;
 	}
 	
 	public int getAbsoluteStartIndex() {
