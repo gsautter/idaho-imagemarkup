@@ -331,7 +331,7 @@ public class PageImageAnalysis implements ImagingConstants {
 	 * @return the root region, representing the whole page
 	 */
 	public static Region getPageRegion(AnalysisImage ai, int dpi, boolean filterImageBlocks, ProgressMonitor psm) {
-		return getPageRegion(ai, dpi, null, filterImageBlocks, psm);
+		return getPageRegion(ai, dpi, null, -1, filterImageBlocks, psm);
 	}
 	
 	/**
@@ -342,20 +342,21 @@ public class PageImageAnalysis implements ImagingConstants {
 	 * @param columnAreas an array of bounding boxes marking the areas where
 	 *            text columns are located, preventing column splits inside
 	 *            each individual area
+	 * @param minColumnWidth the minimum width for a column after a split
 	 * @param filterImageBlocks filter out blocks that are likely to be images
 	 *            rather than text? (safe to switch off for born-digital page
 	 *            images)
 	 * @param psm a monitor object for reporting progress, e.g. to a UI
 	 * @return the root region, representing the whole page
 	 */
-	public static Region getPageRegion(AnalysisImage ai, int dpi, BoundingBox[] columnAreas, boolean filterImageBlocks, ProgressMonitor psm) {
+	public static Region getPageRegion(AnalysisImage ai, int dpi, BoundingBox[] columnAreas, int minColumnWidth, boolean filterImageBlocks, ProgressMonitor psm) {
 		ImagePartRectangle pageBounds = Imaging.getContentBox(ai);
 //		int minHorizontalBlockMargin = (dpi / 15); // TODO find out if this makes sense (will turn out in the long haul only, though)
 		int minHorizontalBlockMargin = (dpi / 10); // TODO find out if this makes sense (will turn out in the long haul only, though)
 //		int minHorizontalBlockMargin = (dpi / 8); // TODO find out if this makes sense (will turn out in the long haul only, though)
 //		int minVerticalBlockMargin = (dpi / 15); // TODO find out if this makes sense (will turn out in the long haul only, though)
 		int minVerticalBlockMargin = (dpi / 10); // TODO find out if this makes sense (will turn out in the long haul only, though)
-		return getPageRegion(pageBounds, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, dpi, filterImageBlocks, psm);
+		return getPageRegion(pageBounds, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, minColumnWidth, dpi, filterImageBlocks, psm);
 	}
 	
 	/**
@@ -378,7 +379,7 @@ public class PageImageAnalysis implements ImagingConstants {
 	 * @return the root region, representing the whole page
 	 */
 	public static Region getPageRegion(AnalysisImage ai, int dpi, int minHorizontalBlockMargin, int minVerticalBlockMargin, boolean filterImageBlocks, ProgressMonitor psm) {
-		return getPageRegion(ai, dpi, minHorizontalBlockMargin, minVerticalBlockMargin, null, filterImageBlocks, psm);
+		return getPageRegion(ai, dpi, minHorizontalBlockMargin, minVerticalBlockMargin, null, -1, filterImageBlocks, psm);
 	}
 	
 	/**
@@ -397,31 +398,32 @@ public class PageImageAnalysis implements ImagingConstants {
 	 * @param columnAreas an array of bounding boxes marking the areas where
 	 *            text columns are located, preventing column splits inside
 	 *            each individual area
+	 * @param minColumnWidth the minimum width for a column after a split
 	 * @param filterImageBlocks filter out blocks that are likely to be images
 	 *            rather than text? (safe to switch off for born-digital page
 	 *            images)
 	 * @param psm a monitor object for reporting progress, e.g. to a UI
 	 * @return the root region, representing the whole page
 	 */
-	public static Region getPageRegion(AnalysisImage ai, int dpi, int minHorizontalBlockMargin, int minVerticalBlockMargin, BoundingBox[] columnAreas, boolean filterImageBlocks, ProgressMonitor psm) {
+	public static Region getPageRegion(AnalysisImage ai, int dpi, int minHorizontalBlockMargin, int minVerticalBlockMargin, BoundingBox[] columnAreas, int minColumnWidth, boolean filterImageBlocks, ProgressMonitor psm) {
 		ImagePartRectangle pageBounds = Imaging.getContentBox(ai);
-		return getPageRegion(pageBounds, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, dpi, filterImageBlocks, psm);
+		return getPageRegion(pageBounds, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, minColumnWidth, dpi, filterImageBlocks, psm);
 	}
 	
-	private static Region getPageRegion(ImagePartRectangle pageBounds, int minHorizontalBlockMargin, int minVerticalBlockMargin, BoundingBox[] columnAreas, int dpi, boolean filterImageBlocks, ProgressMonitor psm) {
+	private static Region getPageRegion(ImagePartRectangle pageBounds, int minHorizontalBlockMargin, int minVerticalBlockMargin, BoundingBox[] columnAreas, int minColumnWidth, int dpi, boolean filterImageBlocks, ProgressMonitor psm) {
 		
 		//	create block comprising whole page
 		Region page = new Region(pageBounds, false, null);
 		
 		//	fill in region tree
-		fillInSubRegions(page, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, dpi, filterImageBlocks, psm);
+		fillInSubRegions(page, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, minColumnWidth, dpi, filterImageBlocks, psm);
 		
 		//	finally ...
 		return page;
 	}
 	
 	private static final float capitalIHeightWidthRatio = (((float) 8) / 2); // the height/width ratio of a capital I is usually lower in serif fonts, but we want to have some safety margin
-	private static void fillInSubRegions(Region region, int minHorizontalBlockMargin, int minVerticalBlockMargin, BoundingBox[] columnAreas, int dpi, boolean filterImageBlocks, ProgressMonitor psm) {
+	private static void fillInSubRegions(Region region, int minHorizontalBlockMargin, int minVerticalBlockMargin, BoundingBox[] columnAreas, int minColumnWidth, int dpi, boolean filterImageBlocks, ProgressMonitor psm) {
 		if (minHorizontalBlockMargin != 1)
 			System.out.println("Splitting region " + region.getBoundingBox());
 		
@@ -451,8 +453,13 @@ public class PageImageAnalysis implements ImagingConstants {
 		if (minHorizontalBlockMargin != 1)
 			System.out.println(" - got " + subRegions.length + " sub regions");
 		
+		//	nothing to merge if we're splitting into rows, only have a single sub region, or are down to single-pixle splits
+		if (region.isColumn) {}
+		else if (subRegions.length < 2) {}
+		else if (minHorizontalBlockMargin == 1) {}
+		
 		//	if splitting into columns, re-merge splits lying inside a single column area
-		if (!region.isColumn && (subRegions.length > 1) && (minHorizontalBlockMargin != 1) && (columnAreas != null)) {
+		else if (columnAreas != null) {
 			ArrayList subRegionList = new ArrayList();
 			for (int c = 1; c < subRegions.length; c++) {
 				boolean mergeSubRegions = false;
@@ -472,6 +479,87 @@ public class PageImageAnalysis implements ImagingConstants {
 			}
 			subRegionList.add(subRegions[subRegions.length-1]);
 			if (subRegionList.size() < subRegions.length) {
+				subRegions = ((ImagePartRectangle[]) subRegionList.toArray(new ImagePartRectangle[subRegionList.size()]));
+				System.out.println(" - got " + subRegions.length + " sub regions after column repair");
+			}
+		}
+		
+		//	if splitting into columns, re-merge splits if either side is narrower than minimum column width
+		else if (minColumnWidth > 0) {
+			ArrayList subRegionList = null;
+			for (int c = 0; c < subRegions.length; c++) {
+				if (subRegions[c].getWidth() >= minColumnWidth)
+					continue;
+				int leftDist = (((c == 0) || (subRegions[c-1] == null)) ? Integer.MAX_VALUE : (subRegions[c].leftCol - subRegions[c-1].rightCol));
+				int rightDist = (((c+1) == subRegions.length) ? Integer.MAX_VALUE : (subRegions[c+1].leftCol - subRegions[c].rightCol));
+				
+				//	nothing left to merge with
+				if ((leftDist == Integer.MAX_VALUE) && (rightDist == Integer.MAX_VALUE))
+					continue;
+				
+				//	merge left if distance significantly smaller
+				if (leftDist < (rightDist / 2)) {
+					if (subRegionList == null)
+						subRegionList = new ArrayList();
+					subRegions[c].leftCol = Math.min(subRegions[c-1].leftCol, subRegions[c].leftCol);
+					subRegions[c].rightCol = Math.max(subRegions[c-1].rightCol, subRegions[c].rightCol);
+					subRegions[c].topRow = Math.min(subRegions[c-1].topRow, subRegions[c].topRow);
+					subRegions[c].bottomRow = Math.max(subRegions[c-1].bottomRow, subRegions[c].bottomRow);
+					subRegions[c-1] = null;
+				}
+				
+				//	merge right if distance significantly smaller
+				else if (rightDist < (leftDist / 2)) {
+					if (subRegionList == null)
+						subRegionList = new ArrayList();
+					subRegions[c+1].leftCol = Math.min(subRegions[c].leftCol, subRegions[c+1].leftCol);
+					subRegions[c+1].rightCol = Math.max(subRegions[c].rightCol, subRegions[c+1].rightCol);
+					subRegions[c+1].topRow = Math.min(subRegions[c].topRow, subRegions[c+1].topRow);
+					subRegions[c+1].bottomRow = Math.max(subRegions[c].bottomRow, subRegions[c+1].bottomRow);
+					if (c == 0)
+						subRegions[c] = null;
+					else {
+						subRegions[c] = subRegions[c-1];
+						subRegions[c-1] = null;
+					}
+				}
+				
+				//	decide based on difference between resulting column widths, preferring similarity
+				else {
+					int leftWidth = (((c == 0) || (subRegions[c-1] == null)) ? 0 : (subRegions[c].rightCol - subRegions[c-1].leftCol));
+					int leftDiff = Math.abs(leftWidth - subRegions[c+1].getWidth());
+					int rightWidth = (((c+1) == subRegions.length) ? 0 : (subRegions[c+1].rightCol - subRegions[c].leftCol));
+					int rightDiff = Math.abs(rightWidth - subRegions[c-1].getWidth());
+					if (leftDiff < rightDiff) {
+						if (subRegionList == null)
+							subRegionList = new ArrayList();
+						subRegions[c].leftCol = Math.min(subRegions[c-1].leftCol, subRegions[c].leftCol);
+						subRegions[c].rightCol = Math.max(subRegions[c-1].rightCol, subRegions[c].rightCol);
+						subRegions[c].topRow = Math.min(subRegions[c-1].topRow, subRegions[c].topRow);
+						subRegions[c].bottomRow = Math.max(subRegions[c-1].bottomRow, subRegions[c].bottomRow);
+						subRegions[c-1] = null;
+					}
+					else {
+						if (subRegionList == null)
+							subRegionList = new ArrayList();
+						subRegions[c+1].leftCol = Math.min(subRegions[c].leftCol, subRegions[c+1].leftCol);
+						subRegions[c+1].rightCol = Math.max(subRegions[c].rightCol, subRegions[c+1].rightCol);
+						subRegions[c+1].topRow = Math.min(subRegions[c].topRow, subRegions[c+1].topRow);
+						subRegions[c+1].bottomRow = Math.max(subRegions[c].bottomRow, subRegions[c+1].bottomRow);
+						if (c == 0)
+							subRegions[c] = null;
+						else {
+							subRegions[c] = subRegions[c-1];
+							subRegions[c-1] = null;
+						}
+					}
+				}
+			}
+			if (subRegionList != null) {
+				for (int c = 0; c < subRegions.length; c++) {
+					if (subRegions[c] != null)
+						subRegionList.add(subRegions[c]);
+				}
 				subRegions = ((ImagePartRectangle[]) subRegionList.toArray(new ImagePartRectangle[subRegionList.size()]));
 				System.out.println(" - got " + subRegions.length + " sub regions after column repair");
 			}
@@ -505,7 +593,7 @@ public class PageImageAnalysis implements ImagingConstants {
 			Region subRegion = new Region(subRegions[r], !region.isColumn, region);
 			
 			//	analyze sub region recursively
-			fillInSubRegions(subRegion, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, dpi, filterImageBlocks, psm);
+			fillInSubRegions(subRegion, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, minColumnWidth, dpi, filterImageBlocks, psm);
 			
 			//	this sub region is not atomic, but has no sub regions worth retaining either, so forget about it
 			if (!subRegion.isAtomic() && (subRegion.getSubRegionCount() == 0))
@@ -550,7 +638,7 @@ public class PageImageAnalysis implements ImagingConstants {
 				ImagePartRectangle testRegionBounds = new ImagePartRectangle(subRegion.bounds.analysisImage);
 				Imaging.copyBounds(subRegion.bounds, testRegionBounds);
 				Region testRegion = new Region(testRegionBounds, true, null);
-				fillInSubRegions(testRegion, 1, 1, null, dpi, true, psm);
+				fillInSubRegions(testRegion, 1, 1, null, -1, dpi, true, psm);
 				if (!testRegion.isAtomic() && (testRegion.getSubRegionCount() == 0))
 					continue;
 			}
@@ -616,7 +704,7 @@ public class PageImageAnalysis implements ImagingConstants {
 				Region mergedSubRegion = new Region(Imaging.getHull(subRegionBounds), !region.isColumn, region);
 				
 				//	re-get sub structure (easier than copying)
-				fillInSubRegions(mergedSubRegion, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, dpi, filterImageBlocks, psm);
+				fillInSubRegions(mergedSubRegion, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, dpi, minColumnWidth, filterImageBlocks, psm);
 				
 				//	does the merged sub region have as many columns as the original sub regions?
 				if (mergedSubRegion.getSubRegionCount() < topSubRegion.getSubRegionCount())

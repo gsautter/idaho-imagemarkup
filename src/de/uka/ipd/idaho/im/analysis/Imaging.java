@@ -31,6 +31,7 @@ import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.Point;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
@@ -836,7 +837,7 @@ public class Imaging {
 	/**
 	 * Compute the average brightness of a part of an image.
 	 * @param rect the image part to compute the brightness for
-	 * @return the avearge brightness
+	 * @return the average brightness
 	 */
 	public static byte computeAverageBrightness(ImagePartRectangle rect) {
 		if ((rect.rightCol <= rect.leftCol) || (rect.bottomRow <= rect.topRow))
@@ -866,6 +867,78 @@ public class Imaging {
 				brightnessDist[brightness[c][r] / brightnessBucketWidth]++;
 		}
 		return brightnessDist;
+	}
+	
+	/**
+	 * Flood fill the brightness array of an analysis image. This helps detect
+	 * continuous areas of a specific brightness, without destroying the source
+	 * image proper. If the pixel at <code>startCol/startRow</code> has a
+	 * brightness value different from <code>toFillValue</code>, this method
+	 * does nothing. Likewise, if the point <code>startCol/startRow</code> lies
+	 * outside the dimensions of the agument brightness array, this method has
+	 * no effect.
+	 * @param brightness the brightness array to work on
+	 * @param startCol the column to start at
+	 * @param startRow the row to start at
+	 * @param toFillValue the brightness value to fill
+	 * @param fillValue the brightness value to fill with
+	 */
+	public static void floodFill(byte[][] brightness, int startCol, int startRow, byte toFillValue, byte fillValue) {
+		ArrayList pointsToFill = new ArrayList() {
+			private HashSet addedPoints = new HashSet();
+			public boolean add(Object ptf) {
+				if (this.addedPoints.add(ptf))
+					return super.add(ptf);
+				else return false;
+			}
+		};
+		pointsToFill.add(new Point(startCol, startRow));
+		while (pointsToFill.size() != 0) {
+			Point ptf = ((Point) pointsToFill.remove(0));
+			if (brightness[ptf.c][ptf.r] != toFillValue)
+				continue;
+			brightness[ptf.c][ptf.r] = fillValue;
+			
+			//	explore left and right, and one row above and below
+			for (int c = (ptf.c - 1); c >= 0; c--) {
+				if (brightness[c][ptf.r] == toFillValue)
+					brightness[c][ptf.r] = fillValue;
+				else break;
+				if ((ptf.r > 0) && (brightness[c][ptf.r - 1] == toFillValue))
+					pointsToFill.add(new Point(c, (ptf.r - 1)));
+				if (((ptf.r + 1) < brightness[c].length) && (brightness[c][ptf.r + 1] == toFillValue))
+					pointsToFill.add(new Point(c, (ptf.r + 1)));
+			}
+			for (int c = (ptf.c + 1); c < brightness.length; c++) {
+				if (brightness[c][ptf.r] == toFillValue)
+					brightness[c][ptf.r] = fillValue;
+				else break;
+				if ((ptf.r > 0) && (brightness[c][ptf.r - 1] == toFillValue))
+					pointsToFill.add(new Point(c, (ptf.r - 1)));
+				if (((ptf.r + 1) < brightness[c].length) && (brightness[c][ptf.r + 1] == toFillValue))
+					pointsToFill.add(new Point(c, (ptf.r + 1)));
+			}
+			
+			//	explore upward and downward, and one row to left and right
+			for (int r = (ptf.r - 1); r >= 0; r--) {
+				if (brightness[ptf.c][r] == toFillValue)
+					brightness[ptf.c][r] = fillValue;
+				else break;
+				if ((ptf.c > 0) && (brightness[ptf.c - 1][r] == toFillValue))
+					pointsToFill.add(new Point((ptf.c - 1), r));
+				if (((ptf.c + 1) < brightness.length) && (brightness[ptf.c + 1][r] == toFillValue))
+					pointsToFill.add(new Point((ptf.c + 1), r));
+			}
+			for (int r = (ptf.r + 1); r < brightness[ptf.c].length; r++) {
+				if (brightness[ptf.c][r] == toFillValue)
+					brightness[ptf.c][r] = fillValue;
+				else break;
+				if ((ptf.c > 0) && (brightness[ptf.c - 1][r] == toFillValue))
+					pointsToFill.add(new Point((ptf.c - 1), r));
+				if (((ptf.c + 1) < brightness.length) && (brightness[ptf.c + 1][r] == toFillValue))
+					pointsToFill.add(new Point((ptf.c + 1), r));
+			}
+		}
 	}
 	
 	/**

@@ -80,6 +80,18 @@ public class WordImageAnalysis {
 	 * @param pm a progress monitor to observe the processing
 	 */
 	public static void analyzeFontMetrics(ImDocument doc, ProgressMonitor pm) {
+		analyzeFontMetrics(doc, true, pm);
+	}
+	
+	/**
+	 * Analyze font metrics in an Image Markup document. This method relies on
+	 * OCR results for comparison.
+	 * @param doc the document whose font metrics to analyze
+	 * @param useMultipleCores use multiple CPU cores for word image analysis
+	 *            if possible (i.e., if multiple cores available)?
+	 * @param pm a progress monitor to observe the processing
+	 */
+	public static void analyzeFontMetrics(ImDocument doc, boolean useMultipleCores, ProgressMonitor pm) {
 		final SynchronizedProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? ((SynchronizedProgressMonitor) pm) : new SynchronizedProgressMonitor(pm));
 		
 		//	collect word images for later collective assessment
@@ -111,7 +123,7 @@ public class WordImageAnalysis {
 					wordImages.addAll(Arrays.asList(pageWordImages));
 				}
 			}
-		}, pages.length, -1);
+		}, pages.length, (useMultipleCores ? -1 : 1));
 		
 		//	average out font sizes inside paragraphs (should be rather consistent)
 		spm.setStep("Computing paragraph font sizes");
@@ -134,7 +146,7 @@ public class WordImageAnalysis {
 						assessFontSize(paragraphWords);
 				}
 			}
-		}, pages.length, -1);
+		}, pages.length, (useMultipleCores ? -1 : 1));
 		
 		/* Average out weight differences between font sizes
 		 * - relative weight generally differs between words (ones with no
@@ -281,7 +293,7 @@ public class WordImageAnalysis {
 					}
 				}
 			}
-		}, pages.length, -1);
+		}, pages.length,  (useMultipleCores ? -1 : 1));
 	}
 	
 	/**
@@ -1564,7 +1576,7 @@ public class WordImageAnalysis {
 				int shiftDistSquareSum = 0;
 				int mWidth = Math.max((sWidth + Math.max(-ls, 0) + Math.max(-rs, 0)), (rWidth + Math.max(ls, 0) + Math.max(rs, 0)));
 				for (int c = 0; c < mWidth; c++) {
-//					//	THIS IS NOT PUSHING INWARD, THIS IS JUMPING INWARD, AKA PULING OUTWARD !!!
+//					//	THIS IS NOT PUSHING INWARD, THIS IS JUMPING INWARD, AKA PULLING OUTWARD !!!
 //					int sCol = ((sLeft + Math.max(-ls, 0)) + ((c * (sWidth - Math.max(-ls, 0) - Math.max(-rs, 0))) / (mWidth - Math.max(-ls, 0) - Math.max(-rs, 0))));
 //					int rCol = (rLeft + Math.max(ls, 0) + ((c * (rWidth - Math.max(ls, 0) - Math.max(rs, 0))) / (mWidth - Math.max(ls, 0) - Math.max(rs, 0))));
 					//	PUSH INWARD
