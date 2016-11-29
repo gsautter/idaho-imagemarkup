@@ -35,6 +35,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayList;
 
 import javax.imageio.ImageIO;
 
@@ -55,12 +56,23 @@ public class PdfImageDecoder {
 		else if (osName.matches("Mac.*"))
 			return "convert-linux";
 		else {
-			System.out.println("OcrEngin: unknown OS name: " + osName);
+			System.out.println("PdfImageDecoder: unknown OS name: " + osName);
+			return null;
+		}
+	}
+
+	private static String getConvertSystemCommand() {
+		String osName = System.getProperty("os.name");
+		if (osName.matches(".*Linux.*"))
+			return "convert";
+		else {
+			System.out.println("PdfImageDecoder: system command unknown for OS name: " + osName);
 			return null;
 		}
 	}
 	
 	private File imPath;
+	private boolean useSystemCommand = false;;
 	
 	/** Constructor
 	 * @param tessPath the folder to work in
@@ -69,8 +81,12 @@ public class PdfImageDecoder {
 		this.imPath = imPath;
 		if (!this.imPath.exists())
 			this.imPath.mkdirs();
-		if (!this.install(getConvertCommand()))
-			throw new IOException("PdfImageDecoder: binary not found");
+		if (!this.install(getConvertCommand())) {
+			if (getConvertSystemCommand() == null)
+				throw new IOException("PdfImageDecoder: binary not found");
+			else this.useSystemCommand = true;
+		}
+		this.install("ISOcoated_v2_300_eci.icc"); // color profile for CMYK -> RGB conversion
 	}
 	
 	private boolean install(String fileName) {
@@ -127,14 +143,32 @@ public class PdfImageDecoder {
 	 * @throws IOException
 	 */
 	public BufferedImage decodeImage(byte[] imageBytes, String imageFormat) throws IOException {
+		return this.decodeImage(imageBytes, imageFormat, null);
+	}
+	
+	/**
+	 * Decode an image given as an array of bytes with the help of the Image
+	 * Magick <b>convert</b> tool.
+	 * @param imageBytes the bytes representing the image
+	 * @param imageFormat the format the image data is in
+	 * @param colorSpace the name of the color space used in the input data
+	 * @return the decoded image
+	 * @throws IOException
+	 */
+	public BufferedImage decodeImage(byte[] imageBytes, String imageFormat, String colorSpace) throws IOException {
 		try {
-//			System.out.println("Image Magic: converting " + imageBytes.length + " bytes from " + imageFormat + " to PNG");
-			String[] command = {
-					(this.imPath.getAbsolutePath() + "/" + getConvertCommand()),
-					(imageFormat + ":-"),
-					("png:-"),
-			};
-			Process im = Runtime.getRuntime().exec(command, null, imPath.getAbsoluteFile());
+			ArrayList command = new ArrayList();
+			if (this.useSystemCommand)
+				command.add(getConvertSystemCommand());
+			else command.add(this.imPath.getAbsolutePath() + "/" + getConvertCommand());
+			command.add(imageFormat + ":-");
+			if ((colorSpace != null) && colorSpace.toUpperCase().endsWith("CMYK")) {
+				command.add("-negate"); // TODO figure out if this is sensible to add by default
+				command.add("-profile");
+				command.add(this.imPath.getAbsolutePath() + "/ISOcoated_v2_300_eci.icc");
+			}
+			command.add("png:-");
+			Process im = Runtime.getRuntime().exec(((String[]) command.toArray(new String[command.size()])), null, imPath.getAbsoluteFile());
 //			System.out.println(" - process created");
 			OutputStream imIn = im.getOutputStream();
 //			System.out.println(" - got output stream");

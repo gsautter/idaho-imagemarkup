@@ -39,6 +39,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -48,15 +49,19 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.Map;
+import java.util.Set;
 import java.util.SortedSet;
+import java.util.TreeMap;
 import java.util.TreeSet;
 
 import javax.swing.ImageIcon;
+import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 
 import de.uka.ipd.idaho.im.analysis.Imaging;
 import de.uka.ipd.idaho.im.analysis.Imaging.AnalysisImage;
 import de.uka.ipd.idaho.im.analysis.Imaging.ImagePartRectangle;
+import de.uka.ipd.idaho.im.pdf.PdfFontDecoder.FontDecoderCharset;
 import de.uka.ipd.idaho.im.pdf.PdfParser.PStream;
 import de.uka.ipd.idaho.im.pdf.PdfUtils.PdfLineInputStream;
 import de.uka.ipd.idaho.im.util.ImFontUtils;
@@ -86,7 +91,7 @@ public class PdfCharDecoder {
 	 * - include in char signatures 
 	 */
 	
-	private static final int SERIF = 4;
+	static final int SERIF = 4;
 	private static final boolean SERIF_IS_STYLE = false;
 	
 	private static final String[] styleNames4 = {"Plain", "Bold", "Italics", "BoldItalics"};
@@ -257,7 +262,7 @@ public class PdfCharDecoder {
 			
 			//	search match and check how fast it is
 			System.out.println("Actual char is '" + ch + "' (" + Integer.toString(((int) ch), 16) + "):");
-			SortedSet scss = getScoredCharSignatures(cm, (useFontStyle ? fontStyle : -1), true, ((char) 0), efforts);
+			SortedSet scss = getScoredCharSignatures(cm, (useFontStyle ? fontStyle : -1), null, true, ((char) 0), efforts);
 			int nonMatchChars = 0;
 			int afterMatchChars = 0;
 			TreeSet nonMatches = new TreeSet(scoredCharSignatureOrder);
@@ -579,7 +584,7 @@ public class PdfCharDecoder {
 		return regionColorCounts;
 	}
 	
-	static SortedSet getScoredCharSignatures(CharMetrics cm, int style, boolean debug, char debugChar, int[] efforts) {
+	static SortedSet getScoredCharSignatures(CharMetrics cm, int style, FontDecoderCharset charSet, boolean debug, char debugChar, int[] efforts) {
 		TreeSet scss = new TreeSet(scoredCharSignatureOrder);
 		if (cm == null)
 			return scss;
@@ -592,6 +597,8 @@ public class PdfCharDecoder {
 		int cbdComputed = 0;
 		int probCharCount = 0;
 		for (int s = 0; s < charSignatures.length; s++) {
+			if ((charSet != null) && !charSet.containsChar(charSignatures[s].ch))
+				continue;
 			Map diffData = ((efforts != null) ? new HashMap() : null);
 //			float diff = charSignatures[s].getDifference(style, (cm.disjointParts > 1), (cm.loops > 0), cm.fontBoxSignature, cm.charBoxProportion, cm.charBoxSignature, false, diffData);
 			float diff = charSignatures[s].getDifference(style,
@@ -682,8 +689,9 @@ public class PdfCharDecoder {
 	};
 	
 	private static final boolean DEBUG_CHAR_PROG_DECODING = true;
+	private static final boolean DEBUG_DISPLAY_CHAR_PROG_IMAGES = false;
 	
-	static char getChar(PdfFont pFont, PStream charProg, int charCode, String charName, Map objects, Font[] serifFonts, Font[] sansFonts, HashMap cache, boolean debug) throws IOException {
+	static char getChar(PdfFont pFont, PStream charProg, int charCode, String charName, FontDecoderCharset charSet, Map objects, Font[] serifFonts, Font[] sansFonts, HashMap cache, boolean debug) throws IOException {
 		byte[] cpBytes;
 		try {
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -703,6 +711,8 @@ public class PdfCharDecoder {
 		}
 		int imgWidth = -1;
 		int imgHeight = -1;
+		int imgMinY = -1;
+		int imgMaxY = -1;
 		int bpc = -1;
 		boolean isMaskImage = false;
 		String imgFilter = null;
@@ -713,7 +723,46 @@ public class PdfCharDecoder {
 		while ((line = lis.readLine()) != null) {
 			if (PdfUtils.startsWith(line, "BI", 0))
 				break;
-			if (DEBUG_CHAR_PROG_DECODING) System.out.println("IGNORING: " + new String(line));
+			if (PdfUtils.endsWith(line, " d1")) {
+				String[] glyphParams = (new String(line)).split("\\s+");
+				System.out.println("Glyph dimension params: " + Arrays.toString(glyphParams));
+				if (glyphParams.length >= 6) {
+					System.out.println(" - lower left Y: " + Integer.parseInt(glyphParams[3]));
+					imgMinY = Integer.parseInt(glyphParams[3]);
+					System.out.println(" - upper right Y: " + Integer.parseInt(glyphParams[5]));
+					imgMaxY = Integer.parseInt(glyphParams[5]);
+				}
+			}
+			else if (PdfUtils.endsWith(line, " cm")) {
+				String[] glyphTransMatrix = (new String(line)).split("\\s+");
+				System.out.println("Glyph transformation matrix: " + Arrays.toString(glyphTransMatrix));
+				if (glyphTransMatrix.length >= 6) {
+					float[][] gtm = new float[3][3];
+					gtm[2][2] = 1;
+					gtm[1][2] = Float.parseFloat(glyphTransMatrix[5]);
+					gtm[0][2] = Float.parseFloat(glyphTransMatrix[4]);
+					gtm[2][1] = 0;
+					gtm[1][1] = Float.parseFloat(glyphTransMatrix[3]);
+					gtm[0][1] = Float.parseFloat(glyphTransMatrix[2]);
+					gtm[2][0] = 0;
+					gtm[1][0] = Float.parseFloat(glyphTransMatrix[1]);
+					gtm[0][0] = Float.parseFloat(glyphTransMatrix[0]);
+					float[] translate = transform(0, 0, 1, gtm);
+					System.out.println(" - glyph rendering origin " + Arrays.toString(translate));
+					float[] scaleRotate1 = transform(1, 0, 0, gtm);
+					System.out.println(" - glyph rotation and scaling 1 " + Arrays.toString(scaleRotate1));
+					float[] scaleRotate2 = transform(0, 1, 0, gtm);
+					System.out.println(" - glyph rotation and scaling 2 " + Arrays.toString(scaleRotate2));
+					//	if image is upside-down (scaleRotate2[1] < 0), invert min and max Y
+					if (scaleRotate2[1] < 0) {
+						int minY = Math.min(-imgMinY, -imgMaxY);
+						int maxY = Math.max(-imgMinY, -imgMaxY);
+						imgMinY = minY;
+						imgMaxY = maxY;
+					}
+				}
+			}
+			else if (DEBUG_CHAR_PROG_DECODING) System.out.println("IGNORING: " + new String(line));
 		}
 		Hashtable imgParams = new Hashtable();
 		while ((line = lis.readLine()) != null) {
@@ -753,7 +802,7 @@ public class PdfCharDecoder {
 			}
 		}
 		
-		//	TODO implement other types of true type fonts
+		//	TODO implement other types of type 3 fonts (as examples become available)
 		
 		if ((imgWidth == -1) || (imgHeight == -1) || (imgData == null)) {
 			if (DEBUG_CHAR_PROG_DECODING) System.out.println("Invalid char prog");
@@ -764,10 +813,23 @@ public class PdfCharDecoder {
 			PdfParser.decode(imgFilter, imgData, imgParams, imgBuffer, objects);
 			imgData = imgBuffer.toByteArray();
 		}
-		if (DEBUG_CHAR_PROG_DECODING) System.out.println("GOT DATA FOR CHAR IMAGE (" + imgWidth + " x " + imgHeight + "): " + imgData.length);
+		if (DEBUG_CHAR_PROG_DECODING) {
+			System.out.println("GOT DATA FOR CHAR IMAGE (" + imgWidth + " x " + imgHeight + "): " + imgData.length);
+			System.out.println("MIN Y: " + imgMinY);
+			System.out.println("MAX Y: " + imgMaxY);
+		}
 		BufferedImage cpImg = null;
-		if (isMaskImage)
+		if (isMaskImage) {
 			cpImg = createImageMask(imgWidth, imgHeight, imgData);
+			if (DEBUG_DISPLAY_CHAR_PROG_IMAGES) {
+				BufferedImage cpImgBi = new BufferedImage(cpImg.getWidth(), cpImg.getHeight(), BufferedImage.TYPE_INT_ARGB);
+				Graphics gr = cpImgBi.createGraphics();
+				gr.drawImage(cpImg, 0, 0, null);
+				gr.setColor(Color.RED);
+				gr.drawLine(0, imgMaxY, imgWidth, imgMaxY);
+				JOptionPane.showMessageDialog(null, new JLabel(new ImageIcon(cpImgBi)));
+			}
+		}
 		else {
 			//	TODO implement color spaces, and read them as bitmaps nonetheless
 			//	TODO to achieve this, create a BufferedImage in respective color space and read back brightness
@@ -779,7 +841,7 @@ public class PdfCharDecoder {
 		pFont.setCharImage(charCode, charName, cpImg);
 		
 		//	wrap and measure char
-		CharImage chImage = new CharImage(cpImg, -1);
+		CharImage chImage = new CharImage(cpImg, imgMaxY);
 		CharMetrics chMetrics = getCharMetrics(cpImg, 1);
 		
 		//	little we can do about this one
@@ -790,9 +852,10 @@ public class PdfCharDecoder {
 		
 		//	set up statistics
 		CharImageMatch bestCim = null;
+		float bestCimSigDiff = -1;
 		
 		//	get ranked list of probably matches
-		SortedSet matchChars = getScoredCharSignatures(chMetrics, -1, true, ((char) 0), null);
+		SortedSet matchChars = getScoredCharSignatures(chMetrics, -1, charSet, true, ((char) 0), null);
 		
 		//	evaluate probable matches
 		for (Iterator mcit = matchChars.iterator(); mcit.hasNext();) {
@@ -817,15 +880,36 @@ public class PdfCharDecoder {
 			}
 			System.out.println("   --> similarity is " + cim.sim);
 			if ((bestCim == null) || (cim.sim > bestCim.sim)) {
+				System.out.println("   ==> new best match '" + scs.cs.ch + "' (" + ((int) scs.cs.ch) + ", " + StringUtils.getCharName((char) scs.cs.ch) + "), similarity is " + cim.sim + ", scale logs are " + cim.scaleLogX + "/" + cim.scaleLogY);
+				if (bestCim != null) {
+					System.out.println("    - improvement is " + (cim.sim - bestCim.sim));
+					System.out.println("    - sig diff factor is " + (scs.difference / bestCimSigDiff));
+					System.out.println("    - sig diff malus is " + (scs.difference / (bestCimSigDiff * 100)));
+					if ((bestCim.sim + (scs.difference / (bestCimSigDiff * 100))) > cim.sim) {
+						System.out.println("    ==> rejected for signature difference");
+						if (debug || DEBUG_DISPLAY_CHAR_PROG_IMAGES)
+							PdfCharDecoder.displayCharMatch(cim, "New best match rejected for char signature difference");
+						continue;
+					}
+				}
+				if (debug || DEBUG_DISPLAY_CHAR_PROG_IMAGES)
+					displayCharMatch(cim, "New best match");
 				bestCim = cim;
-				System.out.println("   ==> new best match '" + scs.cs.ch + "' (" + ((int) scs.cs.ch) + ", " + StringUtils.getCharName((char) scs.cs.ch) + "), similarity is " + cim.sim);
-				if (debug)
-					displayCharMatch(bestCim, "New best punctuation match");
+				bestCimSigDiff = scs.difference;
 			}
+			else if (DEBUG_DISPLAY_CHAR_PROG_IMAGES && ((bestCim == null) || (cim.sim > (bestCim.sim - 0.01))))
+				displayCharMatch(cim, "New almost best match");
 		}
 		
 		//	finally ...
 		return ((bestCim == null) ? 0 : bestCim.match.ch);
+	}
+	
+	private static float[] transform(float x, float y, float z, float[][] matrix) {
+		float[] res = new float[3];
+		for (int c = 0; c < matrix.length; c++)
+			res[c] = ((matrix[c][0] * x) + (matrix[c][1] * y) + (matrix[c][2] * z));
+		return res;
 	}
 	
 	private static final int blackRgb = Color.BLACK.getRGB();
@@ -858,7 +942,18 @@ public class PdfCharDecoder {
 		int spurious;
 		int missed;
 		float sim;
+		float vCenterShift;
+		float scaleLogX;
+		float scaleLogY;
 		boolean isCharBoxMatch;
+		float relAscenderShift;
+		float relDescenderShift;
+		int leftShift;
+		int rightShift;
+		int topShift;
+		int bottomShift;
+		float xHistSim;
+		float yHistSim;
 		CharImageMatch(CharImage charImage, CharImage match, int matched, int spurious, int missed, boolean isCharBoxMatch) {
 			this.charImage = charImage;
 			this.match = match;
@@ -876,8 +971,8 @@ public class PdfCharDecoder {
 		}
 	}
 	
-	static CharImageMatch matchChar(CharImage charImage, char ch, Font font, HashMap cache, boolean isVerificationMatch, boolean debug) {
-		CharImage matchImage = createCharImage(ch, font, cache, debug);
+	static CharImageMatch matchChar(CharImage charImage, char ch, Font font, boolean isSerifFont, HashMap cache, boolean isVerificationMatch, boolean debug) {
+		CharImage matchImage = createCharImage(ch, font, isSerifFont, cache, debug);
 		if (matchImage == null)
 			return null;
 		if ((charImage.box.getBottomRow() <= charImage.baseline) && (matchImage.baseline <= matchImage.box.getTopRow()))
@@ -892,6 +987,21 @@ public class PdfCharDecoder {
 		CharImageMatch[] serifStyleCims = new CharImageMatch[4];
 		CharImageMatch[] sansStyleCims = new CharImageMatch[4];
 		CharMatchResult() {}
+		float getAverageSimilarity() {
+			float simSum = 0;
+			int simCount = 0;
+			for (int s = Font.PLAIN; s <= (Font.BOLD | Font.ITALIC); s++) {
+				if (this.serifStyleCims[s] != null) {
+					simSum += this.serifStyleCims[s].sim;
+					simCount++;
+				}
+				if (this.sansStyleCims[s] != null) {
+					simSum += this.sansStyleCims[s].sim;
+					simCount++;
+				}
+			}
+			return ((simCount == 0) ? 0 : (simSum / simCount));
+		}
 	}
 	
 	static CharMatchResult matchChar(CharImage charImage, char ch, boolean allowCaps, Font[] serifFonts, Font[] sansFonts, HashMap cache, boolean isVerificationMatch, boolean debug) {
@@ -905,17 +1015,20 @@ public class PdfCharDecoder {
 		boolean charAboveBaseline = (charImage.box.getBottomRow() <= charImage.baseline);
 		boolean charBelowBaseline = ((0 < charImage.baseline) && (charImage.baseline <= charImage.box.getTopRow()));
 		
-		//	char box match or font box match?
+		/* char box match or font box match? (cut some slack for mathematical
+		 * symbols, especially '=', whose distance tends to vary widely) */
 		boolean useCharBoxMatch;
 		if (charImage.baseline < 1)
 			useCharBoxMatch = true;
 		else if (((charImage.box.getWidth() * 2) > charImage.img.getWidth()) && ((charImage.box.getHeight() * 2) > charImage.img.getHeight()))
 			useCharBoxMatch = true;
+		else if ("=#+×<>\u00B1\u00F7\u2260\u2264\u2265\u2266\u2267\u2268\u2269".indexOf(ch) != -1)
+			useCharBoxMatch = true;
 		else useCharBoxMatch = false;
 		
 		//	match argument char in different serif fonts
 		for (int s = 0; s < serifFonts.length; s++) {
-			CharImage matchImage = createCharImage(ch, serifFonts[s], cache, debug);
+			CharImage matchImage = createCharImage(ch, serifFonts[s], true, cache, debug);
 			if (matchImage == null)
 				continue;
 			if (charAboveBaseline && (matchImage.baseline <= matchImage.box.getTopRow()))
@@ -930,7 +1043,7 @@ public class PdfCharDecoder {
 			}
 			matchResult.serifStyleCims[s] = matchCharImage(charImage, matchImage, serifFonts[s].getName(), doUseCharBoxMatch, isVerificationMatch, debug);
 			if (allowCaps && (ch != Character.toUpperCase(ch))) {
-				CharImage capMatchImage = createCharImage(Character.toUpperCase(ch), serifFonts[s], cache, debug);
+				CharImage capMatchImage = createCharImage(Character.toUpperCase(ch), serifFonts[s], true, cache, debug);
 				if (capMatchImage != null) {
 					doUseCharBoxMatch = (charImage.baseline < 1);
 					if (useCharBoxMatch != doUseCharBoxMatch) {
@@ -949,7 +1062,7 @@ public class PdfCharDecoder {
 		
 		//	match argument char in different sans-serif fonts
 		for (int s = 0; s < sansFonts.length; s++) {
-			CharImage matchImage = createCharImage(ch, sansFonts[s], cache, debug);
+			CharImage matchImage = createCharImage(ch, sansFonts[s], false, cache, debug);
 			if (matchImage == null)
 				continue;
 			if (charAboveBaseline && (matchImage.baseline <= matchImage.box.getTopRow()))
@@ -964,7 +1077,7 @@ public class PdfCharDecoder {
 			}
 			matchResult.sansStyleCims[s] = matchCharImage(charImage, matchImage, sansFonts[s].getName(), doUseCharBoxMatch, isVerificationMatch, debug);
 			if (allowCaps && (ch != Character.toUpperCase(ch))) {
-				CharImage capMatchImage = createCharImage(Character.toUpperCase(ch), sansFonts[s], cache, debug);
+				CharImage capMatchImage = createCharImage(Character.toUpperCase(ch), sansFonts[s], false, cache, debug);
 				if (capMatchImage != null) {
 					doUseCharBoxMatch = (charImage.baseline < 1);
 					if (useCharBoxMatch != doUseCharBoxMatch) {
@@ -997,39 +1110,158 @@ public class PdfCharDecoder {
 //		if ((charImage == null) || (match == null))
 //			return null;
 //		
-		int ciLeft = charImage.box.getLeftCol();
-		int ciRight = charImage.box.getRightCol();
-		int ciTop = (charBoxMatch ? charImage.box.getTopRow() : Math.min(charImage.baseline, charImage.box.getTopRow()));
-		int ciBottom = (charBoxMatch ? charImage.box.getBottomRow() : Math.max(charImage.baseline, charImage.box.getBottomRow()));
-		int ciHeight = (ciBottom - ciTop);
-		int mLeft = match.box.getLeftCol();
-		int mRight = match.box.getRightCol();
-		int mTop = (charBoxMatch ? match.box.getTopRow() : Math.min(match.baseline, match.box.getTopRow()));
-		int mBottom = (charBoxMatch ? match.box.getBottomRow() : Math.max(match.baseline, match.box.getBottomRow()));
-		int mHeight = (mBottom - mTop);
-		
 		if (!isVerificationMatch) {
 			double charBoxProportionDistance = computeCharBoxProportionDistance(charImage, match);
 			if (charBoxProportionDistance > 1) // TODO verify this cutoff
 				return null;
 		}
 		
-		int cimWidth = Math.max((ciRight - ciLeft), (mRight - mLeft));
+		//	align histograms to compute image match offsets
+		int[] colShifts = getHistogramAlignmentShifts(charImage.xHistogram, charImage.xHistogramMax, match.xHistogram, match.xHistogramMax, 10);
+		int leftShift = colShifts[0];
+		int rightShift = colShifts[1];
+		int[] rowShifts = getHistogramAlignmentShifts(charImage.yHistogram, charImage.yHistogramMax, match.yHistogram, match.yHistogramMax, 10);
+		int topShift = rowShifts[0];
+		int bottomShift = rowShifts[1];
+		
+		/* create match with and without horizontal and vertical shifts (either
+		 * one can be advantageous, depending on glyph shape and resulting
+		 * histogram shape); actually matching glyphs will benefit from
+		 * - not shifting if histograms are rather smooth and flat
+		 * - shifting if histograms exhibit distinctive peaks (corresponding)
+		 *   to stems
+		 */
+		CharImageMatch ffCim = matchCharImage(charImage, match, 0, 0, 0, 0, fontName, charBoxMatch, debug);
+		CharImageMatch fsCim = matchCharImage(charImage, match, 0, 0, topShift, bottomShift, fontName, charBoxMatch, debug);
+		CharImageMatch sfCim = matchCharImage(charImage, match, leftShift, rightShift, 0, 0, fontName, charBoxMatch, debug);
+		CharImageMatch ssCim = matchCharImage(charImage, match, leftShift, rightShift, topShift, bottomShift, fontName, charBoxMatch, debug);
+		
+		//	find and return best match
+		CharImageMatch cim1 = ((ffCim.sim < fsCim.sim) ? fsCim : ffCim);
+		CharImageMatch cim2 = ((sfCim.sim < ssCim.sim) ? ssCim : sfCim);
+		return ((cim1.sim < cim2.sim) ? cim2 : cim1);
+	}
+	
+	private static int[] getHistogramAlignmentShifts(short[] ciHist, int ciHistMax, short[] mHist, int mHistMax, int maxShift) {
+		int ciStart = 0;
+		while ((ciStart < ciHist.length) && (ciHist[ciStart] == 0))
+			ciStart++;
+		int ciEnd = ciHist.length;
+		while ((ciEnd != 0) && (ciHist[ciEnd-1] == 0))
+			ciEnd--;
+		int mStart = 0;
+		while ((mStart < mHist.length) && (mHist[mStart] == 0))
+			mStart++;
+		int mEnd = mHist.length;
+		while ((mEnd != 0) && (mHist[mEnd-1] == 0))
+			mEnd--;
+		
+		if ((ciEnd <= ciStart) || (mEnd <= mStart)) {
+			int[] shifts = {0, 0};
+			return shifts;
+		}
+		
+		int ciLength = (ciEnd - ciStart);
+		int mLength = (mEnd - mStart);
+		
+		int ciMaxShift = maxShift;
+		int mMaxShift = maxShift;
+		if (ciHist.length > mHist.length) {
+			ciMaxShift = maxShift;
+			mMaxShift = ((maxShift * mHist.length) / ciHist.length);
+		}
+		else if (ciHist.length < mHist.length) {
+			ciMaxShift = ((maxShift * ciHist.length) / mHist.length);
+			mMaxShift = maxShift;
+		}
+		int startShift = 0;
+		int endShift = 0;
+		int bestShiftAlignLength = 1;
+		long bestShiftDistSquareSum = Long.MAX_VALUE;
+		for (int ss = -ciMaxShift; ss <= mMaxShift; ss++)
+			for (int es = -ciMaxShift; es <= mMaxShift; es++) {
+				long distSquareSum = 0;
+				int alignLength = Math.max((ciLength + Math.max(-ss, 0) + Math.max(-es, 0)), (mLength + Math.max(ss, 0) + Math.max(es, 0)));
+				for (int c = 0; c < alignLength; c++) {
+//					//	THIS IS NOT PUSHING INWARD, THIS IS JUMPING INWARD, AKA PULING OUTWARD !!!
+//					int sCol = ((sLeft + Math.max(-ls, 0)) + ((c * (sWidth - Math.max(-ls, 0) - Math.max(-rs, 0))) / (mWidth - Math.max(-ls, 0) - Math.max(-rs, 0))));
+//					int rCol = (rLeft + Math.max(ls, 0) + ((c * (rWidth - Math.max(ls, 0) - Math.max(rs, 0))) / (mWidth - Math.max(ls, 0) - Math.max(rs, 0))));
+					//	PUSH INWARD
+//					int sCol = (0 - Math.max(-ls, 0) + ((c * (sHist.length + Math.max(-ls, 0) + Math.max(-rs, 0))) / mWidth));
+//					int rCol = (0 - Math.max(ls, 0) + ((c * (rHist.length + Math.max(ls, 0) + Math.max(rs, 0))) / mWidth));
+					int ciHistPos = (ciStart - Math.max(-ss, 0) + ((c * (ciLength + Math.max(-ss, 0) + Math.max(-es, 0))) / alignLength));
+					int mHistPos = (mStart - Math.max(ss, 0) + ((c * (mLength + Math.max(ss, 0) + Math.max(es, 0))) / alignLength));
+					
+					int ciHistVal = (mHistMax * (((0 <= ciHistPos) && (ciHistPos < ciHist.length)) ? ciHist[ciHistPos] : 0));
+					int mHistVal = (ciHistMax * (((0 <= mHistPos) && (mHistPos < mHist.length)) ? mHist[mHistPos] : 0));
+					distSquareSum += ((ciHistVal - mHistVal) * (ciHistVal - mHistVal));
+					if (distSquareSum < 0) {
+						distSquareSum = Long.MAX_VALUE;
+						break;
+					}
+				}
+				if ((distSquareSum != Long.MAX_VALUE) && ((distSquareSum / alignLength) < (bestShiftDistSquareSum / bestShiftAlignLength))) {
+					bestShiftAlignLength = alignLength;
+					bestShiftDistSquareSum = distSquareSum;
+					startShift = ss;
+					endShift = es;
+				}
+			}
+		int[] shifts = {startShift, endShift};
+		return shifts;
+	}
+	
+	private static CharImageMatch matchCharImage(CharImage charImage, CharImage match, int leftShift, int rightShift, int topShift, int bottomShift, String fontName, boolean charBoxMatch, boolean debug) {
+		
+		int ciLeft = charImage.box.getLeftCol();
+		int ciRight = charImage.box.getRightCol();
+		int ciWidth = (ciRight - ciLeft);
+		int ciTop = (charBoxMatch ? charImage.box.getTopRow() : Math.min(charImage.baseline, charImage.box.getTopRow()));
+		int ciBottom = (charBoxMatch ? charImage.box.getBottomRow() : Math.max(charImage.baseline, charImage.box.getBottomRow()));
+		int ciHeight = (ciBottom - ciTop);
+		int mLeft = match.box.getLeftCol();
+		int mRight = match.box.getRightCol();
+		int mWidth = (mRight - mLeft);
+		int mTop = (charBoxMatch ? match.box.getTopRow() : Math.min(match.baseline, match.box.getTopRow()));
+		int mBottom = (charBoxMatch ? match.box.getBottomRow() : Math.max(match.baseline, match.box.getBottomRow()));
+		int mHeight = (mBottom - mTop);
+		
+		int cimWidth = Math.max(ciWidth, mWidth);
 		int cimHeight = Math.max(ciHeight, mHeight);
-		byte[][] cimData = new byte[cimWidth][cimHeight];
-		byte[][] ciDistData = new byte[cimWidth][cimHeight];
-		byte[][] mDistData = new byte[cimWidth][cimHeight];
+		
+		//	align histograms to compute image match offsets
+		if ((leftShift != 0) || (rightShift != 0)) {
+			ciLeft = (ciLeft - Math.max(-leftShift, 0));
+			ciRight = (ciRight + Math.max(-rightShift, 0));
+			ciWidth = (ciRight - ciLeft);
+			mLeft = (mLeft - Math.max(leftShift, 0));
+			mRight = (mRight + Math.max(rightShift, 0));
+			mWidth = (mRight - mLeft);
+			cimWidth = Math.max(ciWidth, mWidth);
+		}
+		if ((topShift != 0) || (bottomShift != 0)) {
+			ciTop = (ciTop - Math.max(-topShift, 0));
+			ciBottom = (ciBottom + Math.max(-bottomShift, 0));
+			ciHeight = (ciBottom - ciTop);
+			mTop = (mTop - Math.max(topShift, 0));
+			mBottom = (mBottom + Math.max(bottomShift, 0));
+			mHeight = (mBottom - mTop);
+			cimHeight = Math.max(ciHeight, mHeight);
+		}
 		
 		int matched = 0;
 		int spurious = 0;
 		int missed = 0;
+		byte[][] cimData = new byte[cimWidth][cimHeight];
+		byte[][] ciDistData = new byte[cimWidth][cimHeight];
+		byte[][] mDistData = new byte[cimWidth][cimHeight];
 		for (int cimCol = 0; cimCol < cimWidth; cimCol++) {
-			int ciCol = (ciLeft + ((cimCol * charImage.box.getWidth()) / cimWidth));
+			int ciCol = (ciLeft + ((cimCol * ciWidth) / cimWidth));
 			if (ciCol < 0)
 				continue;
 			if (ciRight <= ciCol)
 				break;
-			int mCol = (mLeft + ((cimCol * match.box.getWidth()) / cimWidth));
+			int mCol = (mLeft + ((cimCol * mWidth) / cimWidth));
 			if (mCol < 0)
 				continue;
 			if (mRight <= mCol)
@@ -1047,8 +1279,8 @@ public class PdfCharDecoder {
 				if (mBottom <= mRow)
 					break;
 				
-				byte cib = charImage.brightness[ciCol][ciRow];
-				byte mb = match.brightness[mCol][mRow];
+				byte cib = (((0 <= ciCol) && (ciCol < charImage.brightness.length) && (0 <= ciRow) && (ciRow < charImage.brightness[ciCol].length)) ? charImage.brightness[ciCol][ciRow] : ((byte) 127));
+				byte mb = (((0 <= mCol) && (mCol < match.brightness.length) && (0 <= mRow) && (mRow < match.brightness[mCol].length)) ? match.brightness[mCol][mRow] : ((byte) 127));
 				if ((cib < 80) && (mb < 80)) {
 					matched++;
 					cimData[cimCol][cimRow] = CIM_MATCHED;
@@ -1085,6 +1317,38 @@ public class PdfCharDecoder {
 		//	TODO figure out if surface of any use
 		
 		CharImageMatch cim = new CharImageMatch(charImage, match, matched, spurious, missed, charBoxMatch);
+		cim.leftShift = leftShift;
+		cim.rightShift = rightShift;
+		cim.topShift = topShift;
+		cim.bottomShift = bottomShift;
+		cim.xHistSim = getHistogramSimilarity(charImage.xHistogram, charImage.xHistogramMax, match.xHistogram, match.xHistogramMax, leftShift, rightShift);
+		cim.yHistSim = getHistogramSimilarity(charImage.yHistogram, charImage.yHistogramMax, match.yHistogram, match.yHistogramMax, topShift, bottomShift);
+		
+		//	test for similarity computation
+//		cim.xHistSim = getHistogramSimilarity(charImage.xHistogram, charImage.xHistogramMax, charImage.xHistogram, charImage.xHistogramMax, 0, 0);
+//		cim.yHistSim = getHistogramSimilarity(match.yHistogram, match.yHistogramMax, match.yHistogram, match.yHistogramMax, 0, 0);
+		
+		/* Measure glyph distortion, and also displacement relative to baseline
+		 * - measure baseline relative ascender and descender shift
+		 * - measure relative stretch in each dimension
+		 * - both should be relatively constant for each font
+		 * ==> penalize deviations
+		 * ==> should help preventing case mix-ups for "c", "j", "o", "p", "s", "v", "w", "x", "y", and "z"
+		 */
+		float ciRelAscender = (((float) (charImage.baseline - charImage.box.getTopRow())) / charImage.img.getHeight());
+		float mRelAscender = (((float) (match.baseline - match.box.getTopRow())) / match.img.getHeight());
+		float ciRelDescender = (((float) (charImage.baseline - charImage.box.getBottomRow())) / charImage.img.getHeight());
+		float mRelDescender = (((float) (match.baseline - match.box.getBottomRow())) / match.img.getHeight());
+		cim.relAscenderShift = (ciRelAscender - mRelAscender);
+		cim.relDescenderShift = (ciRelDescender - mRelDescender);
+		
+		float ciRelVerticalCenter = (((float) (charImage.box.getTopRow() + charImage.box.getBottomRow())) / (2 * charImage.img.getHeight()));
+		float mRelVerticalCenter = (((float) (match.box.getTopRow() + match.box.getBottomRow())) / (2 * match.img.getHeight()));
+		cim.vCenterShift = (ciRelVerticalCenter - mRelVerticalCenter);
+		
+		cim.scaleLogX = ((float) Math.log(((double) charImage.box.getWidth()) / match.box.getWidth()));
+		cim.scaleLogY = ((float) Math.log(((double) charImage.box.getHeight()) / match.box.getHeight()));
+		
 		if (debug) {
 			fillDistData(ciDistData);
 			fillDistData(mDistData);
@@ -1095,10 +1359,46 @@ public class PdfCharDecoder {
 			System.out.println(" - matched " + matched + ", surface " + getSurface(cimData, CIM_MATCHED));
 			System.out.println(" - spurious " + spurious + ", surface " + getSurface(cimData, CIM_SPURIOUS) + ", avg distance " + getAvgDist(cimData, CIM_SPURIOUS, mDistData));
 			System.out.println(" - missed " + missed + ", surface " + getSurface(cimData, CIM_MISSED) + ", avg distance " + getAvgDist(cimData, CIM_MISSED, ciDistData));
-//			if (cim.sim > 0.4)
+	//		if (cim.sim > 0.4)
 				displayCharMatch(cim, ((charBoxMatch ? "Char" : "Font") + " box match"));
 		}
 		return cim;
+	}
+	
+	private static float getHistogramSimilarity(short[] ciHist, int ciHistMax, short[] mHist, int mHistMax, int startShift, int endShift) {
+		int ciStart = 0;
+		while ((ciStart < ciHist.length) && (ciHist[ciStart] == 0))
+			ciStart++;
+		int ciEnd = ciHist.length;
+		while ((ciEnd != 0) && (ciHist[ciEnd-1] == 0))
+			ciEnd--;
+		int mStart = 0;
+		while ((mStart < mHist.length) && (mHist[mStart] == 0))
+			mStart++;
+		int mEnd = mHist.length;
+		while ((mEnd != 0) && (mHist[mEnd-1] == 0))
+			mEnd--;
+		
+		int ciLength = (ciEnd - ciStart);
+		int mLength = (mEnd - mStart);
+		
+		double distSquareSum = 0;
+		int alignLength = Math.max((ciLength + Math.max(-startShift, 0) + Math.max(-endShift, 0)), (mLength + Math.max(startShift, 0) + Math.max(endShift, 0)));
+		for (int c = 0; c < alignLength; c++) {
+//			//	THIS IS NOT PUSHING INWARD, THIS IS JUMPING INWARD, AKA PULING OUTWARD !!!
+//			int sCol = ((sLeft + Math.max(-ls, 0)) + ((c * (sWidth - Math.max(-ls, 0) - Math.max(-rs, 0))) / (mWidth - Math.max(-ls, 0) - Math.max(-rs, 0))));
+//			int rCol = (rLeft + Math.max(ls, 0) + ((c * (rWidth - Math.max(ls, 0) - Math.max(rs, 0))) / (mWidth - Math.max(ls, 0) - Math.max(rs, 0))));
+			//	PUSH INWARD
+//			int sCol = (0 - Math.max(-ls, 0) + ((c * (sHist.length + Math.max(-ls, 0) + Math.max(-rs, 0))) / mWidth));
+//			int rCol = (0 - Math.max(ls, 0) + ((c * (rHist.length + Math.max(ls, 0) + Math.max(rs, 0))) / mWidth));
+			int ciHistPos = (ciStart - Math.max(-startShift, 0) + ((c * (ciLength + Math.max(-startShift, 0) + Math.max(-endShift, 0))) / alignLength));
+			int mHistPos = (mStart - Math.max(startShift, 0) + ((c * (mLength + Math.max(startShift, 0) + Math.max(endShift, 0))) / alignLength));
+			
+			float ciHistVal = (((float) (((0 <= ciHistPos) && (ciHistPos < ciHist.length)) ? ciHist[ciHistPos] : 0)) / ciHistMax);
+			float mHistVal = (((float) (((0 <= mHistPos) && (mHistPos < mHist.length)) ? mHist[mHistPos] : 0)) / mHistMax);
+			distSquareSum += ((ciHistVal - mHistVal) * (ciHistVal - mHistVal));
+		}
+		return (1.0f - ((float) (distSquareSum / alignLength)));
 	}
 	
 	private static void fillDistData(byte[][] distData) {
@@ -1185,15 +1485,30 @@ public class PdfCharDecoder {
 	
 	static BufferedImage getCharMatchImage(CharImageMatch cim) {
 		BufferedImage bi = new BufferedImage(
-				(cim.charImage.img.getWidth() + 1 + cim.match.img.getWidth() + 1 + Math.max(cim.charImage.img.getWidth(), cim.match.img.getWidth())),
-				Math.max(cim.charImage.img.getHeight(), cim.match.img.getHeight()),
-				BufferedImage.TYPE_INT_RGB
+				(cim.charImage.img.getWidth() + 1 + cim.match.img.getWidth() + 1 + Math.max(cim.charImage.img.getWidth(), cim.match.img.getWidth()) + 10),
+				(Math.max(cim.charImage.img.getHeight(), cim.match.img.getHeight()) + 10),
+				BufferedImage.TYPE_INT_ARGB
 			);
 		Graphics g = bi.getGraphics();
 		g.setColor(Color.WHITE);
 		g.fillRect(0, 0, bi.getWidth(), bi.getHeight());
+		
 		g.drawImage(cim.charImage.img, 0, 0, null);
+		g.setColor(new Color((0x80FFFFFF & Color.MAGENTA.getRGB()), true));
+		for (int x = 0; x < cim.charImage.xHistogram.length; x++)
+			g.drawLine(x, (bi.getHeight()-cim.charImage.xHistogram[x]), x, bi.getHeight());
+		g.setColor(new Color((0x80FFFFFF & Color.BLUE.getRGB()), true));
+		for (int y = 0; y < cim.charImage.yHistogram.length; y++)
+			g.drawLine(0, y, cim.charImage.yHistogram[y], y);
+		
 		g.drawImage(cim.match.img, (cim.charImage.img.getWidth() + 1), 0, null);
+		g.setColor(new Color((0x80FFFFFF & Color.MAGENTA.getRGB()), true));
+		for (int x = 0; x < cim.match.xHistogram.length; x++)
+			g.drawLine((x + cim.charImage.img.getWidth() + 1), (bi.getHeight()-cim.match.xHistogram[x]), (x + cim.charImage.img.getWidth() + 1), bi.getHeight());
+		g.setColor(new Color((0x80FFFFFF & Color.BLUE.getRGB()), true));
+		for (int y = 0; y < cim.match.yHistogram.length; y++)
+			g.drawLine((cim.charImage.img.getWidth() + 1), y, (cim.charImage.img.getWidth() + 1 + cim.match.yHistogram[y]), y);
+		
 		g.setColor(Color.BLACK);
 		if (0 < cim.charImage.baseline)
 			g.drawLine(0, cim.charImage.baseline, cim.charImage.img.getWidth(), cim.charImage.baseline);
@@ -1209,32 +1524,52 @@ public class PdfCharDecoder {
 		int mTop = (cim.isCharBoxMatch ? cim.match.box.getTopRow() : Math.min(cim.match.baseline, cim.match.box.getTopRow()));
 		int mBottom = (cim.isCharBoxMatch ? cim.match.box.getBottomRow() : Math.max(cim.match.baseline, cim.match.box.getBottomRow()));
 		
+		//	observe shifts
+		ciLeft = (ciLeft - Math.max(-cim.leftShift, 0));
+		ciRight = (ciRight + Math.max(-cim.rightShift, 0));
+		int ciWidth = (ciRight - ciLeft);
+		mLeft = (mLeft - Math.max(cim.leftShift, 0));
+		mRight = (mRight + Math.max(cim.rightShift, 0));
+		int mWidth = (mRight - mLeft);
+		int cimWidth = Math.max(ciWidth, mWidth);
+		
+		ciTop = (ciTop - Math.max(-cim.topShift, 0));
+		ciBottom = (ciBottom + Math.max(-cim.bottomShift, 0));
+		int ciHeight = (ciBottom - ciTop);
+		mTop = (mTop - Math.max(cim.topShift, 0));
+		mBottom = (mBottom + Math.max(cim.bottomShift, 0));
+		int mHeight = (mBottom - mTop);
+		int cimHeight = Math.max(ciHeight, mHeight);
+		
+		//	render overlay image
 		for (int x = 0;; x++) {
-			int ciCol = (ciLeft + ((x * (ciRight - ciLeft)) / Math.max((ciRight - ciLeft), (mRight - mLeft))));
+			int ciCol = (ciLeft + ((x * (ciRight - ciLeft)) / cimWidth));
 			if (ciCol < 0)
 				continue;
 			if (ciRight <= ciCol)
 				break;
-			int mCol = (mLeft + ((x * (mRight - mLeft)) / Math.max((ciRight - ciLeft), (mRight - mLeft))));
+			int mCol = (mLeft + ((x * (mRight - mLeft)) / cimWidth));
 			if (mCol < 0)
 				continue;
 			if (mRight <= mCol)
 				break;
 			
 			for (int y = 0;; y++) {
-				int ciRow = (ciTop + ((y * (ciBottom - ciTop)) / Math.max((ciBottom - ciTop), (mBottom - mTop))));
+				int ciRow = (ciTop + ((y * (ciBottom - ciTop)) / cimHeight));
 				if (ciRow < 0)
 					continue;
 				if (ciBottom <= ciRow)
 					break;
-				int mRow = (mTop + ((y * (mBottom - mTop)) / Math.max((ciBottom - ciTop), (mBottom - mTop))));
+				int mRow = (mTop + ((y * (mBottom - mTop)) / cimHeight));
 				if (mRow < 0)
 					continue;
 				if (mBottom <= mRow)
 					break;
 				
-				byte cib = cim.charImage.brightness[ciCol][ciRow];
-				byte mb = cim.match.brightness[mCol][mRow];
+//				byte cib = cim.charImage.brightness[ciCol][ciRow];
+//				byte mb = cim.match.brightness[mCol][mRow];
+				byte cib = (((0 <= ciCol) && (ciCol < cim.charImage.brightness.length) && (0 <= ciRow) && (ciRow < cim.charImage.brightness[ciCol].length)) ? cim.charImage.brightness[ciCol][ciRow] : ((byte) 127));
+				byte mb = (((0 <= mCol) && (mCol < cim.match.brightness.length) && (0 <= mRow) && (mRow < cim.match.brightness[mCol].length)) ? cim.match.brightness[mCol][mRow] : ((byte) 127));
 				Color c = null;
 				if ((cib < 80) && (mb < 80))
 					c = Color.BLACK;
@@ -1254,8 +1589,13 @@ public class PdfCharDecoder {
 		return bi;
 	}
 	
-	static void displayCharMatch(CharImageMatch cim, String message) {
-		JOptionPane.showMessageDialog(null, (message + ": '" + cim.match.ch + "', similarity is " + cim.sim + "\n" + cim.matched + "-" + cim.spurious + "-" + cim.missed), "Comparison Image", JOptionPane.PLAIN_MESSAGE, new ImageIcon(getCharMatchImage(cim)));
+	static int displayCharMatch(CharImageMatch cim, String message) {
+		return JOptionPane.showConfirmDialog(null, (message + ": '" + cim.match.ch + "', similarity is " + cim.sim + "" +
+				"\nmatched " + cim.matched + ", spurious " + cim.spurious + ", missed " + cim.missed +
+				"\nx-histogram similarity " + cim.xHistSim + ", y-histogram similarity " + cim.yHistSim +
+				"\nascender shift is " + cim.relAscenderShift + ", descender shift is " + cim.relDescenderShift +
+				"\n[" + cim.leftShift + ", " + cim.rightShift + ", " + cim.topShift + ", " + cim.bottomShift + "]" +
+				""), "Comparison Image", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE, new ImageIcon(getCharMatchImage(cim)));
 	}
 	
 	private static final boolean useNonPostscriptChars = false;
@@ -1481,6 +1821,20 @@ public class PdfCharDecoder {
 		final byte[][] brightness;
 		final ImagePartRectangle box;
 		final int baseline;
+		final short[] xHistogram;
+		final short xHistogramMax;
+		final byte xHistogramPeaks25;
+		final byte xHistogramPeaks33;
+		final byte xHistogramPeaks50;
+		final byte xHistogramPeaks67;
+		final byte xHistogramPeaks75;
+		final short[] yHistogram;
+		final short yHistogramMax;
+		final byte yHistogramPeaks25;
+		final byte yHistogramPeaks33;
+		final byte yHistogramPeaks50;
+		final byte yHistogramPeaks67;
+		final byte yHistogramPeaks75;
 		CharImage(BufferedImage img, int baseline) {
 			this(((char) 0), "", -1, Imaging.wrapImage(img, null), baseline);
 		}
@@ -1495,12 +1849,87 @@ public class PdfCharDecoder {
 			this.brightness = ai.getBrightness();
 			this.box = Imaging.getContentBox(ai);
 			this.baseline = baseline;
+			
+			//	compute histograms
+			byte[][] imgBrightness = ai.getBrightness();
+			this.xHistogram = new short[this.img.getWidth()];
+			Arrays.fill(this.xHistogram, ((short) 0));
+			this.yHistogram = new short[this.img.getHeight()];
+			Arrays.fill(this.yHistogram, ((short) 0));
+			for (int c = 0; c < imgBrightness.length; c++) {
+				for (int r = 0; r < imgBrightness[c].length; r++)
+					if (imgBrightness[c][r] < 80) {
+						this.xHistogram[c]++;
+						this.yHistogram[r]++;
+					}
+			}
+			
+			//	compute histogram maximums (for normalization)
+			int xHistMax = 0;
+			for (int c = 0; c < this.xHistogram.length; c++)
+				xHistMax = Math.max(xHistMax, this.xHistogram[c]);
+			this.xHistogramMax = ((short) xHistMax);
+			int yHistMax = 0;
+			for (int r = 0; r < this.yHistogram.length; r++)
+				yHistMax = Math.max(yHistMax, this.yHistogram[r]);
+			this.yHistogramMax = ((short) yHistMax);
+			
+			//	count histogram peaks (passes through 25%, 33%, 50%, 67%, and 75% of box height/width)
+			int yp25 = 0;
+			int yp33 = 0;
+			int yp50 = 0;
+			int yp67 = 0;
+			int yp75 = 0;
+			for (int c = 0; c <= this.xHistogram.length; c++) {
+				int py = ((c == 0) ? 0 : this.xHistogram[c-1]);
+				int y = ((c == this.xHistogram.length) ? 0 : this.xHistogram[c]);
+				if ((py < ((1 * this.box.getHeight()) / 4)) != (y < ((1 * this.box.getHeight()) / 4)))
+					yp25++;
+				if ((py < ((1 * this.box.getHeight()) / 3)) != (y < ((1 * this.box.getHeight()) / 3)))
+					yp33++;
+				if ((py < ((1 * this.box.getHeight()) / 2)) != (y < ((1 * this.box.getHeight()) / 2)))
+					yp50++;
+				if ((py < ((2 * this.box.getHeight()) / 3)) != (y < ((2 * this.box.getHeight()) / 3)))
+					yp67++;
+				if ((py < ((3 * this.box.getHeight()) / 4)) != (y < ((3 * this.box.getHeight()) / 4)))
+					yp75++;
+			}
+			this.xHistogramPeaks25 = ((byte) (yp25 / 2));
+			this.xHistogramPeaks33 = ((byte) (yp33 / 2));
+			this.xHistogramPeaks50 = ((byte) (yp50 / 2));
+			this.xHistogramPeaks67 = ((byte) (yp67 / 2));
+			this.xHistogramPeaks75 = ((byte) (yp75 / 2));
+			int xp25 = 0;
+			int xp33 = 0;
+			int xp50 = 0;
+			int xp67 = 0;
+			int xp75 = 0;
+			for (int r = 0; r <= this.yHistogram.length; r++) {
+				int px = ((r == 0) ? 0 : this.yHistogram[r-1]);
+				int x = ((r == this.yHistogram.length) ? 0 : this.yHistogram[r]);
+				if ((px < ((1 * this.box.getWidth()) / 4)) != (x < ((1 * this.box.getWidth()) / 4)))
+					xp25++;
+				if ((px < ((1 * this.box.getWidth()) / 3)) != (x < ((1 * this.box.getWidth()) / 3)))
+					xp33++;
+				if ((px < ((1 * this.box.getWidth()) / 2)) != (x < ((1 * this.box.getWidth()) / 2)))
+					xp50++;
+				if ((px < ((2 * this.box.getWidth()) / 3)) != (x < ((2 * this.box.getWidth()) / 3)))
+					xp67++;
+				if ((px < ((3 * this.box.getWidth()) / 4)) != (x < ((3 * this.box.getWidth()) / 4)))
+					xp75++;
+			}
+			this.yHistogramPeaks25 = ((byte) (xp25 / 2));
+			this.yHistogramPeaks33 = ((byte) (xp33 / 2));
+			this.yHistogramPeaks50 = ((byte) (xp50 / 2));
+			this.yHistogramPeaks67 = ((byte) (xp67 / 2));
+			this.yHistogramPeaks75 = ((byte) (xp75 / 2));
 		}
 	}
 	
+	private static float charImageRenderingFontSize = 96.0f;
 	private static HashSet unrenderableChars = new HashSet();
 	
-	static CharImage createCharImage(char ch, Font font, HashMap cache, boolean debug) {
+	static CharImage createCharImage(char ch, Font font, boolean isSerifFont, HashMap cache, boolean debug) {
 		if (debug) System.out.println("Rendering char '" + ch + "' in " + font.getName() + "-" + font.getStyle());
 		if (!font.canDisplay(ch)) {
 			if (debug) System.out.println(" ==> font cannot display char");
@@ -1513,7 +1942,7 @@ public class PdfCharDecoder {
 		String charKey = (ch + "-in-" + font.getName() + "-" + font.getStyle());
 		if (debug) System.out.println(" - char key is " + charKey);
 		if (unrenderableChars.contains(charKey)) {
-			if (debug) System.out.println(" ==> known as unrenderable");
+			if (debug) System.out.println(" ==> known to be unrenderable");
 			return null;
 		}
 		
@@ -1531,13 +1960,13 @@ public class PdfCharDecoder {
 		}
 		
 		//	normalize font size and get maximum char bounds
-		if (font.getSize() != 48)
-			font = font.deriveFont(48.0f);
+		if (font.getSize() != charImageRenderingFontSize)
+			font = font.deriveFont(charImageRenderingFontSize);
 		Rectangle2D fontBox = getFontBox(font);
 		if (debug) System.out.println(" - font box is " + fontBox);
 		
 		//	create char image
-		BufferedImage cbi = new BufferedImage(((int) Math.round(fontBox.getWidth() + 2)), ((int) Math.round(fontBox.getHeight() + 2)), BufferedImage.TYPE_INT_RGB);
+		BufferedImage cbi = new BufferedImage(((int) Math.round(fontBox.getWidth() + 2)), ((int) Math.round(fontBox.getHeight() + 2)), BufferedImage.TYPE_BYTE_BINARY);
 		if (debug) System.out.println(" - image size is " + cbi.getWidth() + "x" + cbi.getHeight());
 		Graphics2D cgr = cbi.createGraphics();
 		cgr.setColor(Color.WHITE);
@@ -1551,7 +1980,7 @@ public class PdfCharDecoder {
 		cgr.drawString(("" + ch), ((int) (Math.round(fontBox.getWidth() - tl.getBounds().getWidth() + 1) / 2)), cbl);
 		cgr.dispose();
 		if (debug) System.out.println(" - char image rendered");
-		CharImage ci = new CharImage(ch, font.getName(), font.getStyle(), cbi, cbl);
+		CharImage ci = new CharImage(ch, font.getName(), (font.getStyle() | (isSerifFont ? SERIF : 0)), cbi, cbl);
 		if (debug) JOptionPane.showMessageDialog(null, "", ("'" + ch + "' in " + font.getName() + "-" + font.getStyle()), JOptionPane.PLAIN_MESSAGE, new ImageIcon(cbi));
 		
 		//	cache image if possible and return it
@@ -1619,5 +2048,581 @@ public class PdfCharDecoder {
 				sig[c][r] = ((byte) Integer.parseInt(sigRows[r].substring(c, (c+1)), 16));
 		}
 		return sig;
+	}
+	
+	//	TODO treat superscript digits as such
+	
+	private static final String[] classifiedUnicodeBlocks = {
+//		"0000;007F;Latin, Common", // Basic Latin[g] (cut control characters)
+//			"0020;007E;Latin, Common", // Basic Latin[g] (split up to distinguish letters from numbers from punctuation marks)
+			"0021;002F;P", // Basic Latin[g] 
+			"0030;0039;D", // Basic Latin[g] 
+			"003A;0040;P", // Basic Latin[g] 
+			"0041;005A;L", // Basic Latin[g] 
+			"005B;0060;P", // Basic Latin[g] 
+			"0061;007A;L", // Basic Latin[g] 
+			"007B;007E;P", // Basic Latin[g] 
+//		"0080;00FF;Latin, Common", // Latin-1 Supplement[h] (cut control block, which renders on Windows machines)
+//			"00A0;00FF;Latin, Common", // Latin-1 Supplement[h] (split up to distinguish letters from numbers from punctuation marks, and cut soft hyphen (u00AD) as indistinguishable from hyphen proper)
+			"00A1;00AC;P", // Latin-1 Supplement[h] 
+			"00AE;00BF;P", // Latin-1 Supplement[h] 
+			"00C0;00FF;L", // Latin-1 Supplement[h] 
+//		"0100;017F;L", // Latin Extended-A (cut Latin small letter long s (u017f), which is extremely rare and very similar to 'f', as well as dot-less i (ui0131))
+			"0100;017E;L", // Latin Extended-A
+//		"0180;024F;L", // Latin Extended-B (split up to cut out tone six letters, which are very rare in Latin scripts, and very similar to 'b', cut florin / f with hook (u0192) as indistinguishable from italics f in serif fonts, cut dental click (u01C0) as indistinguishable from l in sans-serif fonts; cut dental, lateral, alveolar, and retroflex clicks (u01C0, u01C1, u01C2, and u01C3) as virtually indistinguishable from 1, I, l, exclamation mark, etc.)
+			"0180;0183;L", // Latin Extended-B
+			"0186;0191;L", // Latin Extended-B
+			"0193;01BA;L", // Latin Extended-B
+			"01BB;01BB;D", // Latin Extended-B ("letter" two with stroke)
+			"01BC;01BF;L", // Latin Extended-B
+			"01C4;024F;L", // Latin Extended-B
+//		"0250;02AF;Latin", // IPA Extensions (no need to cover phonetic characters)
+//		"02B0;02FF;Latin, Common", // Spacing Modifier Letters 
+//		"0300;036F;L", // Combining Diacritical Marks (split up to remove combining diacritic strokes, which are extremely rare and virtually indistinguishable from dashes, short and long combining solidus overlay (u0337 and u0338) as indistinguishable from slash, grave and acute tone marks (u0340 and u0341), which are indistinguishable from respective accents, and legacy Greet perispomeni and other accents (u342, u343, u344, u345), which is indistinguishable from other accents still in use in Latin based alphabets)
+			"0300;0334;L", // Combining Diacritical Marks 
+			"0339;033F;L", // Combining Diacritical Marks 
+			"0346;036F;L", // Combining Diacritical Marks 
+//		"0370;03FF;G", // Greek and Coptic (split up to remove heta, sampi, Pamphylian digamma, lunate sigma, which are historical and closely resemble 'I', 'T', reversed 'N', and 'c', respectively; cut blank codes and tonos diacritics; cut further archaic Greek symbols; cut Greek question mark, which looks just like ';')
+			"0391;03D7;G", // Greek and Coptic 
+			"03E2;03EF;G", // Greek and Coptic 
+			"03FC;03FC;G", // Greek and Coptic 
+		"0400;04FF;C", // Cyrillic 
+		"0500;052F;C", // Cyrillic Supplement 
+//		"0530;058F;Armenian, Common", // Armenian 
+//		"0590;05FF;Hebrew", // Hebrew 
+//		"0600;06FF;Arabic, Common, Inherited", // Arabic 
+//		"0700;074F;Syriac", // Syriac 
+//		"0750;077F;Arabic", // Arabic Supplement 
+//		"0780;07BF;Thaana", // Thaana 
+//		"07C0;07FF;Nko", // NKo 
+//		"0800;083F;Samaritan", // Samaritan 
+//		"0840;085F;Mandaic", // Mandaic 
+//		"08A0;08FF;Arabic", // Arabic Extended-A 
+//		"0900;097F;Devanagari, Common, Inherited", // Devanagari 
+//		"0980;09FF;Bengali", // Bengali 
+//		"0A00;0A7F;Gurmukhi", // Gurmukhi 
+//		"0A80;0AFF;Gujarati", // Gujarati 
+//		"0B00;0B7F;Oriya", // Oriya 
+//		"0B80;0BFF;Tamil", // Tamil 
+//		"0C00;0C7F;Telugu", // Telugu 
+//		"0C80;0CFF;Kannada", // Kannada 
+//		"0D00;0D7F;Malayalam", // Malayalam 
+//		"0D80;0DFF;Sinhala", // Sinhala 
+//		"0E00;0E7F;Thai, Common", // Thai 
+//		"0E80;0EFF;Lao", // Lao 
+//		"0F00;0FFF;Tibetan, Common", // Tibetan 
+//		"1000;109F;Myanmar", // Myanmar 
+//		"10A0;10FF;Georgian, Common", // Georgian 
+//		"1100;11FF;Hangul", // Hangul Jamo 
+//		"1200;137F;Ethiopic", // Ethiopic 
+//		"1380;139F;Ethiopic", // Ethiopic Supplement 
+//		"13A0;13FF;Cherokee", // Cherokee 
+//		"1400;167F;Canadian Aboriginal", // Unified Canadian Aboriginal Syllabics 
+//		"1680;169F;Ogham", // Ogham 
+//		"16A0;16FF;Runic, Common", // Runic 
+//		"1700;171F;Tagalog", // Tagalog 
+//		"1720;173F;Hanunoo, Common", // Hanunoo 
+//		"1740;175F;Buhid", // Buhid 
+//		"1760;177F;Tagbanwa", // Tagbanwa 
+//		"1780;17FF;Khmer", // Khmer 
+//		"1800;18AF;Mongolian, Common", // Mongolian 
+//		"18B0;18FF;Canadian Aboriginal", // Unified Canadian Aboriginal Syllabics Extended 
+//		"1900;194F;Limbu", // Limbu 
+//		"1950;197F;Tai Le", // Tai Le 
+//		"1980;19DF;New Tai Lue", // New Tai Lue 
+//		"19E0;19FF;Khmer", // Khmer Symbols 
+//		"1A00;1A1F;Buginese", // Buginese 
+//		"1A20;1AAF;Tai Tham", // Tai Tham 
+//		"1B00;1B7F;Balinese", // Balinese 
+//		"1B80;1BBF;Sundanese", // Sundanese 
+//		"1BC0;1BFF;Batak", // Batak 
+//		"1C00;1C4F;Lepcha", // Lepcha 
+//		"1C50;1C7F;Ol Chiki", // Ol Chiki 
+//		"1CC0;1CCF;Sundanese", // Sundanese Supplement 
+//		"1CD0;1CFF;Common, Inherited", // Vedic Extensions 
+//		"1D00;1D7F;Cyrillic, Greek, Latin", // Phonetic Extensions 
+//		"1D80;1DBF;Latin, Greek", // Phonetic Extensions Supplement 
+//		"1DC0;1DFF;Inherited", // Combining Diacritical Marks Supplement 
+		"1E00;1EFF;L", // Latin Extended Additional 
+		"1F00;1FFF;G", // Greek Extended 
+//		"2000;206F;Common, Inherited", // General Punctuation (cut special spaces, split to exclude per-tenthousand character (u2031), cut off various special spaces (u206x), cut out hyphend (u2010 and u2011) as indistinguishable from ASCII counterpart, cut out low left single quotation mark (u201A) as indistinguishable from comma, cut out one dot enleader (u2024) as indistinguishable from dot/period), cut out fraction slash (u2044) as indistinguishable from slash)
+			"2012;2019;P", // General Punctuation 
+			"201B;2023;P", // General Punctuation 
+			"2025;2027;P", // General Punctuation 
+			"2030;2030;P", // General Punctuation 
+			"2032;2043;P", // General Punctuation 
+			"2045;205E;P", // General Punctuation 
+//		"2070;209F;Latin, Common", // Superscripts and Subscripts 
+//		"20A0;20CF;Common", // Currency Symbols 
+//		"20D0;20FF;Latin", // Combining Diacritical Marks for Symbols 
+//		"2100;214F;Latin, Greek, Common", // Letterlike Symbols
+//		"2150;218F;Latin, Common", // Number Forms (split to exclude Roman numerals (u2160-u217F))
+//			"2150;215F;Latin, Common", // Number Forms 
+//			"2180;218F;Latin, Common", // Number Forms 
+//		"2190;21FF;Common", // Arrows (split and cut to exclude extremely exotic arrows)
+//			"2190;2199;P", // Arrows (removed for now as very unlikely to occur in publication)
+//			"21D0;21D9;P", // Arrows (removed for now as very unlikely to occur in publication)
+//		"2200;22FF;P", // Mathematical Operators (removed for now as very unlikely to occur in publication)
+//		"2300;23FF;P", // Miscellaneous Technical (removed for now as very unlikely to occur in publication)
+//		"2400;243F;Common", // Control Pictures 
+//		"2440;245F;Common", // Optical Character Recognition 
+//		"2460;24FF;Common", // Enclosed Alphanumerics 
+//		"2500;257F;Common", // Box Drawing 
+//		"2580;259F;Common", // Block Elements 
+//		"25A0;25FF;Common", // Geometric Shapes 
+//		"2600;26FF;P", // Miscellaneous Symbols (cut down to gender and planetary symbols for now)
+			"263F;2647;P", // Miscellaneous Symbols
+//		"2700;27BF;Common", // Dingbats 
+//		"27C0;27EF;P", // Miscellaneous Mathematical Symbols-A (removed for now as very unlikely to occur in publication)
+//		"27F0;27FF;Common", // Supplemental Arrows-A 
+//		"2800;28FF;Braille", // Braille Patterns 
+//		"2900;297F;P", // Supplemental Arrows-B (removed for now as very unlikely to occur in publication)
+//		"2980;29FF;P", // Miscellaneous Mathematical Symbols-B (removed for now as very unlikely to occur in publication)
+//		"2A00;2AFF;P", // Supplemental Mathematical Operators (removed for now as very unlikely to occur in publication)
+//		"2B00;2BFF;P", // Miscellaneous Symbols and Arrows (removed for now as very unlikely to occur in publication)
+//		"2C00;2C5F;Glagolitic", // Glagolitic 
+		"2C60;2C7F;L", // Latin Extended-C 
+//		"2C80;2CFF;Coptic", // Coptic 
+//		"2D00;2D2F;Georgian", // Georgian Supplement 
+//		"2D30;2D7F;Tifinagh", // Tifinagh 
+//		"2D80;2DDF;Ethiopic", // Ethiopic Extended 
+		"2DE0;2DFF;C", // Cyrillic Extended-A 
+//		"2E00;2E7F;Common", // Supplemental Punctuation 
+//		"2E80;2EFF;Han", // CJK Radicals Supplement 
+//		"2F00;2FDF;Han", // Kangxi Radicals 
+//		"2FF0;2FFF;Common", // Ideographic Description Characters 
+//		"3000;303F;Han, Hangul, Common, Inherited", // CJK Symbols and Punctuation 
+//		"3040;309F;Hiragana, Common, Inherited", // Hiragana 
+//		"30A0;30FF;Katakana, Common", // Katakana 
+//		"3100;312F;Bopomofo", // Bopomofo 
+//		"3130;318F;Hangul", // Hangul Compatibility Jamo 
+//		"3190;319F;Common", // Kanbun 
+//		"31A0;31BF;Bopomofo", // Bopomofo Extended 
+//		"31C0;31EF;Common", // CJK Strokes 
+//		"31F0;31FF;Katakana", // Katakana Phonetic Extensions 
+//		"3200;32FF;Katakana, Hangul, Common", // Enclosed CJK Letters and Months 
+//		"3300;33FF;Katakana, Common", // CJK Compatibility 
+//		"3400;4DBF;Han", // CJK Unified Ideographs Extension A 
+//		"4DC0;4DFF;Common", // Yijing Hexagram Symbols 
+//		"4E00;9FFF;Han", // CJK Unified Ideographs 
+//		"A000;A48F;Yi", // Yi Syllables 
+//		"A490;A4CF;Yi", // Yi Radicals 
+//		"A4D0;A4FF;Lisu", // Lisu 
+//		"A500;A63F;Vai", // Vai 
+		"A640;A69F;C", // Cyrillic Extended-B 
+//		"A6A0;A6FF;Bamum", // Bamum 
+//		"A700;A71F;Common", // Modifier Tone Letters 
+		"A720;A7FF;L", // Latin Extended-D 
+//		"A800;A82F;Syloti Nagri", // Syloti Nagri 
+//		"A830;A83F;Common", // Common Indic Number Forms 
+//		"A840;A87F;Phags Pa", // Phags-pa 
+//		"A880;A8DF;Saurashtra", // Saurashtra 
+//		"A8E0;A8FF;Devanagari", // Devanagari Extended 
+//		"A900;A92F;Kayah Li", // Kayah Li 
+//		"A930;A95F;Rejang", // Rejang 
+//		"A960;A97F;Hangul", // Hangul Jamo Extended-A 
+//		"A980;A9DF;Javanese", // Javanese 
+//		"AA00;AA5F;Cham", // Cham 
+//		"AA60;AA7F;Myanmar", // Myanmar Extended-A 
+//		"AA80;AADF;Tai Viet", // Tai Viet 
+//		"AAE0;AAFF;Meetei Mayek", // Meetei Mayek Extensions 
+//		"AB00;AB2F;Ethiopic", // Ethiopic Extended-A 
+		"AB30;AB6F;L", // Latin Extended-E 
+//		"AB70;ABBF;Cherokee", // Cherokee 
+//		"ABC0;ABFF;Meetei Mayek", // Meetei Mayek 
+//		"AC00;D7AF;Hangul", // Hangul Syllables 
+//		"D7B0;D7FF;Hangul", // Hangul Jamo Extended-B 
+//		"D800;DB7F;", // High Surrogates 
+//		"DB80;DBFF;", // High Private Use Surrogates 
+//		"DC00;DFFF;", // Low Surrogates 
+//		"E000;F8FF;", // Private Use Area 
+//		"F900;FAFF;Han", // CJK Compatibility Ideographs 
+//		"FB00;FB4F;Latin, Hebrew, Armenian", // Alphabetic Presentation Forms (cut down to Latin)
+			"FB00;FB0F;L", // Alphabetic Presentation Forms 
+//		"FB50;FDFF;Arabic, Common", // Arabic Presentation Forms-A 
+//		"FE00;FE0F;Inherited", // Variation Selectors 
+//		"FE10;FE1F;Common", // Vertical Forms 
+//		"FE20;FE2F;Inherited", // Combining Half Marks 
+//		"FE30;FE4F;Common", // CJK Compatibility Forms 
+//		"FE50;FE6F;Common", // Small Form Variants 
+//		"FE70;FEFF;Arabic, Common", // Arabic Presentation Forms-B 
+//		"FF00;FFEF;Latin, Katakana, Hangul, Common", // Halfwidth and fullwidth forms 
+//		"FFF0;FFFF;Common", // Specials 
+	};
+	
+	private static HashMap charsToScripts = new HashMap();
+	static {
+		
+		//	set up cache for character ranges in each script
+		for (int b = 0; b < classifiedUnicodeBlocks.length; b++) {
+			String[] blockData = classifiedUnicodeBlocks[b].split("\\;");
+			int low = Integer.parseInt(blockData[0], 16);
+			int high = Integer.parseInt(blockData[1], 16);
+			String charClass = blockData[2];
+			for (int c = low; c <= high; c++)
+				charsToScripts.put(new Integer(c), charClass);
+		}
+	}
+	static String getCharClass(char ch) {
+		String charClass = ((String) charsToScripts.get(new Integer((int) ch)));
+		return ((charClass == null) ? "U" : charClass);
+	}
+	
+	/* Sub classes for 'P':
+	 * - 'g' for general (period, comma, etc.), the default
+	 * - 'l' for letters (quotation marks, u0022, u0027, u00AB, u00BB, u2018-u201F)
+	 * - 'd' for digits (angle brackets, plus/minus, degree, currency symbols)
+	 */
+	
+	private static final String[] punctuationBlocks = {
+//		"0000;007F;Latin, Common", // Basic Latin[g] (cut control characters)
+//			"0020;007E;Latin, Common", // Basic Latin[g] (split up to distinguish letters from numbers from punctuation marks)
+			"0021;0022;l", // Basic Latin[g] 
+			"0024;0025;d", // Basic Latin[g] 
+			"003C;003E;d", // Basic Latin[g] 
+			"005E;005E;l", // Basic Latin[g] 
+			"0060;0060;l", // Basic Latin[g] 
+//		"0080;00FF;Latin, Common", // Latin-1 Supplement[h] (cut control block, which renders on Windows machines)
+//			"00A0;00FF;Latin, Common", // Latin-1 Supplement[h] (split up to distinguish letters from numbers from punctuation marks)
+			"00A1;00A1;q", // Latin-1 Supplement[h] (inverted exclamation mark)
+			"00A2;00A5;d", // Latin-1 Supplement[h] 
+			"00A8;00A8;l", // Latin-1 Supplement[h] 
+			"00AA;00AA;d", // Latin-1 Supplement[h] 
+			"00AB;00AB;q", // Latin-1 Supplement[h] (double left-pointing (opening) angle bracket quoter)
+			"00AF;00AF;l", // Latin-1 Supplement[h] 
+			"00B0;00B1;d", // Latin-1 Supplement[h] 
+			"00B4;00B4;l", // Latin-1 Supplement[h] 
+			"00B8;00B8;l", // Latin-1 Supplement[h] 
+			"00BA;00BA;d", // Latin-1 Supplement[h] 
+			"00BB;00BB;Q", // Latin-1 Supplement[h] (double right-pointing angle (closing) bracket quoter)
+			"00BF;00BF;q", // Latin-1 Supplement[h] (inverted question mark)
+//		"2000;206F;Common, Inherited", // General Punctuation (split to exclude per-tenthousand character (u2031), and cut off various special spaces (u206x))
+//			"2018;201F;l", // General Punctuation 
+			"2018;2018;q", // General Punctuation (single high left (opening) quoter)
+			"2019;2019;Q", // General Punctuation (single high right (closing) quoter)
+			"201A;201A;q", // General Punctuation (single low left (opening) quoter)
+			"201B;201B;q", // General Punctuation (single high reversed left (opening) quoter)
+			"201C;201C;q", // General Punctuation (double high left (opening) quoter)
+			"201D;201D;Q", // General Punctuation (double high right (closing) quoter)
+			"201E;201E;q", // General Punctuation (double low left (opening) quoter) 
+			"201F;201F;q", // General Punctuation (double high reversed left (opening) quoter)
+			"2030;2030;d", // General Punctuation 
+			"2032;2037;d", // General Punctuation 
+//			"2039;203A;l", // General Punctuation 
+			"2039;2039;q", // General Punctuation (single left-pointing (opening) angle bracket quoter)
+			"203A;203A;Q", // General Punctuation (single right-pointing angle (closing) bracket quoter)
+			"203C;2051;l", // General Punctuation 
+			"2052;2053;d", // General Punctuation 
+			"2054;205E;l", // General Punctuation 
+//		"2070;209F;Latin, Common", // Superscripts and Subscripts 
+//		"20A0;20CF;Common", // Currency Symbols 
+//		"20D0;20FF;Latin", // Combining Diacritical Marks for Symbols 
+//		"2100;214F;Latin, Greek, Common", // Letterlike Symbols
+//		"2150;218F;Latin, Common", // Number Forms (split to exclude Roman numerals (u2160-u217F))
+//			"2150;215F;Latin, Common", // Number Forms 
+//			"2180;218F;Latin, Common", // Number Forms 
+//		"2190;21FF;Common", // Arrows (split and cut to exclude extremely exotic arrows)
+//			"2190;2199;P", // Arrows (removed for now as very unlikely to occur in publication)
+//			"21D0;21D9;P", // Arrows (removed for now as very unlikely to occur in publication)
+//		"2200;22FF;P", // Mathematical Operators (removed for now as very unlikely to occur in publication)
+//		"2300;23FF;P", // Miscellaneous Technical (removed for now as very unlikely to occur in publication)
+//		"27C0;27EF;P", // Miscellaneous Mathematical Symbols-A (removed for now as very unlikely to occur in publication)
+//		"2900;297F;P", // Supplemental Arrows-B (removed for now as very unlikely to occur in publication)
+//		"2980;29FF;P", // Miscellaneous Mathematical Symbols-B (removed for now as very unlikely to occur in publication)
+//		"2A00;2AFF;P", // Supplemental Mathematical Operators (removed for now as very unlikely to occur in publication)
+//		"2B00;2BFF;P", // Miscellaneous Symbols and Arrows (removed for now as very unlikely to occur in publication)
+	};
+	
+	private static HashMap punctToClass = new HashMap();
+	static {
+		
+		//	set up cache for character ranges in each script
+		for (int b = 0; b < punctuationBlocks.length; b++) {
+			String[] blockData = punctuationBlocks[b].split("\\;");
+			int low = Integer.parseInt(blockData[0], 16);
+			int high = Integer.parseInt(blockData[1], 16);
+			String punctClass = blockData[2];
+			for (int c = low; c <= high; c++)
+				punctToClass.put(new Integer(c), punctClass);
+		}
+	}
+	static String getPunctuationClass(char ch) {
+		String punctClass = ((String) punctToClass.get(new Integer((int) ch)));
+		return ((punctClass == null) ? "g" : punctClass);
+	}
+	
+	//	TODO think of more such pairs
+	private static String[] specialPunctuationPairs = {
+		":/", // for URLs
+	};
+	private static Set specialPunctuationPairSet = new HashSet(Arrays.asList(specialPunctuationPairs));
+	
+	static boolean isSpecialPunctuationPair(char char1, char char2) {
+		return specialPunctuationPairSet.contains(char1 + "" + char2);
+	}
+	
+	private static Integer[] ignoreChars = {
+		new Integer(Integer.parseInt("2100", 16)),
+		new Integer(Integer.parseInt("2101", 16)),
+		new Integer(Integer.parseInt("2105", 16)),
+		new Integer(Integer.parseInt("2106", 16)),
+		new Integer(Integer.parseInt("2120", 16)),
+		new Integer(Integer.parseInt("2121", 16)),
+		new Integer(Integer.parseInt("213a", 16)),
+		new Integer(Integer.parseInt("213b", 16)),
+		new Integer(Integer.parseInt("214d", 16)),
+		new Integer(Integer.parseInt("22d8", 16)),
+		new Integer(Integer.parseInt("22d9", 16)),
+	};
+	private static Set ignoreCharSet = new HashSet(Arrays.asList(ignoreChars));
+	
+	static final String COMBINABLE_ACCENTS;
+	static final HashMap COMBINABLE_ACCENT_MAPPINGS = new HashMap();
+	static {
+//		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u00A8'), "dieresis");
+//		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u00AF'), "macron");
+//		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u00B4'), "acute");
+//		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u00B8'), "cedilla");
+//		
+//		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02C6'), "circumflex");
+//		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02C7'), "caron");
+//		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02D8'), "breve");
+//		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02DA'), "ring");
+		
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u0300'), "grave");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u0301'), "acute");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u0302'), "circumflex");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u0303'), "tilde");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u0304'), "macron");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u0306'), "breve");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u0307'), "dot");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u0308'), "dieresis");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u0309'), "hook");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u030A'), "ring");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u030B'), "dblacute");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u030F'), "dblgrave");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u030C'), "caron");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u0323'), "dotbelow");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u0327'), "cedilla");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u0328'), "ogonek");
+		
+		StringBuffer combinableAccentCollector = new StringBuffer();
+		ArrayList combinableAccents = new ArrayList(COMBINABLE_ACCENT_MAPPINGS.keySet());
+		for (int c = 0; c < combinableAccents.size(); c++) {
+			Character combiningChar = ((Character) combinableAccents.get(c));
+			combinableAccentCollector.append(combiningChar.charValue());
+			String charName = ((String) COMBINABLE_ACCENT_MAPPINGS.get(combiningChar));
+			char baseChar = StringUtils.getCharForName(charName);
+			if ((baseChar > 0) && (baseChar != combiningChar.charValue())) {
+				combinableAccentCollector.append(baseChar);
+				COMBINABLE_ACCENT_MAPPINGS.put(new Character(baseChar), charName);
+			}
+		}
+		COMBINABLE_ACCENTS = combinableAccentCollector.toString();
+	}
+	
+	static boolean isCombiningAccent(char ch) {
+		return (COMBINABLE_ACCENTS.indexOf(ch) != -1);
+	}
+	
+	static String getCombinedCharName(char ch, char cmbAccCh) {
+		return (StringUtils.getBaseChar(ch) + "" + COMBINABLE_ACCENT_MAPPINGS.get(new Character(cmbAccCh)));
+	}
+	
+	static char getCombinedChar(char ch, char cmbAccCh) {
+		return StringUtils.getCharForName(getCombinedCharName(ch, cmbAccCh));
+	}
+	
+	//	extrated from http://en.wikipedia.org/wiki/Unicode_block
+	private static final String[] allUnicodeBlocks = {
+//		"0000;007F;Basic Latin",
+		"0020;007E;Basic Latin", // removed control characters
+//		"0080;00FF;Latin-1 Supplement",
+		"00A0;00FF;Latin-1 Supplement", // removed control characters
+		"0100;017F;Latin Extended-A",
+		"0180;024F;Latin Extended-B",
+		"0250;02AF;IPA Extensions",
+		"02B0;02FF;Spacing Modifier Letters",
+		"0300;036F;Combining Diacritical Marks",
+		"0370;03FF;Greek and Coptic",
+		"0400;04FF;Cyrillic",
+		"0500;052F;Cyrillic Supplement",
+		"0530;058F;Armenian",
+		"0590;05FF;Hebrew",
+		"0600;06FF;Arabic",
+		"0700;074F;Syriac",
+		"0750;077F;Arabic Supplement",
+		"0780;07BF;Thaana",
+		"07C0;07FF;NKo",
+		"0800;083F;Samaritan",
+		"0840;085F;Mandaic",
+		"08A0;08FF;Arabic Extended-A",
+		"0900;097F;Devanagari",
+		"0980;09FF;Bengali",
+		"0A00;0A7F;Gurmukhi",
+		"0A80;0AFF;Gujarati",
+		"0B00;0B7F;Oriya",
+		"0B80;0BFF;Tamil",
+		"0C00;0C7F;Telugu",
+		"0C80;0CFF;Kannada",
+		"0D00;0D7F;Malayalam",
+		"0D80;0DFF;Sinhala",
+		"0E00;0E7F;Thai",
+		"0E80;0EFF;Lao",
+		"0F00;0FFF;Tibetan",
+		"1000;109F;Myanmar",
+		"10A0;10FF;Georgian",
+		"1100;11FF;Hangul Jamo",
+		"1200;137F;Ethiopic",
+		"1380;139F;Ethiopic Supplement",
+		"13A0;13FF;Cherokee",
+		"1400;167F;Unified Canadian Aboriginal Syllabics",
+		"1680;169F;Ogham",
+		"16A0;16FF;Runic",
+		"1700;171F;Tagalog",
+		"1720;173F;Hanunoo",
+		"1740;175F;Buhid",
+		"1760;177F;Tagbanwa",
+		"1780;17FF;Khmer",
+		"1800;18AF;Mongolian",
+		"18B0;18FF;Unified Canadian Aboriginal Syllabics Extended",
+		"1900;194F;Limbu",
+		"1950;197F;Tai Le",
+		"1980;19DF;New Tai Lue",
+		"19E0;19FF;Khmer Symbols",
+		"1A00;1A1F;Buginese",
+		"1A20;1AAF;Tai Tham",
+		"1AB0;1AFF;Combining Diacritical Marks Extended",
+		"1B00;1B7F;Balinese",
+		"1B80;1BBF;Sundanese",
+		"1BC0;1BFF;Batak",
+		"1C00;1C4F;Lepcha",
+		"1C50;1C7F;Ol Chiki",
+		"1C80;1C8F;Cyrillic Extended-C",
+		"1CC0;1CCF;Sundanese Supplement",
+		"1CD0;1CFF;Vedic Extensions",
+		"1D00;1D7F;Phonetic Extensions",
+		"1D80;1DBF;Phonetic Extensions Supplement",
+		"1DC0;1DFF;Combining Diacritical Marks Supplement",
+		"1E00;1EFF;Latin Extended Additional",
+		"1F00;1FFF;Greek Extended",
+		"2000;206F;General Punctuation",
+		"2070;209F;Superscripts and Subscripts",
+		"20A0;20CF;Currency Symbols",
+		"20D0;20FF;Combining Diacritical Marks for Symbols",
+		"2100;214F;Letterlike Symbols",
+		"2150;218F;Number Forms",
+		"2190;21FF;Arrows",
+		"2200;22FF;Mathematical Operators",
+		"2300;23FF;Miscellaneous Technical",
+		"2400;243F;Control Pictures",
+		"2440;245F;Optical Character Recognition",
+		"2460;24FF;Enclosed Alphanumerics",
+		"2500;257F;Box Drawing",
+		"2580;259F;Block Elements",
+		"25A0;25FF;Geometric Shapes",
+		"2600;26FF;Miscellaneous Symbols",
+		"2700;27BF;Dingbats",
+		"27C0;27EF;Miscellaneous Mathematical Symbols-A",
+		"27F0;27FF;Supplemental Arrows-A",
+		"2800;28FF;Braille Patterns",
+		"2900;297F;Supplemental Arrows-B",
+		"2980;29FF;Miscellaneous Mathematical Symbols-B",
+		"2A00;2AFF;Supplemental Mathematical Operators",
+		"2B00;2BFF;Miscellaneous Symbols and Arrows",
+		"2C00;2C5F;Glagolitic",
+		"2C60;2C7F;Latin Extended-C",
+		"2C80;2CFF;Coptic",
+		"2D00;2D2F;Georgian Supplement",
+		"2D30;2D7F;Tifinagh",
+		"2D80;2DDF;Ethiopic Extended",
+		"2DE0;2DFF;Cyrillic Extended-A",
+		"2E00;2E7F;Supplemental Punctuation",
+		"2E80;2EFF;CJK Radicals Supplement",
+		"2F00;2FDF;Kangxi Radicals",
+		"2FF0;2FFF;Ideographic Description Characters",
+		"3000;303F;CJK Symbols and Punctuation",
+		"3040;309F;Hiragana",
+		"30A0;30FF;Katakana",
+		"3100;312F;Bopomofo",
+		"3130;318F;Hangul Compatibility Jamo",
+		"3190;319F;Kanbun",
+		"31A0;31BF;Bopomofo Extended",
+		"31C0;31EF;CJK Strokes",
+		"31F0;31FF;Katakana Phonetic Extensions",
+		"3200;32FF;Enclosed CJK Letters and Months",
+		"3300;33FF;CJK Compatibility",
+		"3400;4DBF;CJK Unified Ideographs Extension A",
+		"4DC0;4DFF;Yijing Hexagram Symbols",
+		"4E00;9FFF;CJK Unified Ideographs",
+		"A000;A48F;Yi Syllables",
+		"A490;A4CF;Yi Radicals",
+		"A4D0;A4FF;Lisu",
+		"A500;A63F;Vai",
+		"A640;A69F;Cyrillic Extended-B",
+		"A6A0;A6FF;Bamum",
+		"A700;A71F;Modifier Tone Letters",
+		"A720;A7FF;Latin Extended-D",
+		"A800;A82F;Syloti Nagri",
+		"A830;A83F;Common Indic Number Forms",
+		"A840;A87F;Phags-pa",
+		"A880;A8DF;Saurashtra",
+		"A8E0;A8FF;Devanagari Extended",
+		"A900;A92F;Kayah Li",
+		"A930;A95F;Rejang",
+		"A960;A97F;Hangul Jamo Extended-A",
+		"A980;A9DF;Javanese",
+		"A9E0;A9FF;Myanmar Extended-B",
+		"AA00;AA5F;Cham",
+		"AA60;AA7F;Myanmar Extended-A",
+		"AA80;AADF;Tai Viet",
+		"AAE0;AAFF;Meetei Mayek Extensions",
+		"AB00;AB2F;Ethiopic Extended-A",
+		"AB30;AB6F;Latin Extended-E",
+		"AB70;ABBF;Cherokee Supplement",
+		"ABC0;ABFF;Meetei Mayek",
+		"AC00;D7AF;Hangul Syllables",
+		"D7B0;D7FF;Hangul Jamo Extended-B",
+		"D800;DB7F;High Surrogates",
+		"DB80;DBFF;High Private Use Surrogates",
+		"DC00;DFFF;Low Surrogates",
+		"E000;F8FF;Private Use Area",
+		"F900;FAFF;CJK Compatibility Ideographs",
+		"FB00;FB4F;Alphabetic Presentation Forms",
+		"FB50;FDFF;Arabic Presentation Forms-A",
+		"FE00;FE0F;Variation Selectors",
+		"FE10;FE1F;Vertical Forms",
+		"FE20;FE2F;Combining Half Marks",
+		"FE30;FE4F;CJK Compatibility Forms",
+		"FE50;FE6F;Small Form Variants",
+		"FE70;FEFF;Arabic Presentation Forms-B",
+		"FF00;FFEF;Halfwidth and Fullwidth Forms",
+		"FFF0;FFFF;Specials"
+	};
+	
+	private static TreeMap unicodeBlocksByName = new TreeMap(String.CASE_INSENSITIVE_ORDER);
+	static {
+		for (int b = 0; b < allUnicodeBlocks.length; b++) {
+			String[] blockData = allUnicodeBlocks[b].split("\\;");
+			int minChar = Integer.parseInt(blockData[0], 16);
+			int maxChar = Integer.parseInt(blockData[1], 16);
+			String name = blockData[2];
+			unicodeBlocksByName.put(name, new UnicodeBlock(name, minChar, maxChar));
+		}
+	}
+	
+	static class UnicodeBlock {
+		final String name;
+		final int minChar;
+		final int maxChar;
+		UnicodeBlock(String name, int minChar, int maxChar) {
+			this.name = name;
+			this.minChar = minChar;
+			this.maxChar = maxChar;
+		}
+	}
+	
+	static UnicodeBlock getUnicodeBlock(String name) {
+		return ((UnicodeBlock) unicodeBlocksByName.get(name));
 	}
 }
