@@ -60,7 +60,6 @@ import de.uka.ipd.idaho.im.ImRegion;
 import de.uka.ipd.idaho.im.ImWord;
 import de.uka.ipd.idaho.im.pdf.PdfExtractor;
 import de.uka.ipd.idaho.im.pdf.PdfFontDecoder;
-import de.uka.ipd.idaho.im.pdf.PdfParser;
 import de.uka.ipd.idaho.im.util.ImDocumentIO;
 import de.uka.ipd.idaho.im.utilities.ImageDisplayDialog;
 
@@ -570,20 +569,28 @@ public class PdfExtractorTest implements ImagingConstants {
 		//	TODO check autonomous page image rendering and subsequent blocking
 		pdfName = "Ogawa etal 2016_Acta_Ento.pdf";
 		pdfName = "C70.1.13-18.pdf"; // TODO resolve small-caps problems, e.g. on page 2 ==> hard one, as fonts contain characters THRICE (capital, lower case, and small-caps, so exclusion does not work)
-//		pdfName = "C70.1.43-48.pdf"; // TODO resolve small-caps problems, e.g. on page 2 ==> hard one, as fonts contain characters THRICE (capital, lower case, and small-caps, so exclusion does not work)
-		pdfName = "C70.1.57-60.pdf"; // TODO resolve small-caps problems, e.g. on page 2 ==> hard one, as fonts contain characters THRICE (capital, lower case, and small-caps, so exclusion does not work)
+		pdfName = "C70.1.43-48.pdf"; // TODO resolve small-caps problems, e.g. on page 2 ==> hard one, as fonts contain characters THRICE (capital, lower case, and small-caps, so exclusion does not work)
+//		pdfName = "C70.1.57-60.pdf"; // TODO resolve small-caps problems, e.g. on page 2 ==> hard one, as fonts contain characters THRICE (capital, lower case, and small-caps, so exclusion does not work)
 //		pdfName = "Zootaxa/zt04173p201.pdf"; // TODO make sure to merge graphics on pages 7, 10, 12, 13, 14, and 16
 //		pdfName = "C70.1.13-18.pdf"; // TODOne dito ==> same as above
-		pdfName = "SystEnt.39.4.691.pdf";
+//		pdfName = "SystEnt.39.4.691.pdf";
 //		pdfName = "Zootaxa/zt00201p001.pdf"; // TODOne make multi-part figures in pages 1 and 2 merge into one region
 //		pdfName = "C71.1.135-141.pdf"; // make sure words stay out of figure in page 4
 		
-		//	TODO trouble maker (IRS tax return form) from Terry, mistaken for landscape for some reason ...
-		pdfName = "131887440_201406_990.pdf"; // ==> TODO facilitate deactivating page orientation detection
+		//	trouble maker (IRS tax return form) from Terry, mistaken for landscape for some reason ...
+//		pdfName = "131887440_201406_990.pdf"; // ==> TODOne facilitate deactivating page orientation detection
+		
+		//	TODO some more trouble makers
+//		pdfName = "ZoolMidEast.62.3.261.pdf"; // TODOne load error ==> solved color initialization problem
+//		pdfName = "ZoolMidEast.62.3.261.pdf"; // TODOne figure on page 2 not showing, though extracted OK ==> added supplement mapping for multi-part figures
+//		pdfName = "Candollea.c2016v711a16.pdf"; // TODOne filter overlay of figure on page 4
+//		pdfName = "Alther_et_al_2016.pdf"; // TODOne trouble with 4410 DPI (!) image in page 0 ==> altered IcePDF fallback rendering
+//		pdfName = "Ghielmi_et_al-2016-Journal_of_Zoological_Systematics_and_Evolutionary_Research.pdf"; // TODOne resolve text stream dismemberment on page 9 ==> not reproducible
+		pdfName = "Ghielmi_et_al-2016-Journal_of_Zoological_Systematics_and_Evolutionary_Research.pdf"; // TODO flip table grid graphics on page 5 and 8
 		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
-		aimAtPage = 0; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
+		aimAtPage = -1; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
 		//	TODO try pages 12, 13, 16, 17, and 21 of Prasse 1979
 		System.out.println("Aiming at page " + aimAtPage);
 		final PdfExtractor pdfExtractor = new PdfExtractor(pdfDataPath, pis, false);
@@ -645,13 +652,13 @@ public class PdfExtractorTest implements ImagingConstants {
 //			flags |= PdfExtractor.DOUBLE_PAGE_SCANS;
 //			flags |= PdfExtractor.ENHANCE_SCANS;
 			System.out.println("Flags are " + flags + " (" + Integer.toString(flags, 2) + ")");
-			doc = pdfExtractor.loadImagePdf(doc, pdfDoc, bytes, flags, scaleFactor, null);
+//			doc = pdfExtractor.loadImagePdf(doc, pdfDoc, bytes, flags, scaleFactor, null);
 //			doc = pdfExtractor.loadImagePdf(doc, pdfDoc, bytes, true, true, scaleFactor, null);
 //			doc = pdfExtractor.loadImagePdfBlocks(doc, pdfDoc, bytes, scaleFactor, null);
 //			doc = pdfExtractor.loadImagePdfPages(doc, pdfDoc, bytes, true, scaleFactor, null);
 //			doc = pdfExtractor.loadTextPdf(doc, pdfDoc, bytes, PdfFontDecoder.UNICODE, pdm);
 //			doc = pdfExtractor.loadTextPdf(doc, pdfDoc, bytes, PdfFontDecoder.LATIN_FULL, pdm);
-//			doc = pdfExtractor.loadTextPdf(doc, pdfDoc, bytes, PdfFontDecoder.RENDER_ONLY, pdm);
+			doc = pdfExtractor.loadTextPdf(doc, pdfDoc, bytes, PdfFontDecoder.RENDER_ONLY, pdm);
 //			doc = pdfExtractor.loadTextPdf(doc, pdfDoc, bytes, PdfFontDecoder.NO_DECODING, pdm);
 //			doc = pdfExtractor.loadGenericPdf(doc, pdfDoc, bytes, scaleFactor, null);
 			

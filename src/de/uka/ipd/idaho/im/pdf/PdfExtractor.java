@@ -832,7 +832,9 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			
 			//	add figures as supplements to document if required (synchronized !!!)
 			if (doc != null) synchronized (doc) {
-				ImSupplement.Figure.createFigure(doc, p, pFigure.renderOrderNumber, pFigureDpi, pFigureImage, pFigureBox);
+				ImSupplement.Figure figureSupplement = ImSupplement.Figure.createFigure(doc, p, pFigure.renderOrderNumber, pFigureDpi, pFigureImage, pFigureBox);
+				if (figureSupplements != null)
+					figureSupplements.put(pFigure, figureSupplement);
 			}
 			
 			//	we're done here
@@ -848,13 +850,19 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		}
 		
 		//	decode PStream to image
-		BufferedImage pFigureImage = this.decodeImage(pdfPage, ((PStream) pFigureData).params, ((PStream) pFigureData).bytes, objects);
-		boolean pFigureImageFromPageImage = false;
+		BufferedImage pFigureImage = this.decodeImage(pdfPage, ((PStream) pFigureData).params, ((PStream) pFigureData).bytes, objects, false);
+//		boolean pFigureImageFromPageImage = false;
 		if (pFigureImage == null) {
 			spm.setInfo("   --> could not decode figure");
 			return null;
 		}
 		spm.setInfo("     - got figure sized " + pFigureImage.getWidth() + " x " + pFigureImage.getHeight() + ", type is " + pFigureImage.getType());
+		
+		//	test for blank image only now, as we have all the data for the page image fallback
+		if (this.checkEmptyImage(pFigureImage)) {
+			pFigureImage = this.decodeImage(pdfPage, ((PStream) pFigureData).params, ((PStream) pFigureData).bytes, objects, true);
+			spm.setInfo("     --> blank decoded figure extracted via IcePDF");
+		}
 		
 		//	check rotation
 		Object rotateObj = PdfParser.dereference(pdfPage.getEntries().get("Rotate"), objects);
@@ -942,13 +950,15 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		spm.setInfo("     - resolution computed as " + pFigureDpi + " DPI (" + rawDpi + ")");
 		
 		//	TODO if we're above 600 DPI, scale down half, third, etc., until at most 600 DPI
-		
-		//	test for blank image only now, as we have all the data for the page image fallback
-		if (this.checkEmptyImage(pFigureImage)) {
-			pFigureImage = this.extractFigureFromPageImage(pdfDoc, p, pdfPageBox, rotate, pFigureDpi, pFigure.bounds);
-			pFigureImageFromPageImage = true;
-			spm.setInfo("     --> blank decoded figure re-rendered as part of page image");
-		}
+//		
+//		//	test for blank image only now, as we have all the data for the page image fallback
+//		if (this.checkEmptyImage(pFigureImage)) {
+//			while (pFigureDpi > 600)
+//				pFigureDpi /= 2;
+//			pFigureImage = this.extractFigureFromPageImage(pdfDoc, p, pdfPageBox, rotate, pFigureDpi, pFigure.bounds);
+//			pFigureImageFromPageImage = true;
+//			spm.setInfo("     --> blank decoded figure re-rendered as part of page image");
+//		}
 //		
 //		//	depending on color space, we might have to take the detour via the page image
 //		Object csObj = PdfParser.getObject(((PStream) pFigureData).params, "ColorSpace", objects);
@@ -7397,7 +7407,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	private PPageImage getPageImagePart(PImagePart pip, Map objects, Document pdfDoc, Page pdfPage, ProgressMonitor spm) throws IOException {
 		
 		//	decode PStream to image
-		BufferedImage pipBi = decodeImage(pdfPage, pip.data.params, pip.data.bytes, objects);
+		BufferedImage pipBi = decodeImage(pdfPage, pip.data.params, pip.data.bytes, objects, false);
 		if (pipBi == null) {
 			spm.setInfo("   --> could not decode figure");
 			return null;
@@ -7409,65 +7419,65 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			pipBi = Imaging.rotateImage(pipBi, pip.pdfRotation);
 			spm.setInfo("     - figure rotated by " + ((180.0 / Math.PI) * pip.pdfRotation) + "°");
 		}
-		
-		Object csObj = PdfParser.dereference(pip.data.params.get("ColorSpace"), objects);
-		if (csObj != null) {
-			spm.setInfo("     - color space is " + csObj.toString());
-			
-			//	get filter to catch JPEG ('DCTDecode')
-			Object filterObj = PdfParser.getObject(pip.data.params, "Filter", objects);
-			if (filterObj instanceof Vector) {
-				if (((Vector) filterObj).size() != 0)
-					filterObj = ((Vector) filterObj).get(0);
-			}
-			if (filterObj instanceof Reference)
-				filterObj = objects.get(((Reference) filterObj).getObjectNumber() + " " + ((Reference) filterObj).getGenerationNumber());
-			spm.setInfo("     - filter is " + filterObj.toString());
-			
-			/* If color space is DeviceCMYK, render page image to figure
-			 * resolution and cut out image: images with color space
-			 * DeviceCMYK come out somewhat differently colored than in
-			 * Acrobat, but we cannot seem to do anything about this -
-			 * IcePDF distorts them as well, if more in single image
-			 * rendering than in the page images it generates. */
-			if ("DeviceCMYK".equals(csObj.toString()) && ((filterObj == null) || !"DCTDecode".equals(filterObj.toString()))) {
-//				pipBi = extractFigureFromPageImage(pdfDoc, pip.pageId, pip.dpi, pip.bounds);
-				pipBi = extractFigureFromPageImage(pdfDoc, pip.pageId, pip.rawDpi, pip.bounds);
-				spm.setInfo("     --> figure re-rendered as part of page image");
-			}
-			/* If color space is Separation, values represent color
-			 * intensity rather than brightness, which means 1.0 is
-			 * black and 0.0 is white. This means the have to invert
-			 * brightness to get the actual image. IcePDF gets this
-			 * wrong as well, with images coming out white on black
-			 * rather than the other way around, so we have to do the
-			 * correction ourselves. */
-			else if ((csObj instanceof Vector) && (((Vector) csObj).size() == 4) && ((Vector) csObj).get(0).equals("Separation")) {
-				invertFigureBrightness(pipBi);
-				spm.setInfo("     --> figure brightness inverted for additive 'Separation' color space");
-			}
-			/* If color space is Indexed, IcePDF seems to do a lot better
-			 * in page image rendering than in single-image rendering. */
-			else if ((csObj instanceof Vector) && (((Vector) csObj).size() == 4) && ((Vector) csObj).get(0).equals("Indexed")) {
-//				pipBi = extractFigureFromPageImage(pdfDoc, pip.pageId, pip.dpi, pip.bounds);
-				pipBi = extractFigureFromPageImage(pdfDoc, pip.pageId, pip.rawDpi, pip.bounds);
-				spm.setInfo("     --> figure re-rendered as part of page image");
-			}
-//			/* Just taking a look a ICCBased color space for now ... IcePDF
-//			 * doesn't really do better at those, as it seems ... */
-//			else if ((csObj instanceof Vector) && (((Vector) csObj).size() == 2) && ((Vector) csObj).get(0).equals("ICCBased")) {
-//				Object csEntryObj = PdfParser.dereference(((Vector) csObj).get(1), objects);
-//				spm.setInfo("     --> ICCBased color space");
-//				spm.setInfo("     --> ICCBased color space entry is " + csEntryObj);
-//				if (csEntryObj instanceof PStream) {
-//					PStream csEntry = ((PStream) csEntryObj);
-//					Object csFilter = csEntry.params.get("Filter");
-//					ByteArrayOutputStream csBaos = new ByteArrayOutputStream();
-//					PdfParser.decode(csFilter, csEntry.bytes, csEntry.params, csBaos, objects);
-//					System.out.println(new String(csBaos.toByteArray()));
-//				}
+//		
+//		Object csObj = PdfParser.dereference(pip.data.params.get("ColorSpace"), objects);
+//		if (csObj != null) {
+//			spm.setInfo("     - color space is " + csObj.toString());
+//			
+//			//	get filter to catch JPEG ('DCTDecode')
+//			Object filterObj = PdfParser.getObject(pip.data.params, "Filter", objects);
+//			if (filterObj instanceof Vector) {
+//				if (((Vector) filterObj).size() != 0)
+//					filterObj = ((Vector) filterObj).get(0);
 //			}
-		}
+//			if (filterObj instanceof Reference)
+//				filterObj = objects.get(((Reference) filterObj).getObjectNumber() + " " + ((Reference) filterObj).getGenerationNumber());
+//			spm.setInfo("     - filter is " + filterObj.toString());
+//			
+//			/* If color space is DeviceCMYK, render page image to figure
+//			 * resolution and cut out image: images with color space
+//			 * DeviceCMYK come out somewhat differently colored than in
+//			 * Acrobat, but we cannot seem to do anything about this -
+//			 * IcePDF distorts them as well, if more in single image
+//			 * rendering than in the page images it generates. */
+//			if ("DeviceCMYK".equals(csObj.toString()) && ((filterObj == null) || !"DCTDecode".equals(filterObj.toString()))) {
+////				pipBi = extractFigureFromPageImage(pdfDoc, pip.pageId, pip.dpi, pip.bounds);
+//				pipBi = extractFigureFromPageImage(pdfDoc, pip.pageId, pip.rawDpi, pip.bounds);
+//				spm.setInfo("     --> figure re-rendered as part of page image");
+//			}
+//			/* If color space is Separation, values represent color
+//			 * intensity rather than brightness, which means 1.0 is
+//			 * black and 0.0 is white. This means the have to invert
+//			 * brightness to get the actual image. IcePDF gets this
+//			 * wrong as well, with images coming out white on black
+//			 * rather than the other way around, so we have to do the
+//			 * correction ourselves. */
+//			else if ((csObj instanceof Vector) && (((Vector) csObj).size() == 4) && ((Vector) csObj).get(0).equals("Separation")) {
+//				invertFigureBrightness(pipBi);
+//				spm.setInfo("     --> figure brightness inverted for additive 'Separation' color space");
+//			}
+//			/* If color space is Indexed, IcePDF seems to do a lot better
+//			 * in page image rendering than in single-image rendering. */
+//			else if ((csObj instanceof Vector) && (((Vector) csObj).size() == 4) && ((Vector) csObj).get(0).equals("Indexed")) {
+////				pipBi = extractFigureFromPageImage(pdfDoc, pip.pageId, pip.dpi, pip.bounds);
+//				pipBi = extractFigureFromPageImage(pdfDoc, pip.pageId, pip.rawDpi, pip.bounds);
+//				spm.setInfo("     --> figure re-rendered as part of page image");
+//			}
+////			/* Just taking a look a ICCBased color space for now ... IcePDF
+////			 * doesn't really do better at those, as it seems ... */
+////			else if ((csObj instanceof Vector) && (((Vector) csObj).size() == 2) && ((Vector) csObj).get(0).equals("ICCBased")) {
+////				Object csEntryObj = PdfParser.dereference(((Vector) csObj).get(1), objects);
+////				spm.setInfo("     --> ICCBased color space");
+////				spm.setInfo("     --> ICCBased color space entry is " + csEntryObj);
+////				if (csEntryObj instanceof PStream) {
+////					PStream csEntry = ((PStream) csEntryObj);
+////					Object csFilter = csEntry.params.get("Filter");
+////					ByteArrayOutputStream csBaos = new ByteArrayOutputStream();
+////					PdfParser.decode(csFilter, csEntry.bytes, csEntry.params, csBaos, objects);
+////					System.out.println(new String(csBaos.toByteArray()));
+////				}
+////			}
+//		}
 		
 		//	finally ...
 		return new PPageImage(pipBi, pip.pdfBounds);
@@ -7484,7 +7494,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		}
 	}
 	
-	private BufferedImage decodeImage(Page pdfPage, Hashtable params, byte[] stream, Map objects) throws IOException {
+	private BufferedImage decodeImage(Page pdfPage, Hashtable params, byte[] stream, Map objects, boolean forceUseIcePdf) throws IOException {
 		if (PdfExtractorTest.aimAtPage != -1) {
 			System.out.println(" ==> read " + stream.length + " bytes");
 			System.out.println(" ==> Lenght parameter is " + params.get("Length"));
@@ -7557,7 +7567,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					System.out.println("   - " + xpFigures[f].name + " @" + xpFigures[f].bounds);
 				Object xpFigureObj = PdfParser.getObject(xObject, xpFigures[f].name, objects);
 				if (xpFigureObj instanceof PStream)
-					return this.decodeImage(pdfPage, ((PStream) xpFigureObj).params, ((PStream) xpFigureObj).bytes, objects);
+					return this.decodeImage(pdfPage, ((PStream) xpFigureObj).params, ((PStream) xpFigureObj).bytes, objects, forceUseIcePdf);
 			}
 			return null;
 		}
@@ -7576,7 +7586,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			if (PdfExtractorTest.aimAtPage != -1)
 				System.out.println(" ==> decoding Flate");
 			//	TODO use java.util.zip.GZIPInputStream instead of IcePDF
-			return this.decodeFlate(stream, params, pdfPage.getLibrary(), pdfPage.getResources(), objects);
+			return this.decodeFlate(stream, params, pdfPage.getLibrary(), pdfPage.getResources(), objects, forceUseIcePdf);
 		}
 		else if ((filter != null) && "DCTDecode".equals(filter.toString())) {
 			if (PdfExtractorTest.aimAtPage != -1)
@@ -7619,10 +7629,12 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		}
 	}
 	
-	private BufferedImage decodeFlate(byte[] stream, Hashtable params, Library library, Resources resources, Map objects) throws IOException {
-		BufferedImage bitmapBi = this.decodeBitmap(stream, "FlateDecode", params, library, resources, objects);
-		if (bitmapBi != null)
-			return bitmapBi;
+	private BufferedImage decodeFlate(byte[] stream, Hashtable params, Library library, Resources resources, Map objects, boolean forceUseIcePdf) throws IOException {
+		if (!forceUseIcePdf) {
+			BufferedImage bitmapBi = this.decodeBitmap(stream, "FlateDecode", params, library, resources, objects);
+			if (bitmapBi != null)
+				return bitmapBi;
+		}
 		
 		SeekableInputConstrainedWrapper streamInputWrapper = new SeekableInputConstrainedWrapper(new SeekableByteArrayInputStream(stream), 0, stream.length, true);
 		Stream str = new Stream(library, params, streamInputWrapper);
@@ -7694,16 +7706,30 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		if (PdfExtractorTest.aimAtPage != -1)
 			System.out.println("   - color space is " + cs.name + " (" + cs.numComponents + " components)");
 		
+		//	get and TODO observe decode parameter dictionary
+		Hashtable decodeParams = null;//((Hashtable) PdfParser.dereference(params.get("DecodeParms"), objects));
+		if (PdfExtractorTest.aimAtPage != -1)
+			System.out.println("   - decode parameters are " + decodeParams);
+		
 		//	get image size
-		Object widthObj = params.get("Width");
 		int width;
-		if (widthObj instanceof Number)
-			width = ((Number) widthObj).intValue();
-		else return null;
+		if (decodeParams == null) {
+			Object widthObj = params.get("Width");
+			if (widthObj instanceof Number)
+				width = ((Number) widthObj).intValue();
+			else return null;
+		}
+		else {
+			Object columnsObj = decodeParams.get("Columns");
+			if (columnsObj instanceof Number)
+				width = ((Number) columnsObj).intValue();
+			else return null;
+		}
 		if (PdfExtractorTest.aimAtPage != -1)
 			System.out.println("   - width is " + width);
-		Object heightObj = params.get("Height");
+		
 		int height;
+		Object heightObj = params.get("Height");
 		if (heightObj instanceof Number)
 			height = ((Number) heightObj).intValue();
 		else return null;
@@ -7711,11 +7737,19 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			System.out.println("   - height is " + height);
 		
 		//	get component depth
-		Object bcpObj = params.get("BitsPerComponent");
 		int bitsPerComponent;
-		if (bcpObj instanceof Number)
-			bitsPerComponent = ((Number) bcpObj).intValue();
-		else return null;
+		if (decodeParams == null) {
+			Object bcpObj = params.get("BitsPerComponent");
+			if (bcpObj instanceof Number)
+				bitsPerComponent = ((Number) bcpObj).intValue();
+			else return null;
+		}
+		else {
+			Object bcpObj = decodeParams.get("BitsPerComponent");
+			if (bcpObj instanceof Number)
+				bitsPerComponent = ((Number) bcpObj).intValue();
+			else return null;
+		}
 		if (PdfExtractorTest.aimAtPage != -1)
 			System.out.println("   - bits per component is " + bitsPerComponent);
 		
@@ -8068,27 +8102,27 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		//	extract figure
 		return figurePageImage.getSubimage(left, top, width, height);
 	}
-	
-	private BufferedImage extractFigureFromPageImage(Document pdfDoc, int p, float figureDpi, BoundingBox figureBox) {
-		
-		//	render page image at figure resolution
-		float figureMagnification = (figureDpi / defaultDpi);
-		BufferedImage figurePageImage;
-		synchronized (pdfDoc) {
-			pdfDoc.getPageTree().getPage(p, "").init(); // there might have been a previous call to reduceMemory() ...
-			figurePageImage = ((BufferedImage) pdfDoc.getPageImage(p, GraphicsRenderingHints.SCREEN, Page.BOUNDARY_CROPBOX, 0, figureMagnification));
-			pdfDoc.getPageTree().getPage(p, "").reduceMemory();
-		}
-		
-		//	extract figure
-		int figLeft = Math.max(figureBox.left, 0);
-		int figRight = Math.min(figureBox.right, figurePageImage.getWidth());
-		int figWidth = Math.min((figRight - figLeft), figurePageImage.getWidth());
-		int figTop = Math.max(figureBox.top, 0);
-		int figBottom = Math.min(figureBox.bottom, figurePageImage.getHeight());
-		int figHeight = Math.min((figBottom - figTop), figurePageImage.getHeight());
-		return figurePageImage.getSubimage(figLeft, figTop, figWidth, figHeight);
-	}
+//	
+//	private BufferedImage extractFigureFromPageImage(Document pdfDoc, int p, float figureDpi, BoundingBox figureBox) {
+//		
+//		//	render page image at figure resolution
+//		float figureMagnification = (figureDpi / defaultDpi);
+//		BufferedImage figurePageImage;
+//		synchronized (pdfDoc) {
+//			pdfDoc.getPageTree().getPage(p, "").init(); // there might have been a previous call to reduceMemory() ...
+//			figurePageImage = ((BufferedImage) pdfDoc.getPageImage(p, GraphicsRenderingHints.SCREEN, Page.BOUNDARY_CROPBOX, 0, figureMagnification));
+//			pdfDoc.getPageTree().getPage(p, "").reduceMemory();
+//		}
+//		
+//		//	extract figure
+//		int figLeft = Math.max(figureBox.left, 0);
+//		int figRight = Math.min(figureBox.right, figurePageImage.getWidth());
+//		int figWidth = Math.min((figRight - figLeft), figurePageImage.getWidth());
+//		int figTop = Math.max(figureBox.top, 0);
+//		int figBottom = Math.min(figureBox.bottom, figurePageImage.getHeight());
+//		int figHeight = Math.min((figBottom - figTop), figurePageImage.getHeight());
+//		return figurePageImage.getSubimage(figLeft, figTop, figWidth, figHeight);
+//	}
 	
 	private void correctInvertedGaryscale(BufferedImage bi) {
 		int rgb;
