@@ -242,7 +242,7 @@ public class PdfFont {
 		this.wordLength = 0;
 //		System.out.println("Font " + this.name + ": word ended");
 	}
-	void setCharUsed(int chb) {
+	synchronized void setCharUsed(int chb) {
 		if (chb != -1)
 			this.wordLength++;
 		
@@ -279,7 +279,7 @@ public class PdfFont {
 //		
 		this.prevUsedChb = chb;
 	}
-	void setCharsNeighbored(int fChb, PdfFont sChbFont, int sChb) {
+	synchronized void setCharsNeighbored(int fChb, PdfFont sChbFont, int sChb) {
 		Integer fChbObj = new Integer(fChb);
 		CharUsageStats fChbStats = ((CharUsageStats) this.usedCharStats.get(fChbObj));
 		if ((fChb != -1) && (fChbStats == null)) {
@@ -503,7 +503,7 @@ public class PdfFont {
 //		return ("" + ((char) chb));
 		return ((char) chb);
 	}
-	void mapDifference(Integer ch, Character mCh, String mChName) {
+	synchronized void mapDifference(Integer ch, Character mCh, String mChName) {
 		if (mCh != null)
 			this.diffMappings.put(ch, mCh);
 		if (mChName != null)
@@ -511,7 +511,7 @@ public class PdfFont {
 		if (DEBUG_CHAR_HANDLING)
 			System.out.println("Diff-Mapped " + ch + " to '" + mCh + "'");
 	}
-	void mapUnicode(Integer ch, String str) {
+	synchronized void mapUnicode(Integer ch, String str) {
 		String nStr = str;
 		
 		//	mapped string starts with combining accent
@@ -555,7 +555,7 @@ public class PdfFont {
 			return ((BufferedImage) this.charImages.get(new Integer(chb)));
 		else return ((BufferedImage) this.charNameImages.get(this.diffNameMappings.get(new Integer(chb))));
 	}
-	void setCharImage(int chb, String chn, BufferedImage chi) {
+	synchronized void setCharImage(int chb, String chn, BufferedImage chi) {
 		this.charImages.put(new Integer(chb), chi);
 		this.charNameImages.put(chn, chi);
 	}
@@ -646,14 +646,14 @@ public class PdfFont {
 	}
 	
 	/* set width for unresolved character code */
-	void setCharWidth(Integer ch, float cw) {
+	synchronized void setCharWidth(Integer ch, float cw) {
 		this.ccWidths.put(ch, new Float(cw));
 		if (DEBUG_CHAR_HANDLING)
 			System.out.println("Unresolved width for " + ch + " set to " + cw);
 	}
 	
 	/* set width for actual character */
-	void setCharWidth(Character ch, float cw) {
+	synchronized void setCharWidth(Character ch, float cw) {
 		this.cWidths.put(ch, new Float(cw));
 		if (DEBUG_CHAR_HANDLING)
 			System.out.println("Resolved width for '" + ch + "' (" + ((int) ch.charValue()) + ") set to " + cw);
@@ -700,7 +700,7 @@ public class PdfFont {
 		this.charBaselineShifts.put(ch, new Float(bls));
 	}
 	
-	int addCombinedChar(int bChb1, PdfFont bChFont1, int bChb2, PdfFont bChFont2, String cChUc, String cChName) {
+	synchronized int addCombinedChar(int bChb1, PdfFont bChFont1, int bChb2, PdfFont bChFont2, String cChUc, String cChName) {
 		
 		//	try and find combined char in Unicode mapping
 		for (Iterator ccit = this.ucMappings.keySet().iterator(); ccit.hasNext();) {
