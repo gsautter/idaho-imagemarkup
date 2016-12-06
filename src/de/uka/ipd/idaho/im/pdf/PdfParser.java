@@ -2869,10 +2869,10 @@ public class PdfParser {
 		
 //		private ColorSpace pcrStrokeColorSpace;
 		private PdfColorSpace pcrStrokeColorSpace;
-		private Color pcrStrokeColor;
+		private Color pcrStrokeColor = Color.BLACK;
 //		private ColorSpace pcrNonStrokeColorSpace;
 		private PdfColorSpace pcrNonStrokeColorSpace;
-		private Color pcrNonStrokeColor;
+		private Color pcrNonStrokeColor = Color.BLACK;
 		
 		private PPath pcrPath = null;
 		private float pcrLineWidth = 1.0f;
