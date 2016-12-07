@@ -580,17 +580,20 @@ public class PdfExtractorTest implements ImagingConstants {
 		//	trouble maker (IRS tax return form) from Terry, mistaken for landscape for some reason ...
 //		pdfName = "131887440_201406_990.pdf"; // ==> TODOne facilitate deactivating page orientation detection
 		
-		//	TODO some more trouble makers
+		//	TODOne some more trouble makers
 //		pdfName = "ZoolMidEast.62.3.261.pdf"; // TODOne load error ==> solved color initialization problem
 //		pdfName = "ZoolMidEast.62.3.261.pdf"; // TODOne figure on page 2 not showing, though extracted OK ==> added supplement mapping for multi-part figures
 //		pdfName = "Candollea.c2016v711a16.pdf"; // TODOne filter overlay of figure on page 4
 //		pdfName = "Alther_et_al_2016.pdf"; // TODOne trouble with 4410 DPI (!) image in page 0 ==> altered IcePDF fallback rendering
 //		pdfName = "Ghielmi_et_al-2016-Journal_of_Zoological_Systematics_and_Evolutionary_Research.pdf"; // TODOne resolve text stream dismemberment on page 9 ==> not reproducible
-		pdfName = "Ghielmi_et_al-2016-Journal_of_Zoological_Systematics_and_Evolutionary_Research.pdf"; // TODO flip table grid graphics on page 5 and 8
+//		pdfName = "Ghielmi_et_al-2016-Journal_of_Zoological_Systematics_and_Evolutionary_Research.pdf"; // TODOne flip table grid graphics on page 5 and 8
+//		pdfName = "10.5281zenodo.163452_Seehausen_Guenther.pdf"; // TODOne figure out small-caps problem in page 18 ==> now ignoring missing CMAP in descendant TrueType fonts
+//		pdfName = "10.5281zenodo.163452_Seehausen_Guenther.pdf"; // TODOne looks like some words in page 0 are over-rendered by graphics ==> ... and rightfully so ...
+//		pdfName = "10.5281zenodo.163452_Seehausen_Guenther.pdf"; // TODOne sort out words that are over-rendered by graphics and then more words in page 0
 		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
-		aimAtPage = -1; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
+		aimAtPage = 0; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
 		//	TODO try pages 12, 13, 16, 17, and 21 of Prasse 1979
 		System.out.println("Aiming at page " + aimAtPage);
 		final PdfExtractor pdfExtractor = new PdfExtractor(pdfDataPath, pis, false);

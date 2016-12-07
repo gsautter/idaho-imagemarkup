@@ -1199,7 +1199,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	}
 	
 	private static final boolean DEBUG_EXTRACT_FIGURES = true;
-	private static final boolean DEBUG_MERGE_WORDS = false;
+	private static final boolean DEBUG_MERGE_WORDS = true;
 	
 	private static class DefaultingMap extends HashMap {
 		public Object get(Object key) {
@@ -1218,7 +1218,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		ParallelFor pf;
 		
 		//	extract page objects
-		spm.setStep("Sanitizing page words");
+		spm.setStep("Sanitizing page words and graphics");
 		spm.setBaseProgress(30);
 		spm.setProgress(0);
 		spm.setMaxProgress(35);
@@ -1237,7 +1237,13 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				//	sanitize words (if any)
 				if (pData[p].words.length != 0) {
 					spm.setInfo("Sanitizing words in page " + p + " of " + pData.length);
-					sanitizePageWords(pData[p], tokenizer, spm);
+					sanitizePageWords(pData[p], tokenizer, magnification, spm);
+				}
+				
+				//	sanitize graphics (if any)
+				if (pData[p].paths.length != 0) {
+					spm.setInfo("Sanitizing graphics in page " + p + " of " + pData.length);
+					sanitizePageGraphics(pData[p], magnification, spm);
 				}
 			}
 		};
@@ -1329,6 +1335,33 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					}
 				}
 				
+				//	get paths inside to-flip area
+				final float lineWidthLimit = ((defaultDpi * magnification) / 50); // half a millimeter
+				final float lineDistanceLimit = ((defaultDpi * magnification) / 12); // some two millimeters
+				for (int t = 0; t < pData[p].paths.length; t++) {
+					
+					//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
+					BoundingBox pb = getBoundingBox(pData[p].paths[t].getBounds(), pData[p].pdfPageContentBox, magnification, pData[p].rotate);
+					int pbCx = ((pb.left + pb.right) / 2);
+					int pbCy = ((pb.top + pb.bottom) / 2);
+					
+					//	test for to-flip paths
+					if ((bubLeft < pbCx) && (pbCx < bubRight) && (bubTop < pbCy) && (pbCy < bubBottom))
+						buPaths.add(pData[p].paths[t]);
+					else if ((tdbLeft < pbCx) && (pbCx < tdbRight) && (tdbTop < pbCy) && (pbCy < tdbBottom))
+						tdPaths.add(pData[p].paths[t]);
+					
+					//	also get lines closing out to-flip tables at top or bottom
+					else if ((bubLeft < pbCx) && (pbCx < bubRight) && (pb.getHeight() < lineWidthLimit) && (Math.min(Math.abs(bubTop - pb.bottom), Math.abs(pb.top - bubBottom)) < lineDistanceLimit))
+						buPaths.add(pData[p].paths[t]);
+					else if ((bubTop < pbCy) && (pbCy < bubBottom) && (pb.getWidth() < lineWidthLimit) && (Math.min(Math.abs(bubLeft - pb.right), Math.abs(pb.left - bubRight)) < lineDistanceLimit))
+						buPaths.add(pData[p].paths[t]);
+					else if ((tdbLeft < pbCx) && (pbCx < tdbRight) && (pb.getHeight() < lineWidthLimit) && (Math.min(Math.abs(tdbTop - pb.bottom), Math.abs(pb.top - tdbBottom)) < lineDistanceLimit))
+						tdPaths.add(pData[p].paths[t]);
+					else if ((tdbTop < pbCy) && (pbCy < tdbBottom) && (pb.getWidth() < lineWidthLimit) && (Math.min(Math.abs(tdbLeft - pb.right), Math.abs(pb.left - tdbRight)) < lineDistanceLimit))
+						tdPaths.add(pData[p].paths[t]);
+				}
+				
 				//	convert page bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
 				BoundingBox pb = getBoundingBox(pData[p].pdfPageContentBox, pData[p].pdfPageContentBox, magnification, pData[p].rotate);
 				
@@ -1365,7 +1398,6 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		final Set[] pInFigureWords = new Set[pData.length];
 		final Set[] pInGraphicsWords = new Set[pData.length];
 		final Map[] pFigureSupplements = new Map[pData.length];
-		final Set[] pInPagePaths = new Set[pData.length];
 		pf = new ParallelFor() {
 			public void doFor(int p) throws Exception {
 				
@@ -1388,8 +1420,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				//	preserve vector based graphics embedded in pages
 				if (pData[p].paths.length != 0) {
 					spm.setInfo("Storing vector based graphics in page " + p + " of " + pData.length);
-					pInPagePaths[p] = new HashSet();
-					storeGraphicsAsSupplements(doc, pData[p], pdfDoc, objects, magnification, pInPagePaths[p], spm);
+					storeGraphicsAsSupplements(doc, pData[p], pdfDoc, magnification, spm);
 				}
 				
 				//	collect words that lie inside images
@@ -1585,7 +1616,6 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		final BufferedImage[] pageImages = new BufferedImage[pData.length];
 		final String[] imageNames = new String[pData.length];
 		final int[] imageDPIs = new int[pData.length];
-//		final boolean[] blockFlipInPage = new boolean[pData.length];
 		final BoundingBox[] pageBounds = new BoundingBox[pData.length];
 		pf = new ParallelFor() {
 			public void doFor(int p) throws Exception {
@@ -1708,16 +1738,6 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 							AffineTransform preAt = piGr.getTransform();
 							LineMetrics wlm = rf.getLineMetrics(pw.str, piGr.getFontRenderContext());
 							TextLayout wtl = new TextLayout(pw.str, rf, piGr.getFontRenderContext());
-//							piGr.translate(wb.left, 0);
-//							float leftShift = ((float) -wtl.getBounds().getMinX());
-//							double hScale = (((double) (wb.right - wb.left)) / wtl.getBounds().getWidth());
-//							if (hScale < 1)
-//								piGr.scale(hScale, 1);
-//							else leftShift += (((wb.right - wb.left) - wtl.getBounds().getWidth()) / 2);
-//							System.out.println("Rendering " + pw.str + ((pw.str.length() == 1) ? (" " + Integer.toString(((int) pw.str.charAt(0)), 16)) : "") + ", hScale is " + hScale);
-//							try {
-//								piGr.drawGlyphVector(rf.createGlyphVector(new FontRenderContext(piGr.getTransform(), true, true), pw.str), leftShift, (wb.bottom - (pw.font.hasDescent ? Math.round(wlm.getDescent()) : 0)));
-//							} catch (InternalError ie) {}
 							piGr.translate(wb.left, wb.bottom);
 							float leftShift = ((float) -wtl.getBounds().getMinX());
 							double hScale = 1;
@@ -1785,8 +1805,6 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						//	render path (safe for what we skipped above, i.e., out of page paths, bright on white paths, etc.)
 						else if (po instanceof PPath) {
 							PPath pp = ((PPath) po);
-							if (!pInPagePaths[p].contains(pp))
-								continue;
 							AffineTransform preAt = piGr.getTransform();
 							piGr.translate((-pData[p].pdfPageContentBox.x * magnification), ((-pData[p].pdfPageContentBox.y + pData[p].pdfPageContentBox.height + pData[p].pdfPageBox.height) * magnification));
 							piGr.scale(magnification, -magnification);
@@ -3221,7 +3239,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		pWordList = null;
 	}
 	
-	private static void sanitizePageWords(PPageData pData, Tokenizer tokenizer, ProgressMonitor spm) {
+	private void sanitizePageWords(PPageData pData, Tokenizer tokenizer, float magnification, ProgressMonitor spm) {
 		
 		//	sort out words that lie outside the media box (normalize media box beforehand, ignoring orientation)
 		ArrayList pWords = new ArrayList();
@@ -3252,6 +3270,59 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			if (pData.words[w].str.trim().length() != 0) {
 				pData.words[w] = shrinkWordBounds(mg, pData.words[w]);
 			}
+		
+		//	sort out words overpainted by opaque graphics
+		spm.setInfo(" - removing words overpainted by opaque graphics");
+		pWords.clear();
+		pWords.addAll(Arrays.asList(pData.words));
+		Collections.sort(pWords);
+		for (int p = 0; p < pData.paths.length; p++) {
+			
+			//	check path opacity
+			if (!isOpaque(pData.paths[p]))
+				continue;
+			
+			//	test word overlap with individual sub paths
+			PSubPath[] pSubPaths = pData.paths[p].getSubPaths();
+			for (int sp = 0; sp < pSubPaths.length; sp++) {
+				
+				//	check if sub path is rectangular
+				Shape[] pShapes = pSubPaths[sp].getShapes();
+				int subPathLineCount = 0;
+				int subPathCurveCount = 0;
+				for (int s = 0; s < pShapes.length; s++) {
+					if (pShapes[s] instanceof Line2D)
+						subPathLineCount++;
+					else if (pShapes[s] instanceof CubicCurve2D)
+						subPathCurveCount++;
+				}
+				if (subPathLineCount < subPathCurveCount)
+					continue;
+				
+				//	get sub path bounds
+				BoundingBox subPathBounds = this.getBoundingBox(pSubPaths[sp].getBounds(), pData.pdfPageContentBox, magnification, pData.rotate);
+				
+				//	collect words painted over by opaquely filled path, but only if it is non-artsy
+				for (int w = 0; w < pWords.size(); w++) {
+					PWord pw = ((PWord) pWords.get(w));
+					
+					//	rendered after current path
+					if (pData.paths[p].renderOrderNumber < pw.renderOrderNumber)
+						break; // we're done here, thanks to ordering of words
+					
+					//	check overlap
+					BoundingBox wordBounds = this.getBoundingBox(pw.bounds, pData.pdfPageContentBox, magnification, pData.rotate);
+					if (wordBounds.liesIn(subPathBounds, false)) {
+						pWords.remove(w--);
+						spm.setInfo("   - removed word '" + pw.str + "' @" + pw.bounds + " as overpainted by graphics path at " + pSubPaths[sp].getBounds());
+					}
+				}
+			}
+		}
+		if (pWords.size() < pData.words.length) {
+			spm.setInfo(" ==> removed " + (pData.words.length - pWords.size()) + " words overpainted by opaque graphics");
+			pData.words = ((PWord[]) pWords.toArray(new PWord[pWords.size()]));
+		}
 		
 		//	sort words left to right and top to bottom (for horizontal writing direction, for other writing directions accordingly)
 		//	TODO make sure this is a total ordering
@@ -3661,23 +3732,23 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		}
 	}
 	
-	private void storeGraphicsAsSupplements(ImDocument doc, PPageData pData, Document pdfDoc, Map objects, float magnification, Set inPagePaths, ProgressMonitor spm) throws IOException {
+	private void sanitizePageGraphics(PPageData pData, float magnification, ProgressMonitor spm) {
 		if (pData.paths.length == 0)
 			return;
-		spm.setInfo(" - storing vector based graphics");
+		Arrays.sort(pData.paths);
 		
 		//	get (and normalize) page bounds
 		if (PdfExtractorTest.aimAtPage != -1)
-			System.out.println("Page bounds are " + pData.pdfPageContentBox);
+			System.out.println(" - PDF page bounds are " + pData.pdfPageContentBox);
 		Rectangle2D.Float pageBounds;
 		if (pData.pdfPageContentBox.height <= pData.pdfPageContentBox.y)
 			pageBounds = new Rectangle2D.Float(pData.pdfPageContentBox.x, (pData.pdfPageContentBox.y - pData.pdfPageContentBox.height), pData.pdfPageContentBox.width, pData.pdfPageContentBox.height);
 		else pageBounds = pData.pdfPageContentBox;
 		if (PdfExtractorTest.aimAtPage != -1)
-			System.out.println("Page box is " + pageBounds);
+			System.out.println(" - page bounds are " + pageBounds);
 		BoundingBox pageBox = getBoundingBox(pageBounds, pData.pdfPageContentBox, 1, 0);
 		if (PdfExtractorTest.aimAtPage != -1)
-			System.out.println("Page box is " + pageBox);
+			System.out.println(" - page box is " + pageBox);
 		
 		//	create grid of minimum render order number in each point on page
 		int[][] minRenderOrderNumbers = new int[Math.round(pData.pdfPageContentBox.width) + 2][Math.round(pData.pdfPageContentBox.height) + 2];
@@ -3721,6 +3792,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				}
 			}
 		}
+		spm.setInfo(" - spacial distribution of minimum render order number computed");
 		
 		//	compute minimum rendering order number of any non-graphics object (word or figure)
 		int minNonGraphicsRenderOrderNumber = Integer.MAX_VALUE;
@@ -3735,6 +3807,155 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				minNonGraphicsRenderOrderNumber = Math.min(minNonGraphicsRenderOrderNumber, pData.words[w].renderOrderNumber);
 		}
 		spm.setInfo(" - minimum non-graphics render order number is " + minNonGraphicsRenderOrderNumber);
+		
+		//	sort out paths that lie outside page, as well as paths rendering bright on white (we need to do that in render order number)
+		spm.setInfo(" - removing invisible paths");
+		ArrayList pPaths = new ArrayList();
+		for (int p = 0; p < pData.paths.length; p++) {
+			Rectangle2D pathBounds = pData.paths[p].getBounds();
+			spm.setInfo("   - checking path at " + pathBounds + " with RON " + pData.paths[p].renderOrderNumber);
+			if (PdfExtractorTest.aimAtPage != -1) {
+				System.out.println("Handling path at " + pathBounds);
+				System.out.println(" - stroke color is " + pData.paths[p].strokeColor + ((pData.paths[p].strokeColor == null) ? "" : (", alpha " + pData.paths[p].strokeColor.getAlpha())));
+				System.out.println(" - line width is " + pData.paths[p].lineWidth);
+				System.out.println(" - fill color is " + pData.paths[p].fillColor + ((pData.paths[p].fillColor == null) ? "" : (", alpha " + pData.paths[p].fillColor.getAlpha())));
+				System.out.println(" - render order number is " + pData.paths[p].renderOrderNumber);
+			}
+			
+			//	get brightness of stroke and fill colors
+			float strokeBrightness = 1.0f;
+			if (pData.paths[p].strokeColor != null)
+				strokeBrightness = getBrightness(pData.paths[p].strokeColor);
+			if (PdfExtractorTest.aimAtPage != -1)
+				System.out.println(" - stroke brightness is " + strokeBrightness);
+			float fillBrightness = 1.0f;
+			if (pData.paths[p].fillColor != null)
+				fillBrightness = getBrightness(pData.paths[p].fillColor);
+			if (PdfExtractorTest.aimAtPage != -1)
+				System.out.println(" - fill brightness is " + fillBrightness);
+			
+			//	if path painted and filled in white, check if it is on top of anything non-white
+			//	TODO assess if 14/16th white for stroking and 15/16 white for filling are sensible thresholds
+//			if ((strokeBrightness >= 0.99) && (fillBrightness >= 0.99)) {
+			if ((strokeBrightness > 0.88) && (fillBrightness > 0.94)) {
+				
+				//	painted right on white page, we don't need this one
+				if (pData.paths[p].renderOrderNumber < minNonGraphicsRenderOrderNumber) {
+					spm.setInfo("     ==> removed as bright on white (RON)");
+					if (PdfExtractorTest.aimAtPage != -1)
+						System.out.println(" ==> removed as bright on white (RON)");
+					continue;
+				}
+				
+				//	depending on blend mode, a light overpaint does not have any significant effect
+				if ((pData.paths[p].blendMode != null) && (pData.paths[p].blendMode.lightIsTranslucent())) {
+					spm.setInfo("     ==> removed as bright on white (BM)");
+					if (PdfExtractorTest.aimAtPage != -1)
+						System.out.println(" ==> removed as bright on white (BM)");
+					continue;
+				}
+				
+				//	check minimum over-painted render order number in grid
+				BoundingBox pathBox = getBoundingBox(pathBounds, pData.pdfPageContentBox, 1, 0);
+				int minOverlappingRenderOrderNumber = Integer.MAX_VALUE;
+				for (int c = 0; c < Math.max(1, pathBox.getWidth()); c++) {
+					if ((pathBox.left + c + 1) < 0)
+						continue;
+					if ((pathBox.left + c + 1) >= minRenderOrderNumbers.length)
+						continue;
+					int[] cMinRenderOrderNumbers = minRenderOrderNumbers[pathBox.left + c + 1];
+					for (int r = 0; r < Math.max(1, pathBox.getHeight()); r++) {
+						if ((pathBox.top + r + 1) < 0)
+							continue;
+						if ((pathBox.top + r + 1) >= cMinRenderOrderNumbers.length)
+							continue;
+						minOverlappingRenderOrderNumber = Math.min(cMinRenderOrderNumbers[pathBox.top + r + 1], minOverlappingRenderOrderNumber);
+					}
+				}
+				if (PdfExtractorTest.aimAtPage != -1)
+					System.out.println(" - minimum overlapping render order number is " + minOverlappingRenderOrderNumber);
+				
+				//	painted right on white page, we don't need this one
+				if (pData.paths[p].renderOrderNumber < minOverlappingRenderOrderNumber) {
+					spm.setInfo("     ==> removed as bright on white for minimum overpainted RON " + minOverlappingRenderOrderNumber);
+					if (PdfExtractorTest.aimAtPage != -1)
+						System.out.println(" ==> removed as bright on white (RON)");
+					continue;
+				}
+			}
+			
+			//	check sub paths
+			PSubPath[] pSubPaths = pData.paths[p].getSubPaths();
+			int inPageSubPathCount = 0;
+			if (PdfExtractorTest.aimAtPage != -1)
+				System.out.println(" - sub paths are:");
+			for (int s = 0; s < pSubPaths.length; s++) {
+				BoundingBox spBox = getBoundingBox(pSubPaths[s].getBounds(), pData.pdfPageContentBox, 1, 0);
+				if (spBox.overlaps(pageBox))
+					inPageSubPathCount++;
+				if (PdfExtractorTest.aimAtPage != -1)
+					System.out.println("   - " + pSubPaths[s].getBounds() + ", " + (spBox.overlaps(pageBox) ? "inside" : "outside") + " page");
+			}
+			
+			//	skip over path completely outside page
+			if (inPageSubPathCount == 0) {
+				spm.setInfo("     ==> removed as completely outside page");
+				if (PdfExtractorTest.aimAtPage != -1)
+					System.out.println(" ==> removed as outside page");
+				continue;
+			}
+			
+			//	skip over invisible paths
+			if ((pData.paths[p].strokeColor == null) && (pData.paths[p].fillColor == null)) {
+				spm.setInfo("     ==> removed as neigher stroked nor filled");
+				if (PdfExtractorTest.aimAtPage != -1)
+					System.out.println(" ==> removed as neigher stroked nor filled");
+				continue;
+			}
+			
+			//	retain path, at last
+			pPaths.add(pData.paths[p]);
+			
+			//	update minimum render order number in grid
+			BoundingBox pathBox = getBoundingBox(pathBounds, pData.pdfPageContentBox, 1, 0);
+			for (int c = 0; c < Math.max(1, pathBox.getWidth()); c++) {
+				if ((pathBox.left + c + 1) < 0)
+					continue;
+				if ((pathBox.left + c + 1) >= minRenderOrderNumbers.length)
+					continue;
+				int[] cMinRenderOrderNumbers = minRenderOrderNumbers[pathBox.left + c + 1];
+				for (int r = 0; r < Math.max(1, pathBox.getHeight()); r++) {
+					if ((pathBox.top + r + 1) < 0)
+						continue;
+					if ((pathBox.top + r + 1) >= cMinRenderOrderNumbers.length)
+						continue;
+					cMinRenderOrderNumbers[pathBox.top + r + 1] = Math.min(cMinRenderOrderNumbers[pathBox.top + r + 1], pData.paths[p].renderOrderNumber);
+				}
+			}
+		}
+		if (pPaths.size() < pData.paths.length) {
+			spm.setInfo(" ==> removed " + (pData.paths.length - pPaths.size()) + " paths as invisible");
+			pData.paths = ((PPath[]) pPaths.toArray(new PPath[pPaths.size()]));
+		}
+	}
+	
+	private void storeGraphicsAsSupplements(ImDocument doc, PPageData pData, Document pdfDoc, float magnification, ProgressMonitor spm) throws IOException {
+		if (pData.paths.length == 0)
+			return;
+		spm.setInfo(" - storing vector based graphics");
+		
+		//	get (and normalize) page bounds
+		if (PdfExtractorTest.aimAtPage != -1)
+			System.out.println("Page bounds are " + pData.pdfPageContentBox);
+		Rectangle2D.Float pageBounds;
+		if (pData.pdfPageContentBox.height <= pData.pdfPageContentBox.y)
+			pageBounds = new Rectangle2D.Float(pData.pdfPageContentBox.x, (pData.pdfPageContentBox.y - pData.pdfPageContentBox.height), pData.pdfPageContentBox.width, pData.pdfPageContentBox.height);
+		else pageBounds = pData.pdfPageContentBox;
+		if (PdfExtractorTest.aimAtPage != -1)
+			System.out.println("Page box is " + pageBounds);
+		BoundingBox pageBox = getBoundingBox(pageBounds, pData.pdfPageContentBox, 1, 0);
+		if (PdfExtractorTest.aimAtPage != -1)
+			System.out.println("Page box is " + pageBox);
 		
 		//	sort paths by area (descending) to speed up clustering
 		PPath[] pPaths = new PPath[pData.paths.length];
@@ -3758,117 +3979,6 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						System.out.println(" - fill color is " + pPaths[p].fillColor + ((pPaths[p].fillColor == null) ? "" : (", alpha " + pPaths[p].fillColor.getAlpha())));
 						System.out.println(" - render order number is " + pPaths[p].renderOrderNumber);
 					}
-					
-					//	get brightness of stroke and fill colors
-					float strokeBrightness = 1.0f;
-					if (pPaths[p].strokeColor != null)
-						strokeBrightness = getBrightness(pPaths[p].strokeColor);
-					if (PdfExtractorTest.aimAtPage != -1)
-						System.out.println(" - stroke brightness is " + strokeBrightness);
-					float fillBrightness = 1.0f;
-					if (pPaths[p].fillColor != null)
-						fillBrightness = getBrightness(pPaths[p].fillColor);
-					if (PdfExtractorTest.aimAtPage != -1)
-						System.out.println(" - fill brightness is " + fillBrightness);
-					
-					//	if path painted and filled in white, check if it is on top of anything non-white
-					//	TODO assess if 14/16th white for stroking and 15/16 white for filling are sensible thresholds
-//					if ((strokeBrightness >= 0.99) && (fillBrightness >= 0.99)) {
-					if ((strokeBrightness > 0.88) && (fillBrightness > 0.94)) {
-						
-						//	painted right on white page, we don't need this one
-						if (pPaths[p].renderOrderNumber < minNonGraphicsRenderOrderNumber) {
-							pPaths[p] = null;
-							if (PdfExtractorTest.aimAtPage != -1)
-								System.out.println(" ==> ignored as bright on white (RON)");
-							continue;
-						}
-						
-						//	depending on blend mode, a light overpaint does not have any significant effect
-						if ((pPaths[p].blendMode != null) && (pPaths[p].blendMode.lightIsTranslucent())) {
-							pPaths[p] = null;
-							if (PdfExtractorTest.aimAtPage != -1)
-								System.out.println(" ==> ignored as bright on white (BM)");
-							continue;
-						}
-						
-						//	check minimum overpainted render order number in grid
-						BoundingBox pathBox = getBoundingBox(pathBounds, pData.pdfPageContentBox, 1, 0);
-						int minOverlappingRenderOrderNumber = Integer.MAX_VALUE;
-						for (int c = 0; c < Math.max(1, pathBox.getWidth()); c++) {
-							if ((pathBox.left + c + 1) < 0)
-								continue;
-							if ((pathBox.left + c + 1) >= minRenderOrderNumbers.length)
-								continue;
-							int[] cMinRenderOrderNumbers = minRenderOrderNumbers[pathBox.left + c + 1];
-							for (int r = 0; r < Math.max(1, pathBox.getHeight()); r++) {
-								if ((pathBox.top + r + 1) < 0)
-									continue;
-								if ((pathBox.top + r + 1) >= cMinRenderOrderNumbers.length)
-									continue;
-								minOverlappingRenderOrderNumber = Math.min(cMinRenderOrderNumbers[pathBox.top + r + 1], minOverlappingRenderOrderNumber);
-							}
-						}
-						if (PdfExtractorTest.aimAtPage != -1)
-							System.out.println(" - minimum overlapping render order number is " + minOverlappingRenderOrderNumber);
-						
-						//	painted right on white page, we don't need this one
-						if (pPaths[p].renderOrderNumber < minOverlappingRenderOrderNumber) {
-							pPaths[p] = null;
-							if (PdfExtractorTest.aimAtPage != -1)
-								System.out.println(" ==> ignored as bright on white (RON)");
-							continue;
-						}
-					}
-					
-					//	check sub paths
-					PSubPath[] pSubPaths = pPaths[p].getSubPaths();
-					int inPageSubPathCount = 0;
-					if (PdfExtractorTest.aimAtPage != -1)
-						System.out.println(" - sub paths are:");
-					for (int s = 0; s < pSubPaths.length; s++) {
-						BoundingBox spBox = getBoundingBox(pSubPaths[s].getBounds(), pData.pdfPageContentBox, 1, 0);
-						if (spBox.overlaps(pageBox))
-							inPageSubPathCount++;
-						if (PdfExtractorTest.aimAtPage != -1)
-							System.out.println("   - " + pSubPaths[s].getBounds() + ", " + (spBox.overlaps(pageBox) ? "inside" : "outside") + " page");
-					}
-					
-					//	skip over path completely outside page
-					if (inPageSubPathCount == 0) {
-						pPaths[p] = null;
-						if (PdfExtractorTest.aimAtPage != -1)
-							System.out.println(" ==> completely outside page");
-						continue;
-					}
-					
-					//	skip over invisible paths
-					if ((pPaths[p].strokeColor == null) && (pPaths[p].fillColor == null)) {
-						pPaths[p] = null;
-						if (PdfExtractorTest.aimAtPage != -1)
-							System.out.println(" ==> neigher stroked nor filled");
-						continue;
-					}
-					
-					//	update minimum render order number in grid
-					BoundingBox pathBox = getBoundingBox(pathBounds, pData.pdfPageContentBox, 1, 0);
-					for (int c = 0; c < pathBox.getWidth(); c++) {
-						if ((pathBox.left + c + 1) < 0)
-							continue;
-						if ((pathBox.left + c + 1) >= minRenderOrderNumbers.length)
-							continue;
-						int[] cMinRenderOrderNumbers = minRenderOrderNumbers[pathBox.left + c + 1];
-						for (int r = 0; r < pathBox.getHeight(); r++) {
-							if ((pathBox.top + r + 1) < 0)
-								continue;
-							if ((pathBox.top + r + 1) >= cMinRenderOrderNumbers.length)
-								continue;
-							cMinRenderOrderNumbers[pathBox.top + r + 1] = Math.min(cMinRenderOrderNumbers[pathBox.top + r + 1], pPaths[p].renderOrderNumber);
-						}
-					}
-					
-					//	remember path is worthwhile painting
-					inPagePaths.add(pPaths[p]);
 					
 					//	start new aggregate path
 					if (pPathCluster == null) {
@@ -3899,7 +4009,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		}
 		spm.setInfo("   - aggreagted " + pPaths.length + " paths into " + pPathClusters.size() + " clusters");
 		
-		//	restore original painting order, re-eliminating out-of-page paths
+		//	restore original painting order
 		System.arraycopy(pData.paths, 0, pPaths, 0, pData.paths.length);
 		for (int c = 0; c < pPathClusters.size(); c++) {
 			PPathCluster pPathCluster = ((PPathCluster) pPathClusters.get(c));
@@ -3913,7 +4023,6 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				int inPageSubPathCount = 0;
 				for (int s = 0; s < pSubPaths.length; s++) {
 					BoundingBox spBox = getBoundingBox(pSubPaths[s].getBounds(), pData.pdfPageContentBox, 1, 0);
-//					if (overlaps(pSubPaths[s].getBounds(), pageBounds))
 					if (spBox.overlaps(pageBox))
 						inPageSubPathCount++;
 				}
@@ -4150,6 +4259,21 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		if ((r2.getMaxY() + overlapTolerance) < r1.getMinY())
 			return false;
 		if ((r2.getMinY() - overlapTolerance) > r1.getMaxY())
+			return false;
+		return true;
+	}
+	
+	private static boolean isOpaque(PPath pPath) {
+		if (pPath.fillColor == null)
+			return false;
+		if (pPath.fillColor.getAlpha() < 64) // TODO check this threshold
+			return true;
+		if (pPath.blendMode == null)
+			return true;
+		float fillBrightness = getBrightness(pPath.fillColor);
+		if ((fillBrightness > 0.94) && pPath.blendMode.lightIsTranslucent())
+			return false;
+		if ((fillBrightness < 0.06) && pPath.blendMode.darkIsTranslucent())
 			return false;
 		return true;
 	}
@@ -4409,6 +4533,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			flippedObjects.put(pWord, pData.words[w]);
 			pData.words[w] = pWord;
 		}
+		
 		if (PdfExtractorTest.aimAtPage != -1)
 			System.out.println(" - flipping figures:");
 		for (int f = 0; f < pData.figures.length; f++) {
@@ -4439,6 +4564,75 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			flippedObjects.put(pFigure, pData.figures[f]);
 			pData.figures[f] = pFigure;
 		}
+		
+		if (PdfExtractorTest.aimAtPage != -1)
+			System.out.println(" - flipping paths:");
+		for (int p = 0; p < pData.paths.length; p++) {
+			if (!flipPaths.contains(pData.paths[p]))
+				continue;
+			Rectangle2D pb = pData.paths[p].getBounds();
+			Point2D pbp = new Point2D.Float(((float) (pb.getMinX() - pFbLeft)), ((float) ((pData.pdfPageContentBox.height - pb.getMaxY()) - pFbTop))); // this one has to be relative to to-flip block to work the same way as the image
+			Point2D fPbp = pAt.transform(pbp, null);
+			Rectangle2D.Float fPb;
+			if (flipContentFontDirection == PWord.BOTTOM_UP_FONT_DIRECTION)
+				fPb = new Rectangle2D.Float(
+						((float) (fPbp.getX() - pb.getHeight())),
+						((float) ((pData.pdfPageContentBox.height - fPbp.getY()) - pb.getWidth())),
+						((float) pb.getHeight()),
+						((float) pb.getWidth())
+					);
+			else if (flipContentFontDirection == PWord.TOP_DOWN_FONT_DIRECTION)
+				fPb = new Rectangle2D.Float(
+						((float) fPbp.getX()),
+						((float) ((pData.pdfPageContentBox.height - fPbp.getY()))),
+						((float) pb.getHeight()),
+						((float) pb.getWidth())
+					);
+			else continue;
+			if (PdfExtractorTest.aimAtPage != -1)
+				System.out.println("   - '" + pData.paths[p] + "' flipped from " + pb + " to " + fPb);
+			PPath pPath = new PPath(pData.paths[p].renderOrderNumber);
+//			sub paths do this
+//			pPath.addPoint(((float) fPb.getMinX()), ((float) fPb.getMinY()));
+//			pPath.addPoint(((float) fPb.getMaxX()), ((float) fPb.getMaxY()));
+			pPath.strokeColor = pData.paths[p].strokeColor;
+			pPath.lineWidth = pData.paths[p].lineWidth;
+			pPath.lineCapStyle = pData.paths[p].lineCapStyle;
+			pPath.lineJointStyle = pData.paths[p].lineJointStyle;
+			pPath.miterLimit = pData.paths[p].miterLimit;
+			pPath.dashPattern = pData.paths[p].dashPattern;
+			pPath.dashPatternPhase = pData.paths[p].dashPatternPhase;
+			pPath.fillColor = pData.paths[p].fillColor;
+			pPath.blendMode = pData.paths[p].blendMode;
+			PSubPath[] pSubPaths = pData.paths[p].getSubPaths();
+			for (int s = 0; s < pSubPaths.length; s++) {
+				Point2D.Float fSpp = flipPoint(pSubPaths[s].startX, pSubPaths[s].startY, pData.pdfPageContentBox, pAt, pFbLeft, pFbTop);
+				PSubPath pSubPath = new PSubPath(pPath, fSpp.x, fSpp.y);
+				Shape[] shapes = pSubPaths[s].getShapes();
+				for (int h = 0; h < shapes.length; h++) {
+					if (shapes[h] instanceof Line2D) {
+						Line2D line = ((Line2D) shapes[h]);
+						Point2D.Float fLe = flipPoint(((float) line.getX2()), ((float) line.getY2()), pData.pdfPageContentBox, pAt, pFbLeft, pFbTop);
+						pSubPath.lineTo(fLe.x, fLe.y);
+					}
+					else if (shapes[h] instanceof CubicCurve2D) {
+						CubicCurve2D curve = ((CubicCurve2D) shapes[h]);
+						Point2D.Float fC1 = flipPoint(((float) curve.getCtrlX1()), ((float) curve.getCtrlY1()), pData.pdfPageContentBox, pAt, pFbLeft, pFbTop);
+						Point2D.Float fC2 = flipPoint(((float) curve.getCtrlX2()), ((float) curve.getCtrlY2()), pData.pdfPageContentBox, pAt, pFbLeft, pFbTop);
+						Point2D.Float fCe = flipPoint(((float) curve.getX2()), ((float) curve.getY2()), pData.pdfPageContentBox, pAt, pFbLeft, pFbTop);
+						pSubPath.curveTo(fC1.x, fC1.y, fC2.x, fC2.y, fCe.x, fCe.y);
+					}
+				}
+			}
+			flippedObjects.put(pPath, pData.paths[p]);
+			pData.paths[p] = pPath;
+		}
+	}
+	
+	private static Point2D.Float flipPoint(float x, float y, Rectangle2D pgb, AffineTransform pAt, double pFbLeft, double pFbTop) {
+		Point2D p = new Point2D.Float(((float) (x - pFbLeft)), ((float) ((pgb.getHeight() - y) - pFbTop))); // this one has to be relative to to-flip block to work the same way as the image
+		Point2D fp = pAt.transform(p, null);
+		return new Point2D.Float((float) (fp.getX()), ((float) ((pgb.getHeight() - fp.getY()))));
 	}
 	
 	private static PWord shrinkWordBounds(Graphics2D mg, PWord pWord) {
