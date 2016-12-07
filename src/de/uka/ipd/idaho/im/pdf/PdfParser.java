@@ -1553,7 +1553,7 @@ public class PdfParser {
 		void doh(LinkedList stack) {
 			this.lineTo(this.startX, this.startY);
 		}
-		private void lineTo(float x, float y) {
+		void lineTo(float x, float y) {
 			
 			//	store shape for later use
 			this.shapes.add(new Line2D.Float(this.x, this.y, x, y));
@@ -1603,18 +1603,18 @@ public class PdfParser {
 			cp1 = applyTransformationMatrices(cp1, transformationMatrices);
 			this.curveTo(cp1[0], cp1[1], p[0], p[1], p[0], p[1]);
 		}
-		private void curveTo(float x1, float y1, float x2, float y2, float x3, float y3) {
+		void curveTo(float cx1, float cy1, float cx2, float cy2, float x, float y) {
 			
 			//	store shape for later use
-			this.shapes.add(new CubicCurve2D.Float(this.x, this.y, x1, y1, x2, y2, x3, y3));
+			this.shapes.add(new CubicCurve2D.Float(this.x, this.y, cx1, cy1, cx2, cy2, x, y));
 			if (this.shapes.size() == 1)
 				this.parent.addSubPath(this);
-			this.x = x3;
-			this.y = y3;
+			this.x = x;
+			this.y = y;
 			
 			//	remember extent and visiting current
-			this.addPoint(x1, y1);
-			this.addPoint(x2, y2);
+			this.addPoint(cx1, cy1);
+			this.addPoint(cx2, cy2);
 			this.addPoint(this.x, this.y);
 		}
 		

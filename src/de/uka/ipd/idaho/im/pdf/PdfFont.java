@@ -361,7 +361,7 @@ public class PdfFont {
 			return;
 		}
 		synchronized (this) {
-			if (this.charDecoder != null) { // multiple threads might get behind above shortcut, so we have to re-check here
+			if (this.charDecoder != null) { // multiple threads might get past above shortcut, so we have to re-check here
 				System.out.println(" ==> decoder found");
 				this.charDecoder.decodeChars(this, charSet, pm);
 			}
@@ -556,6 +556,7 @@ public class PdfFont {
 		else return ((BufferedImage) this.charNameImages.get(this.diffNameMappings.get(new Integer(chb))));
 	}
 	synchronized void setCharImage(int chb, String chn, BufferedImage chi) {
+		if (DEBUG_LOAD_FONTS) System.out.println("Font " + this.name + " (" + this + "): char " + chb + " (" + chn + ") got image");
 		this.charImages.put(new Integer(chb), chi);
 		this.charNameImages.put(chn, chi);
 	}
@@ -2147,8 +2148,8 @@ FontFile2=65 0R
 		if (ff2Obj instanceof PStream)
 			pFont.setCharDecoder(new CharDecoder() {
 				public void decodeChars(PdfFont font, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException {
-					System.out.println("Got font file 2 from " + pFont);
-					System.out.println("  --> argument font is " + font);
+					System.out.println("Got font file 2 from " + pFont.name + " (" + pFont + ")");
+					System.out.println("  --> argument font is " + font.name + " (" + font + ")");
 					System.out.println("  --> base font mode is " + (font != pFont));
 					System.out.println("  --> params are " + ((PStream) ff2Obj).params);
 					Object filter = ((PStream) ff2Obj).params.get("Filter");
@@ -2987,8 +2988,8 @@ FontFile2=65 0R
 		if (ff2Obj instanceof PStream)
 			pFont.setCharDecoder(new CharDecoder() {
 				public void decodeChars(PdfFont font, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException {
-					System.out.println("Got font file 2 from " + pFont);
-					System.out.println("  --> argument font is " + font);
+					System.out.println("Got font file 2 from " + pFont.name + " (" + pFont + ")");
+					System.out.println("  --> argument font is " + font.name + " (" + font + ")");
 					System.out.println("  --> base font mode is " + (font != pFont));
 					System.out.println("  --> params are " + ((PStream) ff2Obj).params);
 					Object filter = ((PStream) ff2Obj).params.get("Filter");

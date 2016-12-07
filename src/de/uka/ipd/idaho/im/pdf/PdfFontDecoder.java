@@ -2927,7 +2927,7 @@ FontName12 38//SID–, FD FontName
 		byte[] cmapBytes = ((byte[]) tables.get("cmap"));
 		byte[] locaBytes = ((byte[]) tables.get("loca"));
 		byte[] glyfBytes = ((byte[]) tables.get("glyf"));
-		if ((headBytes == null) || (cmapBytes == null) || (locaBytes == null) || (glyfBytes == null))
+		if ((headBytes == null) || ((cmapBytes == null) && !dataFromBaseFont) || (locaBytes == null) || (glyfBytes == null))
 			return;
 		
 		//	get parameters from 'head' table (http://developer.apple.com/fonts/TrueType-Reference-Manual/RM06/Chap6head.html)
