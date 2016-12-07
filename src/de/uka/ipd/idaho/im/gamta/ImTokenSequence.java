@@ -62,7 +62,7 @@ import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.ImPage;
 import de.uka.ipd.idaho.im.ImRegion;
 import de.uka.ipd.idaho.im.ImWord;
-import de.uka.ipd.idaho.im.util.ImfIO;
+import de.uka.ipd.idaho.im.util.ImDocumentIO;
 import de.uka.ipd.idaho.stringUtils.StringUtils;
 
 /**
@@ -1183,7 +1183,7 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 		
 		//	load document
 		InputStream docIn = new BufferedInputStream(new FileInputStream(new File(imfDataPath, docName)));
-		ImDocument doc = ImfIO.loadDocument(docIn);
+		ImDocument doc = ImDocumentIO.loadDocument(docIn);
 		docIn.close();
 		ImPage[] pages = doc.getPages();
 		System.out.println("Got document with " + pages.length + " pages");
