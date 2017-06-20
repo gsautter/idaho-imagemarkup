@@ -181,6 +181,8 @@ public class PdfFont {
 	TreeSet usedCharNames = new TreeSet(); // names of chars in above set, as those might also come from Differences mapping in SID fonts
 	CharDecoder charDecoder = null;
 	
+	private HashMap charCodeSubstitutes = new HashMap();
+	
 	PdfFont(Hashtable data, Hashtable descriptor, int firstChar, int lastChar, float[] charWidths, float mCharWidth, String name, String encoding) {
 		this.data = data;
 		this.descriptor = descriptor;
@@ -345,6 +347,31 @@ public class PdfFont {
 	
 	float getAverageWordLength() {
 		return ((this.wordCount == 0) ? 0 : (((float) this.charCount) / this.wordCount));
+	}
+	
+	synchronized int getCharCode(int chc) {
+		if (chc < 256)
+			return chc;
+		Integer chcObj = new Integer(chc);
+		Integer sChcObj = ((Integer) this.charCodeSubstitutes.get(chcObj));
+		if (sChcObj == null) {
+			for (int c = 1; c < 255; c++) {
+				Integer tsChcObj = new Integer(c);
+				if (this.usedCharStats.containsKey(tsChcObj))
+					continue;
+				if (this.charCodeSubstitutes.containsKey(tsChcObj))
+					continue;
+				sChcObj = tsChcObj;
+				this.charCodeSubstitutes.put(chcObj, sChcObj); // hold on to substitution mapping
+				this.charCodeSubstitutes.put(sChcObj, sChcObj); // mark substitute char code as used
+				if (DEBUG_LOAD_FONTS)
+					System.out.println("Font " + this.name + ": substituting char code " + chc + " with " + c);
+				break;
+			}
+			if (sChcObj == null)
+				throw new RuntimeException("No substitutes available for > 255 char code " + chc);
+		}
+		return sChcObj.intValue();
 	}
 	
 	private void setCharDecoder(CharDecoder charDecoder) {
@@ -531,7 +558,7 @@ public class PdfFont {
 		//	store mapping
 		this.ucMappings.put(ch, nStr);
 		
-		//	be verbode if required
+		//	be verbose if required
 		if (DEBUG_CHAR_HANDLING) {
 			System.out.print("UC-Mapped " + ch + " to '" + str + "' (");
 			for (int c = 0; c < str.length(); c++)
@@ -1367,12 +1394,14 @@ public class PdfFont {
 			pm.setInfo(" ==> font name missing");
 			return null;
 		}
+		if (DEBUG_LOAD_FONTS)
+			System.out.println(" --> base font name: " + fnObj);
 		
 		Object feObj = PdfParser.dereference(fontData.get("Encoding"), objects);
 		if (feObj instanceof Hashtable)
 			feObj = PdfParser.dereference(((Hashtable) feObj).get("BaseEncoding"), objects);
 		
-		PdfFont pFont = new PdfFont(fontData, dFont.descriptor, dFont.firstChar, dFont.lastChar, dFont.charWidths, dFont.mCharWidth, fnObj.toString(), ((feObj == null) ? null : feObj.toString()));
+		PdfFont pFont = new PdfFont(fontData, dFont.descriptor, dFont.firstChar, dFont.lastChar, dFont.charWidths, dFont.mCharWidth, (fnObj.toString() + "-D" + ((int) (Math.random() * 256))), ((feObj == null) ? null : feObj.toString()));
 		pFont.ascent = dFont.ascent;
 		pFont.descent = dFont.descent;
 		pFont.capHeight = dFont.capHeight;

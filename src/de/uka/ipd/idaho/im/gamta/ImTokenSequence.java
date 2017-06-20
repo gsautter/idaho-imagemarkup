@@ -761,6 +761,8 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 	
 	int getTokenIndexOf(ImWord imw) {
 		ImToken imt = this.getTokenFor(imw);
+//		if (imt == null)
+//			System.out.println("Strange word " + imw + " at " + imw.getLocalID() + ", could not find token");
 		return ((imt == null) ? -1 : imt.index);
 	}
 	
@@ -1089,6 +1091,7 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 	public void removeCharSequenceListener(CharSequenceListener csl) {/* no use listening on a short-lived wrapper */}
 	
 	public Token tokenAt(int index) {
+//		System.out.println("ImTokenSequence: getting token at " + index);
 		return this.imTokenAtIndex(index);
 	}
 	public Token firstToken() {
@@ -1098,6 +1101,7 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 		return this.imTokenAtIndex(this.size()-1);
 	}
 	public String valueAt(int index) {
+//		System.out.println("ImTokenSequence: getting value at " + index);
 		return this.tokenAt(index).getValue();
 	}
 	public String firstValue() {

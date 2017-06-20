@@ -1998,11 +1998,11 @@ public class Imaging {
 					res.rightCol = rc;
 					res = narrowTopAndBottom(res);
 					if (requireVerticalSplit) {
-						while ((rect.leftCol < res.leftCol) && !whiteCols[res.leftCol - rect.leftCol])
+						while ((rect.leftCol < res.leftCol) && (((res.leftCol - rect.leftCol) >= whiteCols.length) || !whiteCols[res.leftCol - rect.leftCol]))
 							res.leftCol--;
 						while (((res.leftCol + 1) < rect.rightCol) && whiteCols[res.leftCol - rect.leftCol])
 							res.leftCol++;
-						while ((res.rightCol < rect.rightCol) && !whiteCols[res.rightCol - rect.leftCol])
+						while ((res.rightCol < rect.rightCol) && ((res.rightCol - rect.leftCol) < whiteCols.length) && !whiteCols[res.rightCol - rect.leftCol])
 							res.rightCol++;
 						while ((rect.leftCol < (res.rightCol - 1)) && whiteCols[res.rightCol-1 - rect.leftCol])
 							res.rightCol--;
@@ -2648,7 +2648,7 @@ public class Imaging {
 	 * @param dpi the resolution of the image
 	 * @param granularity the granularity in degrees
 	 * @param adjustMode the FFT peak adjust mode
-	 * @return the corrected analysisImage
+	 * @return true if the argument AnalysisImage was modified, false otherwise
 	 */
 	public static boolean correctPageRotation(AnalysisImage analysisImage, int dpi, double granularity, int adjustMode) {
 		return correctPageRotation(analysisImage, dpi, granularity, null, -1, adjustMode);
@@ -2669,7 +2669,7 @@ public class Imaging {
 	 * @param max the adjusted maximum peak height of the argument FFT (set to a
 	 *            negative number to have it computed here)
 	 * @param adjustMode the FFT peak adjust mode
-	 * @return true if the analysisImage was corrected, false otherwise
+	 * @return true if the argument AnalysisImage was modified, false otherwise
 	 */
 	public static boolean correctPageRotation(AnalysisImage analysisImage, int dpi, double granularity, Complex[][] fft, double max, int adjustMode) {
 		if (fft == null) {
@@ -2707,11 +2707,12 @@ public class Imaging {
 		//	detect and correct minor skewing via block line focusing
 		ArrayList blocks = new ArrayList();
 		HashSet blockIDs = new HashSet();
-		blocks.add(getContentBox(analysisImage));
+		ImagePartRectangle pageBox = getContentBox(analysisImage);
+		blocks.add(pageBox);
 		for (int blk = 0; blk < blocks.size(); blk++) {
 			ImagePartRectangle ipr = ((ImagePartRectangle) blocks.get(blk));
 			if (DEBUG_LINE_FOCUSSING) System.out.println("Splitting " + ipr.getId() + ":");
-			if ((ipr.getWidth() < dpi) || ((ipr.getHeight() / 2) < dpi)) {
+			if ((ipr != pageBox) && ((ipr.getWidth() < dpi) || ((ipr.getHeight() / 2) < dpi))) {
 				if (DEBUG_LINE_FOCUSSING) System.out.println(" --> too small");
 				blocks.remove(blk--);
 				continue;

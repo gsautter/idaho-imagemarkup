@@ -45,6 +45,7 @@ import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.SequenceInputStream;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.zip.ZipEntry;
@@ -1156,6 +1157,7 @@ public class ImDocumentIO implements ImagingConstants {
 			
 			//	data for regions
 			ImRegion[] pageRegs = pages[p].getRegions();
+			Arrays.sort(pageRegs, ImUtils.sizeOrder); // sort regions to keep order and hash stable
 			for (int r = 0; r < pageRegs.length; r++) {
 				StringTupel regData = new StringTupel();
 				regData.setValue(PAGE_ID_ATTRIBUTE, ("" + pageRegs[r].pageId));
@@ -1176,6 +1178,7 @@ public class ImDocumentIO implements ImagingConstants {
 		keys.parseAndAddElements((ImAnnotation.FIRST_WORD_ATTRIBUTE + ";" + ImAnnotation.LAST_WORD_ATTRIBUTE + ";" + TYPE_ATTRIBUTE + ";" + ImObject.ATTRIBUTES_STRING_ATTRIBUTE), ";");
 		writeKeys(keys, bw);
 		ImAnnotation[] annots = doc.getAnnotations();
+		Arrays.sort(annots, annotationOrder); // sort annotations to keep order and hash stable
 		for (int a = 0; a < annots.length; a++) {
 			pm.setProgress((a * 100) / annots.length);
 			StringTupel annotData = new StringTupel();
@@ -1195,7 +1198,7 @@ public class ImDocumentIO implements ImagingConstants {
 		keys.clear();
 		keys.parseAndAddElements((ImFont.NAME_ATTRIBUTE + ";" + ImFont.STYLE_ATTRIBUTE + ";" + ImFont.CHARACTER_ID_ATTRIBUTE + ";" + ImFont.CHARACTER_STRING_ATTRIBUTE + ";" + ImFont.CHARACTER_IMAGE_ATTRIBUTE), ";");
 		writeKeys(keys, bw);
-		ImFont[] fonts = doc.getFonts();
+		ImFont[] fonts = doc.getFonts(); // no need to sort here, fonts come sorted
 		for (int f = 0; f < fonts.length; f++) {
 			pm.setProgress((f * 100) / fonts.length);
 			String fontStyle = "";
@@ -1205,7 +1208,7 @@ public class ImDocumentIO implements ImagingConstants {
 				fontStyle += "I";
 			if (fonts[f].isSerif())
 				fontStyle += "S";
-			int[] charIDs = fonts[f].getCharacterIDs();
+			int[] charIDs = fonts[f].getCharacterIDs(); // no need to dort here, those IDs come sorted
 			for (int c = 0; c < charIDs.length; c++) {
 				StringTupel charData = new StringTupel();
 				charData.setValue(ImFont.NAME_ATTRIBUTE, fonts[f].name);
@@ -1369,6 +1372,20 @@ public class ImDocumentIO implements ImagingConstants {
 		//	return entry list for external use
 		return data.getEntries();
 	}
+	
+	private static Comparator annotationOrder = new Comparator() {
+		public int compare(Object obj1, Object obj2) {
+			ImAnnotation annot1 = ((ImAnnotation) obj1);
+			ImAnnotation annot2 = ((ImAnnotation) obj2);
+			int c = ImUtils.textStreamOrder.compare(annot1.getFirstWord(), annot2.getFirstWord());
+			if (c != 0)
+				return c;
+			c = ImUtils.textStreamOrder.compare(annot2.getLastWord(), annot1.getLastWord());
+			if (c != 0)
+				return c;
+			return 0; // no type comparison, ImDocument orders by creation timestamp, and that should pertain on loading
+		}
+	};
 	
 	private static void writeKeys(StringVector keys, BufferedWriter zbw) throws IOException {
 		for (int k = 0; k < keys.size(); k++) {

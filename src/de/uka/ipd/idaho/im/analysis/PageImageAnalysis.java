@@ -34,6 +34,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Iterator;
+import java.util.List;
 import java.util.TreeSet;
 
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
@@ -239,6 +240,7 @@ public class PageImageAnalysis implements ImagingConstants {
 	 */
 	public static class Line extends PagePart {
 		ArrayList words = new ArrayList();
+		int baseline = -1;
 		int fontSize = -1;
 		Line(ImagePartRectangle bounds) {
 			super(bounds);
@@ -250,16 +252,21 @@ public class PageImageAnalysis implements ImagingConstants {
 			return ((Word[]) this.words.toArray(new Word[this.words.size()]));
 		}
 		public int getBaseline() {
+			if (this.baseline == -1)
+				this.computeBaseline();
+			return this.baseline;
+		}
+		private void computeBaseline() {
 			if (this.words.size() == 0)
-				return -1;
+				return;
 			int wordBaselineSum = 0;
 			for (int w = 0; w < this.words.size(); w++) {
 				Word word = ((Word) this.words.get(w));
 				if (word.baseline == -1)
-					return -1;
+					return;
 				wordBaselineSum += word.baseline;
 			}
-			return (wordBaselineSum / this.words.size());
+			this.baseline = (wordBaselineSum / this.words.size());
 		}
 		public int getFontSize() {
 			return this.fontSize;
@@ -273,7 +280,7 @@ public class PageImageAnalysis implements ImagingConstants {
 				if (word.isBold())
 					bwws += (word.bounds.rightCol - word.bounds.leftCol);
 			}
-			return (wws < (2*bwws));
+			return (wws < (2 * bwws));
 		}
 	}
 	
@@ -893,6 +900,437 @@ public class PageImageAnalysis implements ImagingConstants {
 			block.addLine(new Line(lBlocks[l]));
 			lostLine = null;
 		}
+	}
+	
+	/**
+	 * Analyze the inner structure of a single text block to individual lines.
+	 * The returned lines are <i>not</i> added to the argument block. Further,
+	 * the returned lines have their baseline set.
+	 * @param block the text block to analyze
+	 * @param dpi the resolution of the underlying page image
+	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 * @return an array holding the extracted lines
+	 */
+	public static Line[] findBlockLines(Block block, int dpi, ProgressMonitor pm) {
+		return findBlockLines(block.bounds, dpi, pm);
+	}
+	
+	/**
+	 * Analyze the inner structure of a single text block to individual lines.
+	 * Further, the returned lines have their baseline set.
+	 * @param block the bounds of the text block to analyze
+	 * @param dpi the resolution of the underlying page image
+	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 * @return an array holding the extracted lines
+	 */
+	public static Line[] findBlockLines(ImagePartRectangle block, int dpi, ProgressMonitor pm) {
+		
+		//	compute row brightness
+		byte[][] brightness = block.getImage().getBrightness();
+		int[] rowBrightness = getRowBrightness(block, brightness);
+		int[] rowPixelCount = getRowPixelCount(block, brightness);
+		
+		//	wrap brightness and pixel row occupancy histograms, computing basic analyses along the way
+		BlockData bData = new BlockData(block, rowBrightness, rowPixelCount);
+		
+		//	check for last line
+		bData.checkForLastLine();
+		
+		//	wrap lines, and add baselines
+		ImagePartRectangle[] bLines = bData.getBlockLines();
+		Line[] lines = new Line[bLines.length];
+		for (int l = 0; l < bLines.length; l++) {
+			lines[l] = new Line(bLines[l]);
+			lines[l].baseline = (block.getTopRow() + bData.rowPixelCountDrops[l].row);
+		}
+		
+		//	finally ...
+		return lines;
+	}
+	
+	private static class BlockData {
+		ImagePartRectangle block;
+		
+		int[] rowBrightness;
+		int avgRowBrightness;
+		
+		int[] rowPixelCount;
+		int avgRowPixelCount;
+		
+		HistogramRiseDrop[] rowPixelCountRises; // x-height rows of lines
+		HistogramRiseDrop[] rowPixelCountDrops; // baseline rows of lines
+		
+		int[] highRowPixelCenters; // line centers, i.e., middle of x-height
+		int[] highRowPixelWidths; // x-heights of lines
+		int avgHighRowPixelWidth; // average x-height
+		
+		int[] lowRowPixelCenters; // line boundaries
+		
+		BlockData(ImagePartRectangle block, int[] rowBrightness, int[] rowPixelCount) {
+			this.block = block;
+			
+			this.rowBrightness = rowBrightness;
+//			System.out.println("Row brightness:");
+//			for (int r = 0; r < rowBrightness.length; r++)
+//				System.out.println(r + ": " + rowBrightness[r]);
+			this.avgRowBrightness = getHistogramAverage(this.rowBrightness);
+//			System.out.println("avg brightness: " + avgRowBrightness);
+			
+			this.rowPixelCount = rowPixelCount;
+//			System.out.println("Row occupation:");
+//			for (int r = 0; r < rowBrightness.length; r++)
+//				System.out.println(r + ": " + rowPixelCount[r]);
+			this.avgRowPixelCount = getHistogramAverage(rowPixelCount);
+//			System.out.println("avg row pixels: " + avgRowPixelCount);
+			
+			//	assess row pixel count distribution
+			this.rowPixelCountRises = getHistgramMaxRises(this.rowPixelCount, this.avgRowPixelCount);
+//			System.out.println("Row height from x-heights: " + getDistanceAverage(rowPixelCountRises) + " (min " + getDistanceMin(rowPixelCountRises) + ", max " + getDistanceMax(rowPixelCountRises) + ")");
+			this.rowPixelCountDrops = getHistgramMaxDrops(this.rowPixelCount, this.avgRowPixelCount);
+//			System.out.println("Row height from baselines: " + getDistanceAverage(rowPixelCountDrops) + " (min " + getDistanceMin(rowPixelCountDrops) + ", max " + getDistanceMax(rowPixelCountDrops) + ")");
+			
+			//	filter very small rises and drops immediately adjacent to larger drops and rises !!!
+			this.filterRowPixelCountRisesAndDrops();
+			
+			//	get centers of high and low areas
+			this.highRowPixelCenters = getHighCenters(this.rowPixelCountRises, this.rowPixelCountDrops);
+//			System.out.println("Row height from line centers: " + getDistanceAverage(highRowPixelCenters) + " (min " + getDistanceMin(highRowPixelCenters) + ", max " + getDistanceMax(highRowPixelCenters) + ")");
+			this.lowRowPixelCenters = getLowCenters(this.rowPixelCountRises, this.rowPixelCountDrops);
+//			System.out.println("Row height from line gap centers: " + getDistanceAverage(lowRowPixelCenters) + " (min " + getDistanceMin(lowRowPixelCenters) + ", max " + getDistanceMax(lowRowPixelCenters) + ")");
+			
+			this.highRowPixelWidths = getHighWidths(this.rowPixelCountRises, this.rowPixelCountDrops);
+			this.avgHighRowPixelWidth = getHistogramAverage(this.highRowPixelWidths);
+		}
+		
+		private void filterRowPixelCountRisesAndDrops() {
+			ArrayList rowPixelCountRises = new ArrayList();
+			for (int r = 0; r < this.rowPixelCountRises.length; r++) {
+				for (int d = 0; d < this.rowPixelCountDrops.length; d++) {
+					int dist = Math.abs(this.rowPixelCountRises[r].row - this.rowPixelCountDrops[d].row);
+					if (dist > 2) // TODO_not maybe only allow 1? ==> TODO_not make this dependent on DPI !!!
+						continue;
+					if (this.rowPixelCountRises[r].delta < this.rowPixelCountDrops[d].delta) {
+						System.out.println("Eliminated rise of " + this.rowPixelCountRises[r].delta + " at " + this.rowPixelCountRises[r].row + " as adjacent to drop of " + this.rowPixelCountDrops[d].delta + " at " + this.rowPixelCountDrops[d].row);
+						this.rowPixelCountRises[r] = null;
+						break;
+					}
+				}
+				if (this.rowPixelCountRises[r] != null)
+					rowPixelCountRises.add(this.rowPixelCountRises[r]);
+			}
+			if (rowPixelCountRises.size() < this.rowPixelCountRises.length)
+				this.rowPixelCountRises = ((HistogramRiseDrop[]) rowPixelCountRises.toArray(new HistogramRiseDrop[rowPixelCountRises.size()]));
+			
+			ArrayList rowPixelCountDrops = new ArrayList();
+			for (int d = 0; d < this.rowPixelCountDrops.length; d++) {
+				for (int r = 0; r < this.rowPixelCountRises.length; r++) {
+					int dist = Math.abs(this.rowPixelCountDrops[d].row - this.rowPixelCountRises[r].row);
+					if (dist > 2) // TODO_not maybe only allow 1? ==> TODO_not make this dependent on DPI !!!
+						continue;
+					if (this.rowPixelCountDrops[d].delta < this.rowPixelCountRises[r].delta) {
+						System.out.println("Eliminated drop of " + this.rowPixelCountDrops[d].delta + " at " + this.rowPixelCountDrops[d].row + " as adjacent to rise of " + this.rowPixelCountRises[r].delta + " at " + this.rowPixelCountRises[r].row);
+						this.rowPixelCountDrops[d] = null;
+						break;
+					}
+				}
+				if (this.rowPixelCountDrops[d] != null)
+					rowPixelCountDrops.add(this.rowPixelCountDrops[d]);
+			}
+			if (rowPixelCountDrops.size() < this.rowPixelCountDrops.length)
+				this.rowPixelCountDrops = ((HistogramRiseDrop[]) rowPixelCountDrops.toArray(new HistogramRiseDrop[rowPixelCountDrops.size()]));
+		}
+		
+		void checkForLastLine() {
+			
+			//	if we have only one distinctive line, use x-height to see if we have one or two lines (x-height should never be smaller than 1/3 of line height ...)
+			if ((this.highRowPixelCenters.length < 2) || (this.lowRowPixelCenters.length < 2))
+				this.checkForLastLineXHeight();
+			
+			//	otherwise still check if we have a short last line (based on average line height, though, which should be more reliable)
+			else this.checkForLastLineLineHeight();
+		}
+		
+		private void checkForLastLineXHeight() {
+			System.out.println("x-height is " + this.avgHighRowPixelWidth + " from " + Arrays.toString(this.highRowPixelWidths));
+			
+			//	this x-height looks plausible (usual x-height is 40-50% of line height)
+			if ((this.avgHighRowPixelWidth * 3) > this.block.getHeight()) {
+				System.out.println(" ==> looking like a single line");
+				return;
+			}
+			
+			//	cut row pixel occupancy histogram in half (split off last line), and re-compute average
+			int[] lastLineRowPixelCount = new int[this.rowPixelCount.length / 2];
+			System.arraycopy(this.rowPixelCount, (this.rowPixelCount.length - lastLineRowPixelCount.length), lastLineRowPixelCount, 0, lastLineRowPixelCount.length);
+			int avgLastLineRowPixelCount = getHistogramAverage(lastLineRowPixelCount);
+			System.out.println("last line row pixel average is " + avgLastLineRowPixelCount);
+			
+			//	compute rises and drops of lower half (to allow for local averages to kick in)
+//			int[] lastLineRowPixelCountRises = getHistgramMaxRises(lastLineRowPixelCount, avgLastLineRowPixelCount);
+			HistogramRiseDrop[] lastLineRowPixelCountRises = getHistgramMaxRises(lastLineRowPixelCount, avgLastLineRowPixelCount);
+//			System.out.println("Row height from x-heights: " + getDistanceAverage(rowPixelCountRises) + " (min " + getDistanceMin(rowPixelCountRises) + ", max " + getDistanceMax(rowPixelCountRises) + ")");
+//			int[] lastLineRowPixelCountDrops = getHistgramMaxDrops(lastLineRowPixelCount, avgLastLineRowPixelCount);
+			HistogramRiseDrop[] lastLineRowPixelCountDrops = getHistgramMaxDrops(lastLineRowPixelCount, avgLastLineRowPixelCount);
+//			System.out.println("Row height from baselines: " + getDistanceAverage(rowPixelCountDrops) + " (min " + getDistanceMin(rowPixelCountDrops) + ", max " + getDistanceMax(rowPixelCountDrops) + ")");
+			System.out.println("last line row pixel rises are " + Arrays.toString(lastLineRowPixelCountRises));
+			System.out.println("last line row pixel drops are " + Arrays.toString(lastLineRowPixelCountDrops));
+			
+			//	compute center and x-height of second line
+//			int[] lastLineHighRowPixelCenters = getHighCenters(lastLineRowPixelCountRises, lastLineRowPixelCountDrops);
+//			System.out.println("Row height from line centers: " + getDistanceAverage(highRowPixelCenters) + " (min " + getDistanceMin(highRowPixelCenters) + ", max " + getDistanceMax(highRowPixelCenters) + ")");
+			int[] lastLineHighRowPixelWidths = getHighWidths(lastLineRowPixelCountRises, lastLineRowPixelCountDrops);
+			int avgLastLineHighRowPixelWidth = getHistogramAverage(lastLineHighRowPixelWidths);
+			System.out.println("last line x-height is " + avgLastLineHighRowPixelWidth + " from " + Arrays.toString(lastLineHighRowPixelWidths));
+			
+			//	x-height differs more than 20% from block average, too unreliable
+			if (((avgLastLineHighRowPixelWidth * 10) < (this.avgHighRowPixelWidth * 8)) && ((this.avgHighRowPixelWidth * 8) < (avgLastLineHighRowPixelWidth * 8))) {
+				System.out.println(" ==> x-height of last line too far off");
+				return;
+			}
+			
+			//	append rises and drops for last line
+			for (int r = 0; r < lastLineRowPixelCountRises.length; r++)
+//				lastLineRowPixelCountRises[r] += (this.rowPixelCount.length - lastLineRowPixelCount.length);
+				lastLineRowPixelCountRises[r] = new HistogramRiseDrop((lastLineRowPixelCountRises[r].row + this.rowPixelCount.length - lastLineRowPixelCount.length), lastLineRowPixelCountRises[r].delta);
+			this.rowPixelCountRises = merge(this.rowPixelCountRises, lastLineRowPixelCountRises);
+			for (int d = 0; d < lastLineRowPixelCountDrops.length; d++)
+//				lastLineRowPixelCountDrops[d] += (this.rowPixelCount.length - lastLineRowPixelCount.length);
+				lastLineRowPixelCountDrops[d] = new HistogramRiseDrop((lastLineRowPixelCountDrops[d].row + this.rowPixelCount.length - lastLineRowPixelCount.length), lastLineRowPixelCountDrops[d].delta);
+			this.rowPixelCountDrops = merge(this.rowPixelCountDrops, lastLineRowPixelCountDrops);
+			this.highRowPixelCenters = getHighCenters(this.rowPixelCountRises, this.rowPixelCountDrops);
+			this.lowRowPixelCenters = getLowCenters(this.rowPixelCountRises, this.rowPixelCountDrops);
+			
+			//	re-compute x-heights and average
+			this.highRowPixelWidths = getHighWidths(this.rowPixelCountRises, this.rowPixelCountDrops);
+			this.avgHighRowPixelWidth = getHistogramAverage(this.highRowPixelWidths);
+			
+			//	TODO figure out what to do if x-height of last line too far off
+		}
+		
+		private void checkForLastLineLineHeight() {
+			
+			//	compute average line height (from both line centers and line boundaries)
+			float avgLineCenterDist = getDistanceAverage(this.highRowPixelCenters);
+			float avgLineGapDist = getDistanceAverage(this.lowRowPixelCenters);
+			float avgLineHeight = ((avgLineCenterDist + avgLineGapDist) / 2);
+			System.out.println("line height is " + avgLineHeight + " (line centers: min " + getDistanceMin(this.highRowPixelCenters) + ", max " + getDistanceMax(this.highRowPixelCenters) + ", avg " + avgLineCenterDist + ", line gaps: min " + getDistanceMin(this.lowRowPixelCenters) + ", max " + getDistanceMax(this.lowRowPixelCenters) + ", avg " + avgLineGapDist + ")");
+			System.out.println("x-height is " + this.avgHighRowPixelWidth + " from " + Arrays.toString(this.highRowPixelWidths));
+			
+			//	check distance from block bottom
+			int lineCenterBlockBottomDist = (this.rowPixelCount.length - this.highRowPixelCenters[this.highRowPixelCenters.length-1]);
+			System.out.println("last line center is " + lineCenterBlockBottomDist + " from block bottom");
+			int lineGapBlockBottomDist = (this.rowPixelCount.length - this.lowRowPixelCenters[this.lowRowPixelCenters.length-1]);
+			System.out.println("last line boundary is " + lineGapBlockBottomDist + " from block bottom");
+			
+			//	are we close enough to block bottom, or are we missing a line?
+			if ((lineCenterBlockBottomDist < avgLineHeight) && ((lineGapBlockBottomDist * 2) < (avgLineHeight * 3))) {
+				System.out.println(" ==> looks like we have all the line boundaries");
+				return;
+			}
+			
+			//	extrapolate and merge last rise and drop
+//			int[] lastLineRowPixelCountRises = {Math.round(this.rowPixelCountRises[this.rowPixelCountRises.length-1] + avgLineHeight)};
+			HistogramRiseDrop[] lastLineRowPixelCountRises = {new HistogramRiseDrop(Math.round(this.rowPixelCountRises[this.rowPixelCountRises.length-1].row + avgLineHeight), 0)};
+			this.rowPixelCountRises = merge(this.rowPixelCountRises, lastLineRowPixelCountRises);
+//			int[] lastLineRowPixelCountDrops = {Math.round(this.rowPixelCountDrops[this.rowPixelCountDrops.length-1] + avgLineHeight)};
+			HistogramRiseDrop[] lastLineRowPixelCountDrops = {new HistogramRiseDrop(Math.round(this.rowPixelCountDrops[this.rowPixelCountDrops.length-1].row + avgLineHeight), 0)};
+			this.rowPixelCountDrops = merge(this.rowPixelCountDrops, lastLineRowPixelCountDrops);
+			
+			//	re-compute line centers and boundaries
+			this.highRowPixelCenters = getHighCenters(this.rowPixelCountRises, this.rowPixelCountDrops);
+			this.lowRowPixelCenters = getLowCenters(this.rowPixelCountRises, this.rowPixelCountDrops);
+			
+			//	re-compute individual and average x-heights
+			this.highRowPixelWidths = getHighWidths(this.rowPixelCountRises, this.rowPixelCountDrops);
+			this.avgHighRowPixelWidth = getHistogramAverage(this.highRowPixelWidths);
+		}
+		
+		ImagePartRectangle[] getBlockLines() {
+			
+			//	use line boundaries to split up block
+			ImagePartRectangle[] lines = new ImagePartRectangle[this.lowRowPixelCenters.length+1];
+			for (int l = 0; l <= this.lowRowPixelCenters.length; l++) {
+				int lineTop = ((l == 0) ? 0 : this.lowRowPixelCenters[l-1]);
+				int lineBottom = ((l == this.lowRowPixelCenters.length) ? block.getHeight() : this.lowRowPixelCenters[l]);
+				lines[l] = block.getSubRectangle(block.getLeftCol(), block.getRightCol(), (lineTop + block.getTopRow()), (lineBottom + block.getTopRow()));
+				Imaging.narrowTopAndBottom(lines[l]);
+				Imaging.narrowLeftAndRight(lines[l]);
+				System.out.println("line: " + lines[l].getId());
+			}
+			
+			//	finally ...
+			return lines;
+		}
+	}
+	
+	private static int[] getRowBrightness(ImagePartRectangle block, byte[][] brightness) {
+		int[] rowBrightness = new int[block.getHeight()];
+		Arrays.fill(rowBrightness, 0);
+		for (int c = block.getLeftCol(); c < block.getRightCol(); c++) {
+			for (int r = block.getTopRow(); r < block.getBottomRow(); r++)
+				rowBrightness[r - block.getTopRow()] += brightness[c][r];
+		}
+		for (int r = 0; r < rowBrightness.length; r++)
+			rowBrightness[r] /= block.getWidth();
+		return rowBrightness;
+	}
+	
+	private static int[] getRowPixelCount(ImagePartRectangle block, byte[][] brightness) {
+		int[] rowPixelCount = new int[block.getHeight()];
+		Arrays.fill(rowPixelCount, 0);
+		for (int c = block.getLeftCol(); c < block.getRightCol(); c++)
+			for (int r = block.getTopRow(); r < block.getBottomRow(); r++) {
+				if (brightness[c][r] < 120)
+					rowPixelCount[r - block.getTopRow()]++;
+			}
+		return rowPixelCount;
+	}
+	
+	private static int getHistogramAverage(int[] histogram) {
+		int histogramSum = 0;
+		for (int h = 0; h < histogram.length; h++)
+			histogramSum += histogram[h];
+		return ((histogramSum + (histogram.length / 2)) / histogram.length);
+	}
+	
+	private static HistogramRiseDrop[] getHistgramMaxRises(int[] histogram, int histogramAvg) {
+		List maxRiseRowList = new ArrayList();
+		for (int r = 1; r < histogram.length; r++) {
+			if ((histogram[r] >= histogramAvg) && (histogram[r-1] < histogramAvg)) {
+				int maxRise = 0;
+				int maxRiseRow = -1;
+				for (int rr = Math.max((r-1), 1); rr < Math.min((r+2), histogram.length); rr++) {
+					int rise = (histogram[rr] - histogram[rr-1]);
+					System.out.println(rr + ": Got rise of " + rise + " from " + histogram[rr-1] + " to " + histogram[rr] + " through average of " + histogramAvg);
+					if (rise > maxRise) {
+						maxRise = rise;
+						maxRiseRow = rr;
+					}
+				}
+				if (maxRiseRow != -1) {
+					maxRiseRowList.add(new HistogramRiseDrop(maxRiseRow, maxRise));
+					System.out.println(" ==> Got maximum rise of " + maxRise + " at " + maxRiseRow);
+				}
+			}
+		}
+		return ((HistogramRiseDrop[]) maxRiseRowList.toArray(new HistogramRiseDrop[maxRiseRowList.size()]));
+	}
+	
+	private static HistogramRiseDrop[] getHistgramMaxDrops(int[] histogram, int histogramAvg) {
+		List maxDropRowList = new ArrayList();
+		for (int r = 1; r < histogram.length; r++) {
+			if ((histogram[r] < histogramAvg) && (histogram[r-1] >= histogramAvg)) {
+				int maxDrop = 0;
+				int maxDropRow = -1;
+				for (int dr = Math.max((r-1), 1); dr < Math.min((r+2), histogram.length); dr++) {
+					int drop = (histogram[dr-1] - histogram[dr]);
+					System.out.println(dr + ": Got drop of " + drop + " from " + histogram[dr-1] + " to " + histogram[dr] + " through average of " + histogramAvg);
+					if (drop > maxDrop) {
+						maxDrop = drop;
+						maxDropRow = (dr-1);
+					}
+				}
+				if (maxDropRow != -1) {
+					maxDropRowList.add(new HistogramRiseDrop(maxDropRow, maxDrop));
+					System.out.println(" ==> Got maximum drop of " + maxDrop + " at " + maxDropRow);
+				}
+			}
+		}
+		return ((HistogramRiseDrop[]) maxDropRowList.toArray(new HistogramRiseDrop[maxDropRowList.size()]));
+	}
+	
+	private static class HistogramRiseDrop {
+		final int row;
+		final int delta;
+		HistogramRiseDrop(int row, int delta) {
+			this.row = row;
+			this.delta = delta;
+		}
+	}
+	
+	private static HistogramRiseDrop[] merge(HistogramRiseDrop[] h1, HistogramRiseDrop[] h2) {
+		HistogramRiseDrop[] h = new HistogramRiseDrop[h1.length + h2.length];
+		System.arraycopy(h1, 0, h, 0, h1.length);
+		System.arraycopy(h2, 0, h, h1.length, h2.length);
+		return h;
+	}
+	
+	private static int[] getHighCenters(HistogramRiseDrop[] rises, HistogramRiseDrop[] drops) {
+		ArrayList highCenterList = new ArrayList();
+		int lastDrop = -1;
+		for (int r = 0; r < rises.length; r++) {
+			for (int d = 0; d < drops.length; d++)
+				if (drops[d].row > rises[r].row) {
+					if (drops[d].row == lastDrop)
+						highCenterList.remove(highCenterList.size()-1);
+					lastDrop = drops[d].row;
+					highCenterList.add(new Integer((rises[r].row + drops[d].row + 1) / 2));
+					break;
+				}
+		}
+		int[] highCenters = new int[highCenterList.size()];
+		for (int c = 0; c < highCenterList.size(); c++)
+			highCenters[c] = ((Integer) highCenterList.get(c)).intValue();
+		return highCenters;
+	}
+	
+	private static int[] getHighWidths(HistogramRiseDrop[] rises, HistogramRiseDrop[] drops) {
+		ArrayList highWidthList = new ArrayList();
+		int lastDrop = -1;
+		for (int r = 0; r < rises.length; r++) {
+			for (int d = 0; d < drops.length; d++)
+				if (drops[d].row > rises[r].row) {
+					if (drops[d].row == lastDrop)
+						highWidthList.remove(highWidthList.size()-1);
+					lastDrop = drops[d].row;
+					highWidthList.add(new Integer(drops[d].row - rises[r].row));
+					break;
+				}
+		}
+		int[] highWidths = new int[highWidthList.size()];
+		for (int c = 0; c < highWidthList.size(); c++)
+			highWidths[c] = ((Integer) highWidthList.get(c)).intValue();
+		return highWidths;
+	}
+	
+	private static int[] getLowCenters(HistogramRiseDrop[] rises, HistogramRiseDrop[] drops) {
+		ArrayList lowCenterList = new ArrayList();
+		int lastRise = -1;
+		for (int d = 0; d < drops.length; d++) {
+			for (int r = 0; r < rises.length; r++)
+				if (rises[r].row > drops[d].row) {
+					if (rises[r].row == lastRise)
+						lowCenterList.remove(lowCenterList.size()-1);
+					lastRise = rises[r].row;
+					lowCenterList.add(new Integer((drops[d].row + rises[r].row + 1) / 2));
+					break;
+				}
+		}
+		int[] lowCenters = new int[lowCenterList.size()];
+		for (int c = 0; c < lowCenterList.size(); c++)
+			lowCenters[c] = ((Integer) lowCenterList.get(c)).intValue();
+		return lowCenters;
+	}
+	
+	private static int getDistanceMin(int[] rows) {
+		int rowDistanceMin = Integer.MAX_VALUE;
+		for (int r = 1; r < rows.length; r++)
+			rowDistanceMin = Math.min((rows[r] - rows[r-1]), rowDistanceMin);
+		return rowDistanceMin;
+	}
+	
+	private static int getDistanceMax(int[] rows) {
+		int rowDistanceMax = 0;
+		for (int r = 1; r < rows.length; r++)
+			rowDistanceMax = Math.max((rows[r] - rows[r-1]), rowDistanceMax);
+		return rowDistanceMax;
+	}
+	
+	private static float getDistanceAverage(int[] rows) {
+		float rowDistanceSum = 0;
+		for (int r = 1; r < rows.length; r++)
+			rowDistanceSum += (rows[r] - rows[r-1]);
+		return (rowDistanceSum / (rows.length - 1));
 	}
 	
 	/**

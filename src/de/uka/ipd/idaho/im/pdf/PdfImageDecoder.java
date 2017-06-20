@@ -156,6 +156,20 @@ public class PdfImageDecoder {
 	 * @throws IOException
 	 */
 	public BufferedImage decodeImage(byte[] imageBytes, String imageFormat, String colorSpace) throws IOException {
+		return this.decodeImage(imageBytes, imageFormat, colorSpace, null);
+	}
+	
+	/**
+	 * Decode an image given as an array of bytes with the help of the Image
+	 * Magick <b>convert</b> tool.
+	 * @param imageBytes the bytes representing the image
+	 * @param imageFormat the format the image data is in
+	 * @param colorSpace the name of the color space used in the input data
+	 * @param altColorSpace the name of the alternative color space specified in the argument color space definition
+	 * @return the decoded image
+	 * @throws IOException
+	 */
+	public BufferedImage decodeImage(byte[] imageBytes, String imageFormat, String colorSpace, String altColorSpace) throws IOException {
 		try {
 			ArrayList command = new ArrayList();
 			if (this.useSystemCommand)
@@ -163,11 +177,19 @@ public class PdfImageDecoder {
 			else command.add(this.imPath.getAbsolutePath() + "/" + getConvertCommand());
 			command.add(imageFormat + ":-");
 			if ((colorSpace != null) && colorSpace.toUpperCase().endsWith("CMYK")) {
-				command.add("-negate"); // TODO figure out if this is sensible to add by default
+				command.add("-negate");
 				command.add("-profile");
 				command.add(this.imPath.getAbsolutePath() + "/ISOcoated_v2_300_eci.icc");
 			}
+			else if ((colorSpace != null) && colorSpace.toUpperCase().startsWith("ICCB") && (altColorSpace != null) && altColorSpace.toUpperCase().endsWith("CMYK")) {
+				command.add("-negate");
+				command.add("-profile");
+				command.add(this.imPath.getAbsolutePath() + "/ISOcoated_v2_300_eci.icc");
+			}
+			else if ("SeparationBlack".equals(colorSpace) && ("DeviceRGB".equals(altColorSpace) || "DeviceGray".equals(altColorSpace)))
+				command.add("-negate");
 			command.add("png:-");
+			System.out.println("PdfImageDecoder: command is " + command);
 			Process im = Runtime.getRuntime().exec(((String[]) command.toArray(new String[command.size()])), null, imPath.getAbsoluteFile());
 //			System.out.println(" - process created");
 			OutputStream imIn = im.getOutputStream();

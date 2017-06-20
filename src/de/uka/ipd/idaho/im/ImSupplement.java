@@ -74,10 +74,6 @@ import de.uka.ipd.idaho.im.analysis.Imaging.AnalysisImage;
  * 
  * @author sautter
  */
-/**
- * @author sautter
- *
- */
 public abstract class ImSupplement extends AbstractAttributed implements ImObject {
 	
 	/** type of a supplement representing the original binary source of a document */
@@ -919,7 +915,7 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			 * this path is not stroked, this method returns null.
 			 * @return the stroke
 			 */
-			public Stroke getStroke() {
+			public BasicStroke getStroke() {
 				if (this.strokeColor == null)
 					return null;
 				float[] dashPattern = null;
@@ -935,6 +931,11 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 				}
 				return new BasicStroke(this.lineWidth, this.lineCapStyle, this.lineJointStyle, ((this.miterLimit < 1) ? 1.0f : this.miterLimit), dashPattern, this.dashPatternPhase);
 			}
+//			public BasicStroke getFallbackStroke() {
+//				if (this.strokeColor == null)
+//					return null;
+//				return new BasicStroke(1, this.lineCapStyle, this.lineJointStyle, ((this.miterLimit < 1) ? 1.0f : this.miterLimit));
+//			}
 			
 			/**
 			 * Retrieve the fill color for this path. If this path is not
@@ -943,6 +944,36 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			 */
 			public Color getFillColor() {
 				return this.fillColor;
+			}
+			
+			/**
+			 * Test if the path is filled. This can be true in two ways: (a)
+			 * the path is actually filled, i.e., has a fill color set, or (b)
+			 * the path is stroked, i.e., has a stroke color set, and its line
+			 * width is so large that stroking actually fills an area rather
+			 * than drawing a line in a stricter sense.
+			 * @return true if the path is filled
+			 */
+			public boolean isFilled() {
+				return this.isFilled(((float) RESOLUTION) / 6); // we _are_ an area, if one just made up of lines wider than a sixth of an inch (some 4 mm)
+			}
+			
+			/**
+			 * Test if the path is filled. This can be true in two ways: (a)
+			 * the path is actually filled, i.e., has a fill color set, or (b)
+			 * the path is stroked, i.e., has a stroke color set, and its line
+			 * width is so large that stroking actually fills an area rather
+			 * than drawing a line in a stricter sense. The argument threshold
+			 * specifies above which line width the latter should be assumed
+			 * the case.
+			 * @param minAreaLineWidth the minimum line width above which to
+			 *        consider a line a filled area
+			 * @return true if the path is filled
+			 */
+			public boolean isFilled(float minAreaLineWidth) {
+				if (this.fillColor != null)
+					return true;
+				return ((this.strokeColor != null) && (this.lineWidth >= minAreaLineWidth));
 			}
 			
 			/**
@@ -973,8 +1004,8 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 					Rectangle2D extent = null;
 					for (int s = 0; s < this.subPaths.size(); s++) {
 						if (extent == null)
-							extent = ((SubPath) this.subPaths.get(s)).getExtent();
-						else extent = extent.createUnion(((SubPath) this.subPaths.get(s)).getExtent());
+							extent = ((SubPath) this.subPaths.get(s)).getExtent(this);
+						else extent = extent.createUnion(((SubPath) this.subPaths.get(s)).getExtent(this));
 					}
 					this.extent = extent;
 				}
@@ -1188,12 +1219,14 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			 * on this sub path.
 			 * @return the extent of the sub path
 			 */
-			public Rectangle2D getExtent() {
+			public Rectangle2D getExtent(Path parent) {
 				if (this.extent == null) {
 					float minX = Float.MAX_VALUE;
 					float minY = Float.MAX_VALUE;
 					float maxX = -Float.MAX_VALUE;
 					float maxY = -Float.MAX_VALUE;
+					
+					//	measure actual points
 					for (int s = 0; s < this.shapes.size(); s++) {
 						Shape shape = ((Shape) this.shapes.get(s));
 						if (shape instanceof Line2D) {
@@ -1225,6 +1258,38 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 							maxY = Math.max(maxY, ((float) ((CubicCurve2D) shape).getY2()));
 						}
 					}
+					
+					/* if path is stroked, factor in line width and line caps
+					 * (yes, rectangles _can_ and do come as very wide lines
+					 * ... horizontal or vertical) */
+					if (parent.strokeColor != null) {
+						
+						//	we don't have line end decoration, and no line joints at all, add in direction vertical to main extent
+						if ((parent.lineCapStyle == BasicStroke.CAP_BUTT) && (parent.subPaths.size() < 2)) {
+							
+							//	mostly vertical extent
+							if (Math.abs(maxX - minX) < Math.abs(maxY - minY)) {
+								minX -= (parent.lineWidth / 2);
+								maxX += (parent.lineWidth / 2);
+							}
+							
+							//	mostly horizontal extent
+							else {
+								minY -= (parent.lineWidth / 2);
+								maxY += (parent.lineWidth / 2);
+							}
+						}
+						
+						//	we have line joint and/or line end decoration, simply add in all directions
+						else {
+							minX -= (parent.lineWidth / 2);
+							minY -= (parent.lineWidth / 2);
+							maxX += (parent.lineWidth / 2);
+							maxY += (parent.lineWidth / 2);
+						}
+					}
+					
+					//	finally ...
 					this.extent = new Rectangle2D.Float(minX, minY, (maxX - minX), (maxY - minY));
 				}
 				return this.extent;
@@ -1644,25 +1709,47 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 					if ((strokeColor == null) && (fillColor == null))
 						continue;
 					
-					SubPath[] subPaths = paths[p].getSubPaths();
+					Path2D path = new Path2D.Float();
+					Graphics.SubPath[] subPaths = paths[p].getSubPaths();
 					for (int s = 0; s < subPaths.length; s++) {
-						
-						//	render sub path
-						Path2D path = subPaths[s].getPath();
-						if (fillColor != null) {
-							renderer.setColor(fillColor);
-							renderer.fill(path);
-						}
-						if (strokeColor != null) {
-							renderer.setColor(strokeColor);
-							renderer.setStroke(stroke);
-							renderer.draw(path);
-						}
-						else if (fillColor != null) {
-							renderer.setColor(fillColor);
-							renderer.draw(path);
-						}
+						Path2D subPath = subPaths[s].getPath();
+						path.append(subPath, false);
 					}
+					
+					if (fillColor != null) {
+						renderer.setColor(fillColor);
+						renderer.fill(path);
+					}
+					if (strokeColor != null) {
+						renderer.setColor(strokeColor);
+						renderer.setStroke(stroke);
+						renderer.draw(path);
+					}
+//					else if (fillColor != null) {
+//						renderer.setColor(fillColor);
+//						renderer.draw(path);
+//					}
+					
+//					NEED TO FIRST COLLECT ALL SUB PATHS AND THEN FILL THE WHOLE PATH SO EVEN-ODD RULE CAN TAKE EFFECT ON FILLING
+//					SubPath[] subPaths = paths[p].getSubPaths();
+//					for (int s = 0; s < subPaths.length; s++) {
+//						
+//						//	render sub path
+//						Path2D path = subPaths[s].getPath();
+//						if (fillColor != null) {
+//							renderer.setColor(fillColor);
+//							renderer.fill(path);
+//						}
+//						if (strokeColor != null) {
+//							renderer.setColor(strokeColor);
+//							renderer.setStroke(stroke);
+//							renderer.draw(path);
+//						}
+//						else if (fillColor != null) {
+//							renderer.setColor(fillColor);
+//							renderer.draw(path);
+//						}
+//					}
 					renderer.setColor(preColor);
 					renderer.setStroke(preStroke);
 				}
@@ -1678,25 +1765,47 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 				Stroke stroke = this.path.getStroke();
 				Color fillColor = this.path.getFillColor();
 				
-				SubPath[] subPaths = this.path.getSubPaths();
+				Path2D path = new Path2D.Float();
+				Graphics.SubPath[] subPaths = this.path.getSubPaths();
 				for (int s = 0; s < subPaths.length; s++) {
-					
-					//	render sub path
-					Path2D path = subPaths[s].getPath();
-					if (fillColor != null) {
-						renderer.setColor(fillColor);
-						renderer.fill(path);
-					}
-					if (strokeColor != null) {
-						renderer.setColor(strokeColor);
-						renderer.setStroke(stroke);
-						renderer.draw(path);
-					}
-					else if (fillColor != null) {
-						renderer.setColor(fillColor);
-						renderer.draw(path);
-					}
+					Path2D subPath = subPaths[s].getPath();
+					path.append(subPath, false);
 				}
+				
+				if (fillColor != null) {
+					renderer.setColor(fillColor);
+					renderer.fill(path);
+				}
+				if (strokeColor != null) {
+					renderer.setColor(strokeColor);
+					renderer.setStroke(stroke);
+					renderer.draw(path);
+				}
+//				else if (fillColor != null) {
+//					renderer.setColor(fillColor);
+//					renderer.draw(path);
+//				}
+				
+//				NEED TO FIRST COLLECT ALL SUB PATHS AND THEN FILL THE WHOLE PATH SO EVEN-ODD RULE CAN TAKE EFFECT ON FILLING
+//				SubPath[] subPaths = this.path.getSubPaths();
+//				for (int s = 0; s < subPaths.length; s++) {
+//					
+//					//	render sub path
+//					Path2D path = subPaths[s].getPath();
+//					if (fillColor != null) {
+//						renderer.setColor(fillColor);
+//						renderer.fill(path);
+//					}
+//					if (strokeColor != null) {
+//						renderer.setColor(strokeColor);
+//						renderer.setStroke(stroke);
+//						renderer.draw(path);
+//					}
+//					else if (fillColor != null) {
+//						renderer.setColor(fillColor);
+//						renderer.draw(path);
+//					}
+//				}
 				renderer.setColor(preColor);
 				renderer.setStroke(preStroke);
 			}
@@ -1902,7 +2011,7 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 				
 				//	translate rendering bounds and position
 				float x = (eWordBounds[w].left - eBounds.left);
-				float y = ((eWordBounds[w].top - eBounds.top) + (eWordBounds[w].getHeight() * (1 - 0.275f))); // factor in that text is anchored at baseline (some 25-30 percent from bottom of word box in most fonts), not top left corner
+				float y;
 				
 				//	get font size
 				int fontSize = -1;
@@ -1916,12 +2025,23 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 				//	write start tag, including rendering properties
 				svg.append("<text ");
 				svg.append(" x=\"" + x + "px\"");
-				svg.append(" y=\"" + y + "px\"");
-				if (ImWord.TEXT_DIRECTION_BOTTOM_UP.equals(to))
-					svg.append(" transform=\"rotate(-90, " + (((float) eWordBounds[w].getWidth()) / 2) + ", -" + (((float) eWordBounds[w].getWidth()) / 2) + ")\"");
-				else if (ImWord.TEXT_DIRECTION_TOP_DOWN.equals(to))
-					svg.append(" transform=\"rotate(90, " + (((float) eWordBounds[w].getHeight()) / 2) + ", -" + (((float) eWordBounds[w].getHeight()) / 2) + ")\"");
-				svg.append(" textLength=\"" + eWordBounds[w].getWidth() + "px\"");
+				if (ImWord.TEXT_DIRECTION_BOTTOM_UP.equals(to)) {
+					y = ((eWordBounds[w].bottom - eBounds.top) - (eWordBounds[w].getWidth() * 0.275f)); // factor in that text is anchored at baseline (some 25-30 percent from bottom of word box in most fonts), not top left corner
+					svg.append(" y=\"" + y + "px\"");
+					svg.append(" transform=\"rotate(-90, " + (x + (((float) eWordBounds[w].getWidth()) / 2)) + ", " + (y - (((float) eWordBounds[w].getWidth()) / 2)) + ")\"");
+					svg.append(" textLength=\"" + eWordBounds[w].getHeight() + "px\"");
+				}
+				else if (ImWord.TEXT_DIRECTION_TOP_DOWN.equals(to)) {
+					y = ((eWordBounds[w].bottom - eBounds.top) - (eWordBounds[w].getWidth() * 0.275f)); // factor in that text is anchored at baseline (some 25-30 percent from bottom of word box in most fonts), not top left corner
+					svg.append(" y=\"" + y + "px\"");
+					svg.append(" transform=\"rotate(90, " + (x + (((float) eWordBounds[w].getHeight()) / 2)) + ", " + (y - (((float) eWordBounds[w].getHeight()) / 2)) + ")\"");
+					svg.append(" textLength=\"" + eWordBounds[w].getHeight() + "px\"");
+				}
+				else {
+					y = ((eWordBounds[w].bottom - eBounds.top) - (eWordBounds[w].getHeight() * 0.275f)); // factor in that text is anchored at baseline (some 25-30 percent from bottom of word box in most fonts), not top left corner
+					svg.append(" y=\"" + y + "px\"");
+					svg.append(" textLength=\"" + eWordBounds[w].getWidth() + "px\"");
+				}
 				svg.append(" font-family=\"" + "sans-serif" + "\""); // default to sans-serif font for now ...
 				if (fontSize != -1)
 					svg.append(" font-size=\"" + fontSize + "\"");
@@ -1954,9 +2074,9 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 				"");
 	}
 	
-	private static final String getHex(int i) {
-		int high = (i >>> 4) & 15;
-		int low = i & 15;
+	private static final String getHex(int c) {
+		int high = (c >>> 4) & 15;
+		int low = c & 15;
 		String hex = "";
 		if (high < 10) hex += ("" + high);
 		else hex += ("" + ((char) ('A' + (high - 10))));

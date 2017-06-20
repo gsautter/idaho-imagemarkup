@@ -160,15 +160,18 @@ public class PsParser {
 				//	put an element into an array or dictionary
 				else if ("put".equals(psc.command)) {
 					Object element = stack.removeLast();
+//					System.out.println("Put object is: " + element);
 					Object nameOrIndex = stack.removeLast();
+//					System.out.println("Put name or index is: " + nameOrIndex);
 					Object dictOrArray = stack.removeLast();
+//					System.out.println("Put target is: " + dictOrArray);
 					try {
 						if (dictOrArray instanceof Vector) {
 							int index = ((Number) nameOrIndex).intValue();
 							Vector array = ((Vector) dictOrArray);
 							if (index < array.size())
 								array.set(index, element);
-							array.add(index, element);
+							else array.add(index, element);
 //							System.out.println("Set " + index + " to " + element);
 //							System.out.println("Stack is: " + stack);
 						}
@@ -183,6 +186,9 @@ public class PsParser {
 							stack.addLast(dictOrArray);
 							stack.addLast(nameOrIndex);
 							stack.addLast(element);
+							System.out.println("Strange put element is: " + element);
+							System.out.println("Strange put name or index is: " + nameOrIndex);
+							System.out.println("Strange put target is: " + dictOrArray);
 							System.out.println("Strange put stack is: " + stack);
 							System.out.println("Strange put dict stack is: " + dictStack);
 							System.out.println("Strange put state is: " + state);
@@ -192,6 +198,9 @@ public class PsParser {
 						stack.addLast(dictOrArray);
 						stack.addLast(nameOrIndex);
 						stack.addLast(element);
+						System.out.println("Error put element is: " + element);
+						System.out.println("Error put name or index is: " + nameOrIndex);
+						System.out.println("Error put target is: " + dictOrArray);
 						System.out.println("Error stack is: " + stack);
 						System.out.println("Error dict stack is: " + dictStack);
 						System.out.println("Error state is: " + state);
@@ -202,22 +211,30 @@ public class PsParser {
 				//	get an element from an array or dictionary
 				else if ("get".equals(psc.command)) {
 					Object nameOrIndex = stack.removeLast();
+//					System.out.println("Get name or index is: " + nameOrIndex);
 					Object dictOrArray = stack.removeLast();
+//					System.out.println("Get target is: " + dictOrArray);
 					try {
 						if (dictOrArray instanceof Vector) {
 							int index = ((Number) nameOrIndex).intValue();
 							Vector array = ((Vector) dictOrArray);
-							stack.addLast(array.get(index));
+							if (index < array.size()) // TODO track how that can happen ...
+								stack.addLast(array.get(index));
+							else System.out.println("Invalid request for element " + index + " of " + array);
 						}
 						else if (dictOrArray instanceof Hashtable) {
 							Name key = ((Name) nameOrIndex);
 							Hashtable dict = ((Hashtable) dictOrArray);
 							Object value = dict.get(key);
-							stack.addLast(value);
+							if (value != null) // TODO track how that can happen ...
+								stack.addLast(value);
+							else System.out.println("Invalid request for entry " + key + " of " + dict);
 						}
 						else {
 							stack.addLast(dictOrArray);
 							stack.addLast(nameOrIndex);
+							System.out.println("Strange get name or index is: " + nameOrIndex);
+							System.out.println("Strange get target is: " + dictOrArray);
 							System.out.println("Strange get stack is: " + stack);
 							System.out.println("Strange get dict stack is: " + dictStack);
 							System.out.println("Strange get state is: " + state);
@@ -226,6 +243,8 @@ public class PsParser {
 					catch (RuntimeException re) {
 						stack.addLast(dictOrArray);
 						stack.addLast(nameOrIndex);
+						System.out.println("Error get name or index is: " + nameOrIndex);
+						System.out.println("Error get target is: " + dictOrArray);
 						System.out.println("Error stack is: " + stack);
 						System.out.println("Error dict stack is: " + dictStack);
 						System.out.println("Error state is: " + state);
@@ -272,14 +291,14 @@ public class PsParser {
 					while (bObj instanceof PsProcedure) {
 						PsProcedure bProc = ((PsProcedure) bObj);
 						System.out.println("Executing " + bProc.toString());
-						bProc.execute(state, stack);
+						bProc.execute(state, stack, ((indent == null) ? null : (indent + "  ")));
 						bObj = stack.removeLast();
 					}
 					if (((Boolean) bObj).booleanValue()) {
 						if (tObj instanceof PsProcedure) {
 							PsProcedure tProc = ((PsProcedure) tObj);
 							System.out.println("Executing " + tProc.toString());
-							tProc.execute(state, stack);
+							tProc.execute(state, stack, ((indent == null) ? null : (indent + "  ")));
 						}
 						else stack.addLast(tObj);
 					}
@@ -294,14 +313,14 @@ public class PsParser {
 					while (bObj instanceof PsProcedure) {
 						PsProcedure bProc = ((PsProcedure) bObj);
 						System.out.println("Executing " + bProc.toString());
-						bProc.execute(state, stack);
+						bProc.execute(state, stack, ((indent == null) ? null : (indent + "  ")));
 						bObj = stack.removeLast();
 					}
 					if (((Boolean) bObj).booleanValue()) {
 						if (tObj instanceof PsProcedure) {
 							PsProcedure tProc = ((PsProcedure) tObj);
 							System.out.println("Executing " + tProc.toString());
-							tProc.execute(state, stack);
+							tProc.execute(state, stack, ((indent == null) ? null : (indent + "  ")));
 						}
 						else stack.addLast(tObj);
 					}
@@ -309,32 +328,72 @@ public class PsParser {
 						if (fObj instanceof PsProcedure) {
 							PsProcedure fProc = ((PsProcedure) fObj);
 							System.out.println("Executing " + fProc.toString());
-							fProc.execute(state, stack);
+							fProc.execute(state, stack, ((indent == null) ? null : (indent + "  ")));
 						}
 						else stack.addLast(fObj);
 					}
 				}
 				
-				
+				//	for command
+				else if ("for".equals(psc.command)) {
+					PsProcedure proc = ((PsProcedure) stack.removeLast());
+					Number limit = ((Number) stack.removeLast());
+					Number increment = ((Number) stack.removeLast());
+					Number initial = ((Number) stack.removeLast());
+					for (int i = initial.intValue(); i <= limit.intValue(); i += increment.intValue()) {
+						stack.addLast(new Integer(i));
+						System.out.println("Executing (" + i + ") " + proc.toString());
+						proc.execute(state, stack, ((indent == null) ? null : (indent + "  ")));
+					}
+					System.out.println("Post-for stack is " + stack);
+				}
 				
 				//	the usual RD, ND, and NP (always named that in Type1 fonts)
 				else if ("RD".equals(psc.command)) {
 					int length = ((Number) stack.removeLast()).intValue();
-					while (pbis.peek() == 32)
+					if (DEBUG_PARSE_PS) System.out.println("Reading char string for " + stack.getLast() + " with length " + length);
+					int skipped = 0;
+					if (pbis.peek() == 32) {
 						pbis.read();
+						skipped++;
+					}
 					ByteArrayOutputStream baos = new ByteArrayOutputStream();
-					for (int l = 0; l < length; l++)
-						baos.write(pbis.read());
+					int lastByte = -1;
+					for (int l = 0; l < length; l++) {
+						lastByte = pbis.read();
+						baos.write(lastByte);
+					}
 					byte[] stopPeek = new byte[3];
-					while (true) {
+					while (pbis.peek() != -1) {
 						pbis.peek(stopPeek);
-						if (PdfUtils.equals(stopPeek, " ND"))
+						if (false) {}
+						else if (PdfUtils.equals(stopPeek, " ND") || PdfUtils.equals(stopPeek, " |-"))
 							break;
-						else if (PdfUtils.equals(stopPeek, " NP"))
+						else if (PdfUtils.equals(stopPeek, " NP") || PdfUtils.startsWith(stopPeek, "|", 0))
+							break;
+//						else if ((lastByte == 32) && (PdfUtils.startsWith(stopPeek, "ND", 0) || PdfUtils.startsWith(stopPeek, "|-", 0)))
+//							break;
+//						else if ((lastByte == 32) && (PdfUtils.startsWith(stopPeek, "NP", 0) || PdfUtils.startsWith(stopPeek, "|", 0)))
+//							break;
+						else if (PdfUtils.startsWith(stopPeek, "ND", 0) || PdfUtils.startsWith(stopPeek, "|-", 0))
+							break;
+						else if (PdfUtils.startsWith(stopPeek, "NP", 0) || PdfUtils.startsWith(stopPeek, "|", 0))
 							break;
 						else baos.write(pbis.read());
 					}
-					stack.addLast(new PsString(baos.toByteArray()));
+					
+					byte[] bytes = baos.toByteArray();
+					stack.addLast(new PsString(bytes));
+					if (DEBUG_PARSE_PS) {
+						System.out.println(" ==> read " + bytes.length + " bytes after initial skip of " + skipped);
+						System.out.println("          " + Arrays.toString(bytes));
+						if (bytes.length > length) {
+							byte[] lBytes = new byte[length];
+							System.arraycopy(bytes, 0, lBytes, 0, lBytes.length);
+							System.out.println("          " + Arrays.toString(lBytes));
+							System.out.println("          " + new String(bytes, length, (bytes.length - length)));
+						}
+					}
 				}
 				else if ("ND".equals(psc.command)) {
 					Object value = stack.removeLast();
@@ -347,7 +406,10 @@ public class PsParser {
 					Object element = stack.removeLast();
 					int index = ((Number) stack.removeLast()).intValue();
 					Vector array = ((Vector) stack.removeLast());
+					while (array.size() < index)
+						array.add(null); // fill up any '.notdef' incurred gaps
 					array.add(index, element);
+//					System.out.println("Set " + index + " to " + element);
 				}
 				
 				//	define font
@@ -356,7 +418,6 @@ public class PsParser {
 					Object key = stack.removeLast();
 					state.put(key, font);
 				}
-				
 				
 				
 				//	get absolute value of last stack element
@@ -594,14 +655,20 @@ public class PsParser {
 				}
 				
 				
+				//	push built-in encoding onto stack
+				else if ("StandardEncoding".equals(psc.command))
+					stack.addLast(getStandardEncoding());
+				else if ("ISOLatin1Encoding".equals(psc.command))
+					stack.addLast(getISOLatin1Encoding());
+				
 				
 				//	user defined command
 				else if ((dictStack.isEmpty() ? state : ((Hashtable) dictStack.getLast())).containsKey(psc.command)) {
 					Object obj = (dictStack.isEmpty() ? state : ((Hashtable) dictStack.getLast())).get(psc.command);
-					System.out.println("Got " + psc.command + ": " + obj.toString());
+//					System.out.println("Got " + psc.command + ": " + obj.toString());
 					PsProcedure proc = ((PsProcedure) obj);
-					System.out.println("Executing " + proc.toString());
-					proc.execute(state, stack);
+//					System.out.println("Executing " + proc.toString());
+					proc.execute(state, stack, ((indent == null) ? null : (indent + "  ")));
 				}
 				
 				//	other command, yet to be implements
@@ -671,18 +738,50 @@ public class PsParser {
 			return cropName(bytes);
 		}
 		
-		//	boolean, number, null, or function call
+		//	boolean, number, null, command, or function call
 		else {
 			byte[] lookahead = new byte[16]; // 16 bytes is reasonable for detecting references, as object number and generation number combined will rarely exceed 13 digits
 			int l = bytes.peek(lookahead);
 			if (l == -1)
 				return null;
-			if (DEBUG_PARSE_PS) System.out.println("Got lookahead: " + new String(lookahead));
+			String lookaheadStr = new String(lookahead, 0, l);
+			if (DEBUG_PARSE_PS) System.out.println("Got lookahead: " + lookaheadStr);
+			
+			//	catch Type1 font specific symbols right away ('-|' for 'RD', '|-' for 'ND', and '|' for 'NP')
+			//	TODO make sure this doesn't wreck any havoc in non-font PS usage
+			if (lookaheadStr.startsWith("-|")) {
+				bytes.read();
+				bytes.read();
+				if (DEBUG_PARSE_PS) System.out.println(" ==> command");
+				return new PsCommand("RD"); // translate synonym right away
+			}
+			else if (lookaheadStr.startsWith("|-")) {
+				bytes.read();
+				bytes.read();
+				if (DEBUG_PARSE_PS) System.out.println(" ==> command");
+				return new PsCommand("ND"); // translate synonym right away
+			}
+			else if (lookaheadStr.startsWith("|")) {
+				bytes.read();
+				if (DEBUG_PARSE_PS) System.out.println(" ==> command");
+				return new PsCommand("NP"); // translate synonym right away
+			}
+			
+			//	what are we dealing with?
+			boolean croppingInteger = lookaheadStr.matches("\\-?[0-9]++.*");
+			boolean croppingDouble = lookaheadStr.matches("\\-?[0-9]*+\\.[0-9]++.*");
 			
 			if (DEBUG_PARSE_PS) System.out.println(" --> other object");
 			StringBuffer valueBuffer = new StringBuffer();
-			while ((bytes.peek() > 32) && ("%()<>[]{}/#".indexOf((char) bytes.peek()) == -1))
+//			while ((bytes.peek() > 32) && ("%()<>[]{}/#".indexOf((char) bytes.peek()) == -1))
+//				valueBuffer.append((char) bytes.read());
+			while ((bytes.peek() > 32) && ("%()<>[]{}/#".indexOf((char) bytes.peek()) == -1)) {
+				if (croppingInteger && ("-0123456789".indexOf((char) bytes.peek()) == -1))
+					break;
+				if (croppingDouble && ("-0123456789.".indexOf((char) bytes.peek()) == -1))
+					break;
 				valueBuffer.append((char) bytes.read());
+			}
 			String value = valueBuffer.toString();
 			if (DEBUG_PARSE_PS) System.out.println(" --> value: " + value);
 			if ("true".equalsIgnoreCase(value) || "false".equalsIgnoreCase(value)) {
@@ -1094,6 +1193,371 @@ public class PsParser {
 		return ht;
 	}
 	
+	//	properly populate this sucker
+	private static Vector getStandardEncoding() {
+		Vector v = new Vector();
+		for (int i = 0; i < 256; i++)
+			v.add(".notdef");
+		v.set(32, "space");
+		v.set(33, "exclam");
+		v.set(34, "quotedbl");
+		v.set(35, "numbersign");
+		v.set(36, "dollar");
+		v.set(37, "percent");
+		v.set(38, "ampersand");
+		v.set(39, "quoteright");
+		v.set(40, "parenleft");
+		v.set(41, "parenright");
+		v.set(42, "asterisk");
+		v.set(43, "plus");
+		v.set(44, "comma");
+		v.set(45, "hyphen");
+		v.set(46, "period");
+		v.set(47, "slash");
+		v.set(48, "zero");
+		v.set(49, "one");
+		v.set(50, "two");
+		v.set(51, "three");
+		v.set(52, "four");
+		v.set(53, "five");
+		v.set(54, "six");
+		v.set(55, "seven");
+		v.set(56, "eight");
+		v.set(57, "nine");
+		v.set(58, "colon");
+		v.set(59, "semicolon");
+		v.set(60, "less");
+		v.set(61, "equal");
+		v.set(62, "greater");
+		v.set(63, "question");
+		v.set(64, "at");
+		v.set(65, "A");
+		v.set(66, "B");
+		v.set(67, "C");
+		v.set(68, "D");
+		v.set(69, "E");
+		v.set(70, "F");
+		v.set(71, "G");
+		v.set(72, "H");
+		v.set(73, "I");
+		v.set(74, "J");
+		v.set(75, "K");
+		v.set(76, "L");
+		v.set(77, "M");
+		v.set(78, "N");
+		v.set(79, "O");
+		v.set(80, "P");
+		v.set(81, "Q");
+		v.set(82, "R");
+		v.set(83, "S");
+		v.set(84, "T");
+		v.set(85, "U");
+		v.set(86, "V");
+		v.set(87, "W");
+		v.set(88, "X");
+		v.set(89, "Y");
+		v.set(90, "Z");
+		v.set(91, "bracketleft");
+		v.set(92, "backslash");
+		v.set(93, "bracketright");
+		v.set(94, "asciicircum");
+		v.set(95, "underscore");
+		v.set(96, "quoteleft");
+		v.set(97, "a");
+		v.set(98, "b");
+		v.set(99, "c");
+		v.set(100, "d");
+		v.set(101, "e");
+		v.set(102, "f");
+		v.set(103, "g");
+		v.set(104, "h");
+		v.set(105, "i");
+		v.set(106, "j");
+		v.set(107, "k");
+		v.set(108, "l");
+		v.set(109, "m");
+		v.set(110, "n");
+		v.set(111, "o");
+		v.set(112, "p");
+		v.set(113, "q");
+		v.set(114, "r");
+		v.set(115, "s");
+		v.set(116, "t");
+		v.set(117, "u");
+		v.set(118, "v");
+		v.set(119, "w");
+		v.set(120, "x");
+		v.set(121, "y");
+		v.set(122, "z");
+		v.set(123, "braceleft");
+		v.set(124, "bar");
+		v.set(125, "braceright");
+		v.set(126, "asciitilde");
+		v.set(161, "exclamdown");
+		v.set(162, "cent");
+		v.set(163, "sterling");
+		v.set(164, "fraction");
+		v.set(165, "yen");
+		v.set(166, "florin");
+		v.set(167, "section");
+		v.set(168, "currency");
+		v.set(169, "quotesingle");
+		v.set(170, "quotedblleft");
+		v.set(171, "guillemotleft");
+		v.set(172, "guilsinglleft");
+		v.set(173, "guilsinglright");
+		v.set(174, "fi");
+		v.set(175, "fl");
+		v.set(177, "endash");
+		v.set(178, "dagger");
+		v.set(179, "daggerdbl");
+		v.set(180, "periodcentered");
+		v.set(182, "paragraph");
+		v.set(183, "bullet");
+		v.set(184, "quotesinglbase");
+		v.set(185, "quotedblbase");
+		v.set(186, "quotedblright");
+		v.set(187, "guillemotright");
+		v.set(188, "ellipsis");
+		v.set(189, "perthousand");
+		v.set(191, "questiondown");
+		v.set(193, "grave");
+		v.set(194, "acute");
+		v.set(195, "circumflex");
+		v.set(196, "tilde");
+		v.set(197, "macron");
+		v.set(198, "breve");
+		v.set(199, "dotaccent");
+		v.set(200, "dieresis");
+		v.set(202, "ring");
+		v.set(203, "cedilla");
+		v.set(205, "hungarumlaut");
+		v.set(206, "ogonek");
+		v.set(207, "caron");
+		v.set(208, "emdash");
+		v.set(225, "AE");
+		v.set(227, "ordfeminine");
+		v.set(232, "Lslash");
+		v.set(233, "Oslash");
+		v.set(234, "OE");
+		v.set(235, "ordmasculine");
+		v.set(241, "ae");
+		v.set(245, "dotlessi");
+		v.set(248, "lslash");
+		v.set(249, "oslash");
+		v.set(250, "oe");
+		v.set(251, "germandbls");
+		return v;
+	}
+	
+	//	properly populate this sucker
+	private static Vector getISOLatin1Encoding() {
+		Vector v = new Vector();
+		for (int i = 0; i < 256; i++)
+			v.add(".notdef");
+		v.set(32, "space");
+		v.set(33, "exclam");
+		v.set(34, "quotedbl");
+		v.set(35, "numbersign");
+		v.set(36, "dollar");
+		v.set(37, "percent");
+		v.set(38, "ampersand");
+		v.set(39, "quoteright");
+		v.set(40, "parenleft");
+		v.set(41, "parenright");
+		v.set(42, "asterisk");
+		v.set(43, "plus");
+		v.set(44, "comma");
+		v.set(45, "minus");
+		v.set(46, "period");
+		v.set(47, "slash");
+		v.set(48, "zero");
+		v.set(49, "one");
+		v.set(50, "two");
+		v.set(51, "three");
+		v.set(52, "four");
+		v.set(53, "five");
+		v.set(54, "six");
+		v.set(55, "seven");
+		v.set(56, "eight");
+		v.set(57, "nine");
+		v.set(58, "colon");
+		v.set(59, "semicolon");
+		v.set(60, "less");
+		v.set(61, "equal");
+		v.set(62, "greater");
+		v.set(63, "question");
+		v.set(64, "at");
+		v.set(65, "A");
+		v.set(66, "B");
+		v.set(67, "C");
+		v.set(68, "D");
+		v.set(69, "E");
+		v.set(70, "F");
+		v.set(71, "G");
+		v.set(72, "H");
+		v.set(73, "I");
+		v.set(74, "J");
+		v.set(75, "K");
+		v.set(76, "L");
+		v.set(77, "M");
+		v.set(78, "N");
+		v.set(79, "O");
+		v.set(80, "P");
+		v.set(81, "Q");
+		v.set(82, "R");
+		v.set(83, "S");
+		v.set(84, "T");
+		v.set(85, "U");
+		v.set(86, "V");
+		v.set(87, "W");
+		v.set(88, "X");
+		v.set(89, "Y");
+		v.set(90, "Z");
+		v.set(91, "bracketleft");
+		v.set(92, "backslash");
+		v.set(93, "bracketright");
+		v.set(94, "asciicircum");
+		v.set(95, "underscore");
+		v.set(96, "quoteleft");
+		v.set(97, "a");
+		v.set(98, "b");
+		v.set(99, "c");
+		v.set(100, "d");
+		v.set(101, "e");
+		v.set(102, "f");
+		v.set(103, "g");
+		v.set(104, "h");
+		v.set(105, "i");
+		v.set(106, "j");
+		v.set(107, "k");
+		v.set(108, "l");
+		v.set(109, "m");
+		v.set(110, "n");
+		v.set(111, "o");
+		v.set(112, "p");
+		v.set(113, "q");
+		v.set(114, "r");
+		v.set(115, "s");
+		v.set(116, "t");
+		v.set(117, "u");
+		v.set(118, "v");
+		v.set(119, "w");
+		v.set(120, "x");
+		v.set(121, "y");
+		v.set(122, "z");
+		v.set(123, "braceleft");
+		v.set(124, "bar");
+		v.set(125, "braceright");
+		v.set(126, "asciitilde");
+		v.set(144, "dotlessi");
+		v.set(145, "grave");
+		v.set(147, "circumflex");
+		v.set(148, "tilde");
+		v.set(150, "breve");
+		v.set(151, "dotaccent");
+		v.set(154, "ring");
+		v.set(157, "hungarumlaut");
+		v.set(158, "ogonek");
+		v.set(159, "caron");
+		v.set(161, "exclamdown");
+		v.set(162, "cent");
+		v.set(163, "sterling");
+		v.set(164, "currency");
+		v.set(165, "yen");
+		v.set(166, "brokenbar");
+		v.set(167, "section");
+		v.set(168, "dieresis");
+		v.set(169, "copyright");
+		v.set(170, "ordfeminine");
+		v.set(171, "guillemotleft");
+		v.set(172, "logicalnot");
+		v.set(173, "hyphen");
+		v.set(174, "registered");
+		v.set(175, "macron");
+		v.set(176, "degree");
+		v.set(177, "plusminus");
+		v.set(178, "twosuperior");
+		v.set(179, "threesuperior");
+		v.set(180, "acute");
+		v.set(181, "mu");
+		v.set(182, "paragraph");
+		v.set(183, "periodcentered");
+		v.set(184, "cedilla");
+		v.set(185, "onesuperior");
+		v.set(186, "ordmasculine");
+		v.set(187, "guillemotright");
+		v.set(188, "onequarter");
+		v.set(189, "onehalf");
+		v.set(190, "threequarters");
+		v.set(191, "questiondown");
+		v.set(192, "Agrave");
+		v.set(193, "Aacute");
+		v.set(194, "Acircumflex");
+		v.set(195, "Atilde");
+		v.set(196, "Adieresis");
+		v.set(197, "Aring");
+		v.set(198, "AE");
+		v.set(199, "Ccedilla");
+		v.set(200, "Egrave");
+		v.set(201, "Eacute");
+		v.set(202, "Ecircumflex");
+		v.set(203, "Edieresis");
+		v.set(204, "Igrave");
+		v.set(205, "Iacute");
+		v.set(206, "Icircumflex");
+		v.set(207, "Idieresis");
+		v.set(208, "Eth");
+		v.set(209, "Ntilde");
+		v.set(210, "Ograve");
+		v.set(211, "Oacute");
+		v.set(212, "Ocircumflex");
+		v.set(213, "Otilde");
+		v.set(214, "Odieresis");
+		v.set(215, "multiply");
+		v.set(216, "Oslash");
+		v.set(217, "Ugrave");
+		v.set(218, "Uacute");
+		v.set(219, "Ucircumflex");
+		v.set(220, "Udieresis");
+		v.set(221, "Yacute");
+		v.set(222, "Thorn");
+		v.set(223, "germandbls");
+		v.set(224, "agrave");
+		v.set(225, "aacute");
+		v.set(226, "acircumflex");
+		v.set(227, "atilde");
+		v.set(228, "adieresis");
+		v.set(229, "aring");
+		v.set(230, "ae");
+		v.set(231, "ccedilla");
+		v.set(232, "egrave");
+		v.set(233, "eacute");
+		v.set(234, "ecircumflex");
+		v.set(235, "edieresis");
+		v.set(236, "igrave");
+		v.set(237, "iacute");
+		v.set(238, "icircumflex");
+		v.set(239, "idieresis");
+		v.set(240, "eth");
+		v.set(241, "ntilde");
+		v.set(242, "ograve");
+		v.set(243, "oacute");
+		v.set(244, "ocircumflex");
+		v.set(245, "otilde");
+		v.set(246, "odieresis");
+		v.set(247, "divide");
+		v.set(248, "oslash");
+		v.set(249, "ugrave");
+		v.set(250, "uacute");
+		v.set(251, "ucircumflex");
+		v.set(252, "udieresis");
+		v.set(253, "yacute");
+		v.set(254, "thorn");
+		v.set(255, "ydieresis");
+		return v;
+	}
+	
 	/**
 	 * Wrapper object for a raw, undecoded string object.
 	 * 
@@ -1132,12 +1596,13 @@ public class PsParser {
 		}
 		public String toString() {
 			StringBuffer string = new StringBuffer();
-			if (this.isHex) {
-				for (int b = 0; b < this.bytes.length; b += 2)
-					string.append((char) this.getHex(b));
-			}
-			else for (int c = 0; c < this.bytes.length; c++)
-				string.append((char) convertUnsigned(this.bytes[c]));
+//			if (this.isHex) {
+//				for (int b = 0; b < this.bytes.length; b += 2)
+//					string.append((char) this.getHex(b));
+//			}
+//			else for (int c = 0; c < this.bytes.length; c++)
+//				string.append((char) convertUnsigned(this.bytes[c]));
+			string.append("Str<" + this.length() + ">");
 			return string.toString();
 		}
 		public int length() {
@@ -1194,6 +1659,9 @@ public class PsParser {
 		PsCommand(String command) {
 			this.command = command;
 		}
+		public String toString() {
+			return ("PostScript command '" + this.command + "'");
+		}
 	}
 	
 	/**
@@ -1207,10 +1675,11 @@ public class PsParser {
 			this.bytes = bytes;
 		}
 		public String toString() {
-			return ("{" + new String(this.bytes) + "}");
+//			return ("{" + new String(this.bytes) + "}");
+			return ("Proc<" + this.bytes.length + ">");
 		}
-		public void execute(Hashtable state, LinkedList stack) throws IOException {
-			executePs(this.bytes, state, stack);
+		public void execute(Hashtable state, LinkedList stack, String indent) throws IOException {
+			executePs(this.bytes, state, stack, indent);
 		}
 	}
 	

@@ -44,6 +44,7 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.ListIterator;
+import java.util.Set;
 import java.util.TreeSet;
 
 import javax.swing.DefaultComboBoxModel;
@@ -1059,6 +1060,21 @@ public class ImUtils implements ImagingConstants {
 	 * @return an array holding the table rows
 	 */
 	public static ImRegion[] getTableRows(ImRegion table) {
+		return getTableRows(table,  null);
+	}
+	
+	/**
+	 * Retrieve the rows of a table. If table rows are already marked, this
+	 * method simply returns them. If no rows are marked, this method tries to
+	 * generate them. If generation fails, e.g. if the argument region does not
+	 * contain any words, or if no row gaps exist, this method returns null.
+	 * Newly generated table rows are not attached to the page.
+	 * @param table the table whose rows to retrieve
+	 * @param ignoreWords a set containing word to ignore if table rows have to
+	 *            be newly created
+	 * @return an array holding the table rows
+	 */
+	public static ImRegion[] getTableRows(ImRegion table, Set ignoreWords) {
 		
 		//	get page
 		ImPage page = table.getPage();
@@ -1066,7 +1082,7 @@ public class ImUtils implements ImagingConstants {
 			page = table.getDocument().getPage(table.pageId);
 		
 		//	estimate minimums and get columns
-		return getTableRows(table,  (page.getImageDPI() / 50) /* about 0.5mm */, 0);
+		return getTableRows(table, ignoreWords,  (page.getImageDPI() / 50) /* about 0.5mm */, 0);
 	}
 	
 	/**
@@ -1081,6 +1097,23 @@ public class ImUtils implements ImagingConstants {
 	 * @return an array holding the table rows
 	 */
 	public static ImRegion[] getTableRows(ImRegion table, int minRowMargin, int minRowCount) {
+		return getTableRows(table, null, minRowMargin, minRowCount);
+	}
+	
+	/**
+	 * Retrieve the rows of a table. If table rows are already marked, this
+	 * method simply returns them. If no rows are marked, this method tries to
+	 * generate them. If generation fails, e.g. if the argument region does not
+	 * contain any words, or if no row gaps exist, this method returns null.
+	 * Newly generated table rows are not attached to the page.
+	 * @param table the table whose rows to retrieve
+	 * @param ignoreWords a set containing word to ignore if table rows have to
+	 *            be newly created
+	 * @param minRowMargin the minimum margin between two rows
+	 * @param minRowCount the minimum number of rows
+	 * @return an array holding the table rows
+	 */
+	public static ImRegion[] getTableRows(ImRegion table, Set ignoreWords, int minRowMargin, int minRowCount) {
 		
 		//	get page
 		ImPage page = table.getPage();
@@ -1105,11 +1138,23 @@ public class ImUtils implements ImagingConstants {
 	 * this method returns null. The generated table rows are not attached to
 	 * the page.
 	 * @param table the table whose rows to retrieve
-	 * @param minColumnMargin the minimum margin between two columns
-	 * @param minColumnCount the minimum number of columns
 	 * @return an array holding the table rows
 	 */
 	public static ImRegion[] createTableRows(ImRegion table) {
+		return createTableRows(table, null);
+	}
+	
+	/**
+	 * Create the rows of a table. This method always tries to generate table
+	 * rows, ignoring any existing ones. If generation fails, e.g. if the
+	 * argument region does not contain any words, or if no row gaps exist,
+	 * this method returns null. The generated table rows are not attached to
+	 * the page.
+	 * @param table the table whose rows to retrieve
+	 * @param ignoreWords a set containing word to ignore
+	 * @return an array holding the table rows
+	 */
+	public static ImRegion[] createTableRows(ImRegion table, Set ignoreWords) {
 		
 		//	get page
 		ImPage page = table.getPage();
@@ -1132,6 +1177,22 @@ public class ImUtils implements ImagingConstants {
 	 * @return an array holding the table rows
 	 */
 	public static ImRegion[] createTableRows(ImRegion table, int minRowMargin, int minRowCount) {
+		return createTableRows(table, null, minRowMargin, minRowCount);
+	}
+	
+	/**
+	 * Create the rows of a table. This method always tries to generate table
+	 * rows, ignoring any existing ones. If generation fails, e.g. if the
+	 * argument region does not contain any words, or if no row gaps exist,
+	 * this method returns null. The generated table rows are not attached to
+	 * the page.
+	 * @param table the table whose rows to retrieve
+	 * @param ignoreWords a set containing word to ignore
+	 * @param minRowMargin the minimum margin between two rows
+	 * @param minRowCount the minimum number of rows
+	 * @return an array holding the table rows
+	 */
+	public static ImRegion[] createTableRows(ImRegion table, Set ignoreWords, int minRowMargin, int minRowCount) {
 		
 		//	get page
 		ImPage page = table.getPage();
@@ -1140,6 +1201,8 @@ public class ImUtils implements ImagingConstants {
 		
 		//	get words
 		ImWord[] tableWords = page.getWordsInside(table.bounds);
+		if (ignoreWords != null)
+			tableWords = filterWords(tableWords, ignoreWords);
 		if (tableWords.length == 0)
 			return null;
 		
@@ -1161,15 +1224,19 @@ public class ImUtils implements ImagingConstants {
 			return null;
 		
 		//	create row regions
-		ImRegion[] tableRows = new ImRegion[rowGaps.size() + 1];
+//		ImRegion[] tableRows = new ImRegion[rowGaps.size() + 1];
+		ArrayList tableRowList = new ArrayList(rowGaps.size() + 1);
 		for (int g = 0; g <= rowGaps.size(); g++) {
 			int tableRowTop = table.bounds.top + ((g == 0) ? 0 : ((Gap) rowGaps.get(g-1)).end);
 			int tableRowBottom = ((g == rowGaps.size()) ? table.bounds.bottom : (table.bounds.top + ((Gap) rowGaps.get(g)).start));
-			tableRows[g] = new ImRegion(table.getDocument(), table.pageId, new BoundingBox(table.bounds.left, table.bounds.right, tableRowTop, tableRowBottom), ImRegion.TABLE_ROW_TYPE);
+//			tableRows[g] = new ImRegion(table.getDocument(), table.pageId, new BoundingBox(table.bounds.left, table.bounds.right, tableRowTop, tableRowBottom), ImRegion.TABLE_ROW_TYPE);
+			if (tableRowTop < tableRowBottom)
+				tableRowList.add(new ImRegion(table.getDocument(), table.pageId, new BoundingBox(table.bounds.left, table.bounds.right, tableRowTop, tableRowBottom), ImRegion.TABLE_ROW_TYPE));
 		}
 		
 		//	finally ...
-		return tableRows;
+//		return tableRows;
+		return ((ImRegion[]) tableRowList.toArray(new ImRegion[tableRowList.size()]));
 	}
 	
 	/**
@@ -1182,6 +1249,21 @@ public class ImUtils implements ImagingConstants {
 	 * @return an array holding the table columns
 	 */
 	public static ImRegion[] getTableColumns(ImRegion table) {
+		return getTableColumns(table, null);
+	}
+	
+	/**
+	 * Retrieve the columns of a table. If table columns are already marked,
+	 * this method simply returns them. If no columns are marked, this method
+	 * tries to generate them. If generation fails, e.g. if the argument region
+	 * does not contain any words, or if no column gaps exist, this method
+	 * returns null. Newly generated table columns are not attached to the page.
+	 * @param table the table whose columns to retrieve
+	 * @param ignoreWords a set containing word to ignore if table columns have
+	 *            to be newly created
+	 * @return an array holding the table columns
+	 */
+	public static ImRegion[] getTableColumns(ImRegion table, Set ignoreWords) {
 		
 		//	get page
 		ImPage page = table.getPage();
@@ -1189,7 +1271,7 @@ public class ImUtils implements ImagingConstants {
 			page = table.getDocument().getPage(table.pageId);
 		
 		//	estimate minimums and get columns
-		return getTableColumns(table, (page.getImageDPI() / 30) /* less than 1mm */, 0);
+		return getTableColumns(table, ignoreWords, (page.getImageDPI() / 30) /* less than 1mm */, 0);
 	}
 	
 	/**
@@ -1204,6 +1286,23 @@ public class ImUtils implements ImagingConstants {
 	 * @return an array holding the table columns
 	 */
 	public static ImRegion[] getTableColumns(ImRegion table, int minColumnMargin, int minColumnCount) {
+		return getTableColumns(table, null, minColumnMargin, minColumnCount);
+	}
+	
+	/**
+	 * Retrieve the columns of a table. If table columns are already marked,
+	 * this method simply returns them. If no columns are marked, this method
+	 * tries to generate them. If generation fails, e.g. if the argument region
+	 * does not contain any words, or if no column gaps exist, this method
+	 * returns null. Newly generated table columns are not attached to the page.
+	 * @param table the table whose columns to retrieve
+	 * @param ignoreWords a set containing word to ignore if table columns have
+	 *            to be newly created
+	 * @param minColumnMargin the minimum margin between two columns
+	 * @param minColumnCount the minimum number of columns
+	 * @return an array holding the table columns
+	 */
+	public static ImRegion[] getTableColumns(ImRegion table, Set ignoreWords, int minColumnMargin, int minColumnCount) {
 		
 		//	get page
 		ImPage page = table.getPage();
@@ -1231,6 +1330,20 @@ public class ImUtils implements ImagingConstants {
 	 * @return an array holding the table columns
 	 */
 	public static ImRegion[] createTableColumns(ImRegion table) {
+		return createTableColumns(table, null);
+	}
+	
+	/**
+	 * Create the columns of a table. This method always tries to generate
+	 * table columns, ignoring any existing ones. If generation fails, e.g. if
+	 * the argument region does not contain any words, or if no column gaps
+	 * exist, this method returns null. The generated table columns are not
+	 * attached to the page.
+	 * @param table the table whose columns to retrieve
+	 * @param ignoreWords a set containing word to ignore
+	 * @return an array holding the table columns
+	 */
+	public static ImRegion[] createTableColumns(ImRegion table, Set ignoreWords) {
 		
 		//	get page
 		ImPage page = table.getPage();
@@ -1238,7 +1351,7 @@ public class ImUtils implements ImagingConstants {
 			page = table.getDocument().getPage(table.pageId);
 		
 		//	estimate minimums and get columns
-		return createTableColumns(table, (page.getImageDPI() / 30) /* less than 1mm */, 0);
+		return createTableColumns(table, ignoreWords, (page.getImageDPI() / 30) /* less than 1mm */, 0);
 	}
 	
 	/**
@@ -1253,6 +1366,22 @@ public class ImUtils implements ImagingConstants {
 	 * @return an array holding the table columns
 	 */
 	public static ImRegion[] createTableColumns(ImRegion table, int minColumnMargin, int minColumnCount) {
+		return createTableColumns(table, null, minColumnMargin, minColumnCount);
+	}
+	
+	/**
+	 * Create the columns of a table. This method always tries to generate
+	 * table columns, ignoring any existing ones. If generation fails, e.g. if
+	 * the argument region does not contain any words, or if no column gaps
+	 * exist, this method returns null. The generated table columns are not
+	 * attached to the page.
+	 * @param table the table whose columns to retrieve
+	 * @param ignoreWords a set containing word to ignore
+	 * @param minColumnMargin the minimum margin between two columns
+	 * @param minColumnCount the minimum number of columns
+	 * @return an array holding the table columns
+	 */
+	public static ImRegion[] createTableColumns(ImRegion table, Set ignoreWords, int minColumnMargin, int minColumnCount) {
 		
 		//	get page
 		ImPage page = table.getPage();
@@ -1261,6 +1390,8 @@ public class ImUtils implements ImagingConstants {
 		
 		//	get words
 		ImWord[] tableWords = page.getWordsInside(table.bounds);
+		if (ignoreWords != null)
+			tableWords = filterWords(tableWords, ignoreWords);
 		if (tableWords.length == 0)
 			return null;
 		
@@ -1282,12 +1413,16 @@ public class ImUtils implements ImagingConstants {
 			return null;
 		
 		//	create column regions
-		ImRegion[] tableCols = new ImRegion[colGaps.size() + 1];
+//		ImRegion[] tableCols = new ImRegion[colGaps.size() + 1];
+		ArrayList tableColList = new ArrayList(colGaps.size() + 1);
 		for (int g = 0; g <= colGaps.size(); g++) {
 			int tableColLeft = table.bounds.left + ((g == 0) ? 0 : ((Gap) colGaps.get(g-1)).end);
 			int tableColRight = ((g == colGaps.size()) ? table.bounds.right : (table.bounds.left + ((Gap) colGaps.get(g)).start));
-			tableCols[g] = new ImRegion(page.getDocument(), page.pageId, new BoundingBox(tableColLeft, tableColRight, table.bounds.top, table.bounds.bottom), ImRegion.TABLE_COL_TYPE);
+//			tableCols[g] = new ImRegion(page.getDocument(), page.pageId, new BoundingBox(tableColLeft, tableColRight, table.bounds.top, table.bounds.bottom), ImRegion.TABLE_COL_TYPE);
+			if (tableColLeft < tableColRight)
+				tableColList.add(new ImRegion(page.getDocument(), page.pageId, new BoundingBox(tableColLeft, tableColRight, table.bounds.top, table.bounds.bottom), ImRegion.TABLE_COL_TYPE));
 		}
+		ImRegion[] tableCols = ((ImRegion[]) tableColList.toArray(new ImRegion[tableColList.size()]));
 		
 		//	compute word density and average space widths in columns
 		int[] colRowCount = new int[tableCols.length];
@@ -1305,6 +1440,8 @@ public class ImUtils implements ImagingConstants {
 			int minWordSpace = Integer.MAX_VALUE;
 			int maxWordSpace = 0;
 			ImWord[] colWords = page.getWordsInside(tableCols[c].bounds);
+			if (ignoreWords != null)
+				colWords = filterWords(colWords, ignoreWords);
 			if (colWords.length == 0) {
 				colWordCount[c] = 0;
 				colWordHeightSum[c] = 0;
@@ -1393,6 +1530,8 @@ public class ImUtils implements ImagingConstants {
 			int[] pxColWordCounts = new int[tableCols[c].bounds.right - tableCols[c].bounds.left];
 			Arrays.fill(pxColWordCounts, 0);
 			ImWord[] colWords = page.getWordsInside(tableCols[c].bounds);
+			if (ignoreWords != null)
+				colWords = filterWords(colWords, ignoreWords);
 			sortLeftRightTopDown(colWords);
 			for (int w = 0; w < colWords.length; w++) {
 				for (int pc = colWords[w].bounds.left; pc < colWords[w].bounds.right; pc++) {
@@ -1567,18 +1706,33 @@ public class ImUtils implements ImagingConstants {
 		//	re-split columns if any new gaps found
 		if (colGaps.size() >= tableCols.length) {
 			Collections.sort(colGaps);
-			tableCols = new ImRegion[colGaps.size() + 1];
+//			tableCols = new ImRegion[colGaps.size() + 1];
+			tableColList.clear();
 			for (int g = 0; g <= colGaps.size(); g++) {
 				int tableColLeft = table.bounds.left + ((g == 0) ? 0 : ((Gap) colGaps.get(g-1)).end);
 				int tableColRight = ((g == colGaps.size()) ? table.bounds.right : (table.bounds.left + ((Gap) colGaps.get(g)).start));
-				tableCols[g] = new ImRegion(page.getDocument(), page.pageId, new BoundingBox(tableColLeft, tableColRight, table.bounds.top, table.bounds.bottom), ImRegion.TABLE_COL_TYPE);
+//				tableCols[g] = new ImRegion(page.getDocument(), page.pageId, new BoundingBox(tableColLeft, tableColRight, table.bounds.top, table.bounds.bottom), ImRegion.TABLE_COL_TYPE);
+				if (tableColLeft < tableColRight)
+					tableColList.add(new ImRegion(page.getDocument(), page.pageId, new BoundingBox(tableColLeft, tableColRight, table.bounds.top, table.bounds.bottom), ImRegion.TABLE_COL_TYPE));
 			}
+			tableCols = ((ImRegion[]) tableColList.toArray(new ImRegion[tableColList.size()]));
 		}
 		
 		//	finally ...
 		return tableCols;
 	}
-	private static final boolean DEBUG_CREATE_TABLE_COLS = true;
+	private static final boolean DEBUG_CREATE_TABLE_COLS = false;
+	
+	private static ImWord[] filterWords(ImWord[] words, Set ignoreWords) {
+		if (words.length == 0)
+			return words;
+		ArrayList wordList = new ArrayList(words.length);
+		for (int w = 0; w < words.length; w++) {
+			if (!ignoreWords.contains(words[w]))
+				wordList.add(words[w]);
+		}
+		return ((wordList.size() < words.length) ? ((ImWord[]) wordList.toArray(new ImWord[wordList.size()])) : words);
+	}
 	
 	/**
 	 * Retrieve the cells of a table. If table cells are already marked, this
@@ -1592,15 +1746,32 @@ public class ImUtils implements ImagingConstants {
 	 * @return an array holding the table cells
 	 */
 	public static ImRegion[][] getTableCells(ImRegion table, ImRegion[] rows, ImRegion[] cols) {
+		return getTableCells(table, null, rows, cols);
+	}
+	
+	/**
+	 * Retrieve the cells of a table. If table cells are already marked, this
+	 * method simply returns them. If no cells are marked, this method tries to
+	 * generate them. If generation fails, e.g. if the argument region does not
+	 * contain any words, or if no column or row gaps exist, this method
+	 * returns null. Newly generated table cells are not attached to the page.
+	 * @param table the table whose cells to retrieve
+	 * @param ignoreWords a set containing word to ignore if table columns or
+	 *            rows have to be newly created
+	 * @param rows an array holding existing table rows (may be null)
+	 * @param cols an array holding existing table columns (may be null)
+	 * @return an array holding the table cells
+	 */
+	public static ImRegion[][] getTableCells(ImRegion table, Set ignoreWords, ImRegion[] rows, ImRegion[] cols) {
 		
 		//	get rows and columns if not given
 		if (rows == null) {
-			rows = getTableRows(table);
+			rows = getTableRows(table, ignoreWords);
 			if (rows == null)
 				return null;
 		}
 		if (cols == null) {
-			cols = getTableColumns(table);
+			cols = getTableColumns(table, ignoreWords);
 			if (cols == null)
 				return null;
 		}
@@ -1628,6 +1799,8 @@ public class ImUtils implements ImagingConstants {
 			for (int c = 0; c < cols.length; c++) {
 				BoundingBox cellBounds = new BoundingBox(cols[c].bounds.left, cols[c].bounds.right, rows[r].bounds.top, rows[r].bounds.bottom);
 				ImWord[] cellWords = page.getWordsInside(cellBounds);
+				if (ignoreWords != null)
+					cellWords = filterWords(cellWords, ignoreWords);
 				if (cellWords.length != 0) {
 					int cbLeft = cellBounds.right;
 					int cbRight = cellBounds.left;

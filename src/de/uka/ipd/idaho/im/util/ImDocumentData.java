@@ -44,6 +44,7 @@ import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
@@ -52,10 +53,13 @@ import java.util.zip.ZipEntry;
 
 import de.uka.ipd.idaho.easyIO.util.RandomByteSource;
 import de.uka.ipd.idaho.gamta.Attributed;
+import de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
+import de.uka.ipd.idaho.im.ImAnnotation;
 import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.ImObject;
 import de.uka.ipd.idaho.im.ImSupplement;
+import de.uka.ipd.idaho.im.ImWord;
 import de.uka.ipd.idaho.stringUtils.csvHandler.StringRelation;
 import de.uka.ipd.idaho.stringUtils.csvHandler.StringTupel;
 
@@ -115,7 +119,7 @@ public abstract class ImDocumentData {
 		}
 		
 		/**
-		 * @param name
+		 * @param varName
 		 * @param updateTime
 		 * @param dataHash
 		 */
@@ -406,6 +410,83 @@ public abstract class ImDocumentData {
 		};
 	}
 	
+	private ArrayList annotations = null;
+	private boolean annotationLoadError = false;
+	private boolean ensureAnnotationsLoaded() {
+		if ((this.annotations == null) && !this.annotationLoadError) try {
+			InputStream annotsIn = this.getInputStream("annotations.csv");
+			StringRelation annotsData = StringRelation.readCsvData(new InputStreamReader(annotsIn, "UTF-8"), true, null);
+			annotsIn.close();
+			this.annotations = new ArrayList();
+			for (int s = 0; s < annotsData.size(); s++) {
+				StringTupel annotData = annotsData.get(s);
+				ImAnnotation annot = new ImAnnotationStub();
+				ImDocumentIO.setAttributes(annot, annotData.getValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, ""));
+				annot.setType(annotData.getValue(ImAnnotation.TYPE_ATTRIBUTE)); // after all the other attributes, as this makes it read-only
+				this.annotations.add(annot);
+			}
+		}
+		catch (IOException ioe) {
+			this.annotationLoadError = true;
+		}
+		return (this.annotations != null);
+	}
+	
+	private static class ImAnnotationStub extends AbstractAttributed implements ImAnnotation {
+		private String type;
+		public String getType() {
+			return this.type;
+		}
+		public void setType(String type) {
+			if (this.type == null)
+				this.type = type; // we're read-only for now (first call seals the attributes)
+		}
+		public ImDocument getDocument() {
+			return null;
+		}
+		public String getDocumentProperty(String propertyName) {
+			return null;
+		}
+		public String getDocumentProperty(String propertyName, String defaultValue) {
+			return defaultValue;
+		}
+		public String[] getDocumentPropertyNames() {
+			return new String[0];
+		}
+		public Object setAttribute(String name, Object value) {
+			if (this.type == null)
+				return super.setAttribute(name, value);
+			else return value;
+		}
+		public void copyAttributes(Attributed source) { /* we're read-only for now */ }
+		public Object removeAttribute(String name) {
+			return null; // we're read-only for now
+		}
+		public void clearAttributes() { /* we're read-only for now */ }
+		
+		public ImWord getFirstWord() {
+			return null;
+		}
+		public void setFirstWord(ImWord firstWord) { /* we're read-only for now */ }
+		public ImWord getLastWord() {
+			return null;
+		}
+		public void setLastWord(ImWord lastWord) { /* we're read-only for now */ }
+	}
+	
+	/**
+	 * Retrieve the annotations of the document. The returned annotations are
+	 * immutable, and they are not bounds to an actual document. As a result,
+	 * the <code>getFirstWord()</code>, <code>getLastWord()</code>, and
+	 * <code>getDocument()</code> methods return null.
+	 * @return the document annotations
+	 */
+	public ImAnnotation[] getAnnotations() {
+		if (this.ensureAnnotationsLoaded())
+			return ((ImAnnotation[]) this.annotations.toArray(new ImAnnotation[this.annotations.size()]));
+		else return new ImAnnotation[0];
+	}
+	
 	private TreeMap supplementsById = null;
 	private boolean supplementLoadError = false;
 	private boolean ensureSupplementsLoaded() {
@@ -526,45 +607,6 @@ public abstract class ImDocumentData {
 	 *            Image Markup document
 	 */
 	public abstract boolean canStoreDocument();
-	
-//	
-//	/**
-//	 * Produce a document data object from an input stream and a cache folder.
-//	 * This method expects the argument input stream to provide the document
-//	 * entries in a zipped-up form; it will un-zip and cache them first thing.
-//	 * If the argument cache folder is null, the individual un-zipped entries
-//	 * are cached as byte arrays in memory; otherwise, the argument folder is
-//	 * used for caching.
-//	 * @param in the input stream to read from
-//	 * @param inLength the length of the input stream
-//	 * @param cacheFolder the folder to use for caching
-//	 * @param pm a progress monitor to observe the reading process
-//	 * @return a document data object wrapping the data from the argument input
-//	 *            stream
-//	 * @throws IOException
-//	 */
-//	public static ImDocumentData getDocumentData(InputStream in, int inLength, File cacheFolder, ProgressMonitor pm) throws IOException {
-//		
-//	}
-//	
-//	/**
-//	 * Produce a document data object from an input stream and a cache folder.
-//	 * This method expects the argument input stream to provide the document
-//	 * entries in a zipped-up form; it will un-zip and cache them first thing.
-//	 * If the argument cache folder is null, the individual un-zipped entries
-//	 * are cached as byte arrays in memory; otherwise, the argument folder is
-//	 * used for caching.
-//	 * @param in the input stream to read from
-//	 * @param inLength the length of the input stream
-//	 * @param cacheFolder the folder to use for caching
-//	 * @param pm a progress monitor to observe the reading process
-//	 * @return a document data object wrapping the data from the argument input
-//	 *            stream
-//	 * @throws IOException
-//	 */
-//	public static ImDocumentData getDocumentData(File folder, ImDocumentEntry[] entries) throws IOException {
-//		
-//	}
 	
 	/**
 	 * An output stream that updates an MD5 message digester as data is written

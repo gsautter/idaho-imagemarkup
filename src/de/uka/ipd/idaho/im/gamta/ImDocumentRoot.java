@@ -257,7 +257,11 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			return ((aggregateImWordBounds == null) ? NULL_BOUNDING_BOX : aggregateImWordBounds);
 		}
 		int getStartIndex() {
-			return getTokenIndexOf(this.firstWord());
+			int startIndex = getTokenIndexOf(this.firstWord());
+//			if (startIndex < 0)
+//				System.out.println("Strange start index for " + this.firstWord() + " in " + this.getType());
+			return startIndex;
+//			return getTokenIndexOf(this.firstWord());
 		}
 		int getEndIndex() {
 			return (getTokenIndexOf(this.lastWord()) + 1);
@@ -275,6 +279,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			return imTokenAtIndex(this.getStartIndex() + index);
 		}
 		String valueAt(int index) {
+//			System.out.println("ImAnnotationView: getting value at " + index + " with own start index " + this.getStartIndex());
 			return ImDocumentRoot.this.valueAt(this.getStartIndex() + index);
 		}
 		String getWhitespaceAfter(int index) {
@@ -362,6 +367,18 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		}
 		
 		public int getStartIndex() {
+//			int startIndex = (this.base.getStartIndex() - ((this.sourceBase == null) ? 0 : this.sourceBase.getStartIndex()));
+//			if (startIndex < 0) {
+//				System.out.println("Strange absolute start index " + startIndex + " in " + this.base.getType());
+//				System.out.println(" - base start index is " + this.base.getStartIndex());
+//				if (this.sourceBase == null)
+//					System.out.println(" - source base is " + null);
+//				else {
+//					System.out.println(" - source base is " + this.sourceBase.getType());
+//					System.out.println(" - source base start index is " + this.sourceBase.getStartIndex());
+//				}
+//			}
+//			return startIndex;
 			return (this.base.getStartIndex() - ((this.sourceBase == null) ? 0 : this.sourceBase.getStartIndex()));
 		}
 		public int getEndIndex() {
@@ -600,6 +617,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			return this.tokenAt(this.size()-1);
 		}
 		public String valueAt(int index) {
+//			System.out.println("ImAnnotationView: getting value at " + index);
 			return this.base.valueAt(index);
 		}
 		public String firstValue() {

@@ -662,7 +662,8 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * @param ims the supplement to remove
 	 */
 	public void removeSupplement(ImSupplement ims) {
-		this.removeSupplement(ims.getId());
+		if (ims != null)
+			this.supplementsById.remove(ims.getId());
 		//	TODO dispose any removed supplement
 	}
 	
@@ -671,7 +672,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * @param sid the ID of the supplement to remove
 	 */
 	public void removeSupplement(String sid) {
-		this.supplementsById.remove(sid);
+		this.removeSupplement(this.getSupplement(sid));
 	}
 	
 	void addPage(ImPage page) {

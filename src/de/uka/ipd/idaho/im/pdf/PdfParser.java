@@ -59,6 +59,7 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.Vector;
@@ -623,20 +624,29 @@ public class PdfParser {
 			//	inline image
 			else if (expectPTags && PdfUtils.matches(lookahead, "BI(\\s+.*)?")) {
 				if (DEBUG_PARSE_PDF) System.out.println(" ==> inline image");
-				StringBuffer image = new StringBuffer();
+				bytes.read(); // consume B
+				bytes.read(); // consume I
+				bytes.skipSpace();
+				ByteArrayOutputStream iImageData = new ByteArrayOutputStream();
 				while (bytes.peek() != -1) {
 					while ((bytes.peek() != -1) && (bytes.peek() != 'E'))
-						image.append((char) bytes.read());
+						iImageData.write(bytes.read());
 					if (bytes.peek() == 'E') {
-						image.append((char) bytes.read());
+						bytes.read(); // consume E
 						if (bytes.peek() == 'I') {
-							image.append((char) bytes.read());
-							return new PtTag(image.toString());
+							bytes.read(); // consume I
+							return new PInlineImage("BI", iImageData.toByteArray());
 						}
-						else image.append((char) bytes.read());
+						else if (bytes.peek() == -1) {
+							iImageData.write((int) 'E'); // re-add E
+						}
+						else {
+							iImageData.write((int) 'E'); // re-add E
+							iImageData.write(bytes.read());
+						}
 					}
 				}
-				return new PtTag(image.toString());
+				return new PInlineImage("BI", iImageData.toByteArray());
 			}
 			
 			//	boolean, number, null, or page content tag
@@ -925,6 +935,98 @@ public class PdfParser {
 		return ht;
 	}
 	
+	private static Hashtable cropInlineImageParams(PdfByteInputStream iiBytes) throws IOException {
+		if (DEBUG_PARSE_PDF) System.out.println("Cropping dictionary");
+		Hashtable iip = new Hashtable(2);
+		while (true) {
+			if (!iiBytes.skipSpaceCheckEnd())
+				throw new IOException("Broken inline image dictionary");
+			while (iiBytes.peek() == '%') {
+				skipComment(iiBytes);
+				if (!iiBytes.skipSpaceCheckEnd())
+					throw new IOException("Broken inline image dictionary");
+			}
+			if ((iiBytes.peek(0) == 'I') && (iiBytes.peek(1) == 'D')) {
+				iiBytes.read(); // consume I
+				iiBytes.read(); // consume D
+				if (!"ASCIIHexDecode".equals(iip.get("Filter")) && !"ASCII85Decode".equals(iip.get("Filter")) && (iiBytes.peek() < 33))
+					iiBytes.read(); // consume space terminating 'ID' image data start marker (not required on the two checked filters according to spec)
+				break;
+			}
+			if (!iiBytes.skipSpaceCheckEnd())
+				throw new IOException("Broken inline image dictionary");
+			while (iiBytes.peek() == '%') {
+				skipComment(iiBytes);
+				if (!iiBytes.skipSpaceCheckEnd())
+					throw new IOException("Broken inline image dictionary");
+			}
+			Name name = cropName(iiBytes);
+			if (!iiBytes.skipSpaceCheckEnd())
+				throw new IOException("Broken inline image dictionary");
+			while (iiBytes.peek() == '%') {
+				skipComment(iiBytes);
+				if (!iiBytes.skipSpaceCheckEnd())
+					throw new IOException("Broken inline image dictionary");
+			}
+			Object value = cropNext(iiBytes, false, true);
+			iip.put(translateInlineImageObject(name, true), translateInlineImageObject(value, false));
+		}
+		if (DEBUG_PARSE_PDF) System.out.println(" --> " + iip.toString());
+		return iip;
+	}
+	
+	private static Object translateInlineImageObject(Object obj, boolean isKey) {
+		if (obj instanceof Name) {
+			Properties translator = (isKey ? inlineImageParamNameTranslator : inlineImageParamValueTranslator);
+			return new Name(translator.getProperty(obj.toString(), obj.toString()));
+		}
+		else if (obj instanceof Vector) {
+			Vector array = ((Vector) obj);
+			for (int e = 0; e < array.size(); e++)
+				array.set(e, translateInlineImageObject(array.get(e), false));
+			return array;
+		}
+		else if (obj instanceof Hashtable) {
+			Hashtable dict = ((Hashtable) obj);
+			Hashtable tDict = new Hashtable();
+			for (Iterator kit = dict.keySet().iterator(); kit.hasNext();) {
+				Object key = kit.next();
+				tDict.put(translateInlineImageObject(key, true), translateInlineImageObject(dict.get(key), false));
+			}
+			return tDict;
+		}
+		else return obj;
+	}
+	
+	private static Properties inlineImageParamNameTranslator = new Properties();
+	static {
+		inlineImageParamNameTranslator.setProperty("BPC","BitsPerComponent");
+		inlineImageParamNameTranslator.setProperty("CS","ColorSpace");
+		inlineImageParamNameTranslator.setProperty("D","Decode");
+		inlineImageParamNameTranslator.setProperty("DP","DecodeParms");
+		inlineImageParamNameTranslator.setProperty("F","Filter");
+		inlineImageParamNameTranslator.setProperty("H","Height");
+		inlineImageParamNameTranslator.setProperty("IM","ImageMask");
+		inlineImageParamNameTranslator.setProperty("I","Interpolate");
+		inlineImageParamNameTranslator.setProperty("W","Width");
+	}
+	
+	private static Properties inlineImageParamValueTranslator = new Properties();
+	static {
+		inlineImageParamValueTranslator.setProperty("G","DeviceGray");
+		inlineImageParamValueTranslator.setProperty("RGB","DeviceRGB");
+		inlineImageParamValueTranslator.setProperty("CMYK","DeviceCMYK");
+		inlineImageParamValueTranslator.setProperty("I","Indexed");
+		
+		inlineImageParamValueTranslator.setProperty("AHx","ASCIIHexDecode");
+		inlineImageParamValueTranslator.setProperty("A85","ASCII85Decode");
+		inlineImageParamValueTranslator.setProperty("LZW","LZWDecode");
+		inlineImageParamValueTranslator.setProperty("Fl","FlateDecode");
+		inlineImageParamValueTranslator.setProperty("RL","RunLengthDecode");
+		inlineImageParamValueTranslator.setProperty("CCF","CCITTFaxDecode");
+		inlineImageParamValueTranslator.setProperty("DCT","DCTDecode");
+	}
+	
 	/**
 	 * Wrapper object for a raw, unparsed stream object and its associated meta
 	 * data.
@@ -1112,6 +1214,14 @@ public class PdfParser {
 		}
 	}
 	
+	static class PInlineImage extends PtTag {
+		final byte[] data;
+		PInlineImage(String tag, byte[] data) {
+			super(tag);
+			this.data = data;
+		}
+	}
+	
 	//	/SMask 711 0 R
 	/**
 	 * Extract the mask image of an image object. If the argument image does not
@@ -1193,6 +1303,7 @@ public class PdfParser {
 		public static final int LEFT_RIGHT_FONT_DIRECTION = 0;
 		public static final int BOTTOM_UP_FONT_DIRECTION = 1;
 		public static final int TOP_DOWN_FONT_DIRECTION = -1;
+		public static final int UPSIDE_DOWN_FONT_DIRECTION = -2;
 		public final String charCodes;
 		public final String str;
 		public final Rectangle2D.Float bounds;
@@ -1219,6 +1330,12 @@ public class PdfParser {
 			this.fontSize = fontSize;
 			this.fontDirection = fontDirection;
 			this.font = font;
+			if (DEBUG_RENDER_PAGE_CONTENT && (str != null)) {
+				System.out.print("Got word '" + this.str + "' with char codes '");
+				for (int c = 0; c < this.charCodes.length(); c++)
+					System.out.print(((c == 0) ? "" : " ") + Integer.toString(((int) this.charCodes.charAt(c)), 16));
+				System.out.println("'" + ((this.font == null) ? "" : (" in font " + this.font.name)));
+			}
 		}
 		public String toString() {
 			return (this.str + " [" + Math.round(this.bounds.getMinX()) + "," + Math.round(this.bounds.getMaxX()) + "," + Math.round(this.bounds.getMinY()) + "," + Math.round(this.bounds.getMaxY()) + "], sized " + this.fontSize + (this.bold ? ", bold" : "") + (this.italics ? ", italic" : "") + ((this.color == null) ? "" : (", in " + Integer.toString(((this.color.getRGB() >>> 24) & 0xFF), 16).toUpperCase() + "-" + Integer.toString((this.color.getRGB() & 0xFFFFFF), 16).toUpperCase())) + ", at RON " + this.renderOrderNumber);
@@ -1310,6 +1427,33 @@ public class PdfParser {
 			super(renderOrderNumber);
 		}
 		
+		PPath(PPath model, PSubPath[] subPaths) {
+			super(model.renderOrderNumber);
+			
+			this.strokeColor = model.strokeColor;
+			this.lineWidth = model.lineWidth;
+			this.lineCapStyle = model.lineCapStyle;
+			this.lineJointStyle = model.lineJointStyle;
+			this.miterLimit = model.miterLimit;
+			this.dashPattern = model.dashPattern;
+			this.dashPatternPhase = model.dashPatternPhase;
+			
+			this.fillColor = model.fillColor;
+			this.fillEvenOdd = model.fillEvenOdd;
+			
+			this.clipPaths = model.clipPaths;
+			
+			this.blendMode = model.blendMode;
+			
+			for (int s = 0; s < subPaths.length; s++) {
+				this.subPaths.add(subPaths[s]);
+				this.minX = Math.min(this.minX, subPaths[s].minX);
+				this.maxX = Math.max(this.maxX, subPaths[s].maxX);
+				this.minY = Math.min(this.minY, subPaths[s].minY);
+				this.maxY = Math.max(this.maxY, subPaths[s].maxY);
+			}
+		}
+		
 		private void dom(LinkedList stack, LinkedList transformationMatrices) {
 			float y = ((Number) stack.removeLast()).floatValue();
 			float x = ((Number) stack.removeLast()).floatValue();
@@ -1369,6 +1513,8 @@ public class PdfParser {
 			this.doh(stack);
 		}
 		
+		PPath[] clipPaths;
+		
 		static int strokeCount = 0;
 		static CountingSet strokeColors = new CountingSet(new TreeMap());
 		Color strokeColor = null;
@@ -1378,7 +1524,7 @@ public class PdfParser {
 		float miterLimit = Float.NaN;
 		Vector dashPattern = null;
 		float dashPatternPhase = Float.NaN;
-		void stroke(Color color, float lineWidth, byte lineCapStyle, byte lineJointStyle, float miterLimit, Vector dashPattern, float dashPatternPhase, LinkedList transformationMatrices) {
+		void stroke(PPath[] clipPaths, Color color, float lineWidth, byte lineCapStyle, byte lineJointStyle, float miterLimit, Vector dashPattern, float dashPatternPhase, LinkedList transformationMatrices) {
 			strokeCount++;
 			if (color != null)
 				strokeColors.add(Integer.toString((color.getRGB() & 0xFFFFFF), 16).toUpperCase());
@@ -1397,30 +1543,34 @@ public class PdfParser {
 			this.dashPatternPhase = zoom(dashPatternPhase, transformationMatrices);
 			if (PdfExtractorTest.aimAtPage != -1)
 				System.out.println("PPath: stroked with color " + this.strokeColor + ((this.strokeColor == null) ? "" : (", alpha " + this.strokeColor.getAlpha())));
+			this.clipPaths = clipPaths;
 		}
 		private static float zoom(float f, LinkedList transformationMatrices) {
 			float[] zoomer = {f, f, 0};
 			zoomer = applyTransformationMatrices(zoomer, transformationMatrices);
-			return ((zoomer[0] + zoomer[1]) / 2);
+			return ((Math.abs(zoomer[0]) + Math.abs(zoomer[1])) / 2);
 		}
 		
 		static int fillCount = 0;
 		static CountingSet fillColors = new CountingSet(new TreeMap());
 		Color fillColor = null;
-		void fill(Color color) {
+		boolean fillEvenOdd = false;
+		void fill(PPath[] clipPaths, Color color, boolean fillEvenOdd) {
 			fillCount++;
 			if (color != null)
 				fillColors.add(Integer.toString((color.getRGB() & 0xFFFFFF), 16).toUpperCase());
 			if (color == null)
 				throw new RuntimeException("Cannot fill without color");
 			this.fillColor = color;
+			this.fillEvenOdd = fillEvenOdd;
 			if (PdfExtractorTest.aimAtPage != -1)
-				System.out.println("PPath: filled with color " + this.fillColor + ((this.fillColor == null) ? "" : (", alpha " + this.fillColor.getAlpha())));
+				System.out.println("PPath: filled (" + (this.fillEvenOdd ? "even-odd" : "non-zero winding number") + ") with color " + this.fillColor + ((this.fillColor == null) ? "" : (", alpha " + this.fillColor.getAlpha())));
+			this.clipPaths = clipPaths;
 		}
 		
-		void fillAndStroke(Color fillColor, Color strokeColor, float lineWidth, byte lineCapStyle, byte lineJointStyle, float miterLimit, Vector dashPattern, float dashPatternPhase, LinkedList transformationMatrices) {
-			this.fill(fillColor);
-			this.stroke(strokeColor, lineWidth, lineCapStyle, lineJointStyle, miterLimit, dashPattern, dashPatternPhase, transformationMatrices);
+		void fillAndStroke(PPath[] clipPaths, Color fillColor, boolean fillEvenOdd, Color strokeColor, float lineWidth, byte lineCapStyle, byte lineJointStyle, float miterLimit, Vector dashPattern, float dashPatternPhase, LinkedList transformationMatrices) {
+			this.fill(clipPaths, fillColor, fillEvenOdd);
+			this.stroke(clipPaths, strokeColor, lineWidth, lineCapStyle, lineJointStyle, miterLimit, dashPattern, dashPatternPhase, transformationMatrices);
 		}
 		
 		void addPoint(float x, float y) {
@@ -1434,46 +1584,128 @@ public class PdfParser {
 		
 		void addSubPath(PSubPath subPath) {
 			this.subPaths.add(subPath);
+			this.bounds = null;
+		}
+		
+		void removeSubPath(PSubPath subPath) {
+			this.subPaths.remove(subPath);
+			this.bounds = null;
 		}
 		
 		PSubPath[] getSubPaths() {
 			return ((PSubPath[]) this.subPaths.toArray(new PSubPath[this.subPaths.size()]));
 		}
 		
-		private Rectangle2D bounds = null;
-		Rectangle2D getBounds() {
-			if (this.bounds == null)
-				this.bounds = new Rectangle2D.Float(this.minX, this.minY, (this.maxX - this.minX), (this.maxY - this.minY));
+		private Rectangle2D.Float bounds = null;
+		Rectangle2D.Float getBounds() {
+			if (this.bounds == null) {
+				float minX = this.minX;
+				float minY = this.minY;
+				float maxX = this.maxX;
+				float maxY = this.maxY;
+				
+				/* if path is stroked, we have to factor in line width and line
+				 * caps (yes, rectangles _can_ and do come as very wide lines
+				 * ... horizontal or vertical) */
+				if (this.strokeColor != null) {
+					
+					//	we don't have line end decoration, and no line joints at all, add in direction vertical to main extent
+					if ((this.lineCapStyle == BasicStroke.CAP_BUTT) && (this.subPaths.size() < 2)) {
+						
+						//	mostly vertical extent
+						if (Math.abs(maxX - minX) < Math.abs(maxY - minY)) {
+							minX -= (this.lineWidth / 2);
+							maxX += (this.lineWidth / 2);
+						}
+						
+						//	mostly horizontal extent
+						else {
+							minY -= (this.lineWidth / 2);
+							maxY += (this.lineWidth / 2);
+						}
+					}
+					
+					//	we have line joint and/or line end decoration, simply add in all directions
+					else {
+						minX -= (this.lineWidth / 2);
+						minY -= (this.lineWidth / 2);
+						maxX += (this.lineWidth / 2);
+						maxY += (this.lineWidth / 2);
+					}
+				}
+				this.bounds = new Rectangle2D.Float(minX, minY, (maxX - minX), (maxY - minY));
+			}
+//			if (this.bounds == null)
+//				this.bounds = new Rectangle2D.Float(this.minX, this.minY, (this.maxX - this.minX), (this.maxY - this.minY));
 			return this.bounds;
+		}
+		
+		public boolean isFilled() {
+			return this.isFilled(72.0f / 6); // we _are_ an area, if one just made up of lines wider than a sixth of an inch (some 4 mm)
+		}
+		
+		public boolean isFilled(float minAreaLineWidth) {
+			if (this.fillColor != null)
+				return true;
+			return ((this.strokeColor != null) && (this.lineWidth >= minAreaLineWidth));
 		}
 		
 		public void paint(Graphics2D gr) {
 			Color preColor = gr.getColor();
 			Stroke preStroke = gr.getStroke();
+			
+			Path2D path = new Path2D.Float();
 			for (int p = 0; p < this.subPaths.size(); p++) {
-				Path2D sp = ((PSubPath) this.subPaths.get(p)).getPath();
-				if (this.fillColor != null) {
-					gr.setColor(this.fillColor);
-					gr.fill(sp);
-				}
-				if (this.strokeColor != null) {
-					gr.setColor(this.strokeColor);
-					float[] dashPattern = new float[this.dashPattern.size()];
-					boolean allZeroDashes = true;
-					for (int e = 0; e < this.dashPattern.size(); e++) {
-						dashPattern[e] = ((Number) this.dashPattern.get(e)).floatValue();
-						allZeroDashes = (allZeroDashes && (dashPattern[e] == 0));
-					}
-					if (allZeroDashes)
-						dashPattern = null;
-					gr.setStroke(new BasicStroke(this.lineWidth, this.lineCapStyle, this.lineJointStyle, ((this.miterLimit < 1) ? 1.0f : this.miterLimit), dashPattern, this.dashPatternPhase));
-					gr.draw(sp);
-				}
-				else if (this.fillColor != null) {
-					gr.setColor(this.fillColor);
-					gr.draw(sp);
-				}
+				Path2D subPath = ((PSubPath) this.subPaths.get(p)).getPath();
+				path.append(subPath, false);
 			}
+			
+			if (this.fillColor != null) {
+				gr.setColor(this.fillColor);
+				gr.fill(path);
+			}
+			if (this.strokeColor != null) {
+				gr.setColor(this.strokeColor);
+				float[] dashPattern = new float[this.dashPattern.size()];
+				boolean allZeroDashes = true;
+				for (int e = 0; e < this.dashPattern.size(); e++) {
+					dashPattern[e] = ((Number) this.dashPattern.get(e)).floatValue();
+					allZeroDashes = (allZeroDashes && (dashPattern[e] == 0));
+				}
+				if (allZeroDashes)
+					dashPattern = null;
+				gr.setStroke(new BasicStroke(this.lineWidth, this.lineCapStyle, this.lineJointStyle, ((this.miterLimit < 1) ? 1.0f : this.miterLimit), dashPattern, this.dashPatternPhase));
+				gr.draw(path);
+			}
+			else if (this.fillColor != null) {
+				gr.setColor(this.fillColor);
+				gr.draw(path);
+			}
+//			NEED TO FIRST COLLECT ALL SUB PATHS AND THEN FILL THE WHOLE PATH SO EVEN-ODD RULE CAN TAKE EFFECT ON FILLING
+//			for (int p = 0; p < this.subPaths.size(); p++) {
+//				Path2D sp = ((PSubPath) this.subPaths.get(p)).getPath();
+//				if (this.fillColor != null) {
+//					gr.setColor(this.fillColor);
+//					gr.fill(sp);
+//				}
+//				if (this.strokeColor != null) {
+//					gr.setColor(this.strokeColor);
+//					float[] dashPattern = new float[this.dashPattern.size()];
+//					boolean allZeroDashes = true;
+//					for (int e = 0; e < this.dashPattern.size(); e++) {
+//						dashPattern[e] = ((Number) this.dashPattern.get(e)).floatValue();
+//						allZeroDashes = (allZeroDashes && (dashPattern[e] == 0));
+//					}
+//					if (allZeroDashes)
+//						dashPattern = null;
+//					gr.setStroke(new BasicStroke(this.lineWidth, this.lineCapStyle, this.lineJointStyle, ((this.miterLimit < 1) ? 1.0f : this.miterLimit), dashPattern, this.dashPatternPhase));
+//					gr.draw(sp);
+//				}
+//				else if (this.fillColor != null) {
+//					gr.setColor(this.fillColor);
+//					gr.draw(sp);
+//				}
+//			}
 			gr.setColor(preColor);
 			gr.setStroke(preStroke);
 		}
@@ -1496,6 +1728,30 @@ public class PdfParser {
 			
 			for (int p = 0; p < this.subPaths.size(); p++)
 				tPath.subPaths.add(((PSubPath) this.subPaths.get(p)).translate(tPath, x, y));
+			
+			return tPath;
+		}
+		
+		PPath transform(LinkedList matrices) {
+			PPath tPath = new PPath(this.renderOrderNumber);
+			float[] minPoint = transformPoint(this.minX, this.minY, matrices);
+			tPath.minX = minPoint[0];
+			tPath.minY = minPoint[1];
+			float[] maxPoint = transformPoint(this.maxX, this.maxY, matrices);
+			tPath.maxX = maxPoint[0];
+			tPath.maxY = maxPoint[1];
+			
+			tPath.strokeColor = this.strokeColor;
+			tPath.lineWidth = this.lineWidth;
+			tPath.lineCapStyle = this.lineCapStyle;
+			tPath.lineJointStyle = this.lineJointStyle;
+			tPath.miterLimit = this.miterLimit;
+			tPath.dashPattern = this.dashPattern;
+			tPath.dashPatternPhase = this.dashPatternPhase;
+			tPath.fillColor = this.fillColor;
+			
+			for (int p = 0; p < this.subPaths.size(); p++)
+				tPath.subPaths.add(((PSubPath) this.subPaths.get(p)).transform(tPath, matrices));
 			
 			return tPath;
 		}
@@ -1564,6 +1820,9 @@ public class PdfParser {
 			
 			//	remember visiting current point
 			this.addPoint(this.x, this.y);
+			
+			//	bounds might have changed ...
+			this.bounds = null;
 		}
 		
 		void doc(LinkedList stack, LinkedList transformationMatrices) {
@@ -1616,6 +1875,9 @@ public class PdfParser {
 			this.addPoint(cx1, cy1);
 			this.addPoint(cx2, cy2);
 			this.addPoint(this.x, this.y);
+			
+			//	bounds might have changed ...
+			this.bounds = null;
 		}
 		
 		Shape[] getShapes() {
@@ -1637,10 +1899,47 @@ public class PdfParser {
 			this.maxY = Math.max(this.maxY, this.y);
 		}
 		
-		private Rectangle2D bounds = null;
-		Rectangle2D getBounds() {
-			if (this.bounds == null)
-				this.bounds = new Rectangle2D.Float(this.minX, this.minY, (this.maxX - this.minX), (this.maxY - this.minY));
+		private Rectangle2D.Float bounds = null;
+		Rectangle2D.Float getBounds(PPath parent) {
+			if (this.bounds == null) {
+				float minX = this.minX;
+				float minY = this.minY;
+				float maxX = this.maxX;
+				float maxY = this.maxY;
+				
+				/* if path is stroked, we have to factor in line width and line
+				 * caps (yes, rectangles _can_ and do come as very wide lines
+				 * ... horizontal or vertical) */
+				if (parent.strokeColor != null) {
+					
+					//	we don't have line end decoration, and no line joints at all, add in direction vertical to main extent
+					if ((parent.lineCapStyle == BasicStroke.CAP_BUTT) && (parent.subPaths.size() < 2)) {
+						
+						//	mostly vertical extent
+						if (Math.abs(maxX - minX) < Math.abs(maxY - minY)) {
+							minX -= (parent.lineWidth / 2);
+							maxX += (parent.lineWidth / 2);
+						}
+						
+						//	mostly horizontal extent
+						else {
+							minY -= (parent.lineWidth / 2);
+							maxY += (parent.lineWidth / 2);
+						}
+					}
+					
+					//	we have line joint and/or line end decoration, simply add in all directions
+					else {
+						minX -= (parent.lineWidth / 2);
+						minY -= (parent.lineWidth / 2);
+						maxX += (parent.lineWidth / 2);
+						maxY += (parent.lineWidth / 2);
+					}
+				}
+				this.bounds = new Rectangle2D.Float(minX, minY, (maxX - minX), (maxY - minY));
+			}
+//			if (this.bounds == null)
+//				this.bounds = new Rectangle2D.Float(this.minX, this.minY, (this.maxX - this.minX), (this.maxY - this.minY));
 			return this.bounds;
 		}
 		
@@ -1655,6 +1954,36 @@ public class PdfParser {
 				else if (shape instanceof CubicCurve2D) {
 					CubicCurve2D curve = ((CubicCurve2D) shape);
 					tSubPath.shapes.add(new CubicCurve2D.Float((((float) curve.getX1()) + x), (((float) curve.getY1()) + y), (((float) curve.getCtrlX1()) + x), (((float) curve.getCtrlY1()) + y), (((float) curve.getCtrlX2()) + x), (((float) curve.getCtrlY2()) + y), (((float) curve.getX2()) + x), (((float) curve.getY2()) + y)));
+				}
+			}
+			return tSubPath;
+		}
+		
+		PSubPath transform(PPath tParent, LinkedList matrices) {
+			float[] startPoint = transformPoint(this.startX, this.startY, matrices);
+			PSubPath tSubPath = new PSubPath(tParent, startPoint[0], startPoint[1]);
+			float[] minPoint = transformPoint(this.minX, this.minY, matrices);
+			tSubPath.minX = minPoint[0];
+			tSubPath.minY = minPoint[1];
+			float[] maxPoint = transformPoint(this.maxX, this.maxY, matrices);
+			tSubPath.maxX = maxPoint[0];
+			tSubPath.maxY = maxPoint[1];
+			
+			for (int s = 0; s < this.shapes.size(); s++) {
+				Shape shape = ((Shape) this.shapes.get(s));
+				if (shape instanceof Line2D) {
+					Line2D line = ((Line2D) shape);
+					float[] sPoint = transformPoint(((float) line.getX1()), ((float) line.getY1()), matrices);
+					float[] ePoint = transformPoint(((float) line.getX2()), ((float) line.getY2()), matrices);
+					tSubPath.shapes.add(new Line2D.Float(sPoint[0], sPoint[1], ePoint[0], ePoint[1]));
+				}
+				else if (shape instanceof CubicCurve2D) {
+					CubicCurve2D curve = ((CubicCurve2D) shape);
+					float[] sPoint = transformPoint(((float) curve.getX1()), ((float) curve.getY1()), matrices);
+					float[] cPoint1 = transformPoint(((float) curve.getCtrlX1()), ((float) curve.getCtrlY1()), matrices);
+					float[] cPoint2 = transformPoint(((float) curve.getCtrlX2()), ((float) curve.getCtrlY2()), matrices);
+					float[] ePoint = transformPoint(((float) curve.getX2()), ((float) curve.getY2()), matrices);
+					tSubPath.shapes.add(new CubicCurve2D.Float(sPoint[0], sPoint[1], cPoint1[0], cPoint1[1], cPoint2[0], cPoint2[1], ePoint[0], ePoint[1]));
 				}
 			}
 			return tSubPath;
@@ -1908,7 +2237,11 @@ public class PdfParser {
 			if (fontObj == null) 
 				continue;
 			
-			if (PdfFont.DEBUG_LOAD_FONTS) System.out.println("Loading font " + ((Reference) fontRef).getObjectNumber() + " " + ((Reference) fontRef).getGenerationNumber());
+			if (PdfFont.DEBUG_LOAD_FONTS) {
+				if (fontRef == null)
+					System.out.println("Loading font " + fontKey);
+				else System.out.println("Loading font " + fontKey + " from " + ((Reference) fontRef).getObjectNumber() + " " + ((Reference) fontRef).getGenerationNumber());
+			}
 			
 			//	this one has already been loaded
 			if (fontObj instanceof PdfFont) {
@@ -2023,44 +2356,38 @@ public class PdfParser {
 		Object obj;
 		LinkedList stack = new LinkedList();
 		while ((obj = cropNext(bytes, true, false)) != null) {
-			if (obj instanceof PtTag) {
+			if (obj instanceof PInlineImage) {
+				if (DEBUG_RENDER_PAGE_CONTENT) System.out.println("Inline Image: " + ((PInlineImage) obj).tag + " [" + ((PInlineImage) obj).data.length + "]");
+				pcr.evaluateTag(((PInlineImage) obj).tag, ((PInlineImage) obj).data, stack, pm);
+			}
+			else if (obj instanceof PtTag) {
 				if (DEBUG_RENDER_PAGE_CONTENT) System.out.println("Content tag: " + ((PtTag) obj).tag);
-				pcr.evaluateTag(((PtTag) obj).tag, stack, pm);
+				pcr.evaluateTag(((PtTag) obj).tag, null, stack, pm);
 			}
 			else {
-				if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(obj.getClass().getName() + ": " + obj.toString());
+				if (DEBUG_RENDER_PAGE_CONTENT) {
+					System.out.println(obj.getClass().getName() + ": " + obj.toString());
+					if (obj instanceof PString) {
+						PString str = ((PString) obj);
+						System.out.println(" --> HEX 2: " + str.isHex2 + ", HEX 4: " + str.isHex4);
+						System.out.println(" --> " + Arrays.toString(str.bytes));
+						if (str.isHex2) {
+							System.out.print(" -->");
+							for (int b = 0; (b + 1) < str.bytes.length; b += 2)
+								System.out.print(" " + ((char) str.bytes[b]) + ((char) str.bytes[b+1]));
+							System.out.println();
+						}
+						else if (str.isHex4) {
+							System.out.print(" -->");
+							for (int b = 0; (b + 3) < str.bytes.length; b += 4)
+								System.out.print(" " + ((char) str.bytes[b]) + ((char) str.bytes[b+1]) + ((char) str.bytes[b+2]) + ((char) str.bytes[b+3]));
+							System.out.println();
+						}
+					}
+				}
 				stack.addLast(obj);
 			}
 		}
-//		
-//		//	TODO remove this after vector graphics tests
-//		if ((paths != null) && (paths.size() != 0) && !assessFonts) {
-//			ImageDisplayDialog idd = new ImageDisplayDialog("Paths");
-//			BufferedImage bi = new BufferedImage(1600, 2000, BufferedImage.TYPE_INT_ARGB);
-//			Graphics2D gr = bi.createGraphics();
-//			gr.setColor(Color.WHITE);
-//			gr.fillRect(0, 0, bi.getWidth(), bi.getHeight());
-//			gr.scale(1, -1);
-//			gr.translate(0, -bi.getHeight());
-//			gr.scale(2, 2);
-//			System.out.println("Painting " + paths.size() + " paths:");
-//			System.out.println(" - " + PPath.strokeCount + " stroked, colors:");
-//			for (Iterator cit = PPath.strokeColors.iterator(); cit.hasNext();) {
-//				String color = ((String) cit.next());
-//				System.out.println("   - " + color + " (" + PPath.strokeColors.getCount(color) + " times)");
-//			}
-//			System.out.println(" - " + PPath.fillCount + " filled, colors:");
-//			for (Iterator cit = PPath.fillColors.iterator(); cit.hasNext();) {
-//				String color = ((String) cit.next());
-//				System.out.println("   - " + color + " (" + PPath.fillColors.getCount(color) + " times)");
-//			}
-//			for (int p = 0; p < paths.size(); p++)
-//				((PPath) paths.get(p)).paint(gr);
-//			idd.addImage(bi, "All Paths in Page");
-//			idd.setSize(900, 1080);
-//			idd.setLocationRelativeTo(null);
-//			idd.setVisible(true);
-//		}
 		
 		//	sort out words with invalid bounding boxes, duplicate words, and words in all too light colors (water marks, etc.)
 		if (words != null) {
@@ -2096,50 +2423,51 @@ public class PdfParser {
 			}
 		}
 		
-		//	check rotation
-		Object rotateObj = dereference(entries.get("Rotate"), objects);
-		int rotate = ((rotateObj instanceof Number) ? ((Number) rotateObj).intValue() : 0);
-		if (DEBUG_RENDER_PAGE_CONTENT) System.out.println("Page rotation is " + rotate);
-		
-		//	rotate words and figures
-		if (rotate != 0) {
-			if (DEBUG_RENDER_PAGE_CONTENT) System.out.println("Rotating words and figures");
-			Object mbObj = dereference(entries.get("MediaBox"), objects);
-			if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" - media box is " + mbObj);
-			float pgw = -1;
-			float pgh = -1;
-			if ((mbObj instanceof Vector) && (((Vector) mbObj).size() == 4)) {
-				Object pgwObj = ((Vector) mbObj).get(2);
-				if (pgwObj instanceof Number)
-					pgw = ((Number) pgwObj).floatValue();
-				Object pghObj = ((Vector) mbObj).get(3);
-				if (pghObj instanceof Number)
-					pgh = ((Number) pghObj).floatValue();
-			}
-			if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" - page width is " + pgw + ", page height is " + pgh);
-			if (words != null)
-				for (int w = 0; w < words.size(); w++) {
-					PWord pw = ((PWord) words.get(w));
-					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" - '" + pw.str + "' @ " + pw.bounds + " directed " + pw.fontDirection);
-					int rfd = pw.fontDirection;
-					if ((rotate == 90) || (rotate == -270))
-						rfd--;
-					else if ((rotate == 270) || (rotate == -90))
-						rfd++;
-					PWord rpw = new PWord(pw.renderOrderNumber, pw.charCodes, pw.str, rotateBounds(pw.bounds, pgw, pgh, rotate), pw.color, pw.fontSize, rfd, pw.font);
-					rpw.joinWithNext = pw.joinWithNext;
-					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" --> '" + rpw.str + "' @ " + rpw.bounds + " directed " + rpw.fontDirection);
-					words.set(w, rpw);
-				}
-			if (figures != null)
-				for (int f = 0; f < figures.size(); f++) {
-					PFigure pf = ((PFigure) figures.get(f));
-					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" - '" + pf.name + "' @ " + pf.bounds);
-					PFigure rpf = new PFigure(pf.renderOrderNumber, pf.name, rotateBounds(pf.bounds, pgw, pgh, rotate), pf.refOrData, pf.rotation, pf.rightSideLeft, pf.upsideDown);
-					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" --> '" + rpf.name + "' @ " + rpf.bounds);
-					figures.set(f, rpf);
-				}
-		}
+//		NO NEED TO CHECK ROTATION HERE ANY MORE, AS WE DON'T HAVE TO FIT AN IcePDF PAGE IMAGE ANY LONGER
+//		//	check rotation
+//		Object rotateObj = dereference(entries.get("Rotate"), objects);
+//		int rotate = ((rotateObj instanceof Number) ? ((Number) rotateObj).intValue() : 0);
+//		if (DEBUG_RENDER_PAGE_CONTENT) System.out.println("Page rotation is " + rotate);
+//		
+//		//	rotate words and figures
+//		if (rotate != 0) {
+//			if (DEBUG_RENDER_PAGE_CONTENT) System.out.println("Rotating words and figures");
+//			Object mbObj = dereference(entries.get("MediaBox"), objects);
+//			if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" - media box is " + mbObj);
+//			float pgw = -1;
+//			float pgh = -1;
+//			if ((mbObj instanceof Vector) && (((Vector) mbObj).size() == 4)) {
+//				Object pgwObj = ((Vector) mbObj).get(2);
+//				if (pgwObj instanceof Number)
+//					pgw = ((Number) pgwObj).floatValue();
+//				Object pghObj = ((Vector) mbObj).get(3);
+//				if (pghObj instanceof Number)
+//					pgh = ((Number) pghObj).floatValue();
+//			}
+//			if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" - page width is " + pgw + ", page height is " + pgh);
+//			if (words != null)
+//				for (int w = 0; w < words.size(); w++) {
+//					PWord pw = ((PWord) words.get(w));
+//					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" - '" + pw.str + "' @ " + pw.bounds + " directed " + pw.fontDirection);
+//					int rfd = pw.fontDirection;
+//					if ((rotate == 90) || (rotate == -270))
+//						rfd--;
+//					else if ((rotate == 270) || (rotate == -90))
+//						rfd++;
+//					PWord rpw = new PWord(pw.renderOrderNumber, pw.charCodes, pw.str, rotateBounds(pw.bounds, pgw, pgh, rotate), pw.color, pw.fontSize, rfd, pw.font);
+//					rpw.joinWithNext = pw.joinWithNext;
+//					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" --> '" + rpw.str + "' @ " + rpw.bounds + " directed " + rpw.fontDirection);
+//					words.set(w, rpw);
+//				}
+//			if (figures != null)
+//				for (int f = 0; f < figures.size(); f++) {
+//					PFigure pf = ((PFigure) figures.get(f));
+//					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" - '" + pf.name + "' @ " + pf.bounds);
+//					PFigure rpf = new PFigure(pf.renderOrderNumber, pf.name, rotateBounds(pf.bounds, pgw, pgh, rotate), pf.refOrData, pf.rotation, pf.rightSideLeft, pf.upsideDown);
+//					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" --> '" + rpf.name + "' @ " + rpf.bounds);
+//					figures.set(f, rpf);
+//				}
+//		}
 		
 		//	merge words with extremely close or overlapping bounding boxes (can be split due to implicit spaces and caret repositioning, for instance)
 		if ((words != null) && (words.size() > 1)) {
@@ -2421,13 +2749,30 @@ public class PdfParser {
 					continue;
 				}
 				
+				//	check for inverse overlap
+				if ((word.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) && (lastWord.bounds.getMinX() > word.bounds.getMinX())) {
+					lastWord = word;
+					if (DEBUG_MERGE_WORDS && !assessFonts) System.out.println(" --> inverse overlap");
+					continue;
+				}
+				else if ((word.fontDirection == PWord.UPSIDE_DOWN_FONT_DIRECTION)  && (lastWord.bounds.getMaxX() < word.bounds.getMaxX())) {
+					lastWord = word;
+					if (DEBUG_MERGE_WORDS && !assessFonts) System.out.println(" --> inverse overlap");
+					continue;
+				}
+				else if ((word.fontDirection == PWord.BOTTOM_UP_FONT_DIRECTION) && (lastWord.bounds.getMinY() > word.bounds.getMinY())) {
+					lastWord = word;
+					if (DEBUG_MERGE_WORDS && !assessFonts) System.out.println(" --> inverse overlap");
+					continue;
+				}
+				else if ((word.fontDirection == PWord.TOP_DOWN_FONT_DIRECTION) && (lastWord.bounds.getMaxY() < word.bounds.getMaxY())) {
+					lastWord = word;
+					if (DEBUG_MERGE_WORDS && !assessFonts) System.out.println(" --> inverse overlap");
+					continue;
+				}
+				
 				//	check if words on same line, last word starts before current one, and vertical overlap sufficient
-				if (word.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) {
-					if (lastWord.bounds.getMinX() > word.bounds.getMinX()) {
-						lastWord = word;
-						if (DEBUG_MERGE_WORDS && !assessFonts) System.out.println(" --> inverse overlap");
-						continue;
-					}
+				if ((word.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) || (word.fontDirection == PWord.UPSIDE_DOWN_FONT_DIRECTION)) {
 					if (word.fontSize == lastWord.fontSize) {
 						float uTop = ((float) Math.max(lastWord.bounds.getMaxY(), word.bounds.getMaxY()));
 						float iTop = ((float) Math.min(lastWord.bounds.getMaxY(), word.bounds.getMaxY()));
@@ -2452,16 +2797,6 @@ public class PdfParser {
 					}
 				}
 				else {
-					if ((word.fontDirection == PWord.BOTTOM_UP_FONT_DIRECTION) && (lastWord.bounds.getMinY() > word.bounds.getMinY())) {
-						lastWord = word;
-						if (DEBUG_MERGE_WORDS && !assessFonts) System.out.println(" --> inverse overlap");
-						continue;
-					}
-					else if ((word.fontDirection == PWord.TOP_DOWN_FONT_DIRECTION) && (lastWord.bounds.getMaxY() < word.bounds.getMaxY())) {
-						lastWord = word;
-						if (DEBUG_MERGE_WORDS && !assessFonts) System.out.println(" --> inverse overlap");
-						continue;
-					}
 					if (word.fontSize == lastWord.fontSize) {
 						float uLeft = ((float) Math.min(lastWord.bounds.getMinX(), word.bounds.getMinX()));
 						float iLeft = ((float) Math.max(lastWord.bounds.getMinX(), word.bounds.getMinX()));
@@ -2498,6 +2833,8 @@ public class PdfParser {
 					cutWordBox = new Rectangle2D.Float(((float) lastWord.bounds.getMinX()), ((float) lastWord.bounds.getMinY()), ((float) lastWord.bounds.getWidth()), ((float) (word.bounds.getMinY() - lastWord.bounds.getMinY())));
 				else if (lastWord.fontDirection == PWord.TOP_DOWN_FONT_DIRECTION)
 					cutWordBox = new Rectangle2D.Float(((float) lastWord.bounds.getMinX()), ((float) lastWord.bounds.getMinY()), ((float) lastWord.bounds.getWidth()), ((float) (word.bounds.getMinY() - lastWord.bounds.getMinY())));
+				else if (word.fontDirection == PWord.UPSIDE_DOWN_FONT_DIRECTION)
+					cutWordBox = new Rectangle2D.Float(((float) lastWord.bounds.getMinX()), ((float) lastWord.bounds.getMinY()), ((float) (word.bounds.getMinX() - lastWord.bounds.getMinX())), ((float) lastWord.bounds.getHeight()));
 				else continue; // never gonna happen, but Java don't know
 				
 				//	cut previous word
@@ -2508,121 +2845,122 @@ public class PdfParser {
 				lastWord = word;
 			}
 		}
-		
-		/* combine figures that are adjacent in one dimension and identical in
-		 * the other, and do so recursively, both top-down and left-right, to
-		 * also catch weirdly tiled images */
-		while ((figures != null) && (figures.size() > 1)) {
-			int figureCount = figures.size();
-			
-			//	try merging left to right
-			Collections.sort(figures, leftRightFigureOrder);
-			for (int f = 0; f < figures.size(); f++) {
-				PFigure pf = ((PFigure) figures.get(f));
-				if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println("Checking image " + pf + " for left-right mergers");
-				PFigure mpf = null;
-				for (int cf = (f+1); cf < figures.size(); cf++) {
-					PFigure cpf = ((PFigure) figures.get(cf));
-					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" - comparing to image " + cpf);
-					if (!figureEdgeMatch(pf.bounds.getMaxY(), cpf.bounds.getMaxY())) {
-						if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" ==> top edge mismatch");
-						continue;
-					}
-					if (!figureEdgeMatch(pf.bounds.getMinY(), cpf.bounds.getMinY())) {
-						if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" ==> bottom edge mismatch");
-						continue;
-					}
-					if (!figureEdgeMatch(pf.bounds.getMaxX(), cpf.bounds.getMinX())) {
-						if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" ==> not adjacent (" + pf.bounds.getMaxX() + " != " + cpf.bounds.getMinX() + ")");
-						continue;
-					}
-					mpf = new PFigure(pf, cpf);
-					figures.remove(cf);
-					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" ==> got merged figure " + mpf);
-					break;
-				}
-				if (mpf != null)
-					figures.set(f--, mpf);
-			}
-			
-			//	try merging top down
-			Collections.sort(figures, topDownFigureOrder);
-			for (int f = 0; f < figures.size(); f++) {
-				PFigure pf = ((PFigure) figures.get(f));
-				if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println("Checking image " + pf + " for top-down mergers");
-				PFigure mpf = null;
-				for (int cf = (f+1); cf < figures.size(); cf++) {
-					PFigure cpf = ((PFigure) figures.get(cf));
-					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" - comparing to image " + cpf);
-					if (!figureEdgeMatch(pf.bounds.getMinX(), cpf.bounds.getMinX())) {
-						if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" ==> left edge mismatch");
-						continue;
-					}
-					if (!figureEdgeMatch(pf.bounds.getMaxX(), cpf.bounds.getMaxX())) {
-						if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" ==> right edge mismatch");
-						continue;
-					}
-					if (!figureEdgeMatch(pf.bounds.getMinY(), cpf.bounds.getMaxY())) {
-						if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" ==> not adjacent (" + pf.bounds.getMinY() + " != " + cpf.bounds.getMaxY() + ")");
-						continue;
-					}
-					mpf = new PFigure(pf, cpf);
-					figures.remove(cf);
-					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" ==> got merged figure " + mpf);
-					break;
-				}
-				if (mpf != null)
-					figures.set(f--, mpf);
-			}
-			
-			//	nothing merged in either direction, we're done
-			if (figures.size() == figureCount)
-				break;
-		}
+//		
+//		BETTER WE DO THIS AFTER GRAPHICS CLEANUP, AS IT'S BETTER TO HAVE ORIGINAL RENDER ORDER NUMBERS FR LATTER
+//		/* combine figures that are adjacent in one dimension and identical in
+//		 * the other, and do so recursively, both top-down and left-right, to
+//		 * also catch weirdly tiled images */
+//		while ((figures != null) && (figures.size() > 1)) {
+//			int figureCount = figures.size();
+//			
+//			//	try merging left to right
+//			Collections.sort(figures, leftRightFigureOrder);
+//			for (int f = 0; f < figures.size(); f++) {
+//				PFigure pf = ((PFigure) figures.get(f));
+//				if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println("Checking image " + pf + " for left-right mergers");
+//				PFigure mpf = null;
+//				for (int cf = (f+1); cf < figures.size(); cf++) {
+//					PFigure cpf = ((PFigure) figures.get(cf));
+//					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" - comparing to image " + cpf);
+//					if (!figureEdgeMatch(pf.bounds.getMaxY(), cpf.bounds.getMaxY())) {
+//						if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" ==> top edge mismatch");
+//						continue;
+//					}
+//					if (!figureEdgeMatch(pf.bounds.getMinY(), cpf.bounds.getMinY())) {
+//						if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" ==> bottom edge mismatch");
+//						continue;
+//					}
+//					if (!figureEdgeMatch(pf.bounds.getMaxX(), cpf.bounds.getMinX())) {
+//						if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" ==> not adjacent (" + pf.bounds.getMaxX() + " != " + cpf.bounds.getMinX() + ")");
+//						continue;
+//					}
+//					mpf = new PFigure(pf, cpf);
+//					figures.remove(cf);
+//					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" ==> got merged figure " + mpf);
+//					break;
+//				}
+//				if (mpf != null)
+//					figures.set(f--, mpf);
+//			}
+//			
+//			//	try merging top down
+//			Collections.sort(figures, topDownFigureOrder);
+//			for (int f = 0; f < figures.size(); f++) {
+//				PFigure pf = ((PFigure) figures.get(f));
+//				if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println("Checking image " + pf + " for top-down mergers");
+//				PFigure mpf = null;
+//				for (int cf = (f+1); cf < figures.size(); cf++) {
+//					PFigure cpf = ((PFigure) figures.get(cf));
+//					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" - comparing to image " + cpf);
+//					if (!figureEdgeMatch(pf.bounds.getMinX(), cpf.bounds.getMinX())) {
+//						if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" ==> left edge mismatch");
+//						continue;
+//					}
+//					if (!figureEdgeMatch(pf.bounds.getMaxX(), cpf.bounds.getMaxX())) {
+//						if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" ==> right edge mismatch");
+//						continue;
+//					}
+//					if (!figureEdgeMatch(pf.bounds.getMinY(), cpf.bounds.getMaxY())) {
+//						if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" ==> not adjacent (" + pf.bounds.getMinY() + " != " + cpf.bounds.getMaxY() + ")");
+//						continue;
+//					}
+//					mpf = new PFigure(pf, cpf);
+//					figures.remove(cf);
+//					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" ==> got merged figure " + mpf);
+//					break;
+//				}
+//				if (mpf != null)
+//					figures.set(f--, mpf);
+//			}
+//			
+//			//	nothing merged in either direction, we're done
+//			if (figures.size() == figureCount)
+//				break;
+//		}
 		
 		//	tell any recursive caller where to continue with numbering
 		return (pcr.nextRenderOrderNumber + 1);
 	}
-	
-	private static final Comparator leftRightFigureOrder = new Comparator() {
-		public int compare(Object obj1, Object obj2) {
-			PFigure pf1 = ((PFigure) obj1);
-			PFigure pf2 = ((PFigure) obj2);
-			int c = Double.compare(pf1.bounds.getMinX(), pf2.bounds.getMinX());
-			return ((c == 0) ? Double.compare(pf2.bounds.getMaxX(), pf1.bounds.getMaxX()) : c);
-		}
-	};
-	private static final Comparator topDownFigureOrder = new Comparator() {
-		public int compare(Object obj1, Object obj2) {
-			PFigure pf1 = ((PFigure) obj1);
-			PFigure pf2 = ((PFigure) obj2);
-			int c = Double.compare(pf2.bounds.getMaxY(), pf1.bounds.getMaxY());
-			return ((c == 0) ? Double.compare(pf1.bounds.getMinY(), pf2.bounds.getMinY()) : c);
-		}
-	};
-	private static final boolean figureEdgeMatch(double e1, double e2) {
-//		return (e1 == e2); // TODO use this to see individual values
-		return (Math.abs(e1 - e2) < 0.001); // TODO adjust this threshold
-	}
-	
-	private static Rectangle2D.Float rotateBounds(Rectangle2D.Float bounds, float pw, float ph, int rotate) {
-		if ((rotate == 90) || (rotate == -270)) {
-			float rx = ((float) bounds.getMinY());
-			float ry = ((float) (pw - bounds.getMaxX()));
-			return new Rectangle2D.Float(rx, ry, ((float) bounds.getHeight()), ((float) bounds.getWidth()));
-		}
-		else if ((rotate == 270) || (rotate == -90)) {
-			float rx = ((float) (ph - bounds.getMaxY()));
-			float ry = ((float) bounds.getMinX());
-			return new Rectangle2D.Float(rx, ry, ((float) bounds.getHeight()), ((float) bounds.getWidth()));
-		}
-		else if ((rotate == 180) || (rotate == -180)) {
-			float rx = ((float) (pw - bounds.getMaxX()));
-			float ry = ((float) (ph - bounds.getMaxY()));
-			return new Rectangle2D.Float(rx, ry, ((float) bounds.getWidth()), ((float) bounds.getHeight()));
-		}
-		else return bounds;
-	}
+//	
+//	private static final Comparator leftRightFigureOrder = new Comparator() {
+//		public int compare(Object obj1, Object obj2) {
+//			PFigure pf1 = ((PFigure) obj1);
+//			PFigure pf2 = ((PFigure) obj2);
+//			int c = Double.compare(pf1.bounds.getMinX(), pf2.bounds.getMinX());
+//			return ((c == 0) ? Double.compare(pf2.bounds.getMaxX(), pf1.bounds.getMaxX()) : c);
+//		}
+//	};
+//	private static final Comparator topDownFigureOrder = new Comparator() {
+//		public int compare(Object obj1, Object obj2) {
+//			PFigure pf1 = ((PFigure) obj1);
+//			PFigure pf2 = ((PFigure) obj2);
+//			int c = Double.compare(pf2.bounds.getMaxY(), pf1.bounds.getMaxY());
+//			return ((c == 0) ? Double.compare(pf1.bounds.getMinY(), pf2.bounds.getMinY()) : c);
+//		}
+//	};
+//	private static final boolean figureEdgeMatch(double e1, double e2) {
+////		return (e1 == e2); // TODO use this to see individual values
+//		return (Math.abs(e1 - e2) < 0.001); // TODO adjust this threshold
+//	}
+//	
+//	private static Rectangle2D.Float rotateBounds(Rectangle2D.Float bounds, float pw, float ph, int rotate) {
+//		if ((rotate == 90) || (rotate == -270)) {
+//			float rx = ((float) bounds.getMinY());
+//			float ry = ((float) (pw - bounds.getMaxX()));
+//			return new Rectangle2D.Float(rx, ry, ((float) bounds.getHeight()), ((float) bounds.getWidth()));
+//		}
+//		else if ((rotate == 270) || (rotate == -90)) {
+//			float rx = ((float) (ph - bounds.getMaxY()));
+//			float ry = ((float) bounds.getMinX());
+//			return new Rectangle2D.Float(rx, ry, ((float) bounds.getHeight()), ((float) bounds.getWidth()));
+//		}
+//		else if ((rotate == 180) || (rotate == -180)) {
+//			float rx = ((float) (pw - bounds.getMaxX()));
+//			float ry = ((float) (ph - bounds.getMaxY()));
+//			return new Rectangle2D.Float(rx, ry, ((float) bounds.getWidth()), ((float) bounds.getHeight()));
+//		}
+//		else return bounds;
+//	}
 	
 	private static boolean areWordsCloseEnoughForCombinedAccent(PWord lastWord, boolean lastWordIsCombiningAccent, PWord word, boolean wordIsCombiningAccent) {
 		if (lastWord.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) {
@@ -2658,6 +2996,17 @@ public class PdfParser {
 			}
 			return ((word.bounds.getMaxY() - 1) > lastWord.bounds.getMinY());
 		}
+		else if (lastWord.fontDirection == PWord.UPSIDE_DOWN_FONT_DIRECTION) {
+			if (lastWordIsCombiningAccent) {
+				float lwCenterX = ((float) ((lastWord.bounds.getMinX() + lastWord.bounds.getMaxX()) / 2));
+				return (lwCenterX < word.bounds.getMaxX());
+			}
+			else if (wordIsCombiningAccent) {
+				float wCenterX = ((float) ((word.bounds.getMinX() + word.bounds.getMaxX()) / 2));
+				return (lastWord.bounds.getMinX() < wCenterX);
+			}
+			else return ((word.bounds.getMaxX() - 1) > lastWord.bounds.getMinX());
+		}
 		else return false;
 	}
 	
@@ -2669,6 +3018,8 @@ public class PdfParser {
 			wordDistance = (word.bounds.getMinY() - lastWord.bounds.getMaxY());
 		else if (lastWord.fontDirection == PWord.TOP_DOWN_FONT_DIRECTION)
 			wordDistance = (word.bounds.getMaxY() - lastWord.bounds.getMinY());
+		else if (lastWord.fontDirection == PWord.UPSIDE_DOWN_FONT_DIRECTION)
+			wordDistance = (word.bounds.getMaxX() - lastWord.bounds.getMinX());
 		else return false;
 		
 		//	are we close enough
@@ -2701,11 +3052,11 @@ public class PdfParser {
 //		}
 		
 		//	check in-line alignment
-		if ((lastWord.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) ? ((lastWordMiddleY < word.bounds.getMinY()) || (lastWordMiddleY > word.bounds.getMaxY())) : ((lastWordMiddleX < word.bounds.getMinX()) || (lastWordMiddleX > word.bounds.getMaxX()))) {
+		if (((lastWord.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) || (lastWord.fontDirection == PWord.UPSIDE_DOWN_FONT_DIRECTION)) ? ((lastWordMiddleY < word.bounds.getMinY()) || (lastWordMiddleY > word.bounds.getMaxY())) : ((lastWordMiddleX < word.bounds.getMinX()) || (lastWordMiddleX > word.bounds.getMaxX()))) {
 			if (DEBUG_MERGE_WORDS) System.out.println(" --> vertical alignment mismatch (1)");
 			return false;
 		}
-		if ((lastWord.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) ? ((wordMiddleY < lastWord.bounds.getMinY()) || (wordMiddleY > lastWord.bounds.getMaxY())) : ((wordMiddleX < lastWord.bounds.getMinX()) || (wordMiddleX > lastWord.bounds.getMaxX()))) {
+		if (((lastWord.fontDirection == PWord.LEFT_RIGHT_FONT_DIRECTION) || (lastWord.fontDirection == PWord.UPSIDE_DOWN_FONT_DIRECTION)) ? ((wordMiddleY < lastWord.bounds.getMinY()) || (wordMiddleY > lastWord.bounds.getMaxY())) : ((wordMiddleX < lastWord.bounds.getMinX()) || (wordMiddleX > lastWord.bounds.getMaxX()))) {
 			if (DEBUG_MERGE_WORDS) System.out.println(" --> vertical alignment mismatch (2)");
 			return false;
 		}
@@ -2723,6 +3074,10 @@ public class PdfParser {
 			if (DEBUG_MERGE_WORDS) System.out.println(" --> horizontal alignment mismatch (3)");
 			return false;
 		}
+		if (checkHorizontalAlignment && (lastWord.fontDirection == PWord.UPSIDE_DOWN_FONT_DIRECTION) && ((word.bounds.getMinX() > lastWord.bounds.getMinX()) || (word.bounds.getMaxX() > lastWord.bounds.getMaxX()))) {
+			if (DEBUG_MERGE_WORDS) System.out.println(" --> horizontal alignment mismatch (4)");
+			return false;
+		}
 		
 		//	OK, we didn't find any red flags about these two
 		return true;
@@ -2730,6 +3085,11 @@ public class PdfParser {
 	
 	private static final boolean DEBUG_RENDER_PAGE_CONTENT = false;
 	private static final boolean DEBUG_MERGE_WORDS = false;
+	
+	private static float[] transformPoint(float x, float y, LinkedList matrices) {
+		float[] point = {x, y, 1};
+		return applyTransformationMatrices(point, matrices);
+	}
 	
 	private static float[] applyTransformationMatrices(float[] f, LinkedList transformationMatrices) {
 		for (Iterator tmit = transformationMatrices.iterator(); tmit.hasNext();) {
@@ -2787,10 +3147,8 @@ public class PdfParser {
 		private Map objects;
 		
 		private class SavedGraphicsState {
-//			private ColorSpace sgsStrokeColorSpace;
 			private PdfColorSpace sgsStrokeColorSpace;
 			private Color sgsStrokeColor;
-//			private ColorSpace sgsNonStrokeColorSpace;
 			private PdfColorSpace sgsNonStrokeColorSpace;
 			private Color sgsNonStrokeColor;
 			
@@ -2800,6 +3158,8 @@ public class PdfParser {
 			private float sgsMiterLimit;
 			private Vector sgsDashPattern;
 			private float sgsDashPatternPhase;
+			
+			private LinkedList sgsClippingPathStack = new LinkedList();
 			
 			private Object sgsFontKey;
 			private PdfFont sgsFont;
@@ -2827,6 +3187,8 @@ public class PdfParser {
 				this.sgsDashPattern = new Vector(pcrDashPattern);
 				this.sgsDashPatternPhase = pcrDashPatternPhase;
 				
+				this.sgsClippingPathStack = new LinkedList(pcrClippingPathStack);
+				
 				this.sgsFontKey = pcrFontKey;
 				this.sgsFont = pcrFont;
 				this.sgsFontSpaceWidth = pcrFontSpaceWidth;
@@ -2853,6 +3215,8 @@ public class PdfParser {
 				pcrDashPattern = this.sgsDashPattern;
 				pcrDashPatternPhase = this.sgsDashPatternPhase;
 				
+				pcrClippingPathStack = this.sgsClippingPathStack;
+				
 				pcrFontKey = this.sgsFontKey;
 				pcrFont = this.sgsFont;
 				pcrFontSpaceWidth = this.sgsFontSpaceWidth;
@@ -2867,10 +3231,8 @@ public class PdfParser {
 			}
 		}
 		
-//		private ColorSpace pcrStrokeColorSpace;
 		private PdfColorSpace pcrStrokeColorSpace;
 		private Color pcrStrokeColor = Color.BLACK;
-//		private ColorSpace pcrNonStrokeColorSpace;
 		private PdfColorSpace pcrNonStrokeColorSpace;
 		private Color pcrNonStrokeColor = Color.BLACK;
 		
@@ -2881,6 +3243,8 @@ public class PdfParser {
 		private float pcrMiterLimit = 10.0f;
 		private Vector pcrDashPattern = new Vector();
 		private float pcrDashPatternPhase = 0;
+		
+		private LinkedList pcrClippingPathStack = new LinkedList();
 		
 		private Object pcrFontKey = null;
 		private PdfFont pcrFont = null;
@@ -2912,19 +3276,6 @@ public class PdfParser {
 		private boolean assessFonts;
 		
 		int nextRenderOrderNumber = 0;
-		
-//		//	constructor for text char extraction
-//		PageWordRenderer(Hashtable fonts) {
-//			this.fonts = fonts;
-//			this.words = null;
-//			this.figures = null;
-//			for (int c = 0; c < this.textMatrix.length; c++) {
-//				Arrays.fill(this.textMatrix[c], 0);
-//				this.textMatrix[c][c] = 1;
-//			}
-//			cloneValues(this.textMatrix, this.lineMatrix);
-//			//	TODO consider switching off all the computational rigmarole if word list is null
-//		}
 		
 		//	constructor for actual word extraction
 		PageContentRenderer(int firstRenderOrderNumber, Hashtable resources, Hashtable fonts, FontDecoderCharset fontCharSet, Hashtable xObject, Map objects, List words, List figures, List paths, boolean assessFonts) {
@@ -3000,6 +3351,11 @@ public class PdfParser {
 		}
 		
 		private void doQ(LinkedList stack) {
+			if (this.graphicsStateStack.isEmpty()) {
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+					System.out.println(" --> cannot restore graphics state - empty stack");
+				return;
+			}
 			((SavedGraphicsState) this.graphicsStateStack.removeLast()).restore();
 			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) {
 				System.out.println(" --> restore graphics state:");
@@ -3126,7 +3482,7 @@ public class PdfParser {
 		}
 		
 		private void doS(LinkedList stack) {
-			this.pcrPath.stroke(this.pcrStrokeColor, this.pcrLineWidth, this.pcrLineCapStyle, this.pcrLineJointStyle, this.pcrMiterLimit, this.pcrDashPattern, this.pcrDashPatternPhase, this.pcrTransformationMatrices);
+			this.pcrPath.stroke(this.getClipPaths(), this.getStrokeColor(), this.pcrLineWidth, this.pcrLineCapStyle, this.pcrLineJointStyle, this.pcrMiterLimit, this.pcrDashPattern, this.pcrDashPatternPhase, this.pcrTransformationMatrices);
 			if (this.paths != null)
 				this.paths.add(this.pcrPath);
 			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
@@ -3137,42 +3493,65 @@ public class PdfParser {
 			this.doh(stack);
 			this.doS(stack);
 		}
+		
 		private void dof(LinkedList stack) {
 			this.doh(stack);
-			this.pcrPath.fill(this.pcrNonStrokeColor);
+			this.doFillPath(stack, false);
+		}
+		private void doF(LinkedList stack) {
+			this.dof(stack);
+		}
+		private void dofasterisk(LinkedList stack) {
+			this.doh(stack);
+			this.doFillPath(stack, true);
+		}
+		private void doFillPath(LinkedList stack, boolean fillEvenOdd) {
+			this.pcrPath.fill(this.getClipPaths(), this.getNonStrokeColor(), fillEvenOdd);
 			if (this.paths != null)
 				this.paths.add(this.pcrPath);
 			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
 				System.out.println(" --> path filled inside " + this.pcrPath.getBounds());
 			this.pcrPath = null;
 		}
-		private void doF(LinkedList stack) {
-			this.dof(stack);
-		}
-		private void dofasterisc(LinkedList stack) {
-			this.dof(stack);
-		}
+		
 		private void doB(LinkedList stack) {
-			this.pcrPath.fillAndStroke(this.pcrNonStrokeColor, this.pcrStrokeColor, this.pcrLineWidth, this.pcrLineCapStyle, this.pcrLineJointStyle, this.pcrMiterLimit, this.pcrDashPattern, this.pcrDashPatternPhase, this.pcrTransformationMatrices);
+			this.doFillAndStrokePath(stack, false);
+		}
+		private void doBasterisk(LinkedList stack) {
+			this.doFillAndStrokePath(stack, true);
+		}
+		private void dob(LinkedList stack) {
+			this.doh(stack);
+			this.doB(stack);
+		}
+		private void dobasterisk(LinkedList stack) {
+			this.doh(stack);
+			this.doBasterisk(stack);
+		}
+		private void doFillAndStrokePath(LinkedList stack, boolean fillEvenOdd) {
+			//	TODO factor in GS alpha only here
+			this.pcrPath.fillAndStroke(this.getClipPaths(), this.pcrNonStrokeColor, fillEvenOdd, this.pcrStrokeColor, this.pcrLineWidth, this.pcrLineCapStyle, this.pcrLineJointStyle, this.pcrMiterLimit, this.pcrDashPattern, this.pcrDashPatternPhase, this.pcrTransformationMatrices);
 			if (this.paths != null)
 				this.paths.add(this.pcrPath);
 			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
 				System.out.println(" --> path filled and stroked inside " + this.pcrPath.getBounds());
 			this.pcrPath = null;
 		}
-		private void doBasterisc(LinkedList stack) {
-			this.doB(stack);
-		}
-		private void dob(LinkedList stack) {
-			this.doh(stack);
-			this.doB(stack);
-		}
-		private void dobasterisc(LinkedList stack) {
-			this.doh(stack);
-			this.doBasterisc(stack);
-		}
-		private void don(LinkedList stack) {
+		
+		private void doW(LinkedList stack) {
+			this.pcrClippingPathStack.addLast(this.pcrPath);
 			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+				System.out.println(" --> clipping restricted to " + this.pcrPath.getBounds());
+		}
+		private void doWasterisk(LinkedList stack) {
+			this.doW(stack);
+		}
+		private PPath[] getClipPaths() {
+			return (this.pcrClippingPathStack.isEmpty() ? null : ((PPath[]) this.pcrClippingPathStack.toArray(new PPath[this.pcrClippingPathStack.size()])));
+		}
+		
+		private void don(LinkedList stack) {
+			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts && (this.pcrPath != null))
 				System.out.println(" --> path nilled inside " + this.pcrPath.getBounds());
 			this.pcrPath = null;
 		}
@@ -3217,25 +3596,106 @@ public class PdfParser {
 		}
 		
 		private void doSCN(LinkedList stack) {
-			this.pcrStrokeColor = this.pcrStrokeColorSpace.getColor(stack, null);
-			if (this.graphicsState != null) {
-				Number sCa = ((Number) this.graphicsState.get("CA"));
-				if (sCa != null)
-					this.pcrNonStrokeColor = this.getCompositeAlphaColor(this.pcrNonStrokeColor, Math.round(sCa.floatValue() * 255));
+			if ("Pattern".equals(this.pcrStrokeColorSpace.name)) {
+				Object pRef = stack.removeLast();
+				Hashtable pPatterns = ((Hashtable) this.resources.get("Pattern"));
+				Object pObj = dereference(pPatterns.get(pRef), this.objects);
+				System.out.println("Pattern " + pRef + " resolved to " + pObj);
+				try {
+					PStream pStream = ((PStream) pObj);
+					ByteArrayOutputStream baos = new ByteArrayOutputStream();
+					decode(pStream.params.get("Filter"), pStream.bytes, pStream.params, baos, this.objects);
+					System.out.println(new String(baos.toByteArray()));
+				}
+				catch (Exception e) {
+					e.printStackTrace(System.out);
+				}
+				//	TODO treat this as repeated form-style Do command on stroking
+				this.pcrStrokeColor = Color.CYAN; // using fallback for now ...
+//				if (this.graphicsState != null) {
+//					Number sCa = ((Number) this.graphicsState.get("CA"));
+//					if (sCa != null)
+//						this.pcrStrokeColor = this.getCompositeAlphaColor(this.pcrStrokeColor, Math.round(sCa.floatValue() * 255));
+//				}
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+					System.out.println(" --> stroking color " + this.pcrNonStrokeColor);
 			}
-			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
-				System.out.println(" --> stroking color " + this.pcrNonStrokeColor);
+			else {
+				this.pcrStrokeColor = this.pcrStrokeColorSpace.getColor(stack, ((DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) ? "" : null));
+//				//	do NOT factor in GS alpha here, as GS might change
+//				if (this.graphicsState != null) {
+//					Number sCa = ((Number) this.graphicsState.get("CA"));
+//					if (sCa != null)
+//						this.pcrStrokeColor = this.getCompositeAlphaColor(this.pcrStrokeColor, Math.round(sCa.floatValue() * 255));
+//					if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+//						System.out.println(" --> stroking color " + this.pcrStrokeColor + ((this.pcrStrokeColor == null) ? "" : (" with alpha " + this.pcrStrokeColor.getAlpha())) + " for CA " + this.graphicsState.get("CA"));
+//				}
+//				else if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+//					System.out.println(" --> stroking color " + this.pcrStrokeColor + ((this.pcrStrokeColor == null) ? "" : (" with alpha " + this.pcrStrokeColor.getAlpha())));
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+					System.out.println(" --> stroking color " + this.pcrStrokeColor + ((this.pcrStrokeColor == null) ? "" : (" with alpha " + this.pcrStrokeColor.getAlpha())));
+			}
 		}
 		private void doscn(LinkedList stack) {
-			this.pcrNonStrokeColor = this.pcrNonStrokeColorSpace.getColor(stack, null);
-			if (this.graphicsState != null) {
-				Number nsCa = ((Number) this.graphicsState.get("ca"));
-				if (nsCa != null)
-					this.pcrNonStrokeColor = this.getCompositeAlphaColor(this.pcrNonStrokeColor, Math.round(nsCa.floatValue() * 255));
+			if ("Pattern".equals(this.pcrNonStrokeColorSpace.name)) {
+				Object pRef = stack.removeLast();
+				Hashtable pPatterns = ((Hashtable) this.resources.get("Pattern"));
+				Object pObj = dereference(pPatterns.get(pRef), this.objects);
+				System.out.println("Pattern " + pRef + " resolved to " + pObj);
+				try {
+					PStream pStream = ((PStream) pObj);
+					ByteArrayOutputStream baos = new ByteArrayOutputStream();
+					decode(pStream.params.get("Filter"), pStream.bytes, pStream.params, baos, this.objects);
+					System.out.println(new String(baos.toByteArray()));
+				}
+				catch (Exception e) {
+					e.printStackTrace(System.out);
+				}
+				//	TODO treat this as repeated form-style Do command on filling
+				this.pcrNonStrokeColor = Color.MAGENTA; // using fallback for now ...
+//				if (this.graphicsState != null) {
+//					Number nsCa = ((Number) this.graphicsState.get("ca"));
+//					if (nsCa != null)
+//						this.pcrNonStrokeColor = this.getCompositeAlphaColor(this.pcrNonStrokeColor, Math.round(nsCa.floatValue() * 255));
+//				}
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+					System.out.println(" --> non-stroking color " + this.pcrNonStrokeColor + ((this.pcrNonStrokeColor == null) ? "" : (" with alpha " + this.pcrNonStrokeColor.getAlpha())));
 			}
-			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
-				System.out.println(" --> non-stroking color " + this.pcrNonStrokeColor);
+			else {
+				this.pcrNonStrokeColor = this.pcrNonStrokeColorSpace.getColor(stack, ((DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) ? "" : null));
+//				//	do NOT factor in GS alpha here, as GS might change
+//				if (this.graphicsState != null) {
+//					Number nsCa = ((Number) this.graphicsState.get("ca"));
+//					if (nsCa != null)
+//						this.pcrNonStrokeColor = this.getCompositeAlphaColor(this.pcrNonStrokeColor, Math.round(nsCa.floatValue() * 255));
+//					if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+//						System.out.println(" --> non-stroking color " + this.pcrNonStrokeColor + ((this.pcrNonStrokeColor == null) ? "" : (" with alpha " + this.pcrNonStrokeColor.getAlpha())) + " for ca " + this.graphicsState.get("ca"));
+//				}
+//				else if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+//					System.out.println(" --> non-stroking color " + this.pcrNonStrokeColor + ((this.pcrNonStrokeColor == null) ? "" : (" with alpha " + this.pcrNonStrokeColor.getAlpha())));
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+					System.out.println(" --> non-stroking color " + this.pcrNonStrokeColor + ((this.pcrNonStrokeColor == null) ? "" : (" with alpha " + this.pcrNonStrokeColor.getAlpha())));
+			}
 		}
+		
+		private Color getStrokeColor() {
+			if (this.graphicsState == null)
+				return this.pcrStrokeColor;
+			Number sCa = ((Number) this.graphicsState.get("CA"));
+			if (sCa == null)
+				return this.pcrStrokeColor;
+			return this.getCompositeAlphaColor(this.pcrStrokeColor, Math.round(sCa.floatValue() * 255));
+		}
+		
+		private Color getNonStrokeColor() {
+			if (this.graphicsState == null)
+				return this.pcrNonStrokeColor;
+			Number nsCa = ((Number) this.graphicsState.get("ca"));
+			if (nsCa == null)
+				return this.pcrNonStrokeColor;
+			return this.getCompositeAlphaColor(this.pcrNonStrokeColor, Math.round(nsCa.floatValue() * 255));
+		}
+		
 		private Color getCompositeAlphaColor(Color color, int compositeAlpha) {
 			if (color == null)
 				return color;
@@ -3358,19 +3818,28 @@ public class PdfParser {
 			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
 				System.out.println(" ==> effective font size is " + this.eFontSize);
 			if (Math.abs(pwrFontSize[1]) > Math.abs(pwrFontSize[0])) {
-				this.eFontDirection = PWord.LEFT_RIGHT_FONT_DIRECTION;
-				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
-					System.out.println(" ==> effective font direction is left-right");
-			}
-			else if (pwrFontSize[0] < 0) {
-				this.eFontDirection = PWord.BOTTOM_UP_FONT_DIRECTION;
-				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
-					System.out.println(" ==> effective font direction is bottom-up");
+				if (pwrFontSize[1] < 0) {
+					this.eFontDirection = PWord.UPSIDE_DOWN_FONT_DIRECTION;
+					if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+						System.out.println(" ==> effective font direction is upside-down right-left");
+				}
+				else {
+					this.eFontDirection = PWord.LEFT_RIGHT_FONT_DIRECTION;
+					if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+						System.out.println(" ==> effective font direction is left-right");
+				}
 			}
 			else {
-				this.eFontDirection = PWord.TOP_DOWN_FONT_DIRECTION;
-				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
-					System.out.println(" ==> effective font direction is top-down");
+				if (pwrFontSize[0] < 0) {
+					this.eFontDirection = PWord.BOTTOM_UP_FONT_DIRECTION;
+					if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+						System.out.println(" ==> effective font direction is bottom-up");
+				}
+				else {
+					this.eFontDirection = PWord.TOP_DOWN_FONT_DIRECTION;
+					if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+						System.out.println(" ==> effective font direction is top-down");
+				}
 			}
 		}
 		
@@ -3395,7 +3864,7 @@ public class PdfParser {
 			this.doNewLine(stack, true);
 		}
 		
-		private void doTasterisc(LinkedList stack) {
+		private void doTasterisk(LinkedList stack) {
 			stack.addLast(new Float(0));
 			stack.addLast(new Float(-this.pcrLineHeight));
 			this.doNewLine(stack, false);
@@ -3416,7 +3885,7 @@ public class PdfParser {
 			}
 		}
 		
-		void evaluateTag(String tag, LinkedList stack, ProgressMonitor pm) throws IOException {
+		void evaluateTag(String tag, byte[] tagData, LinkedList stack, ProgressMonitor pm) throws IOException {
 			if (false) {}
 			
 			//	keep track of text color (e.g. to identify water marks that come as light gray text)
@@ -3467,7 +3936,7 @@ public class PdfParser {
 			else if ("TD".equals(tag))
 				this.doTD(stack);
 			else if ("T*".equals(tag))
-				this.doTasterisc(stack);
+				this.doTasterisk(stack);
 			
 			//	draw text
 			else if ("Tj".equals(tag))
@@ -3527,6 +3996,12 @@ public class PdfParser {
 			else if ("re".equals(tag))
 				this.dore(stack);
 			
+			//	clipping path
+			else if ("W".equals(tag))
+				this.doW(stack);
+			else if ("S*".equals(tag))
+				this.doWasterisk(stack);
+			
 			//	path rendering and filling
 			else if ("S".equals(tag))
 				this.doS(stack);
@@ -3537,15 +4012,15 @@ public class PdfParser {
 			else if ("f".equals(tag))
 				this.dof(stack);
 			else if ("f*".equals(tag))
-				this.dofasterisc(stack);
+				this.dofasterisk(stack);
 			else if ("B".equals(tag))
 				this.doB(stack);
 			else if ("B*".equals(tag))
-				this.doBasterisc(stack);
+				this.doBasterisk(stack);
 			else if ("b".equals(tag))
 				this.dob(stack);
 			else if ("b*".equals(tag))
-				this.dobasterisc(stack);
+				this.dobasterisk(stack);
 			else if ("B".equals(tag))
 				this.doB(stack);
 			else if ("n".equals(tag))
@@ -3559,11 +4034,43 @@ public class PdfParser {
 			else if ("gs".equals(tag))
 				this.dogs(stack);
 			
-			//	draw object (usually embedded images)
+			//	draw object (usually embedded images, or forms with subordinary content)
 			else if ("Do".equals(tag))
 				this.doDo(stack, pm);
 			
+			//	draw inline image
+			else if ("BI".equals(tag))
+				this.doBI(tagData);
+			
 			else if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" ==> UNKNOWN");
+		}
+		
+		private void doBI(byte[] data) {
+			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+				System.out.println("Drawing inline image at RON " + this.nextRenderOrderNumber);
+			
+			try {
+				PdfByteInputStream iImageData = new PdfByteInputStream(new ByteArrayInputStream(data));
+				
+				Hashtable imageParams = cropInlineImageParams(iImageData);
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+					System.out.println(" - params are " + imageParams);
+				
+				ByteArrayOutputStream imageData = new ByteArrayOutputStream();
+				byte[] buffer = new byte[1024];
+				for (int r; (r = iImageData.read(buffer, 0, buffer.length)) != -1;)
+					imageData.write(buffer, 0, r);
+				
+				PStream image = new PStream(imageParams, imageData.toByteArray());
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+					System.out.println(" - data is " + Arrays.toString(image.bytes));
+				
+				this.doDoFigure("Inline", image); // position, size, rotation, and flip computation is same as for XObject images
+			}
+			catch (IOException ioe) {
+				System.out.println("Error parsing inline image: " + ioe.getMessage());
+				ioe.printStackTrace(System.out);
+			}
 		}
 		
 		private void doDo(LinkedList stack, ProgressMonitor pm) {
@@ -3610,6 +4117,12 @@ public class PdfParser {
 			Object filter = form.params.get("Filter");
 			PdfParser.decode(filter, form.bytes, form.params, baos, objects);
 			byte[] formContent = baos.toByteArray();
+			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) {
+				System.out.println("Doing form");
+				System.out.println(" - resources are " + formResources);
+				System.out.println(" - parameters are " + form.params);
+				System.out.println(" - content is " + formContent.length + " bytes");
+			}
 			
 			/* TODO observe scaling matrix (once we have a respective example PDF):
 			 * - use form specific list for words and figures
@@ -3619,6 +4132,8 @@ public class PdfParser {
 			ArrayList formFigures = ((this.figures == null) ? null : new ArrayList());
 			ArrayList formPaths = ((this.paths == null) ? null : new ArrayList());
 			this.nextRenderOrderNumber = runPageContent(this.nextRenderOrderNumber, form.params, formContent, formResources, this.objects, formWords, null, this.fontCharSet, formFigures, formPaths, this.assessFonts, pm);
+			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+				System.out.println("Form content done");
 			
 			//	check composite alpha and blend mode of current graphics state
 			int sCompositeAlpha = 255;
@@ -3636,32 +4151,70 @@ public class PdfParser {
 					bmComposite = BlendComposite.getInstance(bm.toString());
 			}
 			
-			//	store form content, adjusting colors based on composite alpha values
+			//	transform and store form content, adjusting colors based on composite alpha values
 			if (formWords != null)
 				for (int w = 0; w < formWords.size(); w++) {
 					PWord fw = ((PWord) formWords.get(w));
-					if (fw.color != null)
-						fw = new PWord(fw.renderOrderNumber, fw.charCodes, fw.str, fw.bounds, this.getCompositeAlphaColor(fw.color, nsCompositeAlpha), fw.fontSize, fw.fontDirection, fw.font);
+//					if (fw.color != null)
+//						fw = new PWord(fw.renderOrderNumber, fw.charCodes, fw.str, fw.bounds, this.getCompositeAlphaColor(fw.color, nsCompositeAlpha), fw.fontSize, fw.fontDirection, fw.font);
+					Rectangle2D.Float fwBounds = this.transformBounds(fw.bounds);
+					Color fwColor = ((fw.color == null) ? null : this.getCompositeAlphaColor(fw.color, nsCompositeAlpha));
+					fw = new PWord(fw.renderOrderNumber, fw.charCodes, fw.str, fwBounds, fwColor, fw.fontSize, fw.fontDirection, fw.font);
+					if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) {
+						System.out.println(" - word transformed from " + fw.bounds + " to " + fwBounds);
+						System.out.println("   word color transformed from " + fw.color + ((fw.color == null) ? "" : (" with alpha " + fw.color.getAlpha())) + " to " + fwColor + ((fwColor == null) ? "" : (" with alpha " + fwColor.getAlpha())));
+					}
 					this.words.add(fw);
 				}
 			if (formFigures != null) // TODO consider storing composite alpha with figures (if it turns out necessary)
-				this.figures.addAll(formFigures);
+				for (int f = 0; f < formFigures.size(); f++) {
+					PFigure ff = ((PFigure) formFigures.get(f));
+					Rectangle2D.Float ffBounds = this.transformBounds(ff.bounds);
+					ff = new PFigure(ff.renderOrderNumber, ff.name, ffBounds, ff.refOrData, ff.rotation, ff.rightSideLeft, ff.upsideDown);
+					if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+						System.out.println(" - figure transformed from " + ff.bounds + " to " + ffBounds);
+					this.figures.add(ff);
+				}
+//				this.figures.add(formFigures);
 			if (formPaths != null)
 				for (int p = 0; p < formPaths.size(); p++) {
 					PPath fp = ((PPath) formPaths.get(p));
-					if (fp.strokeColor != null) {
-						fp.strokeColor = this.getCompositeAlphaColor(fp.strokeColor, sCompositeAlpha);
+//					if (fp.strokeColor != null) {
+//						fp.strokeColor = this.getCompositeAlphaColor(fp.strokeColor, sCompositeAlpha);
+//						if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+//							System.out.println("PPath: stroke color set to " + fp.strokeColor + ((fp.strokeColor == null) ? "" : (", alpha " + fp.strokeColor.getAlpha())));
+//					}
+//					if (fp.fillColor != null) {
+//						fp.fillColor = this.getCompositeAlphaColor(fp.fillColor, nsCompositeAlpha);
+//						if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+//							System.out.println("PPath: fill color set to " + fp.fillColor + ((fp.fillColor == null) ? "" : (", alpha " + fp.fillColor.getAlpha())));
+//					}
+//					fp.blendMode = bmComposite;
+//					this.paths.add(fp);
+					PPath tfp = fp.transform(this.pcrTransformationMatrices);
+					if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+						System.out.println("Path transformed from " + fp.getBounds() + " to " + tfp.getBounds());
+					if (tfp.strokeColor != null) {
+						tfp.strokeColor = this.getCompositeAlphaColor(tfp.strokeColor, sCompositeAlpha);
 						if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
-							System.out.println("PPath: stroke color set to " + fp.strokeColor + ((fp.strokeColor == null) ? "" : (", alpha " + fp.strokeColor.getAlpha())));
+							System.out.println("PPath: stroke color set to " + tfp.strokeColor + ((tfp.strokeColor == null) ? "" : (", alpha " + tfp.strokeColor.getAlpha())));
 					}
-					if (fp.fillColor != null) {
-						fp.fillColor = this.getCompositeAlphaColor(fp.fillColor, nsCompositeAlpha);
+					if (tfp.fillColor != null) {
+						tfp.fillColor = this.getCompositeAlphaColor(tfp.fillColor, nsCompositeAlpha);
 						if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
-							System.out.println("PPath: fill color set to " + fp.fillColor + ((fp.fillColor == null) ? "" : (", alpha " + fp.fillColor.getAlpha())));
+							System.out.println("PPath: fill color set to " + tfp.fillColor + ((tfp.fillColor == null) ? "" : (", alpha " + tfp.fillColor.getAlpha())));
 					}
 					fp.blendMode = bmComposite;
-					this.paths.add(fp);
+					this.paths.add(tfp);
 				}
+		}
+		
+		private Rectangle2D.Float transformBounds(Rectangle2D.Float bounds) {
+			float[] llPoint = {bounds.x, bounds.y, 1};
+			llPoint = this.applyTransformationMatrices(llPoint);
+			float[] urPoint = {(bounds.x + bounds.width), (bounds.y + bounds.height), 1};
+			urPoint = this.applyTransformationMatrices(urPoint);
+			return new Rectangle2D.Float(llPoint[0], llPoint[1], (urPoint[0] - llPoint[0]), (urPoint[1] - llPoint[1]));
 		}
 		
 		private void doDoFigure(String name, Object refOrData) {
@@ -3748,7 +4301,7 @@ public class PdfParser {
 		}
 		
 		private void dohighcomma(LinkedList stack) {
-			this.doTasterisc(stack);
+			this.doTasterisk(stack);
 			this.doTj(stack);
 		}
 		
@@ -3810,9 +4363,17 @@ public class PdfParser {
 			 * when rendering (need to do that locally on every row, as it
 			 * varies too much globally due to text justification and tables).
 			 * Use that average explicit space width to assess implicit spaces.
-			 * TODO assess if this works, or if it incurs too many conflated words
-			 */
-			float explicitSpaceWidth = this.measureExplicitSpaceWidth(stros);
+			 * TODOne assess if this works, or if it incurs too many conflated
+			 * words ==> should be OK with below cap-off */
+			float mExplicitSpaceWidth = this.measureExplicitSpaceWidth(stros);
+			/* cap off explicit space with so this works in tables with varying
+			 * column gaps, as otherwise wide column gaps completely collapse
+			 * narrower ones, and empty table cells bridged in a single multi-
+			 * column step have the same effect (1.0 still is pretty wide a
+			 * space ...) */
+			/* use absolute minimum for explicit space width as well, in case
+			 * measurements return an all too low value */
+			float explicitSpaceWidth = Math.max(Math.min(mExplicitSpaceWidth, 1), 0.25f);
 			
 			//	start line, computing top and bottom
 			this.startLine();
@@ -3846,12 +4407,13 @@ public class PdfParser {
 					}
 				}
 				else if (o instanceof Number) {
-					float d = (((Number) o).floatValue() / 1000); // TODO does factoring in char spacing make sense or cause trouble ???
+					float d = (((Number) o).floatValue() / 1000); // TODOne does factoring in char spacing make sense or cause trouble ??? ==> we basically _have_to_ factor it in, as it does contribute
 					float eShift = ((-d * this.pcrFontSize) + this.pcrCharSpacing);
 					if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) {
 						System.out.println("Re-positioning by TJ array number " + d + "*" + this.pcrFontSize + " at effective " + this.eFontSize + ", char spacing is " + this.pcrCharSpacing + ", word spacing is " + this.pcrWordSpacing);
 						System.out.println(" - effective shift is " + eShift);
 						System.out.println(" - minimum implicit space width is " + ((this.pcrFontSpaceWidth * this.narrowSpaceToleranceFactor * this.pcrFontSize) / 1000));
+						System.out.println(" - average explicit space width is " + explicitSpaceWidth + " (capped off from " + mExplicitSpaceWidth + ")");
 					}
 					if ((this.pcrFont != null) && ((eShift * 3) > (explicitSpaceWidth * 2)) && ((-d + this.pcrCharSpacing) > ((this.pcrFontSpaceWidth * this.narrowSpaceToleranceFactor) / 1000))) {
 						if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
@@ -3972,11 +4534,20 @@ public class PdfParser {
 						System.out.println("Handling high byte char '" + ch + "' (" + ((int) ch) + ", " + Integer.toString(((int) ch), 16).toUpperCase() + ") for now, coming back for low byte char '" + cscs[c] + "' (" + ((int) cscs[c]) + ", " + Integer.toString(((int) cscs[c]), 16).toUpperCase() + ") next round");
 					c--; // come back for low byte in the next round
 				}
-				char fCh = this.pcrFont.getChar((int) ch); // the character the font says we're rendering
+				char fCh = this.pcrFont.getChar((int) ch); // the character the font says we're rendering (no matter what it actually renders, Acrobat goes by that in terms of spacing)
 				boolean fIsSpace = (fCh == ' '); // is the font indicated character a space (32, 0x20)?
 				String rCh; // the character actually represented by the glyph we're rendering
 				boolean rIsSpace; // is the actually rendered character as space (<= 32, 0x20)?
-				boolean isImplicitSpace = (this.pcrFont.hasImplicitSpaces || (((this.pcrCharSpacing + (fIsSpace ? this.pcrWordSpacing : 0)) > ((this.pcrFontSpaceWidth * this.narrowSpaceToleranceFactor) / 1000)))); // do TJ shifts, char or word spacing, or excessive glyph width imply rendering a space?
+				float nextTjShift = (((c+1) == cscs.length) ? nextShift : 0); // what shifts did we just have, or do we have coming up (might well erradicate space)?
+				boolean nextIsImplicitSpace = (this.pcrFont.hasImplicitSpaces || ((this.pcrCharSpacing + (fIsSpace ? this.pcrWordSpacing : 0) - nextTjShift) > ((this.pcrFontSpaceWidth * this.narrowSpaceToleranceFactor) / 1000))); // do TJ shifts, char or word spacing, or excessive glyph width imply rendering a space?
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) {
+					System.out.println("Handling char '" + ch + "' (" + ((int) ch) + ", " + Integer.toString(((int) ch), 16).toUpperCase() + ") for now, coming back for low byte char '" + cscs[c] + "' (" + ((int) cscs[c]) + ", " + Integer.toString(((int) cscs[c]), 16).toUpperCase() + ")");
+					System.out.println(" - char spacing is " + this.pcrCharSpacing);
+					System.out.println(" - word spacing is " + this.pcrWordSpacing);
+					System.out.println(" - font space indication is " + fIsSpace);
+					System.out.println(" - following TJ array shift is " + nextTjShift);
+					System.out.println(" - implicit space is " + nextIsImplicitSpace);
+				}
 				
 				/* When deciding if we're rendering a space, check what current
 				 * font _says_ the char is, not what we've decoded it to ...
@@ -4000,18 +4571,29 @@ public class PdfParser {
 					//	compute effective space width and effective last shift (only at start and end of char sequence, though)
 					//	copy from width computation resulting from drawChar()
 					float spaceWidth = ((((this.pcrFont.getCharWidth(ch) * this.pcrFontSize) + ((this.pcrCharSpacing + (fIsSpace ? this.pcrWordSpacing : 0)) * 1000)) * this.pcrHorizontalScaling) / (1000 * 100));
+					float spaceCharWidth = ((((this.pcrFont.getCharWidth(ch) * this.pcrFontSize)) * this.pcrHorizontalScaling) / (1000 * 100));
 					//	copy from width computation resulting from array shift
 					float prevShiftWidth = ((c == 0) ? (prevShift * this.pcrFontSize) : 0.0f);
 					float nextShiftWidth = (((c+1) == cscs.length) ? (nextShift * this.pcrFontSize) : 0.0f);
+					if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+						System.out.println(" - space is " + spaceWidth + " (char " + spaceCharWidth + "), shifts are " + prevShiftWidth + " and " + nextShiftWidth);
 					
 					//	end word if space not compensated (to at least 95%) by previous left (positive) shift and/or subsequent (positive) left shift
 					if ((spaceWidth * 19) > ((prevShiftWidth + nextShiftWidth) * 20)) {
 						if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
-							System.out.println(" ==> space accepted");
+							System.out.println(" ==> space accepted for below 95% compensation at " + (((prevShiftWidth + nextShiftWidth) * 100) / spaceWidth) + "%");
 						this.endWord();
 						rendered.append(' ');
 					}
-					else System.out.println(" ==> space rejected as compensated by shifts");
+					//	end word if space wider than specified by font as well, so shift compensation assessment does not backfire in tables that separate columns via excessive word spacing (results in very wide spaces that are easily compensated beyond 95% and still wide enough for an actual space)
+					else if (((spaceWidth - prevShiftWidth - nextShiftWidth) * 5) > (spaceCharWidth * 4)) {
+						if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+							System.out.println(" ==> space accepted for width above 80% of font specified " + spaceCharWidth + " (" + ((spaceCharWidth * 4) / 5) + ") at " + (spaceWidth - prevShiftWidth - nextShiftWidth));
+						this.endWord();
+						rendered.append(' ');
+					}
+					else if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+						System.out.println(" ==> space rejected as compensated by shifts");
 				}
 				
 				//	rendering non-whitespace char, remember start of word
@@ -4019,21 +4601,23 @@ public class PdfParser {
 					this.startWord();
 					String nrCh = dissolveLigature(rCh);
 					if ((this.wordCharCodes != null) && (this.wordString != null)) {
-						this.wordCharCodes.append((char) ((nrCh.length() * 256) | ((int) ch)));
+//						this.wordCharCodes.append((char) ((nrCh.length() * 256) | ((int) ch)));
+						int chc = ((this.pcrFont == null) ? ((int) ch) : this.pcrFont.getCharCode((int) ch));
+						this.wordCharCodes.append((char) ((nrCh.length() * 256) | chc));
 						this.wordString.append(nrCh);
 					}
 					rendered.append(nrCh);
 				}
 				
 				//	update state (move caret forward)
-				this.drawChar(ch, fIsSpace, isImplicitSpace, rCh);
+				this.drawChar(ch, fIsSpace, nextIsImplicitSpace, rCh);
 				
 				//	remember char usage (only now, after word is started)
 				if (this.assessFonts)
 					this.pcrFont.setCharUsed((int) ch);
 				
 				//	extreme char or word spacing, add space
-				if (isImplicitSpace) {
+				if (nextIsImplicitSpace) {
 					if (!rIsSpace)
 						rendered.append(' ');
 					this.endWord();
@@ -4123,6 +4707,8 @@ public class PdfParser {
 					System.out.println(" --> extent is " + this.top[0] + "-" + this.bottom[0] + " x " + this.start[1] + "-" + end[1]);
 				else if (this.eFontDirection == PWord.TOP_DOWN_FONT_DIRECTION)
 					System.out.println(" --> extent is " + this.bottom[0] + "-" + this.top[0] + " x " + end[1] + "-" + this.start[1]);
+				if (this.eFontDirection == PWord.UPSIDE_DOWN_FONT_DIRECTION)
+					System.out.println(" --> extent is " + end[0] + "-" + this.start[0] + " x " + this.bottom[1] + "-" + this.top[1]);
 			}
 			Rectangle2D.Float pwb = null;
 //			float bls = this.pwrFont.getRelativeBaselineShift(this.wordString.toString());
@@ -4140,12 +4726,17 @@ public class PdfParser {
 				pwb = new Rectangle2D.Float(this.top[0], this.start[1], (this.bottom[0] - this.top[0]), (end[1] - this.start[1]));
 			else if (this.eFontDirection == PWord.TOP_DOWN_FONT_DIRECTION)
 				pwb = new Rectangle2D.Float(this.bottom[0], end[1], (this.top[0] - this.bottom[0]), (this.start[1] - end[1]));
+			else if (this.eFontDirection == PWord.UPSIDE_DOWN_FONT_DIRECTION)
+				pwb = new Rectangle2D.Float(end[0], this.top[1], (this.start[0] - end[0]), (this.bottom[1] - this.top[1]));
 //			if ((pwb != null) && !this.assessFont)
 //				this.words.add(new PWord(this.wordCharCodes.toString(), this.wordString.toString(), pwb, Math.round(this.eFontSize), this.eFontDirection, this.pwrFont));
 			if (pwb != null) {
 				if (this.assessFonts)
-					this.words.add(new PWord(this.nextRenderOrderNumber++, this.wordCharCodes.toString(), pwb, this.pcrNonStrokeColor, Math.round(this.eFontSize), this.eFontDirection, this.pcrFont));
-				else this.words.add(new PWord(this.nextRenderOrderNumber++, this.wordCharCodes.toString(), this.wordString.toString(), pwb, this.pcrNonStrokeColor, Math.round(this.eFontSize), this.eFontDirection, this.pcrFont));
+					this.words.add(new PWord(this.nextRenderOrderNumber++, this.wordCharCodes.toString(), pwb, this.getNonStrokeColor(), Math.round(this.eFontSize), this.eFontDirection, this.pcrFont));
+				else {
+//					System.out.println(" ==> font direction is " + this.eFontDirection);
+					this.words.add(new PWord(this.nextRenderOrderNumber++, this.wordCharCodes.toString(), this.wordString.toString(), pwb, this.getNonStrokeColor(), Math.round(this.eFontSize), this.eFontDirection, this.pcrFont));
+				}
 			}
 			this.wordCharCodes = null;
 			this.wordString = null;
@@ -4231,30 +4822,32 @@ public class PdfParser {
 		
 		static BlendComposite getInstance(String name) {
 			Integer mode = ((Integer) namesToModes.get(name));
-			return ((mode == null) ? null : getInstance(mode.intValue()));
+			return ((mode == null) ? null : getInstance(name, mode.intValue()));
 		}
 		
 		static BlendComposite getInstance(String name, float alpha) {
 			Integer mode = ((Integer) namesToModes.get(name));
-			return ((mode == null) ? null : getInstance(mode.intValue(), alpha));
+			return ((mode == null) ? null : getInstance(name, mode.intValue(), alpha));
 		}
 		
-		static BlendComposite getInstance(int mode) {
-			return new BlendComposite(mode);
+		static BlendComposite getInstance(String name, int mode) {
+			return new BlendComposite(name, mode);
 		}
 		
-		static BlendComposite getInstance(int mode, float alpha) {
-			return new BlendComposite(mode, alpha);
+		static BlendComposite getInstance(String name, int mode, float alpha) {
+			return new BlendComposite(name, mode, alpha);
 		}
 		
+		final String name;
 		private float alpha;
 		private int mode;
 		
-		private BlendComposite(int mode) {
-			this(mode, 1.0f);
+		private BlendComposite(String name, int mode) {
+			this(name, mode, 1.0f);
 		}
 		
-		private BlendComposite(int mode, float alpha) {
+		private BlendComposite(String name, int mode, float alpha) {
+			this.name = name;
 			this.mode = mode;
 			setAlpha(alpha);
 		}
@@ -4299,8 +4892,7 @@ public class PdfParser {
 				if (src.getSampleModel().getDataType() != DataBuffer.TYPE_INT ||
 					dstIn.getSampleModel().getDataType() != DataBuffer.TYPE_INT ||
 					dstOut.getSampleModel().getDataType() != DataBuffer.TYPE_INT) {
-					throw new IllegalStateException(
-							"Source and destination must store pixels as INT.");
+					throw new IllegalArgumentException("Source and destination must store pixels as INT (composite is " + this.composite.name + ").");
 				}
 				
 				int width = Math.min(src.getWidth(), dstIn.getWidth());

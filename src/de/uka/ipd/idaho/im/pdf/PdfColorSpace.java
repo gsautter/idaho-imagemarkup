@@ -97,6 +97,8 @@ abstract class PdfColorSpace {
 			return deviceGray;
 		else if ("CalGray".equalsIgnoreCase(name))
 			return calGray;
+		else if ("Pattern".equalsIgnoreCase(name))
+			return pattern;
 		else return null;
 	}
 	
@@ -233,7 +235,17 @@ abstract class PdfColorSpace {
 				b = ((1.055f * ((float) Math.pow(b, (1 / 2.4 )))) - 0.055f);
 			else b = (12.92f * b);
 			
-			return new Color(r, g, b);
+			try {
+				return new Color(r, g, b);
+			}
+			catch (RuntimeException re) {
+				System.out.println("ColorSpace Lab: illegal RGB values " + r + "/" + g + "/" + b + " for input " + lab_L + "/" + lab_a + "/" + lab_b + ", using range-adjusted fallback");
+				return new Color(this.sanitize(r), this.sanitize(g), this.sanitize(b));
+//				return Color.RED; TODO use this to find page content color space is applied to (for comparison to Acrobat)
+			}
+		}
+		private float sanitize(float f) {
+			return Math.max(0, Math.min(1, f));
 		}
 	};
 	
@@ -248,6 +260,12 @@ abstract class PdfColorSpace {
 		Color decodeColor(LinkedList stack, String indent) {
 			float g = ((Number) stack.removeLast()).floatValue();
 			return new Color(g, g, g); // TODO observe black point and white point
+		}
+	};
+	
+	private static PdfColorSpace pattern = new PdfColorSpace("Pattern", 1, true) {
+		Color decodeColor(LinkedList stack, String indent) {
+			throw new RuntimeException("Need to get pattern from page resources ...");
 		}
 	};
 	
@@ -283,6 +301,8 @@ abstract class PdfColorSpace {
 			}
 			else if (lookupObj instanceof PString) {
 				PString lookup = ((PString) lookupObj);
+				if (lookup.isHex4)
+					lookup = new PString(lookup.bytes, true, false, lookup.isHexWithSpace);
 				this.lookup = new byte[lookup.length()];
 				for (int l = 0; l < this.lookup.length; l++) {
 					int b = ((int) lookup.charAt(l));
@@ -350,6 +370,7 @@ abstract class PdfColorSpace {
 		private String colorantName;
 		private PdfColorSpace altColorSpace;
 		private Function tintTransformer;
+		private HashMap colorCache = new HashMap();
 		SeparationColorSpace(String name, Vector data, PdfColorSpace altCs, Map objects) {
 			super(name, 1, false);
 			if (data.size() < 4)
@@ -389,11 +410,38 @@ abstract class PdfColorSpace {
 			else if ("Black".equals(this.colorantName))
 				return convertCmykToRgb(0, 0, 0, t);
 			
-			//	TODO figure out what to do if our colorant is not present in alternative color space
-			for (int c = 0; c < this.altColorSpace.colorantNames.length; c++)
-				stack.addLast(this.altColorSpace.colorantNames[c].equals(this.colorantName) ? new Float(t) : new Float(0));
-			//	TODO use tint transformer
-			return this.altColorSpace.getColor(stack, ((indent == null) ? null : (indent + "  ")));
+			//	TODOne figure out what to do if our colorant is not present in alternative color space ==> implemented below
+			boolean colorantNameMatched = false;
+			for (int c = 0; c < this.altColorSpace.colorantNames.length; c++) {
+				if (this.altColorSpace.colorantNames[c].equals(this.colorantName)) {
+					stack.addLast(new Float(t));
+					colorantNameMatched = true;
+				}
+				else stack.addLast(new Float(0));
+			}
+			if (colorantNameMatched)
+				return this.altColorSpace.getColor(stack, ((indent == null) ? null : (indent + "  ")));
+			
+			//	use tint transformer
+			String colorCacheKey = ("" + t);
+			Color color = ((Color) this.colorCache.get(colorCacheKey));
+			if (color == null) {
+				float[] x = {t};
+				if (indent != null)
+					System.out.println(indent + this.name + ": X is " + Arrays.toString(x));
+				float[] y = this.tintTransformer.evaluate(x, ((indent == null) ? null : (indent + "  ")));
+				if (indent != null)
+					System.out.println(indent + this.name + ": Y is " + Arrays.toString(y));
+				for (int r = 0; r < y.length; r++)
+					stack.addLast(new Float(y[r]));
+				if (indent != null)
+					System.out.println(indent + this.name + ": Stack is " + stack);
+				color = this.altColorSpace.getColor(stack, ((indent == null) ? null : (indent + "  ")));
+				if (indent != null)
+					System.out.println(indent + this.name + ": Color from " + this.altColorSpace.name + " is " + color);
+				this.colorCache.put(colorCacheKey, color);
+			}
+			return color;
 		}
 	}
 	
@@ -401,7 +449,7 @@ abstract class PdfColorSpace {
 		private String[] colorantNames;
 		private PdfColorSpace altColorSpace;
 		private Function tintTransformer;
-		HashMap colorCache = new HashMap();
+		private HashMap colorCache = new HashMap();
 		DeviceNColorSpace(String name, Vector data, PdfColorSpace altCs, Map objects) {
 			super(name, ((Vector) data.get(1)).size(), ((data.size() < 5) || !(data.get(4) instanceof Hashtable) || (((Hashtable) data.get(4)).get("Subtype") == null) || !"NChannel".equals(((Hashtable) data.get(4)).get("Subtype"))));
 			

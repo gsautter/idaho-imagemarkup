@@ -47,6 +47,7 @@ import java.util.HashSet;
 import java.util.Hashtable;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.Set;
 import java.util.SortedSet;
 import java.util.Vector;
 
@@ -61,6 +62,8 @@ import de.uka.ipd.idaho.im.pdf.PdfCharDecoder.ScoredCharSignature;
 import de.uka.ipd.idaho.im.pdf.PdfCharDecoder.UnicodeBlock;
 import de.uka.ipd.idaho.im.pdf.PdfFont.CharNeighbor;
 import de.uka.ipd.idaho.im.pdf.PdfFont.CharUsageStats;
+import de.uka.ipd.idaho.im.pdf.PsParser.PsCommand;
+import de.uka.ipd.idaho.im.pdf.PsParser.PsProcedure;
 import de.uka.ipd.idaho.im.pdf.PsParser.PsString;
 import de.uka.ipd.idaho.im.util.ImFontUtils;
 import de.uka.ipd.idaho.im.utilities.ImageDisplayDialog;
@@ -422,10 +425,22 @@ public class PdfFontDecoder {
 //		System.out.println("     - main data (encrypted):");
 //		System.out.println(new String(mainData));
 		
-		//	decrypt data
+		//	decrypt data (as it seems, this portion always starts with 'dup', but never with a number, so chunk any leading numbers ...)
 		mainData = decryptType1Data(mainData, 55665);
+		String mainDataStr = new String(mainData);
+		if (!mainDataStr.startsWith("dup")) {
+			int mainDataStart = mainDataStr.indexOf("dup");
+			if ((mainDataStart < 1) || (mainDataStart > 8)) {}
+			else if (!mainDataStr.substring(0, mainDataStart).matches("[0-9]+")) {}
+			else {
+				byte[] cMainData = new byte[mainData.length - mainDataStart];
+				System.arraycopy(mainData, mainDataStart, cMainData, 0, cMainData.length);
+				mainData = cMainData;
+				mainDataStr = new String(mainData);
+			}
+		}
 //		System.out.println("     - main data (plain):");
-//		System.out.println(new String(mainData));
+//		System.out.println(mainDataStr);
 		
 		//	execute font program to get data
 		String fontName = null;
@@ -465,12 +480,24 @@ public class PdfFontDecoder {
 		//	decrypt char string subroutines
 		for (int s = 0; s < charStringSubrs.size(); s++) {
 			PsString css = ((PsString) charStringSubrs.get(s));
+			System.out.println("Decrypting char string sub routine " + css);
+			if (css == null) {
+				System.out.println(" ==> scipped");
+				continue;
+			}
 			byte[] decryptedCssBytes = decryptType1Data(css.bytes, 4330);
 			byte[] plainCssBytes = new byte[decryptedCssBytes.length - n];
 			System.arraycopy(decryptedCssBytes, n, plainCssBytes, 0, plainCssBytes.length);
+//			charStringSubrs.set(s, new PsString(plainCssBytes));
+			css = new PsString(plainCssBytes);
 			charStringSubrs.set(s, new PsString(plainCssBytes));
+			System.out.println(" ==> " + css + ": " + new String(plainCssBytes));
 		}
 //		System.out.println("     - decrypted char string subroutines are " + charStringSubrs);
+		
+		//	extract other subroutines
+		Vector otherSubrs = ((Vector) privateDict.get("OtherSubrs"));
+//		System.out.println("     - other subroutines are " + otherSubrs);
 		
 		//	extract char strings
 		Hashtable charStrings = ((Hashtable) fontData.get("CharStrings"));
@@ -490,22 +517,38 @@ public class PdfFontDecoder {
 			}
 			chars[c] = StringUtils.getCharForName(charName);
 			pFont.mapUnicode(new Integer(c), ("" + chars[c]));
-			System.out.println("     - mapped " + c + " to '" + chars[c] + "' (" + ((int) chars[c]) + " / " + charName + ")");
+			if (DEBUG_TYPE1_LOADING) System.out.println("     - mapped " + c + " to '" + chars[c] + "' (" + ((int) chars[c]) + " / " + charName + ")");
 			
 			//	decrypt char string
 			PsString cs = ((PsString) charStrings.get(charName));
+			if (cs == null) {
+				System.out.println("Char string " + c + " (" + chars[c] + ") not found");
+				continue;
+			}
 			byte[] decryptedCsBytes = decryptType1Data(cs.bytes, 4330);
 			byte[] plainCsBytes = new byte[decryptedCsBytes.length - n];
 			System.arraycopy(decryptedCsBytes, n, plainCsBytes, 0, plainCsBytes.length);
-			cs = new PsString(plainCsBytes);
-			charStrings.put(charName, cs);
-//			System.out.println("     - decrypted char string to " + cs);
+			PsString pcs = new PsString(plainCsBytes);
+			charStrings.put(charName, pcs);
+//			System.out.println("     - decrypted char string " + c + " (" + chars[c] + ") to " + cs);
 //			System.out.println("       " + Arrays.toString(plainCsBytes));
 			
 			//	parse char string
-			ArrayList csOps = new ArrayList();
-			readFontType1CharString(plainCsBytes, charName, charStringSubrs, csOps, "");
-			charStringOps[c] = ((OpType1[]) csOps.toArray(new OpType1[csOps.size()]));
+			try {
+				ArrayList csOps = new ArrayList();
+//				readFontType1CharString(plainCsBytes, charName, charStringSubrs, otherSubrs, csOps, "");
+				readFontType1CharString(pcs.bytes, charName, charStringSubrs, otherSubrs, csOps, "");
+				charStringOps[c] = ((OpType1[]) csOps.toArray(new OpType1[csOps.size()]));
+			}
+			catch (Exception e) {
+				System.out.println("Error reading char string " + c + " (" + chars[c] + ") " + cs + ": " + e.getMessage());
+				System.out.println("  raw char string is: " + new String(cs.bytes));
+				System.out.println("                      " + Arrays.toString(cs.bytes));
+				System.out.println("  decrypted char string is: " + new String(pcs.bytes));
+				System.out.println("                            " + Arrays.toString(pcs.bytes));
+				e.printStackTrace(System.out);
+				throw new RuntimeException(e);
+			}
 		}
 		
 		//	store char codes for use below
@@ -637,10 +680,12 @@ public class PdfFontDecoder {
 		return plain;
 	}
 	
-	private static int readFontType1CharString(byte[] data, String name, Vector subrs, ArrayList content, String indent) {
+	private static int readFontType1CharString(byte[] data, String name, Vector subrs, Vector otherSubrs, ArrayList content, String indent) {
 		int i = 0;
 		LinkedList stack = new LinkedList();
+		LinkedList psStack = new LinkedList();
 		int hintCount = 0;
+//		System.out.println("Reading char string of " + data.length + " bytes");
 		while (i < data.length)  {
 			
 			//	read value
@@ -648,7 +693,7 @@ public class PdfFontDecoder {
 //			System.out.println(indent + " - first byte is " + bs + " (" + data[i-1] + ")");
 			int op = Integer.MIN_VALUE;
 			int iVal = Integer.MIN_VALUE;
-			double dVal = Double.NEGATIVE_INFINITY;
+			double dVal = Double.NaN;
 			
 			if ((0 <= bs) && (bs <= 11)) {
 				op = bs;
@@ -656,38 +701,41 @@ public class PdfFontDecoder {
 			else if (bs == 12) {
 				op = (1000 + convertUnsigned(data[i++]));
 			}
-			else if ((13 <= bs) && (bs <= 18)) {
-				op = bs;
-			}
-			else if (bs == 19) {
-				op = bs;
-			}
-			else if (bs == 20) {
-				op = bs;
-			}
-			else if ((21 <= bs) && (bs <= 27)) {
-				op = bs;
-			}
-			else if (bs == 28) {
-				iVal = 0;
-				for (int b = 0; b < 2; b++) {
-					iVal <<= 8;
-					iVal += convertUnsigned(data[i++]);
-				}
-				if (iVal > 32768)
-					iVal -= 65536;
-			}
-			else if (bs == 29) {
-				iVal = 0;
-				for (int b = 0; b < 4; b++) {
-					iVal <<= 8;
-					iVal += convertUnsigned(data[i++]);
-				}
-			}
-			else if (bs == 30) {
-				op = bs;
-			}
-			else if (bs == 31) {
+//			else if ((13 <= bs) && (bs <= 18)) {
+//				op = bs;
+//			}
+//			else if (bs == 19) {
+//				op = bs;
+//			}
+//			else if (bs == 20) {
+//				op = bs;
+//			}
+//			else if ((21 <= bs) && (bs <= 27)) {
+//				op = bs;
+//			}
+//			else if (bs == 28) {
+//				iVal = 0;
+//				for (int b = 0; b < 2; b++) {
+//					iVal <<= 8;
+//					iVal += convertUnsigned(data[i++]);
+//				}
+//				if (iVal > 32768)
+//					iVal -= 65536;
+//			}
+//			else if (bs == 29) {
+//				iVal = 0;
+//				for (int b = 0; b < 4; b++) {
+//					iVal <<= 8;
+//					iVal += convertUnsigned(data[i++]);
+//				}
+//			}
+//			else if (bs == 30) {
+//				op = bs;
+//			}
+//			else if (bs == 31) {
+//				op = bs;
+//			}
+			else if ((13 <= bs) && (bs <= 31)) {
 				op = bs;
 			}
 			else if ((32 <= bs) && (bs <= 246)) {
@@ -725,6 +773,7 @@ public class PdfFontDecoder {
 //						System.out.println(indent + " --> got " + (stack.size() / 2) + " new hints from " + stack.size() + " args, op is " + op);
 						hintCount += (stack.size() / 2);
 						stack.clear();
+//						System.out.println(indent + " ==> stack cleared");
 					}
 					
 					//	read mask bytes
@@ -742,14 +791,21 @@ public class PdfFontDecoder {
 				
 				//	hstem, vstem, hstemhm & vstemhm (hints are number pairs !!)
 				else if ((op == 1) || (op == 3) || (op == 18) || (op == 23)) {
-					System.out.println(indent + " --> got " + (stack.size() / 2) + " new hints from " + stack.size() + " args, op is " + op);
+//					System.out.println(indent + " --> got " + (stack.size() / 2) + " new hints from " + stack.size() + " args, op is " + op);
+					hintCount += (stack.size() / 2);
+				}
+				
+				//	hstem3 & vstem3
+				else if ((op == 1002) || (op == 1001)) {
+//					System.out.println(indent + " --> got " + (stack.size() / 2) + " new hints from " + stack.size() + " args, op is " + op);
 					hintCount += (stack.size() / 2);
 				}
 				
 				String opStr = ((String) glyphProgOpResolver.get(new Integer(op)));
-//				System.out.print(indent + " --> read operator " + op + " (" + opStr + ")");
+//				System.out.println(indent + " --> read operator " + op + " (" + opStr + ")");
+//				System.out.println(indent + "     stack is " + stack);
 				
-				//	callsubr (roll it out sub routines right here)
+				//	callsubr (roll out sub routines right here)
 				if (op == 10) {
 					int subrNr = ((Number) stack.getLast()).intValue();
 //					while (stack.size() != 0)
@@ -758,7 +814,41 @@ public class PdfFontDecoder {
 //					System.out.println();
 //					System.out.println(indent + " --> inlining call to subroutine " + subrNr);
 					PsString subr = ((PsString) subrs.get(subrNr));
-					readFontType1CharString(subr.bytes, name, subrs, content, (indent + "  "));
+//					System.out.println(indent + "    subroutine is '" + new String(subr.bytes) + "'");
+					readFontType1CharString(subr.bytes, name, subrs, otherSubrs, content, (indent + "  "));
+				}
+				
+				//	callothersubr (run PostScript computation or whatever)
+				else if (op == 1016) {
+					int subrNr = ((Number) stack.getLast()).intValue();
+//					while (stack.size() != 0)
+//						System.out.print(" " + ((Number) stack.removeFirst()));
+					stack.clear();
+//					System.out.println();
+//					System.out.println(indent + " --> inlining call to other subroutine " + subrNr);
+					PsProcedure subr = ((PsProcedure) otherSubrs.get(subrNr));
+//					System.out.println(indent + "    subroutine is '" + new String(subr.bytes) + "'");
+					try {
+						PsParser.executePs(subr.bytes, new Hashtable(), psStack, (DEBUG_TYPE1_LOADING ? (indent + "  ") : null));
+					}
+					catch (IOException ioe) {
+						System.out.println("Error executing PostScript sub routine '" + new String(subr.bytes) + "': " + ioe.getMessage());
+						ioe.printStackTrace(System.out);
+					}
+				}
+				
+				//	div (divide last two numbers on stack and put the result on the stack)
+				else if (op == 1012) {
+					double denom = ((Number) stack.removeLast()).doubleValue();
+					double nom = ((Number) stack.removeLast()).doubleValue();
+					stack.addLast(new Double(nom / denom));
+//					System.out.println(indent + "     stack extended to " + stack);
+				}
+				
+				//	pop (take result from PostScript computation and put it on operand tack)
+				else if (op == 1017) {
+					stack.addLast(psStack.removeLast());
+//					System.out.println(indent + "     stack extended to " + stack);
 				}
 				
 				//	return (end of subroutine, ignore altogether) 
@@ -777,13 +867,14 @@ public class PdfFontDecoder {
 //						System.out.print(" " + ((Number) stack.removeFirst()));
 					stack.clear();
 //					System.out.println();
+//					System.out.println(indent + " --> stored for rendering");
 				}
 			}
 			else if (iVal != Integer.MIN_VALUE) {
 //				System.out.println(indent + " --> read int " + iVal);
 				stack.addLast(new Integer(iVal));
 			}
-			else if (dVal != Double.NEGATIVE_INFINITY) {
+			else if (!Double.isNaN(dVal)) {
 //				System.out.println(indent + " --> read double " + dVal);
 				stack.addLast(new Double(dVal));
 			}
@@ -1025,7 +1116,7 @@ public class PdfFontDecoder {
 					else if (chn.indexOf('_') != -1)
 						chars[c] = StringUtils.getCharForName(chn.replaceAll("_", ""));
 				}
-				if (!DEBUG_TYPE1_RENDRING && !pFont.usesCharCode(new Integer(c)) && (chn != null) && !pFont.usedCharNames.contains(chn)) {
+				if (!DEBUG_TYPE1_RENDRING && !pFont.usesCharCode(new Integer(c)) && !pFont.usesCharCode(new Integer((int) chars[c])) && (chn != null) && !pFont.usedCharNames.contains(chn)) {
 					pm.setInfo("     - ignoring unused char " + c + " with SID " + sid + " (" + chn + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
 					continue;
 				}
@@ -1249,6 +1340,9 @@ public class PdfFontDecoder {
 				);
 		}
 	}
+	
+	//Word 'A' in STTRNB+AGaramond-Regular-SC750: 41
+	//Word 'ubry ' in STTRNB+AGaramond-Regular-SC750: 55425259
 	
 	private static final boolean DEBUG_TYPE1_RENDRING = false;
 	private static final int DEBUG_TYPE1C_TARGET_SID = -1;
@@ -4021,9 +4115,40 @@ dy1 = vy;
 	private static final boolean DEBUG_SHOW_SMALL_CAPS_CHAR_MATCHES = false;
 	
 	private static void decodeChars(PdfFont pFont, char[] chars, Integer[] charCodes, String[] charNames, CharImage[] charImages, int dWidth, float maxDescent, Font[] serifFonts, Font[] sansFonts, FontDecoderCharset charSet, ProgressMonitor pm, boolean debug) {
-//		if (!"OXCEMO+TimesNewRomanPSMT-SC700".equals(pFont.name))
-//			return;
 		
+		/* If some character Unicode maps to a character sequence that is NOT
+		 * a PostScript name (e.g. non-Unicode custom ligature 'Th'), null out
+		 * char image to leave as is (we won't be able to render the apropriate
+		 * comparison char anyway ...) */
+		for (int c = 0; c < chars.length; c++) {
+			if (charImages[c] == null)
+				continue;
+			
+			//	get Unicode mapping
+			String ucStr = ((String) pFont.ucMappings.get(charCodes[c]));
+			
+			//	not Unicode mapped at all
+			if (ucStr == null)
+				continue;
+			
+			//	mapped to single character, should work just fine
+			if (ucStr.length() < 2)
+				continue;
+			
+			//	test if valid PostScript char name
+			char ucCh = StringUtils.getCharForName(ucStr);
+			if (ucCh != 0)
+				continue;
+			
+			//	check if we have a known/frequent custom ligature, and if so, just accept it
+			if (customLigatures.contains(ucStr)) {
+				pm.setInfo("     - Exempting char " + c + " (" + charCodes[c] + "/" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ") from decoding for lack of a Unicode point for mapped character sequence '" + ucStr + "'");
+				if (debug) System.out.println("Exempting char " + c + " (" + charCodes[c] + "/" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ") from decoding for lack of a Unicode point for mapped character sequence '" + ucStr + "'");
+				charImages[c] = null; // that prevents all further analysis (no data loss, though, as image is stored in font before we ever get here)
+			}
+		}
+		
+		//	set up matching
 		CharImageMatch[][] serifStyleCims = new CharImageMatch[chars.length][4];
 		int[] serifCharCounts = {0, 0, 0, 0};
 		int[] serifCharCountsNs = {0, 0, 0, 0};
@@ -4055,7 +4180,7 @@ dy1 = vy;
 			if (charImages[c] == null)
 				continue;
 			
-			//	get basec data
+			//	get basic data
 			Integer chc = charCodes[c];
 			String chn = charNames[c];
 			pm.setInfo("     - Checking char " + c + " (" + chc + "/" + chn + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
@@ -4125,7 +4250,7 @@ dy1 = vy;
 						}
 						
 						if (originalBetter > ucMappingBetter) {
-							pFont.ucMappings.remove(new Integer((int) chars[c]));
+							pFont.ucMappings.remove(chc);
 							if (debug) System.out.println(" --> found original char to be better match (" + originalBetter + " vs. " + ucMappingBetter + "), removing mapping");
 						}
 						else if (debug) System.out.println(" --> found mapped char to be better match (" + ucMappingBetter + " vs. " + originalBetter + ")");
@@ -4214,10 +4339,18 @@ dy1 = vy;
 				continue;
 			}
 			
-			//	remember small-caps match
+			//	remember small-caps match (whichever way)
 			if (bestCims[c].match.ch != chars[c]) {
+//				if (bestCims[c] != null)
+//					PdfCharDecoder.displayCharMatch(bestCims[c], "Small-caps match");
 				smallCapsChars.add(new Integer(c));
 				if (debug) System.out.println(" --> small-caps match");
+			}
+			else if (isSmallCapsMatch(chars[c], ((String) pFont.ucMappings.get(chc)))) {
+//				if (bestCims[c] != null)
+//					PdfCharDecoder.displayCharMatch(bestCims[c], "Small-caps match");
+				smallCapsChars.add(new Integer(c));
+				if (debug) System.out.println(" --> lower case mapped capital");
 			}
 		}
 		
@@ -4262,19 +4395,21 @@ dy1 = vy;
 		double simNs = ((charCountNs == 0) ? 0 : (simSumNs / charCountNs));
 		if (debug) System.out.println(" - average similarity is " + sim + " (" + charCount + ") all / " + simNs + " (" + charCountNs + ") non-skewed");
 		
-		//	mark chars for revisiting if similarity way below font average (more than twice as far from 1 than average)
-		double minAcceptSim = (sim + sim - 1);
-		if (debug) System.out.println(" - minimum acceptance similarity is " + minAcceptSim);
-		for (int c = 0; c < chars.length; c++) {
-			if (charImages[c] == null)
-				continue;
-			if (bestCims[c] == null)
-				continue;
-			
-			//	mark char for revisiting
-			if (bestCims[c].sim < minAcceptSim) {
-				if (debug) System.out.println("   --> marked char " + c + " (" + charCodes[c] + "/" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ") for revistitin at similarity " + bestCims[c].sim);
-				bestCims[c] = null;
+		//	mark chars for revisiting if similarity way below font average (more than twice as far from 1 than average), but only with OCR enabled
+		if ((charSet != NO_DECODING) && (charSet != RENDER_ONLY)) {
+			double minAcceptSim = (sim + sim - 1);
+			if (debug) System.out.println(" - minimum acceptance similarity is " + minAcceptSim);
+			for (int c = 0; c < chars.length; c++) {
+				if (charImages[c] == null)
+					continue;
+				if (bestCims[c] == null)
+					continue;
+				
+				//	mark char for revisiting if similarity too far below average
+				if (bestCims[c].sim < minAcceptSim) {
+					if (debug) System.out.println("   --> marked char " + c + " (" + charCodes[c] + "/" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ") for revistitin at similarity " + bestCims[c].sim);
+					bestCims[c] = null;
+				}
 			}
 		}
 		
@@ -4322,6 +4457,7 @@ dy1 = vy;
 		
 		//	check if font has implicit spaces
 		checkImplicitSpaces(pFont, charImages, chars, charCodes, charNames, debug);
+		
 		
 		//	do we have a match?
 		if (((simMin > 0.5) && (sim > 0.6)) || ((simMin > 0.375) && (sim > 0.7)) || ((simMin > 0.25) && (sim > 0.8))) {
@@ -4373,7 +4509,7 @@ dy1 = vy;
 //				else bfn += "Roman";
 //				pFont.setBaseFont(bfn, false);
 //			}
-			System.out.println(" ==> font decoded");
+			if (debug) System.out.println(" ==> font decoded");
 			
 			//	store character widths
 			if (dWidth != -1)
@@ -4383,61 +4519,7 @@ dy1 = vy;
 			pFont.hasDescent = ((maxDescent < -150) || (pFont.descent < -0.150));
 			
 			//	measure xHeight and capHeight, vertical scaling and relative vertical shift, and relative changes to ascender and descender
-			int xHeightSum = 0;
-			int xHeightCount = 0;
-			int capHeightSum = 0;
-			int capHeightCount = 0;
-			float relVerticalCenterShiftSum = 0;
-			int relVerticalCenterShiftCount = 0;
-			float scaleLogYSum = 0;
-			int scaleLogYCount = 0;
-			float relXHeightAscenderShiftSum = 0;
-			int relXHeightAscenderShiftCount = 0;
-			float relCapHeightAscenderShiftSum = 0;
-			int relCapHeightAscenderShiftCount = 0;
-			float relDescenderShiftSum = 0;
-			int relDescenderShiftCount = 0;
-			for (int c = 0; c < chars.length; c++) {
-				if (charImages[c] == null)
-					continue;
-				if (bestCims[c] == null)
-					continue;
-				if (bestCims[c] == UNICODE_MAPPING_UNRENDERABLE)
-					continue;
-				if ("aemnru".indexOf(bestCims[c].match.ch) != -1) {
-					xHeightSum += charImages[c].box.getHeight();
-					xHeightCount++;
-				}
-				else if ("ABDEFGHIKLMNPRTUYbdfhkl0123456789".indexOf(bestCims[c].match.ch) != -1) {
-					capHeightSum += charImages[c].box.getHeight();
-					capHeightCount++;
-				}
-				relVerticalCenterShiftSum += bestCims[c].vCenterShift;
-				relVerticalCenterShiftCount++;
-				scaleLogYSum += bestCims[c].scaleLogY;
-				scaleLogYCount++;
-				if ("aegmnqruy".indexOf(bestCims[c].match.ch) != -1) {
-					relXHeightAscenderShiftSum += bestCims[c].relAscenderShift;
-					relXHeightAscenderShiftCount++;
-				}
-				else if ("ABDEFGHKMNPQRTUYbdfhk0123456789".indexOf(bestCims[c].match.ch) != -1) {
-					relCapHeightAscenderShiftSum += bestCims[c].relAscenderShift;
-					relCapHeightAscenderShiftCount++;
-				}
-				if ("gjqy".indexOf(bestCims[c].match.ch) != -1) {
-					relDescenderShiftSum += bestCims[c].relDescenderShift;
-					relDescenderShiftCount++;
-				}
-			}
-			int capHeight = ((capHeightCount == 0) ? 0 : (capHeightSum / capHeightCount));
-			int xHeight = ((xHeightCount == 0) ? 0 : (xHeightSum / xHeightCount));
-			if (debug) System.out.println(" - average cap-height is " + capHeight + ", average x-height is " + xHeight);
-			float relVerticalCenterShift = ((relVerticalCenterShiftCount == 0) ? Float.NaN : (relVerticalCenterShiftSum / relVerticalCenterShiftCount));
-			float scaleLogY = ((scaleLogYCount == 0) ? Float.NaN : (scaleLogYSum / scaleLogYCount));
-			float relXHeightAscenderShift = ((relXHeightAscenderShiftCount == 0) ? Float.NaN : (relXHeightAscenderShiftSum / relXHeightAscenderShiftCount));
-			float relCapHeightAscenderShift = ((relCapHeightAscenderShiftCount == 0) ? Float.NaN : (relCapHeightAscenderShiftSum / relCapHeightAscenderShiftCount));
-			float relDescenderShift = ((relDescenderShiftCount == 0) ? Float.NaN : (relDescenderShiftSum / relDescenderShiftCount));
-			if (debug) System.out.println(" - averages: vertical center shift is " + relVerticalCenterShift + ", Y scale log " + scaleLogY + ", x-height ascender shift is " + relXHeightAscenderShift + ", cap height ascender shift is " + relCapHeightAscenderShift + ", descender shift is " + relDescenderShift);
+			CharMatchFontMetrics cmfm = computeFontMetrics(bestCims);
 			
 			//	rectify small-caps based on above measurements
 			//	TODO test with 'o' in font 'PAPCAD+AdvOT6504bca5.I' of 'Carbayo_et_al-2013-Zoologica_Scripta.pdf'
@@ -4446,34 +4528,47 @@ dy1 = vy;
 			for (int c = 0; c < chars.length; c++) {
 				if (charImages[c] == null)
 					continue;
-				if (!smallCapsChars.contains(new Integer(c)))
-					continue;
-				if (chars[c] == Character.toUpperCase(chars[c]))
-					continue;
 				if (bestCims[c] == null)
 					continue;
 				if (bestCims[c] == UNICODE_MAPPING_UNRENDERABLE)
 					continue;
-				if (chars[c] == bestCims[c].match.ch)
+				if (!smallCapsChars.contains(new Integer(c)))
 					continue;
-//				if (pFontChars.contains(new Character(Character.toUpperCase(chars[c]))))
-//					continue;
-//				if ((xHeight < capHeight) && (Math.abs(charImages[c].box.getHeight() - xHeight) < Math.abs(charImages[c].box.getHeight() - capHeight)))
-//					continue;
+				if (!isSmallCapsMatch(chars[c], ((String) pFont.ucMappings.get(charCodes[c])))) {
+					if (chars[c] == Character.toUpperCase(chars[c]))
+						continue;
+					if (chars[c] == bestCims[c].match.ch)
+						continue;
+				}
+				
+				//	postpone to neighborhood analysis for letters whose glyphs do not differ much in both size and vertical position
+				if ("fiFI".indexOf(chars[c]) != -1)
+					continue;
 				
 				boolean lowerCaseOK = true;
 				if (debug) System.out.println(" - double-checking potential small-caps char " + chars[c]);
 				
+				//	get basic data
+				Integer chc = charCodes[c];
+				
+				//	check mapped Unicode in addition to char, in case we have a ligature
+				String uc = pFont.getUnicode(chc);
+				if ((uc != null) && (uc.length() > 1)) {
+					if (debug) System.out.println("   ==> Unicode maps to " + uc + ", should be OK in lower case");
+					smallCapsChars.remove(new Integer(c));
+					continue;
+				}
+				
 				//	simply correct letters whose glyphs are not scaled versions of one another
-				if ("cijopsuvwxyzCIJOPSUVWXYZ".indexOf(chars[c]) == -1) // this is the letters for which distibguishing case is hard
+				if ("cfijopsuvwxyzCFIJOPSUVWXYZ".indexOf(chars[c]) == -1) // this is the letters for which distibguishing case is hard
 					lowerCaseOK = false;
 				
 				//	fall back to ascender and descender shifts if scaling and vertical shift not available
-				else if (Float.isNaN(scaleLogY) && Float.isNaN(relVerticalCenterShift)) {
+				else if (Float.isNaN(cmfm.uaScaleLogY) && Float.isNaN(cmfm.uaRelVerticalCenterShift)) {
 					
 					//	use relative changes to ascender and descender, comparing match result figures to respective font averages
-					float ascenderShiftDist = Math.abs(bestCims[c].relAscenderShift - relCapHeightAscenderShift);
-					float descenderShiftDist = Math.abs(bestCims[c].relDescenderShift - relDescenderShift);
+					float ascenderShiftDist = Math.abs(bestCims[c].relAscenderShift - cmfm.uaRelCapHeightAscenderShift);
+					float descenderShiftDist = Math.abs(bestCims[c].relDescenderShift - cmfm.uaRelDescenderShift);
 					if (debug) System.out.println("   - relative ascender shift in match is " + ascenderShiftDist + " off average, relative descender shift inmatch is " + descenderShiftDist + " off average");
 					
 					//	this one looks OK
@@ -4530,17 +4625,17 @@ dy1 = vy;
 					if (debug) System.out.println("   - measurements: vertical center shifts are LC: " + lcRelVerticalCenterShift + " / UC: " + ucRelVerticalCenterShift + ", Y scale log LC: " + lcScaleLogY + " / UC: " + ucScaleLogY);
 					
 					//	compare shifts
-					float lcRelVerticalCenterShiftDiff = Math.abs(relVerticalCenterShift - lcRelVerticalCenterShift);
-					float ucRelVerticalCenterShiftDiff = Math.abs(relVerticalCenterShift - ucRelVerticalCenterShift);
-					float lcScaleLogYDiff = Math.abs(scaleLogY - lcScaleLogY);
-					float ucScaleLogYDiff = Math.abs(scaleLogY - ucScaleLogY);
+					float lcRelVerticalCenterShiftDiff = Math.abs(cmfm.uaRelVerticalCenterShift - lcRelVerticalCenterShift);
+					float ucRelVerticalCenterShiftDiff = Math.abs(cmfm.uaRelVerticalCenterShift - ucRelVerticalCenterShift);
+					float lcScaleLogYDiff = Math.abs(cmfm.uaScaleLogY - lcScaleLogY);
+					float ucScaleLogYDiff = Math.abs(cmfm.uaScaleLogY - ucScaleLogY);
 					float lcDiff = 0;
 					float ucDiff = 0;
-					if (!Float.isNaN(relVerticalCenterShift)) {
+					if (!Float.isNaN(cmfm.uaRelVerticalCenterShift)) {
 						lcDiff += lcRelVerticalCenterShiftDiff;
 						ucDiff += ucRelVerticalCenterShiftDiff;
 					}
-					if (!Float.isNaN(scaleLogY)) {
+					if (!Float.isNaN(cmfm.uaScaleLogY)) {
 						lcDiff += lcScaleLogYDiff;
 						ucDiff += ucScaleLogYDiff;
 					}
@@ -4551,8 +4646,81 @@ dy1 = vy;
 						lowerCaseOK = false;
 				}
 				
+				//	this one looks OK by the means at hand
+				if (lowerCaseOK) {
+					pFont.mapUnicode(chc, ("" + Character.toLowerCase(chars[c])));
+					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toLowerCase(chars[c])), charImages[c].img);
+					if (debug) System.out.println("   ==> looks OK in lower case");
+					if (DEBUG_SHOW_SMALL_CAPS_CHAR_MATCHES) PdfCharDecoder.displayCharMatch(bestCims[c], "Small-caps match refused");
+				}
+				
+				//	do actual correction
+				else {
+					pFont.mapUnicode(chc, ("" + Character.toUpperCase(chars[c])));
+					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toUpperCase(chars[c])), charImages[c].img);
+					if (debug) System.out.println("   ==> small-caps corrected " + chc + " to " + Character.toUpperCase(chars[c]));
+					if (DEBUG_SHOW_SMALL_CAPS_CHAR_MATCHES) PdfCharDecoder.displayCharMatch(bestCims[c], "Small-caps match accepted");
+				}
+				
+				//	mark as handled either way
+				smallCapsChars.remove(new Integer(c));
+			}
+			
+			//	run neighborhood analysis for remaining potential small-caps
+			for (int c = 0; c < chars.length; c++) {
+				if (charImages[c] == null)
+					continue;
+				if (bestCims[c] == null)
+					continue;
+				if (bestCims[c] == UNICODE_MAPPING_UNRENDERABLE)
+					continue;
+				if (!smallCapsChars.contains(new Integer(c)))
+					continue;
+				if (!isSmallCapsMatch(chars[c], ((String) pFont.ucMappings.get(charCodes[c])))) {
+					if (chars[c] == Character.toUpperCase(chars[c]))
+						continue;
+					if (chars[c] == bestCims[c].match.ch)
+						continue;
+				}
+				
+				boolean lowerCaseOK = true;
+				if (debug) System.out.println(" - double-checking potential small-caps char " + chars[c]);
+				
 				//	get basic data
 				Integer chc = charCodes[c];
+				
+				//	get usage stats
+				CharUsageStats cus = pFont.getCharUsageStats(chc);
+				int lcScore = 0;
+				int ucScore = 0;
+				if (debug) System.out.println(" - doing neighborhood analysis for potential small-caps char " + chars[c] + " in font " + pFont.name);
+				
+				//	count lower case predecessors as indicators for lower case, and upper case predecessors as weak indicatos for small-caps
+				for (Iterator pit = cus.predecessors.iterator(); pit.hasNext();) {
+					Integer pChc = ((Integer) pit.next());
+					String pch = pFont.getUnicode(pChc.intValue());
+					if (pch == null)
+						continue;
+					if (pch.equals(pch.toUpperCase()))
+						ucScore += 1;
+					else lcScore += 2;
+				}
+				if (debug) System.out.println(" - after predecessors, lower case score is " + lcScore + ", small-caps score is " + ucScore);
+				
+				//	count upper case successors as indicators for small-caps, and lower case successors as weak indicators for lower case
+				for (Iterator sit = cus.successors.iterator(); sit.hasNext();) {
+					Integer sChc = ((Integer) sit.next());
+					String sch = pFont.getUnicode(sChc.intValue());
+					if (sch == null)
+						continue;
+					if (sch.equals(sch.toUpperCase()))
+						ucScore += 2;
+					else lcScore += 1;
+				}
+				if (debug) System.out.println(" - after successors, lower case score is " + lcScore + ", small-caps score is " + ucScore);
+				
+				//	check scores
+				lowerCaseOK = (lcScore > ucScore);
 				
 				//	this one looks OK by the means at hand
 				if (lowerCaseOK) {
@@ -4575,10 +4743,13 @@ dy1 = vy;
 		//	reset chars with known names to mark them for re-evaluation (required with fonts that use arbitrary char names)
 		else {
 			if (debug) System.out.println(" ==> mis-match");
-			for (int c = 0; c < bestCims.length; c++) {
-				if (bestCims[c] != UNICODE_MAPPING_UNRENDERABLE)
-					bestCims[c] = null;
-			}
+			
+			//	cancel out what we have only with OCR enabled
+			if ((charSet != NO_DECODING) && (charSet != RENDER_ONLY))
+				for (int c = 0; c < bestCims.length; c++) {
+					if (bestCims[c] != UNICODE_MAPPING_UNRENDERABLE)
+						bestCims[c] = null;
+				}
 		}
 		
 		//	anything left to decode?
@@ -4635,6 +4806,16 @@ dy1 = vy;
 	}
 	
 	private static final CharImageMatch UNICODE_MAPPING_UNRENDERABLE = new CharImageMatch(null, null, 0, 0, 0, false);
+	
+	private static boolean isSmallCapsMatch(char ch, String ucMapping) {
+		if (ucMapping == null)
+			return false;
+		else if (ucMapping.length() != 1)
+			return false;
+		else if (ucMapping.charAt(0) == ch)
+			return false;
+		else return (ch == Character.toUpperCase(ucMapping.charAt(0)));
+	}
 	
 	private static void checkImplicitSpaces(PdfFont pFont, CharImage[] charImages, char[] chars, Integer[] charCodes, String[] charNames, boolean debug) {
 		
@@ -4906,59 +5087,8 @@ dy1 = vy;
 		}
 		
 		//	compute average of measurements (we need them here for gap cutoff)
-		float uaRelVerticalCenterShiftSum = 0;
-		int uaRelVerticalCenterShiftCount = 0;
-		float uaScaleLogXSum = 0;
-		int uaScaleLogXCount = 0;
-		float uaScaleLogYSum = 0;
-		int uaScaleLogYCount = 0;
-		float uaRelXHeightAscenderShiftSum = 0;
-		int uaRelXHeightAscenderShiftCount = 0;
-		float uaRelCapHeightAscenderShiftSum = 0;
-		int uaRelCapHeightAscenderShiftCount = 0;
-		float uaRelDescenderShiftSum = 0;
-		int uaRelDescenderShiftCount = 0;
-		for (int c = 0; c < chars.length; c++) {
-			if (bestCims[c] == null)
-				continue;
-			if (bestCims[c] == UNICODE_MAPPING_UNRENDERABLE)
-				continue;
-			
-			//	don't count punctuation marks whose relative height and position varies too much across fonts
-			if ("P".equals(PdfCharDecoder.getCharClass(bestCims[c].match.ch))) {
-				if ("%&/;:()[]{}\\?!#".indexOf(bestCims[c].match.ch) == -1)
-					continue;
-			}
-			
-			//	record match properties
-			uaRelVerticalCenterShiftSum += bestCims[c].vCenterShift;
-			uaRelVerticalCenterShiftCount++;
-			uaScaleLogXSum += bestCims[c].scaleLogX;
-			uaScaleLogXCount++;
-			uaScaleLogYSum += bestCims[c].scaleLogY;
-			uaScaleLogYCount++;
-			
-			//	take measurements of x-height, cap height, and relative ascender and descender shift as well
-			if ("aegmnqruy".indexOf(bestCims[c].match.ch) != -1) {
-				uaRelXHeightAscenderShiftSum += bestCims[c].relAscenderShift;
-				uaRelXHeightAscenderShiftCount++;
-			}
-			else if ("ABDEFGHIKLMNPQRTUYbdfhkl0123456789".indexOf(bestCims[c].match.ch) != -1) {
-				uaRelCapHeightAscenderShiftSum += bestCims[c].relAscenderShift;
-				uaRelCapHeightAscenderShiftCount++;
-			}
-			if ("gjqy".indexOf(bestCims[c].match.ch) != -1) {
-				uaRelDescenderShiftSum += bestCims[c].relDescenderShift;
-				uaRelDescenderShiftCount++;
-			}
-		}
-		float uaRelVerticalCenterShift = ((uaRelVerticalCenterShiftCount == 0) ? Float.NaN : (uaRelVerticalCenterShiftSum / uaRelVerticalCenterShiftCount));
-		float uaScaleLogX = ((uaScaleLogXCount == 0) ? Float.NaN : (uaScaleLogXSum / uaScaleLogXCount));
-		float uaScaleLogY = ((uaScaleLogYCount == 0) ? Float.NaN : (uaScaleLogYSum / uaScaleLogYCount));
-		float uaRelXHeightAscenderShift = ((uaRelXHeightAscenderShiftCount == 0) ? Float.NaN : (uaRelXHeightAscenderShiftSum / uaRelXHeightAscenderShiftCount));
-		float uaRelCapHeightAscenderShift = ((uaRelCapHeightAscenderShiftCount == 0) ? Float.NaN : (uaRelCapHeightAscenderShiftSum / uaRelCapHeightAscenderShiftCount));
-		float uaRelDescenderShift = ((uaRelDescenderShiftCount == 0) ? Float.NaN : (uaRelDescenderShiftSum / uaRelDescenderShiftCount));
-		if (debug) System.out.println("Averages: vertical center shift is " + uaRelVerticalCenterShift + ", scale log " + uaScaleLogX + "/" + uaScaleLogY + ", x-height ascender shift is " + uaRelXHeightAscenderShift + ", cap height ascender shift is " + uaRelCapHeightAscenderShift + ", descender shift is " + uaRelDescenderShift);
+		CharMatchFontMetrics cmfm = computeFontMetrics(bestCims);
+		if (debug) System.out.println("Averages: vertical center shift is " + cmfm.uaRelVerticalCenterShift + ", scale log " + cmfm.uaScaleLogX + "/" + cmfm.uaScaleLogY + ", x-height ascender shift is " + cmfm.uaRelXHeightAscenderShift + ", cap height ascender shift is " + cmfm.uaRelCapHeightAscenderShift + ", descender shift is " + cmfm.uaRelDescenderShift);
 		
 		/* cut off at any gap of at least 1 percentage point whose high end is
 		 * less than half from 100% than low end; request scaling and vertical
@@ -4996,17 +5126,17 @@ dy1 = vy;
 				}
 				
 				//	reward glyph size scaling in range of average of unambiguous matches (cut somewhat more slack on horizontal scaling, as narrow characters vary more in that department)
-				if (!Float.isNaN(uaScaleLogX) && (Math.abs(uaScaleLogX - lastCim.scaleLogX) > 0.2)) {
+				if (!Float.isNaN(cmfm.uaScaleLogX) && (Math.abs(cmfm.uaScaleLogX - lastCim.scaleLogX) > 0.2)) {
 					topCimList.add(topCims[c][m]);
 					lastCim = topCims[c][m];
 					continue;
 				}
-				else if (!Float.isNaN(uaScaleLogY) && (Math.abs(uaScaleLogY - lastCim.scaleLogY) > 0.1)) {
+				else if (!Float.isNaN(cmfm.uaScaleLogY) && (Math.abs(cmfm.uaScaleLogY - lastCim.scaleLogY) > 0.1)) {
 					topCimList.add(topCims[c][m]);
 					lastCim = topCims[c][m];
 					continue;
 				}
-				else if (!Float.isNaN(uaRelVerticalCenterShift) && (Math.abs(uaRelVerticalCenterShift - lastCim.vCenterShift) > 0.1)) {
+				else if (!Float.isNaN(cmfm.uaRelVerticalCenterShift) && (Math.abs(cmfm.uaRelVerticalCenterShift - lastCim.vCenterShift) > 0.1)) {
 					topCimList.add(topCims[c][m]);
 					lastCim = topCims[c][m];
 					continue;
@@ -5023,17 +5153,17 @@ dy1 = vy;
 			//	remove matches that are way out of proportion (scale log diff above 1 (factor 2)) or place (vertical shift diff above 1/4)
 			for (int m = 0; m < topCimList.size(); m++) {
 				CharImageMatch cim = ((CharImageMatch) topCimList.get(m));
-				if (!Float.isNaN(uaScaleLogX) && (Math.abs(uaScaleLogX - cim.scaleLogX) > 1)) {
+				if (!Float.isNaN(cmfm.uaScaleLogX) && (Math.abs(cmfm.uaScaleLogX - cim.scaleLogX) > 1)) {
 					topCimList.remove(m--);
 					if (debug) System.out.println(" - removed match (x-scale diff) " + cim.match.ch + " (" + ((int) cim.match.ch) + ") at " + cim.sim + ", shift " + cim.vCenterShift + ", scale " + cim.scaleLogX + "/" + cim.scaleLogY + ", " + PdfCharDecoder.getCharClass(cim.match.ch));
 					continue;
 				}
-				if (!Float.isNaN(uaScaleLogY) && (Math.abs(uaScaleLogY - cim.scaleLogY) > 1)) {
+				if (!Float.isNaN(cmfm.uaScaleLogY) && (Math.abs(cmfm.uaScaleLogY - cim.scaleLogY) > 1)) {
 					topCimList.remove(m--);
 					if (debug) System.out.println(" - removed match (y-scale diff) " + cim.match.ch + " (" + ((int) cim.match.ch) + ") at " + cim.sim + ", shift " + cim.vCenterShift + ", scale " + cim.scaleLogX + "/" + cim.scaleLogY + ", " + PdfCharDecoder.getCharClass(cim.match.ch));
 					continue;
 				}
-				if (!Float.isNaN(uaRelVerticalCenterShift) && (Math.abs(uaRelVerticalCenterShift - cim.vCenterShift) > 0.25)) {
+				if (!Float.isNaN(cmfm.uaRelVerticalCenterShift) && (Math.abs(cmfm.uaRelVerticalCenterShift - cim.vCenterShift) > 0.25)) {
 					topCimList.remove(m--);
 					if (debug) System.out.println(" - removed match (vertical shift) " + cim.match.ch + " (" + ((int) cim.match.ch) + ") at " + cim.sim + ", shift " + cim.vCenterShift + ", scale " + cim.scaleLogX + "/" + cim.scaleLogY + ", " + PdfCharDecoder.getCharClass(cim.match.ch));
 					continue;
@@ -5101,19 +5231,7 @@ dy1 = vy;
 			if (debug) System.out.println("Starting char scoring round " + csr + ", idle since " + idleCsrCount);
 			idleCsrCount++;
 			
-			//	handle unambiguous matches, and compute average of measurements
-			uaRelVerticalCenterShiftSum = 0;
-			uaRelVerticalCenterShiftCount = 0;
-			uaScaleLogXSum = 0;
-			uaScaleLogXCount = 0;
-			uaScaleLogYSum = 0;
-			uaScaleLogYCount = 0;
-			uaRelXHeightAscenderShiftSum = 0;
-			uaRelXHeightAscenderShiftCount = 0;
-			uaRelCapHeightAscenderShiftSum = 0;
-			uaRelCapHeightAscenderShiftCount = 0;
-			uaRelDescenderShiftSum = 0;
-			uaRelDescenderShiftCount = 0;
+			//	handle unambiguous matches
 			int aCharCount = 0;
 			for (int c = 0; c < chars.length; c++) {
 				if (topCims[c] == null)
@@ -5128,46 +5246,15 @@ dy1 = vy;
 				//	store match
 				bestCims[c] = topCims[c][0];
 				assignedChars.add(new Integer((int) topCims[c][0].match.ch));
-				
-				//	don't count punctuation marks whose relative height and position varies too much across fonts
-				if ("P".equals(PdfCharDecoder.getCharClass(bestCims[c].match.ch))) {
-					if ("%&/;:()[]{}\\?!#".indexOf(bestCims[c].match.ch) == -1)
-						continue;
-				}
-				
-				//	record match properties
-				uaRelVerticalCenterShiftSum += bestCims[c].vCenterShift;
-				uaRelVerticalCenterShiftCount++;
-				uaScaleLogXSum += bestCims[c].scaleLogX;
-				uaScaleLogXCount++;
-				uaScaleLogYSum += bestCims[c].scaleLogY;
-				uaScaleLogYCount++;
-				
-				//	take measurements of x-height, cap height, and relative ascender and descender shift as well
-				if ("aegmnqruy".indexOf(bestCims[c].match.ch) != -1) {
-					uaRelXHeightAscenderShiftSum += bestCims[c].relAscenderShift;
-					uaRelXHeightAscenderShiftCount++;
-				}
-				else if ("ABDEFGHIKLMNPQRTUYbdfhkl0123456789".indexOf(bestCims[c].match.ch) != -1) {
-					uaRelCapHeightAscenderShiftSum += bestCims[c].relAscenderShift;
-					uaRelCapHeightAscenderShiftCount++;
-				}
-				if ("gjqy".indexOf(bestCims[c].match.ch) != -1) {
-					uaRelDescenderShiftSum += bestCims[c].relDescenderShift;
-					uaRelDescenderShiftCount++;
-				}
 			}
-			uaRelVerticalCenterShift = ((uaRelVerticalCenterShiftCount == 0) ? Float.NaN : (uaRelVerticalCenterShiftSum / uaRelVerticalCenterShiftCount));
-			uaScaleLogX = ((uaScaleLogXCount == 0) ? Float.NaN : (uaScaleLogXSum / uaScaleLogXCount));
-			uaScaleLogY = ((uaScaleLogYCount == 0) ? Float.NaN : (uaScaleLogYSum / uaScaleLogYCount));
-			uaRelXHeightAscenderShift = ((uaRelXHeightAscenderShiftCount == 0) ? Float.NaN : (uaRelXHeightAscenderShiftSum / uaRelXHeightAscenderShiftCount));
-			uaRelCapHeightAscenderShift = ((uaRelCapHeightAscenderShiftCount == 0) ? Float.NaN : (uaRelCapHeightAscenderShiftSum / uaRelCapHeightAscenderShiftCount));
-			uaRelDescenderShift = ((uaRelDescenderShiftCount == 0) ? Float.NaN : (uaRelDescenderShiftSum / uaRelDescenderShiftCount));
-			if (debug) System.out.println("Averages: vertical center shift is " + uaRelVerticalCenterShift + ", scale log " + uaScaleLogX + "/" + uaScaleLogY + ", x-height ascender shift is " + uaRelXHeightAscenderShift + ", cap height ascender shift is " + uaRelCapHeightAscenderShift + ", descender shift is " + uaRelDescenderShift);
 			
 			//	anything left to work on?
 			if (aCharCount == 0)
 				break;
+			
+			//	re-compute measurements
+			cmfm = computeFontMetrics(bestCims);
+			if (debug) System.out.println("Averages: vertical center shift is " + cmfm.uaRelVerticalCenterShift + ", scale log " + cmfm.uaScaleLogX + "/" + cmfm.uaScaleLogY + ", x-height ascender shift is " + cmfm.uaRelXHeightAscenderShift + ", cap height ascender shift is " + cmfm.uaRelCapHeightAscenderShift + ", descender shift is " + cmfm.uaRelDescenderShift);
 			
 			//	inspect all remaining chars
 			for (int c = 0; c < chars.length; c++) {
@@ -5197,15 +5284,15 @@ dy1 = vy;
 					
 					//	reward glyph size scaling in range of average of unambiguous matches
 					float scaleLogXDiff = 1;
-					if (!Float.isNaN(uaScaleLogX)) {
-						scaleLogXDiff = Math.abs(uaScaleLogX - topCims[c][m].scaleLogX);
+					if (!Float.isNaN(cmfm.uaScaleLogX)) {
+						scaleLogXDiff = Math.abs(cmfm.uaScaleLogX - topCims[c][m].scaleLogX);
 						scaleLogXDiff = Math.max(scaleLogXDiff, 0.2f);
 					}
 					
 					//	also factor in vertical shift (measure difference in relative vertical position of char box, and multiply score by (1 - difference))
 					float relVerticalCenterShiftDiff = 0;
-					if (!Float.isNaN(uaRelVerticalCenterShift))
-						relVerticalCenterShiftDiff = Math.abs(uaRelVerticalCenterShift - topCims[c][m].vCenterShift);
+					if (!Float.isNaN(cmfm.uaRelVerticalCenterShift))
+						relVerticalCenterShiftDiff = Math.abs(cmfm.uaRelVerticalCenterShift - topCims[c][m].vCenterShift);
 					
 					/* do scoring, and make sure to not give all too big an
 					 * advantage to punctuation marks like square brackets over
@@ -5284,7 +5371,7 @@ dy1 = vy;
 				 *   - reward lack of (non-punctuation) successor
 				 *   - penalize lack of predecessor
 				 */
-				//	TODO test with font square brackets in font 'PAPBPP+AdvOT7668bbdf' of 'Carbayo_et_al-2013-Zoologica_Scripta.pdf'
+				//	TODO test with square brackets in font 'PAPBPP+AdvOT7668bbdf' of 'Carbayo_et_al-2013-Zoologica_Scripta.pdf'
 				
 				//	reward likely combinations with predecessors
 				for (Iterator pit = cus.predecessors.iterator(); pit.hasNext();) {
@@ -5310,20 +5397,20 @@ dy1 = vy;
 						
 						//	reward glyph size scaling in range of average of unambiguous matches
 						float scaleLogXDiff = 1;
-						if (!Float.isNaN(uaScaleLogX)) {
-							scaleLogXDiff = Math.abs(uaScaleLogX - topCims[c][m].scaleLogX);
+						if (!Float.isNaN(cmfm.uaScaleLogX)) {
+							scaleLogXDiff = Math.abs(cmfm.uaScaleLogX - topCims[c][m].scaleLogX);
 							scaleLogXDiff = Math.max(scaleLogXDiff, 0.2f);
 						}
 						float scaleLogYDiff = 1;
-						if (!Float.isNaN(uaScaleLogY)) {
-							scaleLogYDiff = Math.abs(uaScaleLogY - topCims[c][m].scaleLogY);
+						if (!Float.isNaN(cmfm.uaScaleLogY)) {
+							scaleLogYDiff = Math.abs(cmfm.uaScaleLogY - topCims[c][m].scaleLogY);
 							scaleLogYDiff = Math.max(scaleLogYDiff, 0.2f);
 						}
 						
 						//	also factor in vertical shift (measure difference in relative vertical position of char box, and multiply score by (1 - difference))
 						float relVerticalCenterShiftDiff = 0;
-						if (!Float.isNaN(uaRelVerticalCenterShift))
-							relVerticalCenterShiftDiff = Math.abs(uaRelVerticalCenterShift - topCims[c][m].vCenterShift);
+						if (!Float.isNaN(cmfm.uaRelVerticalCenterShift))
+							relVerticalCenterShiftDiff = Math.abs(cmfm.uaRelVerticalCenterShift - topCims[c][m].vCenterShift);
 						
 //						if (debug) System.out.println("     - scale log diffs are " + scaleLogXDiff + "/" + scaleLogYDiff + ", center shift diff is " + relVerticalCenterShiftDiff);
 						
@@ -5375,20 +5462,20 @@ dy1 = vy;
 						
 						//	reward glyph size scaling in range of average of unambiguous matches
 						float scaleLogXDiff = 1;
-						if (!Float.isNaN(uaScaleLogX)) {
-							scaleLogXDiff = Math.abs(uaScaleLogX - topCims[c][m].scaleLogX);
+						if (!Float.isNaN(cmfm.uaScaleLogX)) {
+							scaleLogXDiff = Math.abs(cmfm.uaScaleLogX - topCims[c][m].scaleLogX);
 							scaleLogXDiff = Math.max(scaleLogXDiff, 0.2f);
 						}
 						float scaleLogYDiff = 1;
-						if (!Float.isNaN(uaScaleLogY)) {
-							scaleLogYDiff = Math.abs(uaScaleLogY - topCims[c][m].scaleLogY);
+						if (!Float.isNaN(cmfm.uaScaleLogY)) {
+							scaleLogYDiff = Math.abs(cmfm.uaScaleLogY - topCims[c][m].scaleLogY);
 							scaleLogYDiff = Math.max(scaleLogYDiff, 0.2f);
 						}
 						
 						//	also factor in vertical shift (measure difference in relative vertical position of char box, and multiply score by (1 - difference))
 						float relVerticalCenterShiftDiff = 0;
-						if (!Float.isNaN(uaRelVerticalCenterShift))
-							relVerticalCenterShiftDiff = Math.abs(uaRelVerticalCenterShift - topCims[c][m].vCenterShift);
+						if (!Float.isNaN(cmfm.uaRelVerticalCenterShift))
+							relVerticalCenterShiftDiff = Math.abs(cmfm.uaRelVerticalCenterShift - topCims[c][m].vCenterShift);
 						
 //						if (debug) System.out.println("     - scale log diffs are " + scaleLogXDiff + "/" + scaleLogYDiff + ", center shift diff is " + relVerticalCenterShiftDiff);
 						
@@ -5443,20 +5530,20 @@ dy1 = vy;
 							
 							//	reward glyph size scaling in range of average of unambiguous matches
 							float scaleLogXDiff = 1;
-							if (!Float.isNaN(uaScaleLogX)) {
-								scaleLogXDiff = Math.abs(uaScaleLogX - topCims[c][m].scaleLogX);
+							if (!Float.isNaN(cmfm.uaScaleLogX)) {
+								scaleLogXDiff = Math.abs(cmfm.uaScaleLogX - topCims[c][m].scaleLogX);
 								scaleLogXDiff = Math.max(scaleLogXDiff, 0.2f);
 							}
 							float scaleLogYDiff = 1;
-							if (!Float.isNaN(uaScaleLogY)) {
-								scaleLogYDiff = Math.abs(uaScaleLogY - topCims[c][m].scaleLogY);
+							if (!Float.isNaN(cmfm.uaScaleLogY)) {
+								scaleLogYDiff = Math.abs(cmfm.uaScaleLogY - topCims[c][m].scaleLogY);
 								scaleLogYDiff = Math.max(scaleLogYDiff, 0.2f);
 							}
 							
 							//	also factor in vertical shift (measure difference in relative vertical position of char box, and multiply score by (1 - difference))
 							float relVerticalCenterShiftDiff = 0;
-							if (!Float.isNaN(uaRelVerticalCenterShift))
-								relVerticalCenterShiftDiff = Math.abs(uaRelVerticalCenterShift - topCims[c][m].vCenterShift);
+							if (!Float.isNaN(cmfm.uaRelVerticalCenterShift))
+								relVerticalCenterShiftDiff = Math.abs(cmfm.uaRelVerticalCenterShift - topCims[c][m].vCenterShift);
 							
 //							if (debug) System.out.println("     - scale log diffs are " + scaleLogXDiff + "/" + scaleLogYDiff + ", center shift diff is " + relVerticalCenterShiftDiff);
 							
@@ -5495,20 +5582,20 @@ dy1 = vy;
 							
 							//	reward glyph size scaling in range of average of unambiguous matches
 							float scaleLogXDiff = 1;
-							if (!Float.isNaN(uaScaleLogX)) {
-								scaleLogXDiff = Math.abs(uaScaleLogX - topCims[c][m].scaleLogX);
+							if (!Float.isNaN(cmfm.uaScaleLogX)) {
+								scaleLogXDiff = Math.abs(cmfm.uaScaleLogX - topCims[c][m].scaleLogX);
 								scaleLogXDiff = Math.max(scaleLogXDiff, 0.2f);
 							}
 							float scaleLogYDiff = 1;
-							if (!Float.isNaN(uaScaleLogY)) {
-								scaleLogYDiff = Math.abs(uaScaleLogY - topCims[c][m].scaleLogY);
+							if (!Float.isNaN(cmfm.uaScaleLogY)) {
+								scaleLogYDiff = Math.abs(cmfm.uaScaleLogY - topCims[c][m].scaleLogY);
 								scaleLogYDiff = Math.max(scaleLogYDiff, 0.2f);
 							}
 							
 							//	also factor in vertical shift (measure difference in relative vertical position of char box, and multiply score by (1 - difference))
 							float relVerticalCenterShiftDiff = 0;
-							if (!Float.isNaN(uaRelVerticalCenterShift))
-								relVerticalCenterShiftDiff = Math.abs(uaRelVerticalCenterShift - topCims[c][m].vCenterShift);
+							if (!Float.isNaN(cmfm.uaRelVerticalCenterShift))
+								relVerticalCenterShiftDiff = Math.abs(cmfm.uaRelVerticalCenterShift - topCims[c][m].vCenterShift);
 							
 //							if (debug) System.out.println("     - scale log diffs are " + scaleLogXDiff + "/" + scaleLogYDiff + ", center shift diff is " + relVerticalCenterShiftDiff);
 							
@@ -5560,20 +5647,20 @@ dy1 = vy;
 							
 							//	reward glyph size scaling in range of average of unambiguous matches
 							float scaleLogXDiff = 1;
-							if (!Float.isNaN(uaScaleLogX)) {
-								scaleLogXDiff = Math.abs(uaScaleLogX - topCims[c][m].scaleLogX);
+							if (!Float.isNaN(cmfm.uaScaleLogX)) {
+								scaleLogXDiff = Math.abs(cmfm.uaScaleLogX - topCims[c][m].scaleLogX);
 								scaleLogXDiff = Math.max(scaleLogXDiff, 0.2f);
 							}
 							float scaleLogYDiff = 1;
-							if (!Float.isNaN(uaScaleLogY)) {
-								scaleLogYDiff = Math.abs(uaScaleLogY - topCims[c][m].scaleLogY);
+							if (!Float.isNaN(cmfm.uaScaleLogY)) {
+								scaleLogYDiff = Math.abs(cmfm.uaScaleLogY - topCims[c][m].scaleLogY);
 								scaleLogYDiff = Math.max(scaleLogYDiff, 0.2f);
 							}
 							
 							//	also factor in vertical shift (measure difference in relative vertical position of char box, and multiply score by (1 - difference))
 							float relVerticalCenterShiftDiff = 0;
-							if (!Float.isNaN(uaRelVerticalCenterShift))
-								relVerticalCenterShiftDiff = Math.abs(uaRelVerticalCenterShift - topCims[c][m].vCenterShift);
+							if (!Float.isNaN(cmfm.uaRelVerticalCenterShift))
+								relVerticalCenterShiftDiff = Math.abs(cmfm.uaRelVerticalCenterShift - topCims[c][m].vCenterShift);
 							
 //							if (debug) System.out.println("     - scale log diffs are " + scaleLogXDiff + "/" + scaleLogYDiff + ", center shift diff is " + relVerticalCenterShiftDiff);
 							
@@ -5612,20 +5699,20 @@ dy1 = vy;
 							
 							//	reward glyph size scaling in range of average of unambiguous matches
 							float scaleLogXDiff = 1;
-							if (!Float.isNaN(uaScaleLogX)) {
-								scaleLogXDiff = Math.abs(uaScaleLogX - topCims[c][m].scaleLogX);
+							if (!Float.isNaN(cmfm.uaScaleLogX)) {
+								scaleLogXDiff = Math.abs(cmfm.uaScaleLogX - topCims[c][m].scaleLogX);
 								scaleLogXDiff = Math.max(scaleLogXDiff, 0.2f);
 							}
 							float scaleLogYDiff = 1;
-							if (!Float.isNaN(uaScaleLogY)) {
-								scaleLogYDiff = Math.abs(uaScaleLogY - topCims[c][m].scaleLogY);
+							if (!Float.isNaN(cmfm.uaScaleLogY)) {
+								scaleLogYDiff = Math.abs(cmfm.uaScaleLogY - topCims[c][m].scaleLogY);
 								scaleLogYDiff = Math.max(scaleLogYDiff, 0.2f);
 							}
 							
 							//	also factor in vertical shift (measure difference in relative vertical position of char box, and multiply score by (1 - difference))
 							float relVerticalCenterShiftDiff = 0;
-							if (!Float.isNaN(uaRelVerticalCenterShift))
-								relVerticalCenterShiftDiff = Math.abs(uaRelVerticalCenterShift - topCims[c][m].vCenterShift);
+							if (!Float.isNaN(cmfm.uaRelVerticalCenterShift))
+								relVerticalCenterShiftDiff = Math.abs(cmfm.uaRelVerticalCenterShift - topCims[c][m].vCenterShift);
 							
 //							if (debug) System.out.println("     - scale log diffs are " + scaleLogXDiff + "/" + scaleLogYDiff + ", center shift diff is " + relVerticalCenterShiftDiff);
 							
@@ -5843,59 +5930,8 @@ dy1 = vy;
 		 */
 		
 		//	handle unambiguous matches, and compute average of measurements
-		uaRelVerticalCenterShiftSum = 0;
-		uaRelVerticalCenterShiftCount = 0;
-		uaScaleLogXSum = 0;
-		uaScaleLogXCount = 0;
-		uaScaleLogYSum = 0;
-		uaScaleLogYCount = 0;
-		uaRelXHeightAscenderShiftSum = 0;
-		uaRelXHeightAscenderShiftCount = 0;
-		uaRelCapHeightAscenderShiftSum = 0;
-		uaRelCapHeightAscenderShiftCount = 0;
-		uaRelDescenderShiftSum = 0;
-		uaRelDescenderShiftCount = 0;
-		for (int c = 0; c < chars.length; c++) {
-			if (bestCims[c] == null)
-				continue;
-			if (bestCims[c] == UNICODE_MAPPING_UNRENDERABLE)
-				continue;
-			
-			//	don't count punctuation marks whose relative height and position varies too much across fonts
-			if ("P".equals(PdfCharDecoder.getCharClass(bestCims[c].match.ch))) {
-				if ("%&/;:()[]{}\\?!#".indexOf(bestCims[c].match.ch) == -1)
-					continue;
-			}
-			
-			//	record match properties
-			uaRelVerticalCenterShiftSum += bestCims[c].vCenterShift;
-			uaRelVerticalCenterShiftCount++;
-			uaScaleLogXSum += bestCims[c].scaleLogX;
-			uaScaleLogXCount++;
-			uaScaleLogYSum += bestCims[c].scaleLogY;
-			uaScaleLogYCount++;
-			
-			//	take measurements of x-height, cap height, and relative ascender and descender shift as well
-			if ("aegmnqruy".indexOf(bestCims[c].match.ch) != -1) {
-				uaRelXHeightAscenderShiftSum += bestCims[c].relAscenderShift;
-				uaRelXHeightAscenderShiftCount++;
-			}
-			else if ("ABDEFGHIKLMNPQRTUYbdfhkl0123456789".indexOf(bestCims[c].match.ch) != -1) {
-				uaRelCapHeightAscenderShiftSum += bestCims[c].relAscenderShift;
-				uaRelCapHeightAscenderShiftCount++;
-			}
-			if ("gjqy".indexOf(bestCims[c].match.ch) != -1) {
-				uaRelDescenderShiftSum += bestCims[c].relDescenderShift;
-				uaRelDescenderShiftCount++;
-			}
-		}
-		uaRelVerticalCenterShift = ((uaRelVerticalCenterShiftCount == 0) ? Float.NaN : (uaRelVerticalCenterShiftSum / uaRelVerticalCenterShiftCount));
-		uaScaleLogX = ((uaScaleLogXCount == 0) ? Float.NaN : (uaScaleLogXSum / uaScaleLogXCount));
-		uaScaleLogY = ((uaScaleLogYCount == 0) ? Float.NaN : (uaScaleLogYSum / uaScaleLogYCount));
-		uaRelXHeightAscenderShift = ((uaRelXHeightAscenderShiftCount == 0) ? Float.NaN : (uaRelXHeightAscenderShiftSum / uaRelXHeightAscenderShiftCount));
-		uaRelCapHeightAscenderShift = ((uaRelCapHeightAscenderShiftCount == 0) ? Float.NaN : (uaRelCapHeightAscenderShiftSum / uaRelCapHeightAscenderShiftCount));
-		uaRelDescenderShift = ((uaRelDescenderShiftCount == 0) ? Float.NaN : (uaRelDescenderShiftSum / uaRelDescenderShiftCount));
-		if (debug) System.out.println("Averages: vertical center shift is " + uaRelVerticalCenterShift + ", scale log " + uaScaleLogX + "/" + uaScaleLogY + ", x-height ascender shift is " + uaRelXHeightAscenderShift + ", cap height ascender shift is " + uaRelCapHeightAscenderShift + ", descender shift is " + uaRelDescenderShift);
+		cmfm = computeFontMetrics(bestCims);
+		if (debug) System.out.println("Averages: vertical center shift is " + cmfm.uaRelVerticalCenterShift + ", scale log " + cmfm.uaScaleLogX + "/" + cmfm.uaScaleLogY + ", x-height ascender shift is " + cmfm.uaRelXHeightAscenderShift + ", cap height ascender shift is " + cmfm.uaRelCapHeightAscenderShift + ", descender shift is " + cmfm.uaRelDescenderShift);
 		
 		//	count out classes of decoded characters
 		CountingSet charClassCounts = new CountingSet(new HashMap());
@@ -5930,20 +5966,20 @@ dy1 = vy;
 				
 				//	reward glyph size scaling in range of average of unambiguous matches
 				float scaleLogXDiff = 1;
-				if (!Float.isNaN(uaScaleLogX)) {
-					scaleLogXDiff = Math.abs(uaScaleLogX - topCims[c][m].scaleLogX);
+				if (!Float.isNaN(cmfm.uaScaleLogX)) {
+					scaleLogXDiff = Math.abs(cmfm.uaScaleLogX - topCims[c][m].scaleLogX);
 					scaleLogXDiff = Math.max(scaleLogXDiff, 0.2f);
 				}
 				float scaleLogYDiff = 1;
-				if (!Float.isNaN(uaScaleLogY)) {
-					scaleLogYDiff = Math.abs(uaScaleLogY - topCims[c][m].scaleLogY);
+				if (!Float.isNaN(cmfm.uaScaleLogY)) {
+					scaleLogYDiff = Math.abs(cmfm.uaScaleLogY - topCims[c][m].scaleLogY);
 					scaleLogYDiff = Math.max(scaleLogYDiff, 0.2f);
 				}
 				
 				//	also factor in vertical shift (measure difference in relative vertical position of char box, and multiply score by (1 - difference))
 				float relVerticalCenterShiftDiff = 0;
-				if (!Float.isNaN(uaRelVerticalCenterShift))
-					relVerticalCenterShiftDiff = Math.abs(uaRelVerticalCenterShift - topCims[c][m].vCenterShift);
+				if (!Float.isNaN(cmfm.uaRelVerticalCenterShift))
+					relVerticalCenterShiftDiff = Math.abs(cmfm.uaRelVerticalCenterShift - topCims[c][m].vCenterShift);
 				
 				//	compute overall similarity, including scaling and vertical shift
 				float sim = topCims[c][m].sim;
@@ -6101,6 +6137,100 @@ dy1 = vy;
 		
 		//	compute score
 		return (scoreFactor * charSim2 * charSim1);
+	}
+	
+	private static CharMatchFontMetrics computeFontMetrics(CharImageMatch[] bestCims) {
+		float xHeightSum = 0;
+		int xHeightCount = 0;
+		float capHeightSum = 0;
+		int capHeightCount = 0;
+		float uaRelVerticalCenterShiftSum = 0;
+		int uaRelVerticalCenterShiftCount = 0;
+		float uaScaleLogXSum = 0;
+		int uaScaleLogXCount = 0;
+		float uaScaleLogYSum = 0;
+		int uaScaleLogYCount = 0;
+		float uaRelXHeightAscenderShiftSum = 0;
+		int uaRelXHeightAscenderShiftCount = 0;
+		float uaRelCapHeightAscenderShiftSum = 0;
+		int uaRelCapHeightAscenderShiftCount = 0;
+		float uaRelDescenderShiftSum = 0;
+		int uaRelDescenderShiftCount = 0;
+		for (int c = 0; c < bestCims.length; c++) {
+			if (bestCims[c] == null)
+				continue;
+			if (bestCims[c] == UNICODE_MAPPING_UNRENDERABLE)
+				continue;
+			
+			//	don't count punctuation marks whose relative height and position varies too much across fonts
+			if ("P".equals(PdfCharDecoder.getCharClass(bestCims[c].match.ch))) {
+				if ("%&/;:()[]{}\\?!#".indexOf(bestCims[c].match.ch) == -1)
+					continue;
+			}
+			
+			//	take measurements of avearge x-height and cap height
+			if ("aemnru".indexOf(bestCims[c].match.ch) != -1) {
+				xHeightSum += bestCims[c].charImage.box.getHeight();
+				xHeightCount++;
+			}
+			else if ("ABDEFGHIKLMNPRTUYbdfhkl0123456789".indexOf(bestCims[c].match.ch) != -1) {
+				capHeightSum += bestCims[c].charImage.box.getHeight();
+				capHeightCount++;
+			}
+			
+			//	record match properties
+			uaRelVerticalCenterShiftSum += bestCims[c].vCenterShift;
+			uaRelVerticalCenterShiftCount++;
+			uaScaleLogXSum += bestCims[c].scaleLogX;
+			uaScaleLogXCount++;
+			uaScaleLogYSum += bestCims[c].scaleLogY;
+			uaScaleLogYCount++;
+			
+			//	take measurements of x-height, cap height, and relative ascender and descender shift as well
+			if ("aegmnqruy".indexOf(bestCims[c].match.ch) != -1) {
+				uaRelXHeightAscenderShiftSum += bestCims[c].relAscenderShift;
+				uaRelXHeightAscenderShiftCount++;
+			}
+			else if ("ABDEFGHIKLMNPQRTUYbdfhkl0123456789".indexOf(bestCims[c].match.ch) != -1) {
+				uaRelCapHeightAscenderShiftSum += bestCims[c].relAscenderShift;
+				uaRelCapHeightAscenderShiftCount++;
+			}
+			if ("gjqy".indexOf(bestCims[c].match.ch) != -1) {
+				uaRelDescenderShiftSum += bestCims[c].relDescenderShift;
+				uaRelDescenderShiftCount++;
+			}
+		}
+		return new CharMatchFontMetrics(
+			((xHeightCount == 0) ? 0 : (xHeightSum / xHeightCount)),
+			((capHeightCount == 0) ? 0 : (capHeightSum / capHeightCount)),
+			((uaRelVerticalCenterShiftCount == 0) ? Float.NaN : (uaRelVerticalCenterShiftSum / uaRelVerticalCenterShiftCount)),
+			((uaScaleLogXCount == 0) ? Float.NaN : (uaScaleLogXSum / uaScaleLogXCount)),
+			((uaScaleLogYCount == 0) ? Float.NaN : (uaScaleLogYSum / uaScaleLogYCount)),
+			((uaRelXHeightAscenderShiftCount == 0) ? Float.NaN : (uaRelXHeightAscenderShiftSum / uaRelXHeightAscenderShiftCount)),
+			((uaRelCapHeightAscenderShiftCount == 0) ? Float.NaN : (uaRelCapHeightAscenderShiftSum / uaRelCapHeightAscenderShiftCount)),
+			((uaRelDescenderShiftCount == 0) ? Float.NaN : (uaRelDescenderShiftSum / uaRelDescenderShiftCount))
+		);
+	}
+	
+	private static class CharMatchFontMetrics {
+		final float uaXHeight;
+		final float uaCapHeight;
+		final float uaRelVerticalCenterShift;
+		final float uaScaleLogX;
+		final float uaScaleLogY;
+		final float uaRelXHeightAscenderShift;
+		final float uaRelCapHeightAscenderShift;
+		final float uaRelDescenderShift;
+		CharMatchFontMetrics(float uaXHeight, float uaCapHeight, float uaRelVerticalCenterShift, float uaScaleLogX, float uaScaleLogY, float uaRelXHeightAscenderShift, float uaRelCapHeightAscenderShift, float uaRelDescenderShift) {
+			this.uaXHeight = uaXHeight;
+			this.uaCapHeight = uaCapHeight;
+			this.uaRelVerticalCenterShift = uaRelVerticalCenterShift;
+			this.uaScaleLogX = uaScaleLogX;
+			this.uaScaleLogY = uaScaleLogY;
+			this.uaRelXHeightAscenderShift = uaRelXHeightAscenderShift;
+			this.uaRelCapHeightAscenderShift = uaRelCapHeightAscenderShift;
+			this.uaRelDescenderShift = uaRelDescenderShift;
+		}
 	}
 	
 	private static HashMap sidResolver = new HashMap();
@@ -6762,6 +6892,16 @@ dy1 = vy;
 //			+ StringUtils.getCharForName("braceright")
 		);
 	
+	/* 
+	 * Multi-character Unicode mappings of somewhat frequent custom ligatures
+	 * that lack a single character representation in Unicode and are not valid
+	 * PostScript character names, either.
+	 */
+	private static final Set customLigatures = Collections.synchronizedSet(new HashSet());
+	static {
+		customLigatures.add("Th");
+	}
+	
 	/*
 	 * chars (mostly actually char modifiers, safe for a few punctuation marks,
 	 * and ligatures) that vary too widely across fonts to prevent a font match;
@@ -6770,7 +6910,7 @@ dy1 = vy;
 	 * case) in some italics font faces and thus won't match comparison; in
 	 * addition, capital A also varies too much in italic angle, and the
 	 * descending tails of capital J and Q and lower case Y and Z exhibit
-	 * extreme variability as well
+	 * extreme variability as well,
 	 */
 	private static final String minIgnoreChars = ("%@?*&/" + diacriticMarkerChars + fractionChars + bracketChars + '\uFB00' + '\uFB01' + '\uFB02' + '\uFB03' + '\uFB04' + '0' + 'A' + 'J' + 'O' + 'Q' + 'V' + 'W' + 'k' + 'v' + 'w' + 'y' + 'z' + '\u00F8' + '\u00BC' + '\u00BD' + '\u2153'); 
 //	private static final int highestPossiblePunctuationMark = 9842; // corresponds to 2672 in Unicode, the end of the Misc Symbols range (we need this for 'male' and 'female' ...)

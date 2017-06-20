@@ -64,11 +64,13 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.Map;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
@@ -96,6 +98,7 @@ import javax.swing.event.ChangeListener;
 import javax.swing.event.PopupMenuEvent;
 import javax.swing.event.PopupMenuListener;
 
+import de.uka.ipd.idaho.gamta.AttributeUtils;
 import de.uka.ipd.idaho.gamta.Attributed;
 import de.uka.ipd.idaho.gamta.Gamta;
 import de.uka.ipd.idaho.gamta.TokenSequence;
@@ -174,8 +177,29 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	private TreeMap textStreamTypeColors = new TreeMap();
 	
 	private int textStringPercentage = 0;
-	private Color textStringBackground = new Color(Color.WHITE.getRed(), Color.WHITE.getGreen(), Color.WHITE.getBlue(), ((this.textStringPercentage * 255) / 100));
-	private Color textStringForeground = new Color(Color.BLACK.getRed(), Color.BLACK.getGreen(), Color.BLACK.getBlue(), ((this.textStringPercentage * 255) / 100));
+	private Color ocrTextStringBackground = new Color(Color.WHITE.getRed(), Color.WHITE.getGreen(), Color.WHITE.getBlue(), ((this.textStringPercentage * 255) / 100));
+	private Color ocrTextStringForeground = new Color(Color.BLACK.getRed(), Color.BLACK.getGreen(), Color.BLACK.getBlue(), ((this.textStringPercentage * 255) / 100));
+	private IndexColorModel ocrTextStringColorModel = createTextStringColorModel(this.ocrTextStringBackground, this.ocrTextStringForeground);
+	
+	private static Color bdBlackTextStringBackground = new Color(Color.WHITE.getRed(), Color.WHITE.getGreen(), Color.WHITE.getBlue(), 0);
+	private static Color bdBlackTextStringForeground = new Color(Color.BLACK.getRed(), Color.BLACK.getGreen(), Color.BLACK.getBlue(), 255);
+	private static IndexColorModel bdBlackTextStringColorModel = createTextStringColorModel(bdBlackTextStringBackground, bdBlackTextStringForeground);
+	
+	private static Color bdWhiteTextStringBackground = new Color(Color.WHITE.getRed(), Color.WHITE.getGreen(), Color.WHITE.getBlue(), 0);
+	private static Color bdWhiteTextStringForeground = new Color(Color.WHITE.getRed(), Color.WHITE.getGreen(), Color.WHITE.getBlue(), 255);
+	private static IndexColorModel bdWhiteTextStringColorModel = createTextStringColorModel(bdWhiteTextStringBackground, bdWhiteTextStringForeground);
+	
+	//	font preference switch, mainly for testing Liberation Fonts against default system fonts
+	private static final boolean USE_FREE_FONTS = true;
+	
+	/* make sure we have the fonts we need */
+	static {
+		if (USE_FREE_FONTS)
+			ImFontUtils.loadFreeFonts();
+	}
+	
+	private static Font serifFont = new Font((USE_FREE_FONTS ? "FreeSerif" : "Serif"), Font.PLAIN, 1);
+	private static Font sansFont = new Font((USE_FREE_FONTS ? "FreeSans" : "SansSerif"), Font.PLAIN, 1);
 	
 	private HashSet paintedLayoutObjectTypes = new HashSet();
 	private TreeMap layoutObjectColors = new TreeMap();
@@ -184,12 +208,11 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	private TreeMap annotationColors = new TreeMap();
 	private int annotationHighlightMargin = 2;
 	
-	private Color selectionHighlightColor = Color.GREEN;
+	private Color selectionHighlightColor = new Color(Color.GREEN.getRed(), Color.GREEN.getGreen(), Color.GREEN.getBlue(), 128);
 	private Color selectionBoxColor = Color.RED;
 	private int selectionBoxThickness = 3;
 	
-	private IndexColorModel textStringColorModel = createTextStringColorModel(this.textStringBackground, this.textStringForeground);
-	private final IndexColorModel pageImageColorModel = createPageImageColorModel();
+	private static final IndexColorModel pageImageColorModel = createPageImageColorModel();
 	
 	private ImWord selectionStartWord = null;
 	private ImWord selectionEndWord = null;
@@ -1063,7 +1086,6 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 * @param visiblePageIDs an array holding the IDs of the pages to set visible
 	 */
 	public void setVisiblePages(int[] visiblePageIDs) {
-		//	TODO track references and see if page IDs used as arguments
 //		System.out.println("Setting visible pages to " + Arrays.toString(visiblePageIDs));
 		HashSet visiblePageIdSet = new HashSet();
 		for (int i = 0; i < visiblePageIDs.length; i++)
@@ -1701,7 +1723,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		this.textStringPercentage = textStringPercentage;
 		
 		//	limit background opacity to 80%, so to not completely obfuscate word selection highlighting
-		this.textStringBackground = new Color(Color.WHITE.getRed(), Color.WHITE.getGreen(), Color.WHITE.getBlue(), ((this.textStringPercentage * 255) / 125));
+		this.ocrTextStringBackground = new Color(Color.WHITE.getRed(), Color.WHITE.getGreen(), Color.WHITE.getBlue(), ((this.textStringPercentage * 255) / 125));
 		
 		//	compute text string opacity
 		int tsfRed;
@@ -1719,10 +1741,10 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			tsfGreen = 0;//((200 * (100 - this.textStringPercentage)) / (100 - 60));
 			tsfBlue = 0;
 		}
-		this.textStringForeground = new Color(tsfRed, tsfGreen, tsfBlue, ((this.textStringPercentage * 255) / 100));
+		this.ocrTextStringForeground = new Color(tsfRed, tsfGreen, tsfBlue, ((this.textStringPercentage * 255) / 100));
 		
 		//	create color model
-		this.textStringColorModel = createTextStringColorModel(this.textStringBackground, this.textStringForeground);
+		this.ocrTextStringColorModel = createTextStringColorModel(this.ocrTextStringBackground, this.ocrTextStringForeground);
 		
 		//	update display only if visible
 		if (this.isVisible()) {
@@ -1766,6 +1788,17 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			comps[3][c] = ((byte) (rgba & 0xff));
 		}
 		return comps;
+	}
+	
+	private static Map fontCache = Collections.synchronizedMap(new HashMap(5));
+	private static Font getTextStringFont(String name, int style, boolean serif, int size) {
+		String fontKey = (style + " " + (serif ? "serif" : "sans") + " " + size);
+		Font font = ((Font) fontCache.get(fontKey));
+		if (font != null)
+			return font;
+		font = (serif ? serifFont : sansFont).deriveFont(style, size);
+		fontCache.put(fontKey, font);
+		return font;
 	}
 	
 	/**
@@ -2460,6 +2493,7 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 			}
 			else {
 				System.out.println("Retaining word '" + ePageWords[w].getString() + "' at " + ePageWords[w].bounds.toString());
+				AttributeUtils.copyAttributes(ePageWords[w], pageWord, AttributeUtils.ADD_ATTRIBUTE_COPY_MODE);
 				ePageWords[w] = null;
 			}
 		}
@@ -2492,6 +2526,22 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 		//	remove regions that are empty now, and shrink others
 		ImRegion[] regions = ipmp.page.getRegions();
 		for (int r = 0; r < regions.length; r++) {
+			
+			//	leave image and graphics regions alone
+			if (ImRegion.IMAGE_TYPE.equals(regions[r].getType()) || ImRegion.GRAPHICS_TYPE.equals(regions[r].getType()))
+				continue;
+			
+			//	test if region contains image or graphics
+			boolean containsImageOrGraphics = false;
+			for (int cr = (r+1); cr < regions.length; cr++)
+				if (ImRegion.IMAGE_TYPE.equals(regions[r].getType()) || ImRegion.GRAPHICS_TYPE.equals(regions[r].getType())) {
+					containsImageOrGraphics = true;
+					continue;
+				}
+			if (containsImageOrGraphics)
+				continue;
+			
+			//	shrink other regions to words
 			ImWord[] regionWords = regions[r].getWords();
 			if (regionWords.length == 0)
 				ipmp.page.removeRegion(regions[r]);
@@ -2957,7 +3007,7 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 			return new Dimension((Math.round(((float) (this.pageWidth * renderingDpi)) / this.pageImageDpi) + (fixPageMargin * 2)), (Math.round(((float) (this.pageHeight * renderingDpi)) / this.pageImageDpi) + (fixPageMargin * 2)));
 		}
 		
-		private TextStringImage[] getTextStringImages() {
+		private TextStringImage[] getTextStringImagesOCR() {
 			if (this.textStringImages != null)
 				return this.textStringImages;
 			
@@ -2997,6 +3047,7 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 					TextStringImage tsi = new TextStringImage(tsiLeft, tsiTop, tsiWidth, tsiHeight);
 					tsiList.add(tsi);
 					Graphics2D tsig = tsi.createGraphics();
+					tsig.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 					
 					//	anything to render for this one?
 					String imwString = imw.getString();
@@ -3004,7 +3055,7 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 						continue;
 					
 					//	initialize font
-					tsig.setColor(textStringForeground);
+					tsig.setColor(ocrTextStringForeground);
 					int fontStyle = Font.PLAIN;
 					if (imw.hasAttribute(BOLD_ATTRIBUTE))
 						fontStyle = (fontStyle | Font.BOLD);
@@ -3018,7 +3069,7 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 					int imwBaseline = -1;
 					if (!documentBornDigital) {
 						if ((imwBaseline == -1) && imw.hasAttribute(BASELINE_ATTRIBUTE))
-							imwBaseline = Integer.parseInt((String) line.getAttribute(BASELINE_ATTRIBUTE, "-1"));
+							imwBaseline = Integer.parseInt((String) imw.getAttribute(BASELINE_ATTRIBUTE, "-1"));
 						if ((imwBaseline == -1) && (line != null) && line.hasAttribute(BASELINE_ATTRIBUTE))
 							imwBaseline = Integer.parseInt((String) line.getAttribute(BASELINE_ATTRIBUTE, "-1"));
 					}
@@ -3031,31 +3082,39 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 					//	adjust font size
 					if (imw.hasAttribute(FONT_SIZE_ATTRIBUTE) && documentBornDigital) {
 						fontSize = Integer.parseInt((String) imw.getAttribute(FONT_SIZE_ATTRIBUTE));
-						rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+//						rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+						rf = getTextStringFont("Serif", fontStyle, true, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
 						imwHasDescent = true; // doesn't really matter, as it's queried only in disjunction with born-digital property anyway
 					}
 					else if (this.isFlatString(imwString)) {
 						fontSize = estimatedWordFontSize;
-						rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+//						rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+						rf = getTextStringFont("Serif", fontStyle, true, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
 						imwHasDescent = false;
 					}
 					else {
 						fontSize = estimatedWordFontSize;
-						rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
-						TextLayout wtl = new TextLayout(imwString, rf, tsig.getFontRenderContext());
-						imwHasDescent = (this.isDecendingString(imwString, imw.hasAttribute(ITALICS_ATTRIBUTE)) || ((Math.abs(wtl.getBounds().getY()) * 10) < (Math.abs(wtl.getBounds().getHeight()) * 9)));
-//						System.out.println("Adjusting font size for '" + imw.getString() + "', initial bounds are " + wtl.getBounds());
+//						rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+						rf = getTextStringFont("Serif", fontStyle, true, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+						String imwFsString = imwString;
+						if (!this.isAscendingString(imwFsString) && (line != null) && ((imw.bounds.getHeight() * 10) > (line.bounds.getHeight() * 9)))
+							imwFsString = ("d" + imwFsString + "b"); // we have a full (> 90%) line height bounding box, make sure we measure with an ascender
+						TextLayout wtl = new TextLayout(imwFsString, rf, tsig.getFontRenderContext());
+						imwHasDescent = (this.isDecendingString(imwFsString, imw.hasAttribute(ITALICS_ATTRIBUTE)) || ((Math.abs(wtl.getBounds().getY()) * 10) < (Math.abs(wtl.getBounds().getHeight()) * 9)));
+//						System.out.println("Adjusting font size for '" + imw.getString() + "' starting from " + fontSize + ", initial bounds are " + wtl.getBounds());
 						while ((wtl.getBounds().getHeight() < (((imwHasDescent || (imwBaseline < 1)) ? imw.bounds.bottom : (imwBaseline + 1)) - imw.bounds.top)) || ((0 < imwBaseline) && (Math.abs(wtl.getBounds().getY()) < ((imwBaseline + 1) - imw.bounds.top)))) {
 							fontSize++;
-							rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
-							wtl = new TextLayout(imwString, rf, tsig.getFontRenderContext());
-//							System.out.println(" - increased bounds are " + wtl.getBounds());
+//							rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+							rf = getTextStringFont("Serif", fontStyle, true, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+							wtl = new TextLayout(imwFsString, rf, tsig.getFontRenderContext());
+//							System.out.println(" - increased bounds at " + fontSize + " are " + wtl.getBounds());
 						}
 						while (((((imwHasDescent || (imwBaseline < 1)) ? imw.bounds.bottom : (imwBaseline + 1)) - imw.bounds.top) < wtl.getBounds().getHeight()) || ((0 < imwBaseline) && (((imwBaseline + 1) - imw.bounds.top) < Math.abs(wtl.getBounds().getY()))))  {
 							fontSize--;
-							rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
-							wtl = new TextLayout(imwString, rf, tsig.getFontRenderContext());
-//							System.out.println(" - decreased bounds are " + wtl.getBounds());
+//							rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+							rf = getTextStringFont("Serif", fontStyle, true, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+							wtl = new TextLayout(imwFsString, rf, tsig.getFontRenderContext());
+//							System.out.println(" - decreased bounds at " + fontSize + " are " + wtl.getBounds());
 						}
 						estimatedWordFontSize = fontSize;
 					}
@@ -3064,17 +3123,18 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 					tsig.setFont(rf);
 					LineMetrics wlm = rf.getLineMetrics(imwString, tsig.getFontRenderContext());
 					TextLayout wtl = new TextLayout(imwString, rf, tsig.getFontRenderContext());
-					double hScale = (((double) (imw.bounds.right - imw.bounds.left)) / wtl.getBounds().getWidth());
-//					System.out.println("Printing '" + imw.getString() + "' in " + imw.bounds.toString() + ", font size is " + fontSize + ", hScale is " + hScale + ", baseline is " + imwBaseline + ", descent is " + imwHasDescent + ", born-digital is " + documentBornDigital);
+					double hScale = (((double) imw.bounds.getWidth()) / wtl.getBounds().getWidth());
+//					System.out.println("Printing '" + imw.getString() + "' in " + imw.bounds.toString() + ", font size is " + fontSize + ", hShift is " + -wtl.getBounds().getMinX() + ", hScale is " + hScale + ", baseline is " + imwBaseline + ", descent is " + imwHasDescent + ", born-digital is " + documentBornDigital);
 					
 					//	draw word
-					tsig.scale(zoom, zoom);
 					tsig.translate(-wtl.getBounds().getMinX(), 0);
-					if (hScale != 1)
+					if (Math.abs(hScale - 1) > 0.001) // cut this a little bit of slack
 						tsig.scale(hScale, 1);
+					tsig.scale(zoom, zoom);
 					tsig.drawString(imwString, 0, (
 								(imwBaseline < 1)
 								?
+								//	no explicit baseline given, need to estimate
 								(
 									(imw.bounds.bottom - imw.bounds.top) - (
 										(documentBornDigital || imwHasDescent)
@@ -3085,12 +3145,57 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 									)
 								)
 								:
+								//	we have an explicit baseline
 								(imwBaseline - imw.bounds.top + 1)
 							)
 						);
 					
 					//	finally ...
 					tsig.dispose();
+				}
+			}
+			
+			//	finally ...
+			this.textStringImageDocModCount = this.docModCount;
+			this.textStringImageTextStringPercentageModCount = textStringPercentageModCount;
+			this.textStringImageRenderingDpiModCount = renderingDpiModCount;
+			this.textStringImages = ((TextStringImage[]) tsiList.toArray(new TextStringImage[tsiList.size()]));
+			return this.textStringImages;
+		}
+		
+		private TextStringImage[] getTextStringImagesBD(BufferedImage spi) {
+			if (this.textStringImages != null)
+				return this.textStringImages;
+			
+			//	get page image and compute zoom
+			int roundAdd = (this.pageImageDpi / 2);
+			
+			//	paint words
+			ArrayList tsiList = new ArrayList();
+			ImWord[] tshs = this.page.getTextStreamHeads();
+			for (int h = 0; h < tshs.length; h++) {
+				
+				//	paint current text stream
+				for (ImWord imw = tshs[h]; (imw != null) && (imw.pageId == this.page.pageId); imw = imw.getNextWord()) {
+					
+					//	anything to render for this one?
+					String imwString = imw.getString();
+					if ((imwString == null) || (imwString.trim().length() == 0))
+						continue;
+					
+					//	create image
+					int tsiLeft = (((imw.bounds.left * renderingDpi) + roundAdd) / this.pageImageDpi);
+					int tsiTop = (((imw.bounds.top * renderingDpi) + roundAdd) / this.pageImageDpi);
+					int tsiWidth = Math.max(((((imw.bounds.right - imw.bounds.left) * renderingDpi) + roundAdd) / this.pageImageDpi), 1);
+					int tsiHeight = Math.max(((((imw.bounds.bottom - imw.bounds.top) * renderingDpi) + roundAdd) / this.pageImageDpi), 1);
+					TextStringImage tsi = new TextStringImage(tsiLeft, tsiTop, tsiWidth, tsiHeight, bdBlackTextStringColorModel);
+					tsiList.add(tsi);
+					for (int c = 0; c < tsiWidth; c++)
+						for (int r = 0; r < tsiHeight; r++) {
+							int rgb = spi.getRGB((tsiLeft + c), (tsiTop + r));
+							if ((rgb & 0xFF) < 32)
+								tsi.setRGB(c, r, bdBlackTextStringForeground.getRGB());
+						}
 				}
 			}
 			
@@ -3110,7 +3215,10 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 			final int left;
 			final int top;
 			TextStringImage(int left, int top, int width, int height) {
-				super(width, height, BufferedImage.TYPE_BYTE_BINARY, textStringColorModel);
+				this(left, top, width, height, ocrTextStringColorModel);
+			}
+			TextStringImage(int left, int top, int width, int height, IndexColorModel colorModel) {
+				super(width, height, BufferedImage.TYPE_BYTE_BINARY, colorModel);
 				this.left = left;
 				this.top = top;
 			}
@@ -3118,8 +3226,16 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 		
 		private boolean isFlatString(String str) {
 			for (int c = 0; c < str.length(); c++) {
-				if (".,:;°_-~*+'´`\"\u2012\u2013\u2014\u2015\u2212".indexOf(str.charAt(c)) == -1)
+				if (".,:;°_-~*+'´`\"\u00AD\u2010\u2011\u2012\u2013\u2014\u2015\u2212".indexOf(str.charAt(c)) == -1)
 					return false;
+			}
+			return true;
+		}
+		
+		private boolean isAscendingString(String str) {
+			for (int c = 0; c < str.length(); c++) {
+				if ("acegmnopqrsuvwxyz.,:;_-~+=\u00AD\u2010\u2011\u2012\u2013\u2014\u2015\u2212".indexOf(str.charAt(c)) == -1)
+					return true;
 			}
 			return false;
 		}
@@ -3517,8 +3633,11 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 			graphics.setColor(preBackgroundColor);
 			
 			//	get page image and compute zoom
-//			PageImage pi = this.getPageImage();
 			float zoom = (((float) renderingDpi) / this.pageImageDpi);
+			
+			//	paint main page image underneath markup highlights to keep latter showing for text on non-white background
+			BufferedImage spi = this.getScaledPageImage();
+			graphics.drawImage(spi, this.getLeftOffset(), this.getTopOffset(), spi.getWidth(), spi.getHeight(), this);
 			
 			//	highlight word selection (if any)
 			Color preSelectionColor = graphics.getColor();
@@ -3583,14 +3702,16 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 						transPageWordConnections.add(new TransPageWordConnection(this.textStreamHeads[h].getPreviousWord(), this.textStreamHeads[h]));
 				}
 			
-			//	paint image only now, putting text on top of highlights (zoomed to size)
-//			graphics.drawImage(pi.image, this.getLeftOffset(), this.getTopOffset(), Math.round(zoom * pi.image.getWidth()), Math.round(zoom * pi.image.getHeight()), this);
-			BufferedImage spi = this.getScaledPageImage();
-			graphics.drawImage(spi, this.getLeftOffset(), this.getTopOffset(), spi.getWidth(), spi.getHeight(), this);
-			
-			//	draw text strings on top if activated
+			//	draw text strings on top of markup if activated
 			if (areTextStringsPainted()) {
-				TextStringImage[] tsis = this.getTextStringImages();
+				TextStringImage[] tsis = this.getTextStringImagesOCR();
+				for (int i = 0; i < tsis.length; i++)
+					graphics.drawImage(tsis[i], (this.getLeftOffset() + tsis[i].left), (this.getTopOffset() + tsis[i].top), tsis[i].getWidth(), tsis[i].getHeight(), this);
+			}
+			
+			//	draw test strings from page image on top of markup
+			else if (documentBornDigital) {
+				TextStringImage[] tsis = this.getTextStringImagesBD(spi);
 				for (int i = 0; i < tsis.length; i++)
 					graphics.drawImage(tsis[i], (this.getLeftOffset() + tsis[i].left), (this.getTopOffset() + tsis[i].top), tsis[i].getWidth(), tsis[i].getHeight(), this);
 			}

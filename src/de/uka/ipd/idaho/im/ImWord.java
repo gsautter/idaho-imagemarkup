@@ -40,7 +40,6 @@ import de.uka.ipd.idaho.gamta.Gamta;
 import de.uka.ipd.idaho.gamta.util.constants.LiteratureConstants;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
-import de.uka.ipd.idaho.im.pdf.PdfParser.PWord;
 
 /**
  * A single word in an image markup document, i.e., a bounding box enclosing a
