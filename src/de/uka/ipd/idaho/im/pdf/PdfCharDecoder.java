@@ -688,7 +688,7 @@ public class PdfCharDecoder {
 		}
 	};
 	
-	private static final boolean DEBUG_CHAR_PROG_DECODING = true;
+	private static final boolean DEBUG_CHAR_PROG_DECODING = false;
 	private static final boolean DEBUG_DISPLAY_CHAR_PROG_IMAGES = false;
 	
 	static char getChar(PdfFont pFont, PStream charProg, int charCode, String charName, FontDecoderCharset charSet, Map objects, Font[] serifFonts, Font[] sansFonts, HashMap cache, boolean debug) throws IOException {
@@ -970,17 +970,17 @@ public class PdfCharDecoder {
 			this.isCharBoxMatch = isCharBoxMatch;
 		}
 	}
-	
-	static CharImageMatch matchChar(CharImage charImage, char ch, Font font, boolean isSerifFont, HashMap cache, boolean isVerificationMatch, boolean debug) {
-		CharImage matchImage = createCharImage(ch, font, isSerifFont, cache, debug);
-		if (matchImage == null)
-			return null;
-		if ((charImage.box.getBottomRow() <= charImage.baseline) && (matchImage.baseline <= matchImage.box.getTopRow()))
-			return null;
-		if ((0 < charImage.baseline) && (charImage.baseline <= charImage.box.getTopRow()) && (matchImage.box.getBottomRow() <= matchImage.baseline))
-			return null;
-		return matchCharImage(charImage, matchImage, font.getName(), (charImage.baseline < 1), isVerificationMatch, debug);
-	}
+//	
+//	static CharImageMatch matchChar(CharImage charImage, char ch, Font font, boolean isSerifFont, HashMap cache, boolean isVerificationMatch, boolean debug) {
+//		CharImage matchImage = createCharImage(ch, font, isSerifFont, cache, debug);
+//		if (matchImage == null)
+//			return null;
+//		if ((charImage.box.getBottomRow() <= charImage.baseline) && (matchImage.baseline <= matchImage.box.getTopRow()))
+//			return null;
+//		if ((0 < charImage.baseline) && (charImage.baseline <= charImage.box.getTopRow()) && (matchImage.box.getBottomRow() <= matchImage.baseline))
+//			return null;
+//		return matchCharImage(charImage, matchImage, font.getName(), (charImage.baseline < 1), isVerificationMatch, debug);
+//	}
 	
 	static class CharMatchResult {
 		boolean rendered = false;
@@ -2379,15 +2379,15 @@ public class PdfCharDecoder {
 	static final String COMBINABLE_ACCENTS;
 	static final HashMap COMBINABLE_ACCENT_MAPPINGS = new HashMap();
 	static {
-//		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u00A8'), "dieresis");
-//		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u00AF'), "macron");
-//		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u00B4'), "acute");
-//		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u00B8'), "cedilla");
-//		
-//		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02C6'), "circumflex");
-//		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02C7'), "caron");
-//		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02D8'), "breve");
-//		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02DA'), "ring");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u00A8'), "dieresis");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u00AF'), "macron");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u00B4'), "acute");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u00B8'), "cedilla");
+		
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02C6'), "circumflex");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02C7'), "caron");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02D8'), "breve");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02DA'), "ring");
 		
 		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u0300'), "grave");
 		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u0301'), "acute");

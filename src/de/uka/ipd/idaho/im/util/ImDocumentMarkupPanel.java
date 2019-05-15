@@ -27,6 +27,7 @@
  */
 package de.uka.ipd.idaho.im.util;
 
+import java.awt.BasicStroke;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
@@ -44,6 +45,8 @@ import java.awt.GridLayout;
 import java.awt.Point;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
+import java.awt.Shape;
+import java.awt.Stroke;
 import java.awt.Toolkit;
 import java.awt.Window;
 import java.awt.event.ActionEvent;
@@ -56,6 +59,7 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.font.LineMetrics;
 import java.awt.font.TextLayout;
+import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.awt.image.ImageObserver;
 import java.awt.image.IndexColorModel;
@@ -69,6 +73,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.Map;
 import java.util.TreeMap;
@@ -118,6 +123,7 @@ import de.uka.ipd.idaho.im.ImLayoutObject;
 import de.uka.ipd.idaho.im.ImObject;
 import de.uka.ipd.idaho.im.ImPage;
 import de.uka.ipd.idaho.im.ImRegion;
+import de.uka.ipd.idaho.im.ImSupplement;
 import de.uka.ipd.idaho.im.ImWord;
 import de.uka.ipd.idaho.im.analysis.Imaging;
 import de.uka.ipd.idaho.im.util.ImDocumentMarkupPanel.ImDocumentViewControl.AnnotControl;
@@ -141,7 +147,8 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	//	TODO set default to built-in cursors
 	//	TODO use static setters, and a cursor provider plugin (generic resource manager) for managing the cursors (solves data problems along the way)
 	
-	private static int transparentWhite = new Color(Color.WHITE.getRed(), Color.WHITE.getGreen(), Color.WHITE.getBlue(), 0).getRGB();
+	private static final int transparentWhite = new Color(Color.WHITE.getRed(), Color.WHITE.getGreen(), Color.WHITE.getBlue(), 0).getRGB();
+	private static final BasicStroke defaultSelectionBoxStroke = new BasicStroke(3, BasicStroke.CAP_SQUARE, BasicStroke.JOIN_MITER);
 	
 	/** the default DPI for rendering images, namely 96 */
 	public static int DEFAULT_RENDERING_DPI = 96; // TODO_ne figure out how to compute this for current display device ==> Toolkit.getDefaultToolkit().getScreenResolution() returns the resolution, in DPI, and it's usually 96, always
@@ -161,6 +168,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	private long renderingDpiModCount = 0;
 	private long textStringPercentageModCount = 0;
 	private long highlightModCount = 0;
+	private long displayExtensionModCount = 0;
 	
 	private int maxPageWidth = 0;
 	private int maxPageHeight = 0;
@@ -210,6 +218,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	
 	private Color selectionHighlightColor = new Color(Color.GREEN.getRed(), Color.GREEN.getGreen(), Color.GREEN.getBlue(), 128);
 	private Color selectionBoxColor = Color.RED;
+	private BasicStroke selectionBoxStroke = defaultSelectionBoxStroke;
 	private int selectionBoxThickness = 3;
 	
 	private static final IndexColorModel pageImageColorModel = createPageImageColorModel();
@@ -227,6 +236,10 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	
 	private TwoClickSelectionAction pendingTwoClickAction = null;
 	private TwoClickActionMessenger twoClickActionMessenger = null;
+	
+	private long atomicActionId = 0;
+	private ImageMarkupTool atomicActionImt = null;
+	private final LinkedHashSet atomicActionListeners = new LinkedHashSet();
 	
 	/**
 	 * Constructor displaying all pages (use with care, high memory
@@ -395,7 +408,8 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			if (selectionStartWord != null) {
 				if (selectionWordClicked) {
 					if (pendingTwoClickAction != null) {
-						beginAtomicAction(pendingTwoClickAction.label);
+						if (!isAtomicActionRunning()) // might have been started from built-in click listener in selection action
+							beginAtomicAction(pendingTwoClickAction.label);
 						boolean changed = pendingTwoClickAction.performAction(selectionStartWord);
 						if (changed)
 							endAtomicAction();
@@ -662,6 +676,9 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				pagePanels[((ImPage) object).pageId].validate();
 				pagePanels[((ImPage) object).pageId].repaint();
 			}
+		}
+		public void supplementChanged(String supplementId, ImSupplement oldValue) {
+			//	there are no visible changes from supplement modifications
 		}
 		public void regionAdded(ImRegion region) {
 			if ((idvc != null) && immediatelyUpdateIdvc)
@@ -1355,14 +1372,33 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	}
 	
 	/**
-	 * Set the line thickness (in pixels) used for the rectangles visualizing
+	 * Set the line thickness (in pixels) to use for the rectangles visualizing
 	 * box selections.
 	 * @param sbt the thickness of the selection box in pixels
 	 */
 	public void setSelectionBoxThickness(int sbt) {
 		this.selectionBoxThickness = sbt;
+		this.selectionBoxStroke = new BasicStroke(this.selectionBoxThickness, BasicStroke.CAP_SQUARE, BasicStroke.JOIN_MITER);;
 		this.validate();
 		this.repaint();
+	}
+	
+	/**
+	 * Retrieve the stroke used for rectangles visualizing box selections.
+	 * @return the current selection box stroke
+	 */
+	public BasicStroke getSelectionBoxStroke() {
+		return this.selectionBoxStroke;
+	}
+	
+	/**
+	 * Set the stroke to use for the rectangles visualizing box selections.
+	 * Specifying a null argument restores the default stroke.
+	 * @param sbs the stroke to use for rendering the selection box
+	 */
+	public void setSelectionBoxStroke(BasicStroke sbs) {
+		this.selectionBoxStroke = ((sbs == null) ? defaultSelectionBoxStroke : sbs);
+		this.selectionBoxThickness = Math.round(this.selectionBoxStroke.getLineWidth());
 	}
 	
 	/**
@@ -1802,6 +1838,47 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	}
 	
 	/**
+	 * Retrieve the display extensions to show in a specific page. This default
+	 * implementation returns an empty array. Sub classes thus have to overwrite
+	 * it to actually include any display extensions.
+	 * @param page the page to retrieve the display extension graphics for
+	 * @return an array holding the display extension graphics
+	 */
+	protected DisplayExtensionGraphics[] getDisplayExtensionGraphics(ImPage page) {
+		return new DisplayExtensionGraphics[0]; // TODO reactivate this after tests
+//		
+//		//	TODO return some colorful corner dots for testing
+//		Shape[] testDegAreaShapes = {new Rectangle2D.Float(30, 30, (page.bounds.getWidth() - 60), (page.bounds.getHeight() - 60))};
+//		DisplayExtensionGraphics testDegArea = new DisplayExtensionGraphics(null, this, page, testDegAreaShapes, (((page.pageId % 2) == 0) ? Color.CYAN : Color.MAGENTA)) {
+//			public boolean isActive() {
+//				return true;
+//			}
+//		};
+//		Shape[] testDegLineShapes = {new Rectangle2D.Float(20, 20, (page.bounds.getWidth() - 40), (page.bounds.getHeight() - 40))};
+//		DisplayExtensionGraphics testDegLine = new DisplayExtensionGraphics(null, this, page, testDegLineShapes, (((page.pageId % 2) == 0) ? Color.MAGENTA : Color.CYAN), new BasicStroke(5)) {
+//			public boolean isActive() {
+//				return true;
+//			}
+//		};
+//		DisplayExtensionGraphics[] testDegs = {testDegArea, testDegLine};
+//		return testDegs;
+	}
+	
+	/**
+	 * Notify the document markup panel that some display extensions have been
+	 * modified or changed their status, and thus should be re-rendered.
+	 */
+	public void setDisplayExtensionsModified() {
+		this.displayExtensionModCount++;
+		
+		//	update display only if visible
+		if (this.isVisible()) {
+			this.validate();
+			this.repaint();
+		}
+	}
+	
+	/**
 	 * Retrieve the available actions for a word selection. This implementation
 	 * returns an empty array. Sub classes thus have to overwrite it to provide
 	 * actual functionality.
@@ -1900,9 +1977,12 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		
 		//	get progress monitor
 		final ProgressMonitor pm = this.getProgressMonitor(("Running '" + imt.getLabel() + "', Please Wait"), "", false, true);
+		final ProgressMonitorWindow pmw = ((pm instanceof ProgressMonitorWindow) ? ((ProgressMonitorWindow) pm) : null);
 		
-		//	initialize atomic UNDO
-		this.beginAtomicAction("Apply " + imt.getLabel());
+		//	initialize atomic UNDO (unless handled externally)
+		final boolean handleAtomicAction = !this.isAtomicActionRunning();
+		if (handleAtomicAction)
+			this.startAtomicAction(("Apply " + imt.getLabel()), imt, annot, pm);
 		
 		//	apply document processor, in separate thread
 		Thread imtThread = new Thread() {
@@ -1911,7 +1991,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				try {
 					
 					//	wait for splash screen progress monitor to come up (we must not reach the dispose() line before the splash screen even comes up)
-					while ((pm instanceof ProgressMonitorWindow) && !((ProgressMonitorWindow) pm).getWindow().isVisible()) try {
+					while ((pmw != null) && !pmw.getWindow().isVisible()) try {
 						Thread.sleep(10);
 					} catch (InterruptedException ie) {}
 					
@@ -1932,6 +2012,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 							}
 						}
 						public void attributeChanged(ImObject object, String attributeName, Object oldValue) {}
+						public void supplementChanged(String supplementId, ImSupplement oldValue) {}
 						public void regionAdded(ImRegion region) {
 							regionCss.add(region.getType());
 						}
@@ -1976,12 +2057,13 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 					if (idl != null)
 						document.removeDocumentListener(idl);
 					
-					//	finish atomic UNDO
-					endAtomicAction();
+					//	finish atomic UNDO (unless handled externally)
+					if (handleAtomicAction)
+						finishAtomicAction(pm);
 					
 					//	dispose splash screen progress monitor
-					if (pm instanceof ProgressMonitorWindow)
-						((ProgressMonitorWindow) pm).close();
+					if (pmw != null)
+						pmw.close();
 					
 					//	make changes show
 					/* we need to do repainting on Swing EDT, as otherwise we
@@ -2000,24 +2082,184 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		imtThread.start();
 		
 		//	open splash screen progress monitor (this waits)
-		if (pm instanceof ProgressMonitorWindow)
-			((ProgressMonitorWindow) pm).popUp(true);
+		if (pmw != null)
+			pmw.popUp(true);
+	}
+//	
+//	/**
+//	 * Start an atomic action, consisting of one or more edits to the Image
+//	 * Markup document being edited in the panel. This default implementation
+//	 * does nothing; sub classes are welcome to overwrite it as needed.
+//	 * @param label the label of the action
+//	 */
+//	public void beginAtomicAction(String label) {}
+	/**
+	 * Start an atomic action, consisting of one or more edits to the Image
+	 * Markup document being edited in the panel. This default implementation
+	 * loops through to <code>startAtomicAction()</code>; sub classes that
+	 * overwrite it either have to make the super call, or call the latter
+	 * method directly.
+	 * @param label the label of the action
+	 */
+	public void beginAtomicAction(String label) {
+		this.startAtomicAction(label, null, null, null);
 	}
 	
 	/**
 	 * Start an atomic action, consisting of one or more edits to the Image
-	 * Markup document being edited in the panel. This default implementation
-	 * does nothing; sub classes are welcome to overwrite it as needed.
+	 * Markup document being edited in the panel.
 	 * @param label the label of the action
+	 * @param imt the Image Markup Tool performing the action
+	 * @param annot the annotation being processed
+	 * @param pm the progress monitor observing on the action (if any)
 	 */
-	public void beginAtomicAction(String label) {}
+	public final void startAtomicAction(String label, ImageMarkupTool imt, ImAnnotation annot, ProgressMonitor pm) {
+		this.startAtomicAction(System.currentTimeMillis(), label, imt, annot, pm);
+	}
 	
+	/**
+	 * Start an atomic action, consisting of one or more edits to the Image
+	 * Markup document being edited in the panel.
+	 * @param id the unique ID of the action (must be non-zero)
+	 * @param label the label of the action
+	 * @param imt the Image Markup Tool performing the action
+	 * @param annot the annotation being processed
+	 * @param pm the progress monitor observing on the action (if any)
+	 */
+	public final void startAtomicAction(long id, String label, ImageMarkupTool imt, ImAnnotation annot, ProgressMonitor pm) {
+		this.atomicActionId = id;
+		this.atomicActionImt = imt;
+		for (Iterator aalit = this.atomicActionListeners.iterator(); aalit.hasNext();)
+			((AtomicActionListener) aalit.next()).atomicActionStarted(id, label, imt, annot, pm);
+	}
+	
+//	/**
+//	 * End an atomic action, consisting of one or more edits to the Image
+//	 * Markup document being edited in the panel. This default implementation
+//	 * does nothing; sub classes are welcome to overwrite it as needed.
+//	 */
+//	public void endAtomicAction() {}
 	/**
 	 * End an atomic action, consisting of one or more edits to the Image
 	 * Markup document being edited in the panel. This default implementation
-	 * does nothing; sub classes are welcome to overwrite it as needed.
+	 * loops through to <code>finishAtomicAction()</code>; sub classes that
+	 * overwrite it either have to make the super call, or call the latter
+	 * method directly.
 	 */
-	public void endAtomicAction() {}
+	public void endAtomicAction() {
+		this.finishAtomicAction(null);
+	}
+	
+	/**
+	 * Finish an atomic action, consisting of one or more edits to the Image
+	 * Markup document being edited in the panel.
+	 */
+	public final void finishAtomicAction(ProgressMonitor pm) {
+		long id = this.atomicActionId;
+		for (Iterator aalit = this.atomicActionListeners.iterator(); aalit.hasNext();)
+			((AtomicActionListener) aalit.next()).atomicActionFinishing(id, pm);
+		this.atomicActionId = 0;
+		this.atomicActionImt = null;
+		for (Iterator aalit = this.atomicActionListeners.iterator(); aalit.hasNext();)
+			((AtomicActionListener) aalit.next()).atomicActionFinished(id, pm);
+	}
+	
+	/**
+	 * Register an atomic action listener to receive notifications of atomic
+	 * actions happening on the markup panel.
+	 * @param aal the atomic action listener to register
+	 */
+	public void addAtomicActionListener(AtomicActionListener aal) {
+		if (aal != null)
+			this.atomicActionListeners.add(aal);
+	}
+	
+	/**
+	 * Remove an atomic action listener to refrain from receiving notifications
+	 * of atomic actions happening on the markup panel.
+	 * @param aal the atomic action listener to un-register
+	 */
+	public void removeAtomicActionListener(AtomicActionListener aal) {
+		this.atomicActionListeners.remove(aal);
+	}
+	
+	/**
+	 * Listener observing atomic actions happening on an Image Markup document
+	 * displayed in a markup panel.
+	 * 
+	 * @author sautter
+	 */
+	public static interface AtomicActionListener {
+		
+		/**
+		 * Receive notification that an atomic action is starting. Both the
+		 * Image Markup Tool and the target annotation can be null, and will be
+		 * for Selection Actions. In fact, the target annotation only ever is
+		 * not null when an Image Markup Tool is run on an annotation.
+		 * @param id the unique ID of the started action
+		 * @param label the label of the action
+		 * @param imt the Image Markup Tool performing the action
+		 * @param annot the annotation being processed
+		 * @param pm the progress monitor observing on the action (if any)
+		 */
+		public abstract void atomicActionStarted(long id, String label, ImageMarkupTool imt, ImAnnotation annot, ProgressMonitor pm);
+		
+		/**
+		 * Receive notification that the running atomic action is finishing.
+		 * This method is intended for implementors to trigger any follow-on
+		 * activities, still within the running atomic action, e.g. updating
+		 * derived data stored on the document proper.
+		 * @param id the unique ID of the finishing action
+		 * @param pm the progress monitor observing on the action (if any)
+		 */
+		public abstract void atomicActionFinishing(long id, ProgressMonitor pm);
+		
+		/**
+		 * Receive notification that the running atomic action is finished. Any
+		 * activities triggered by client code on this notification does not
+		 * fall under the running atomic action any more.
+		 * @param id the unique ID of the finished action
+		 * @param pm the progress monitor observing on the action (if any)
+		 */
+		public abstract void atomicActionFinished(long id, ProgressMonitor pm);
+	}
+	
+	/**
+	 * Test whether or not an atomic action is running on the markup panel.
+	 * This method returns true right from a call to either one of
+	 * <code>beginAtomicAction()</code> and <code>startAtomicAction()</code>
+	 * up to a call to either one of <code>endAtomicAction()</code> and
+	 * <code>finishAtomicAction()</code>.
+	 * @return true if an atomic action is running, false otherwise
+	 */
+	public boolean isAtomicActionRunning() {
+		return (this.atomicActionId != 0);
+	}
+	
+	/**
+	 * Get the ID of the atomic action currently running on the markup panel.
+	 * This method returns a non-zero value right from a call to either one of
+	 * <code>beginAtomicAction()</code> and <code>startAtomicAction()</code>
+	 * up to a call to either one of <code>endAtomicAction()</code> and
+	 * <code>finishAtomicAction()</code>.
+	 * @return the ID of the atomic action currently running
+	 */
+	public long getAtomicActionId() {
+		return this.atomicActionId;
+	}
+	
+	/**
+	 * Test whether or not a running atomic action involves an Image Markup
+	 * Tool. This method returns true right from a call to 
+	 * <code>beginAtomicAction()</code> with a non-null <code>imt</code>
+	 * argument up to a call to either one of <code>endAtomicAction()</code>
+	 * and <code>finishAtomicAction()</code>.
+	 * @return true if an atomic action is running and involves an Image Markup
+	 *            Tool
+	 */
+	public boolean isImageMarkupToolRunning() {
+		return (this.atomicActionImt != null);
+	}
 	
 	/**
 	 * Produce a progress monitor for observing some activity on the image
@@ -2278,6 +2520,7 @@ ImDocumentMarkupPanel:
   ==> ... without cluttering context menu
 
 WordEditDialog: make it volatile dialog (just like word occurrence list), saves tons of effort in ImDocumentMarkupPanel
+==> DOES NOT WORK due to symbol table (opening latter also incurs window focus loss)
 	 */
 	
 	private class IdmpEditWordDialog extends EditWordDialog {
@@ -2611,7 +2854,7 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 		}
 	}
 	
-	private String getAnnotationValue(ImAnnotation annot) {
+	private static String getAnnotationValue(ImAnnotation annot) {
 		
 		//	count out annotation length
 		int annotChars = 0;
@@ -3081,7 +3324,7 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 					
 					//	adjust font size
 					if (imw.hasAttribute(FONT_SIZE_ATTRIBUTE) && documentBornDigital) {
-						fontSize = Integer.parseInt((String) imw.getAttribute(FONT_SIZE_ATTRIBUTE));
+						fontSize = imw.getFontSize();
 //						rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
 						rf = getTextStringFont("Serif", fontStyle, true, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
 						imwHasDescent = true; // doesn't really matter, as it's queried only in disjunction with born-digital property anyway
@@ -3190,12 +3433,21 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 					int tsiHeight = Math.max(((((imw.bounds.bottom - imw.bounds.top) * renderingDpi) + roundAdd) / this.pageImageDpi), 1);
 					TextStringImage tsi = new TextStringImage(tsiLeft, tsiTop, tsiWidth, tsiHeight, bdBlackTextStringColorModel);
 					tsiList.add(tsi);
-					for (int c = 0; c < tsiWidth; c++)
+					for (int c = 0; c < tsiWidth; c++) {
+						if ((tsiLeft + c) < 0)
+							continue;
+						if (spi.getWidth() <= (tsiLeft + c))
+							break;
 						for (int r = 0; r < tsiHeight; r++) {
+							if ((tsiTop + r) < 0)
+								continue;
+							if (spi.getHeight() <= (tsiTop + r))
+								break;
 							int rgb = spi.getRGB((tsiLeft + c), (tsiTop + r));
 							if ((rgb & 0xFF) < 32)
 								tsi.setRGB(c, r, bdBlackTextStringForeground.getRGB());
 						}
+					}
 				}
 			}
 			
@@ -3418,18 +3670,19 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 				ImWord fw = annots[a].getFirstWord();
 				ImWord lw = annots[a].getLastWord();
 				
-				//	TODO move annotation starts and ends out by one extra for paragraph starts and ends ...
-				//	... to not have them overlap with paragraph start and end thickening
-				
 				//	paint opaque kind of square bracket before first and after last word
 				if (fw.pageId == this.page.pageId) {
 					int out = annotStartEndCounts.getCount("S" + fw.getLocalID());
 					annotStartEndCounts.remove("S" + fw.getLocalID());
+					if ((fw.getPreviousWord() == null) || (fw.getPreviousWord().getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END))
+						out++; // make sure to not obfuscate paragraph start thickening
 					boList.add(new AnnotStart(fw.bounds.left, fw.bounds.right, fw.bounds.top, fw.bounds.bottom, annotColor, out));
 				}
 				if (lw.pageId == this.page.pageId) {
 					int out = annotStartEndCounts.getCount("E" + lw.getLocalID());
 					annotStartEndCounts.remove("E" + lw.getLocalID());
+					if ((lw.getNextWord() == null) || (lw.getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END))
+						out++; // make sure to not obfuscate paragraph end thickening
 					boList.add(new AnnotEnd(lw.bounds.left, lw.bounds.right, lw.bounds.top, lw.bounds.bottom, annotColor, out));
 				}
 			}
@@ -3607,15 +3860,31 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 			}
 		}
 		
+		private DisplayExtensionGraphics[] getDisplayExtensionGraphics() {
+			if (this.displayExtensionGraphics == null) {
+				this.displayExtensionGraphicsDocModCount = this.docModCount;
+				this.displayExtensionGraphicsModCount = displayExtensionModCount;
+				this.displayExtensionGraphicsHighlightModCount = highlightModCount;
+				this.displayExtensionGraphics = ImDocumentMarkupPanel.this.getDisplayExtensionGraphics(this.page);
+			}
+			return this.displayExtensionGraphics;
+		}
+		private DisplayExtensionGraphics[] displayExtensionGraphics = null;
+		private long displayExtensionGraphicsDocModCount = 0;
+		private long displayExtensionGraphicsHighlightModCount = 0;
+		private long displayExtensionGraphicsModCount = 0;
+		
 		/* (non-Javadoc)
 		 * @see java.awt.Container#validate()
 		 */
 		public void validate() {
-			if ((this.backgroundObjectDocModCount < this.docModCount) || (this.backgroundObjectHighlightModCount < highlightModCount)) {
+			if ((this.backgroundObjectDocModCount != this.docModCount) || (this.backgroundObjectHighlightModCount != highlightModCount)) {
 				this.backgroundObjects = null;
 				this.textStreamHeads = null;
 			}
-			if ((this.textStringImageDocModCount < this.docModCount) || (this.textStringImageTextStringPercentageModCount < textStringPercentageModCount) || (this.textStringImageRenderingDpiModCount < renderingDpiModCount))
+			if ((this.displayExtensionGraphicsDocModCount != this.docModCount) || (this.displayExtensionGraphicsModCount != displayExtensionModCount) || (this.displayExtensionGraphicsHighlightModCount != highlightModCount))
+				this.displayExtensionGraphics = null;
+			if ((this.textStringImageDocModCount != this.docModCount) || (this.textStringImageTextStringPercentageModCount != textStringPercentageModCount) || (this.textStringImageRenderingDpiModCount != renderingDpiModCount))
 				this.textStringImages = null;
 			super.validate();
 		}
@@ -3690,6 +3959,25 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 			}
 			graphics.setColor(preSelectionColor);
 			
+			//	get display extension graphics
+			DisplayExtensionGraphics[] degs = this.getDisplayExtensionGraphics();
+			
+			//	draw below-text outlines and fillings of text extension objects
+			if (graphics instanceof Graphics2D) {
+				AffineTransform preDegTransform = ((Graphics2D) graphics).getTransform();
+				((Graphics2D) graphics).translate(this.getLeftOffset(), this.getTopOffset());
+				((Graphics2D) graphics).scale(zoom, zoom);
+				for (int g = 0; g < degs.length; g++) {
+					if (!degs[g].isActive())
+						continue;
+					if (!degs[g].fillOverText())
+						degs[g].fill((Graphics2D) graphics);
+					if (!degs[g].outlineOverText())
+						degs[g].outline((Graphics2D) graphics);
+				}
+				((Graphics2D) graphics).setTransform(preDegTransform);
+			}
+			
 			//	paint background / highlight image
 			BackgroundObject[] bos = this.getBackgroundObjects();
 			for (int o = 0; o < bos.length; o++)
@@ -3709,11 +3997,27 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 					graphics.drawImage(tsis[i], (this.getLeftOffset() + tsis[i].left), (this.getTopOffset() + tsis[i].top), tsis[i].getWidth(), tsis[i].getHeight(), this);
 			}
 			
-			//	draw test strings from page image on top of markup
+			//	draw text strings from page image on top of markup
 			else if (documentBornDigital) {
 				TextStringImage[] tsis = this.getTextStringImagesBD(spi);
 				for (int i = 0; i < tsis.length; i++)
 					graphics.drawImage(tsis[i], (this.getLeftOffset() + tsis[i].left), (this.getTopOffset() + tsis[i].top), tsis[i].getWidth(), tsis[i].getHeight(), this);
+			}
+			
+			//	draw above-text outlines and fillings of text extension objects
+			if (graphics instanceof Graphics2D) {
+				AffineTransform preDegTransform = ((Graphics2D) graphics).getTransform();
+				((Graphics2D) graphics).translate(this.getLeftOffset(), this.getTopOffset());
+				((Graphics2D) graphics).scale(zoom, zoom);
+				for (int g = 0; g < degs.length; g++) {
+					if (!degs[g].isActive())
+						continue;
+					if (degs[g].fillOverText())
+						degs[g].fill((Graphics2D) graphics);
+					if (degs[g].outlineOverText())
+						degs[g].outline((Graphics2D) graphics);
+				}
+				((Graphics2D) graphics).setTransform(preDegTransform);
 			}
 			
 			//	draw box selection on top of everything (if any)
@@ -3721,7 +4025,20 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 				preSelectionColor = graphics.getColor();
 				graphics.setColor(selectionBoxColor);
 				BoundingBox selection;
-				for (int i = 0; i < selectionBoxThickness; i++) {
+				if (graphics instanceof Graphics2D) {
+					Stroke preSelectionStroke = ((Graphics2D) graphics).getStroke();
+					((Graphics2D) graphics).setStroke(selectionBoxStroke);
+					selection = new BoundingBox(
+							Math.min(selectionStartPoint.x, selectionEndPoint.x),
+							Math.max(selectionStartPoint.x, selectionEndPoint.x),
+							Math.min(selectionStartPoint.y, selectionEndPoint.y),
+							Math.max(selectionStartPoint.y, selectionEndPoint.y)
+						);
+					if ((selection.left < selection.right) && (selection.top < selection.bottom))
+						this.paintBox(graphics, selection, zoom, this.getLeftOffset(), this.getTopOffset());
+					((Graphics2D) graphics).setStroke(preSelectionStroke);
+				}
+				else for (int i = 0; i < selectionBoxThickness; i++) {
 					selection = new BoundingBox(
 							Math.min(selectionStartPoint.x, selectionEndPoint.x)+i,
 							Math.max(selectionStartPoint.x, selectionEndPoint.x)-i,
@@ -4282,6 +4599,182 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 	}
 	
 	/**
+	 * Implementation of a visual extension to display as an overlay of
+	 * document pages. This facilitates custom additions to the rendering of
+	 * document pages, e.g. to highlight content of special interest in a
+	 * specific situation.
+	 * 
+	 * @author sautter
+	 */
+	public static interface DisplayExtension {
+		
+		/**
+		 * Indicate whether or not the shapes belonging to this display
+		 * extension should be rendered. This facilitates switching display
+		 * extensions on or off as needed instead of adding or removing them.
+		 * @return true if the shapes belonging to this display extension
+		 *        should be rendered, false otherwise
+		 */
+		public abstract boolean isActive();
+		
+		/**
+		 * Obtain the shapes to display in a specific page of a document in a
+		 * specific markup panel. The shapes will only show if this display
+		 * extension is active. Scaling of the shapes has to be to the image
+		 * resolution of the argument page; scaling to the actual display
+		 * resolution is done by the rendering facilities.
+		 * @param page the page to obtain the shapes for
+		 * @param idmp the markup panel to display the extensions in
+		 * @return an array holding the shapes to display
+		 */
+		public abstract DisplayExtensionGraphics[] getExtensionGraphics(ImPage page, ImDocumentMarkupPanel idmp);
+	}
+	
+	/**
+	 * Wrapper for a Java2D shapes, adding bindling functionality and control
+	 * facilities. This enables handling semantically related groups of shapes
+	 * to share one outline color and stroking style, one fill color, as well
+	 * as one activation/deactivation status.
+	 * 
+	 * @author sautter
+	 */
+	public static abstract class DisplayExtensionGraphics {
+		private static final Stroke DEFAULT_STROKE = new BasicStroke(1, BasicStroke.CAP_SQUARE, BasicStroke.JOIN_BEVEL);
+		
+		/** the parent display extension */
+		protected final DisplayExtension parent;
+		
+		/** the markup panel the shape is rendered in */
+		protected final ImDocumentMarkupPanel idmp;
+		
+		/** the page to render the shape in */
+		protected final ImPage page;
+		
+		/** the actual shapes to render */
+		protected final Shape[] shapes;
+		
+		/** the color to draw the outline of the wrapped shape in (null deactivates outline drawing) */
+		protected final Color lineColor;
+		
+		/** the stroke to draw the outline of the wrapped shape with (null uses a solid line) */
+		protected final Stroke lineStroke;
+		
+		/** the color to fill the wrapped shape in (null deactivates filling) */
+		protected final Color fillColor;
+		
+		/** Constructor only taking filling parameters
+		 * @param parent the parent display extension
+		 * @param idmp the markup panel the shape is rendered in
+		 * @param page the page to render the shape in
+		 * @param shapes the actual shape to render
+		 * @param fillColor the color to fill the wrapped shape in (null deactivates filling)
+		 */
+		public DisplayExtensionGraphics(DisplayExtension parent, ImDocumentMarkupPanel idmp, ImPage page, Shape[] shapes, Color fillColor) {
+			this(parent, idmp, page, shapes, null, null, fillColor);
+		}
+		
+		/** Constructor only taking outline drawing parameters
+		 * @param parent the parent display extension
+		 * @param idmp the markup panel the shape is rendered in
+		 * @param page the page to render the shape in
+		 * @param shapes the actual shape to render
+		 * @param lineColor the color to draw the outline of the wrapped shape in (null deactivates outline drawing)
+		 * @param lineStroke the stroke to draw the outline of the wrapped shape with (null uses a solid line with width 1)
+		 */
+		public DisplayExtensionGraphics(DisplayExtension parent, ImDocumentMarkupPanel idmp, ImPage page, Shape[] shapes, Color lineColor, Stroke lineStroke) {
+			this(parent, idmp, page, shapes, lineColor, lineStroke, null);
+		}
+		
+		/** Constructor with all arguments
+		 * @param parent the parent display extension
+		 * @param idmp the markup panel the shape is rendered in
+		 * @param page the page to render the shape in
+		 * @param shapes the actual shape to render
+		 * @param lineColor the color to draw the outline of the wrapped shape in (null deactivates outline drawing)
+		 * @param lineStroke the stroke to draw the outline of the wrapped shape with (null uses a solid line with width 1)
+		 * @param fillColor the color to fill the wrapped shape in (null deactivates filling)
+		 */
+		public DisplayExtensionGraphics(DisplayExtension parent, ImDocumentMarkupPanel idmp, ImPage page, Shape[] shapes, Color lineColor, Stroke lineStroke, Color fillColor) {
+			this.parent = parent;
+			this.idmp = idmp;
+			this.page = page;
+			this.shapes = shapes;
+			//	TODO throw exception if shapes are null or empty (length 0)
+			this.lineColor = lineColor;
+			this.lineStroke = lineStroke;
+			this.fillColor = fillColor;
+			//	TODO throw exception if both line and fill color are null
+		}
+		
+		/**
+		 * Indicate whether or not the wrapped shapes should be rendered. This
+		 * facilitates switching individual shapes on or off as needed instead
+		 * of adding or removing them, e.g. based upon display control settings.
+		 * @return true if the shapes should be rendered, false otherwise
+		 */
+		public abstract boolean isActive();
+		
+		/**
+		 * Indicate whether or not the shapes belonging to this display extension
+		 * graphics should have their filling (if any) rendered on top of the
+		 * document text. This default implementation returns false, indicating
+		 * that document text should be on top of any filling. Sub classes may
+		 * overwrite this method as needed, but should make sure to not completely
+		 * obfuscate the document text, e.g. by using a transparent fill color.
+		 * @return true if shape fillings should be rendered over document text
+		 */
+		public boolean fillOverText() {
+			return false;
+		}
+		
+		/**
+		 * Indicate whether or not the shapes belonging to this display extension
+		 * graphics should have their outlines (if any) rendered on top of the
+		 * document text. This default implementation returns true, indicating
+		 * that the outlines should be rendered on top of any document text. Sub
+		 * classes may overwrite this method as needed, but should make sure to
+		 * not have the document text completely obfuscate the outline, e.g. by
+		 * using a very bright line color or broad line stroke.
+		 * @return true if shape outlines should be rendered over document text
+		 */
+		public boolean outlineOverText() {
+			return true;
+		}
+		
+		/**
+		 * Render the outlines of the shapes making up this display extension
+		 * graphics.
+		 * @param graphics the Java2D graphics to use for rendering
+		 */
+		public void outline(Graphics2D graphics) {
+			if (this.lineColor == null)
+				return;
+			Color preColor = graphics.getColor();
+			graphics.setColor(this.lineColor);
+			Stroke preStroke = graphics.getStroke();
+			graphics.setStroke((this.lineStroke == null) ? DEFAULT_STROKE : this.lineStroke);
+			for (int s = 0; s < this.shapes.length; s++)
+				graphics.draw(this.shapes[s]);
+			graphics.setColor(preColor);
+			graphics.setStroke(preStroke);
+		}
+		
+		/**
+		 * Fill the shapes making up this display extension graphics.
+		 * @param graphics the Java2D graphics to use for rendering
+		 */
+		public void fill(Graphics2D graphics) {
+			if (this.fillColor == null)
+				return;
+			Color preColor = graphics.getColor();
+			graphics.setColor(this.fillColor);
+			for (int s = 0; s < this.shapes.length; s++)
+				graphics.fill(this.shapes[s]);
+			graphics.setColor(preColor);
+		}
+	}
+	
+	/**
 	 * Implementation of an action to perform for a box or word selection. Sub
 	 * classes have to implement the <code>performAction()</code> method. They
 	 * can further overwrite the <code>getMenuItem()</code> method, e.g. to
@@ -4294,7 +4787,7 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 	public static abstract class SelectionAction {
 		
 		/** including this constant action in an array of actions causes a separator to be added to the context menu */
-		public static SelectionAction SEPARATOR = new SelectionAction("SEPARATOR") {
+		public static final SelectionAction SEPARATOR = new SelectionAction("SEPARATOR") {
 			public boolean performAction(ImDocumentMarkupPanel invoker) { return false; }
 		};
 		
@@ -4359,11 +4852,15 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 				mi.setToolTipText(this.tooltip);
 			mi.addActionListener(new ActionListener() {
 				public void actionPerformed(ActionEvent ae) {
-					invoker.beginAtomicAction(label);
-					boolean changed = performAction(invoker);
-					if (changed) {
-						invoker.validate();
-						invoker.repaint();
+					try {
+						invoker.beginAtomicAction(label);
+						boolean changed = performAction(invoker);
+						if (changed) {
+							invoker.validate();
+							invoker.repaint();
+						}
+					}
+					finally {
 						invoker.endAtomicAction();
 					}
 				}

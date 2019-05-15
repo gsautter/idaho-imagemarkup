@@ -27,7 +27,6 @@
  */
 package de.uka.ipd.idaho.im;
 
-import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.TreeSet;
 
@@ -68,7 +67,7 @@ public class ImRegion extends ImLayoutObject {
 	 * @param bounds the bounding box defining the region
 	 */
 	public ImRegion(ImPage page, BoundingBox bounds) {
-		this(page.getDocument(), page.pageId, bounds, null);
+		this(page.getDocument(), page.pageId, bounds);
 		page.addRegion(this);
 	}
 	
@@ -90,7 +89,7 @@ public class ImRegion extends ImLayoutObject {
 	 * @param bounds the bounding box defining the region
 	 */
 	public ImRegion(ImDocument doc, int pageId, BoundingBox bounds) {
-		this(doc, pageId, bounds, null);
+		super(doc, pageId, bounds);
 	}
 	
 	/** Constructor
@@ -100,9 +99,7 @@ public class ImRegion extends ImLayoutObject {
 	 * @param type the region type
 	 */
 	public ImRegion(ImDocument doc, int pageId, BoundingBox bounds, String type) {
-		super(doc, pageId, bounds);
-		if (type != null)
-			this.setType(type);
+		super(doc, pageId, bounds, type);
 	}
 	
 	/* (non-Javadoc)
@@ -168,7 +165,8 @@ public class ImRegion extends ImLayoutObject {
 	 * @return an array holding the regions nested in this region
 	 */
 	public ImRegion[] getRegions() {
-		return this.getRegions(null);
+//		return this.getRegions(null);
+		return this.getRegions(null, false);
 	}
 	
 	/**
@@ -182,22 +180,69 @@ public class ImRegion extends ImLayoutObject {
 	 * @return an array holding the regions representing the layout of the page
 	 */
 	public ImRegion[] getRegions(String type) {
-		if (this.page == null)
-			return new ImRegion[0];
-		ImRegion[] regions = this.page.getRegionsInside(this.bounds, false);
-		if (type == null)
-			return regions;
-		ArrayList regionList = new ArrayList();
-		for (int r = 0; r < regions.length; r++) {
-			if (type.equals(regions[r].getType()))
-				regionList.add(regions[r]);
-		}
-		return ((ImRegion[]) regionList.toArray(new ImRegion[regionList.size()]));
+		return this.getRegions(type, false);
+//		if (this.page == null)
+//			return new ImRegion[0];
+//		ImRegion[] regions = this.page.getRegionsInside(this.bounds, false);
+//		if (type == null)
+//			return regions;
+//		ArrayList regionList = new ArrayList();
+//		for (int r = 0; r < regions.length; r++) {
+//			if (type.equals(regions[r].getType()))
+//				regionList.add(regions[r]);
+//		}
+//		return ((ImRegion[]) regionList.toArray(new ImRegion[regionList.size()]));
 	}
 	
 	/**
-	 * Retrieve the types of regions present in this page. The region types are
-	 * in lexicographical order. If the region is detached from the document,
+	 * Retrieve the regions (e.g. paragraphs and lines) nested inside this
+	 * region. Regions higher up in the hierarchy appear before the ones
+	 * nested in them in the returned array. In addition, they are sorted
+	 * according to the orientation of the document, e.g. left to right and top
+	 * to bottom for text in Latin scripts. If <code>fuzzy</code> is set to
+	 * <code>true</code>, the result also includes all regions whose center
+	 * point lies inside the region, even if they do not fully lie inside the
+	 * region. If the region is detached from the document, this method returns
+	 * an empty array. 
+	 * @param fuzzy do fuzzy matching?
+	 * @return an array holding the regions nested in this region
+	 */
+	public ImRegion[] getRegions(boolean fuzzy) {
+		return this.getRegions(null, fuzzy);
+	}
+	
+	/**
+	 * Retrieve the regions (e.g. paragraphs or lines) nested inside this
+	 * region. Regions higher up in the hierarchy appear before the ones
+	 * nested in them in the returned array. In addition, they are sorted
+	 * according to the orientation of the document, e.g. left to right and top
+	 * to bottom for text in Latin scripts. If <code>fuzzy</code> is set to
+	 * <code>true</code>, the result also includes all regions whose center
+	 * point lies inside the region, even if they do not fully lie inside the
+	 * region. If the region is detached from the document, this method returns
+	 * an empty array. 
+	 * @param type the type of regions to return
+	 * @param fuzzy do fuzzy matching?
+	 * @return an array holding the regions representing the layout of the page
+	 */
+	public ImRegion[] getRegions(String type, boolean fuzzy) {
+		if (this.page == null)
+			return new ImRegion[0];
+		return this.page.getRegionsInside(type, this.bounds, fuzzy);
+//		ImRegion[] regions = this.page.getRegionsInside(this.bounds, false);
+//		if (type == null)
+//			return regions;
+//		ArrayList regionList = new ArrayList();
+//		for (int r = 0; r < regions.length; r++) {
+//			if (type.equals(regions[r].getType()))
+//				regionList.add(regions[r]);
+//		}
+//		return ((ImRegion[]) regionList.toArray(new ImRegion[regionList.size()]));
+	}
+	
+	/**
+	 * Retrieve the types of regions present inside this region. The region types
+	 * are in lexicographical order. If the region is detached from the document,
 	 * this method returns an empty array.
 	 * @return an array holding the region types
 	 */

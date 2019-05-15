@@ -61,6 +61,9 @@ public class ImFont implements ImObject {
 	/** the name of the attribute indicating if the font is serif or sans-serif */
 	public static final String SERIF_ATTRIBUTE = "serif";
 	
+	/** the name of the attribute indicating if the font is monospaced */
+	public static final String MONOSPACED_ATTRIBUTE = "monospaced";
+	
 	/** the name of the attribute to a word storing the font specific char codes the word was composed from */
 	public static final String CHARACTER_CODE_STRING_ATTRIBUTE = "fontCharCodes";
 	
@@ -72,6 +75,7 @@ public class ImFont implements ImObject {
 	private boolean bold;
 	private boolean italics;
 	private boolean serif;
+	private boolean monospaced;
 	
 	private TreeMap characters = new TreeMap();
 	
@@ -80,7 +84,7 @@ public class ImFont implements ImObject {
 	 * @param name the font name
 	 */
 	public ImFont(ImDocument doc, String name) {
-		this(doc, name, false, false, true);
+		this(doc, name, false, false, true, false);
 	}
 	
 	/** Constructor
@@ -91,11 +95,24 @@ public class ImFont implements ImObject {
 	 * @param serif is the font serif or sans-serif?
 	 */
 	public ImFont(ImDocument doc, String name, boolean bold, boolean italics, boolean serif) {
+		this(doc, name, bold, italics, serif, false);
+	}
+	
+	/** Constructor
+	 * @param doc the Image Markup document the font belongs to
+	 * @param name the font name
+	 * @param bold is the font bold?
+	 * @param italics is the font in italics?
+	 * @param serif is the font serif or sans-serif?
+	 * @param monospaced is the font monospaced or not?
+	 */
+	public ImFont(ImDocument doc, String name, boolean bold, boolean italics, boolean serif, boolean monospaced) {
 		this.doc = doc;
 		this.name = name;
 		this.bold = bold;
 		this.italics = italics;
 		this.serif = serif;
+		this.monospaced = monospaced;
 	}
 	
 	/* (non-Javadoc)
@@ -108,6 +125,8 @@ public class ImFont implements ImObject {
 			this.setItalics(true);
 		else if (SERIF_ATTRIBUTE.equals(name))
 			this.setSerif(true);
+		else if (MONOSPACED_ATTRIBUTE.equals(name))
+			this.setMonospaced(true);
 	}
 	
 	/* (non-Javadoc)
@@ -128,6 +147,11 @@ public class ImFont implements ImObject {
 			boolean wasSerif = this.isSerif();
 			this.setSerif(value != null);
 			return new Boolean(wasSerif);
+		}
+		else if (MONOSPACED_ATTRIBUTE.equals(name)) {
+			boolean wasMonospaced = this.isMonospaced();
+			this.setMonospaced(value != null);
+			return new Boolean(wasMonospaced);
 		}
 		else if (name.startsWith(CHARACTER_STRING_ATTRIBUTE + "-") && (value instanceof String)) {
 			int charId = Integer.parseInt(name.substring((CHARACTER_STRING_ATTRIBUTE + "-").length()));
@@ -188,7 +212,7 @@ public class ImFont implements ImObject {
 	 * @see de.uka.ipd.idaho.gamta.Attributed#getAttributeNames()
 	 */
 	public String[] getAttributeNames() {
-		String[] ans = {BOLD_ATTRIBUTE, ITALICS_ATTRIBUTE, SERIF_ATTRIBUTE};
+		String[] ans = {BOLD_ATTRIBUTE, ITALICS_ATTRIBUTE, SERIF_ATTRIBUTE, MONOSPACED_ATTRIBUTE};
 		return ans;
 	}
 	
@@ -210,6 +234,11 @@ public class ImFont implements ImObject {
 			boolean wasSerif = this.isSerif();
 			this.setSerif(false);
 			return new Boolean(wasSerif);
+		}
+		else if (MONOSPACED_ATTRIBUTE.equals(name)) {
+			boolean wasMonospaced = this.isMonospaced();
+			this.setMonospaced(false);
+			return new Boolean(wasMonospaced);
 		}
 		else return null;
 	}
@@ -314,6 +343,26 @@ public class ImFont implements ImObject {
 			return;
 		this.serif = serif;
 		this.doc.notifyAttributeChanged(this, SERIF_ATTRIBUTE, (this.serif ? null : "true"));
+	}
+	
+	/**
+	 * Test whether the font is monospaced.
+	 * @return true if the font is monospaced, false otherwise
+	 */
+	public boolean isMonospaced() {
+		return this.monospaced;
+	}
+	
+	/**
+	 * Mark the font as monospaced or not. This property overwrites the serif
+	 * property if set to <code>true</code>
+	 * @param monospaced is the font monospaced?
+	 */
+	public void setMonospaced(boolean monospaced) {
+		if (this.monospaced == monospaced)
+			return;
+		this.monospaced = monospaced;
+		this.doc.notifyAttributeChanged(this, MONOSPACED_ATTRIBUTE, (this.monospaced ? null : "true"));
 	}
 	
 	/**

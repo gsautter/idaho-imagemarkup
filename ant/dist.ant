@@ -5,8 +5,7 @@
 -->
 
 <project name="dist">
-	<target name="jars" depends="imagemarkupjar,imagemarkupbinjar,ocrjar,ocrbinjar,pdfjar,pdfbinjar">
-	</target>
+	<target name="jars" depends="imagemarkupjar,imagemarkupbinjar,ocrjar,ocrbinjar,pdfjar,pdfbinjar" />
 	
 	<target name="imagemarkupjar">
 		<delete file="${jar.imagemarkup}" />

@@ -27,6 +27,7 @@
  */
 package de.uka.ipd.idaho.im.util;
 
+import java.awt.ComponentOrientation;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
@@ -78,6 +79,36 @@ import de.uka.ipd.idaho.stringUtils.csvHandler.StringTupel;
  * @author sautter
  */
 public abstract class ImDocumentData {
+	
+	/**
+	 * An Image Markup document backed by an instance of Image Markup document
+	 * data.
+	 * 
+	 * @author sautter
+	 */
+	public static abstract class DataBackedImDocument extends ImDocument {
+		
+		/** Constructor
+		 * @param docId
+		 * @param orientation
+		 */
+		protected DataBackedImDocument(String docId, ComponentOrientation orientation) {
+			super(docId, orientation);
+		}
+		
+		/** Constructor
+		 * @param docId
+		 */
+		protected DataBackedImDocument(String docId) {
+			super(docId);
+		}
+		
+		/**
+		 * Retrieve the Image Markup document data backing the document.
+		 * @return the backing Image Markup document data
+		 */
+		public abstract ImDocumentData getDocumentData(); 
+	}
 	
 	/**
 	 * Metadata of a single entry in an Image Markup document.
@@ -198,9 +229,11 @@ public abstract class ImDocumentData {
 		}
 	}
 	
+	private String documentId = null;
 	private HashMap entriesByName = new LinkedHashMap();
 	
 	/** Constructor
+	 * @param documentId the ID of the Image Markup document represented by this data object
 	 */
 	protected ImDocumentData() {}
 	
@@ -213,6 +246,15 @@ public abstract class ImDocumentData {
 	}
 	
 	/**
+	 * Test if this document data object has an entry with a specific name.
+	 * @param entryName the name of the entry to test
+	 * @return true if the argument entry if included in this document data
+	 */
+	public boolean hasEntry(String entryName) {
+		return this.entriesByName.containsKey(entryName);
+	}
+	
+	/**
 	 * Test if this document data object has a specific entry.
 	 * @param entry the entry to test
 	 * @return true if the argument entry if included in this document data
@@ -222,12 +264,14 @@ public abstract class ImDocumentData {
 	}
 	
 	/**
-	 * Test if this document data object has an entry with a specific name.
+	 * Test if this document data object has an entry with a specific name as
+	 * well as the data it points to.
 	 * @param entryName the name of the entry to test
-	 * @return true if the argument entry if included in this document data
+	 * @return true if this document data has the data for the argument entry
 	 */
-	public boolean hasEntry(String entryName) {
-		return this.entriesByName.containsKey(entryName);
+	public boolean hasEntryData(String entryName) {
+		ImDocumentEntry entry = this.getEntry(entryName);
+		return ((entry != null) && this.hasEntryData(entry));
 	}
 	
 	/**
@@ -347,7 +391,7 @@ public abstract class ImDocumentData {
 	 * Instantiate an Image Markup document from the data.
 	 * @return the Image Markup document
 	 */
-	public ImDocument getDocument() throws IOException {
+	public DataBackedImDocument getDocument() throws IOException {
 		return this.getDocument(ProgressMonitor.dummy);
 	}
 	
@@ -356,7 +400,7 @@ public abstract class ImDocumentData {
 	 * @param pm a progress monitor to observe the loading process
 	 * @return the Image Markup document
 	 */
-	public ImDocument getDocument(ProgressMonitor pm) throws IOException {
+	public DataBackedImDocument getDocument(ProgressMonitor pm) throws IOException {
 		return (this.canLoadDocument() ? ImDocumentIO.loadDocument(this, pm) : null);
 	}
 	
@@ -575,6 +619,21 @@ public abstract class ImDocumentData {
 	}
 	
 	/**
+	 * Retrieve the identifier of the Image Markup document represented by the
+	 * underlying data. This default implementation reads the identifier from
+	 * the document attributes. Sub classes are welcome to overwrite it with a
+	 * more efficient implementation.
+	 * @return an identifier of the document
+	 */
+	public String getDocumentId() {
+		if (this.documentId == null) {
+			Attributed attributes = this.getDocumentAttributes();
+			this.documentId = ((String) attributes.getAttribute(ImDocumentIO.DOCUMENT_ID_ATTRIBUTE));
+		}
+		return this.documentId;
+	}
+	
+	/**
 	 * Retrieve an identifier for the underlying data source. This identifier
 	 * is not equal to the ID of the document represented by the underlying
 	 * data, even though it may include it. Rather, the identifier returned by
@@ -650,7 +709,7 @@ public abstract class ImDocumentData {
 		}
 		
 		/** 
-		 * This implementation first closes the wrapped input stream and theb
+		 * This implementation first closes the wrapped input stream and then
 		 * finalizes the MD5 hash of the data.
 		 * @see java.io.FilterOutputStream#close()
 		 */

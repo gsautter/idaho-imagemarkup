@@ -170,7 +170,12 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			return this.mimeType;
 		else if (ID_ATTRIBUTE.equals(name))
 			return this.getId();
-		else return super.setAttribute(name, value);
+		else {
+			Object oldValue = super.setAttribute(name, value);
+			if ((this.doc != null) && ((oldValue == null) ? (value != null) : !oldValue.equals(value)))
+				this.doc.notifyAttributeChanged(this, name, oldValue);
+			return oldValue;
+		}
 	}
 	
 	/* (non-Javadoc)
@@ -309,6 +314,9 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		/** the name of the attribute holding the page internal rendering order position of an image, namely 'ron' */
 		public static final String RENDER_ORDER_NUMBER_ATTRIBUTE = "ron";
 		
+		/** the name of the attribute holding the bounding box of the visible portion of the image on the document page (in page image resolution), namely 'clipBox' */
+		public static final String CLIP_BOX_ATTRIBUTE = "clipBox";
+		
 		int pageId = -1;
 		int renderOrderNumber = -1;
 		int dpi = -1;
@@ -339,7 +347,7 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		}
 		
 		/**
-		 * @return the resolution of the image
+		 * @return the resolution of the graphics
 		 */
 		public int getDpi() {
 			return this.dpi;
@@ -521,6 +529,7 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 	 */
 	public static abstract class Figure extends Image {
 		private BoundingBox bounds = null;
+		private BoundingBox clipBounds = null;
 		
 		/** Constructor
 		 * @param doc the document the figure belongs to
@@ -537,10 +546,25 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		 * @param renderOrderNumber the page internal position at which the figure is rendered
 		 * @param dpi the resolution of the figure
 		 * @param bounds the bounding box of the figure (in page image resolution)
+		 * @param clipBounds the bounding box of the visible portion of the figure on the document page
 		 */
 		public Figure(ImDocument doc, String mimeType, int pageId, int renderOrderNumber, int dpi, BoundingBox bounds) {
+			this(doc, mimeType, pageId, renderOrderNumber, dpi, bounds, null);
+		}
+		
+		/** Constructor
+		 * @param doc the document the figure belongs to
+		 * @param mimeType the MIME type of the binary representation of the figure
+		 * @param pageId the ID of the page the figure lies on
+		 * @param renderOrderNumber the page internal position at which the figure is rendered
+		 * @param dpi the resolution of the figure
+		 * @param bounds the bounding box of the figure (in page image resolution)
+		 * @param clipBounds the bounding box of the visible portion of the figure on the document page
+		 */
+		public Figure(ImDocument doc, String mimeType, int pageId, int renderOrderNumber, int dpi, BoundingBox bounds, BoundingBox clipBounds) {
 			super(doc, FIGURE_TYPE, mimeType, pageId, renderOrderNumber, dpi);
 			this.bounds = bounds;
+			this.clipBounds = ((clipBounds == null) ? this.bounds : clipBounds);
 			if (doc != null)
 				doc.addSupplement(this);
 		}
@@ -559,12 +583,21 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			return this.bounds;
 		}
 		
+		/**
+		 * @return the bounding box of the visible portion of the figure on the document page (in page image resolution)
+		 */
+		public BoundingBox getClipBounds() {
+			return ((this.clipBounds == null) ? this.bounds : this.clipBounds);
+		}
+		
 		/* (non-Javadoc)
 		 * @see de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed#getAttribute(java.lang.String)
 		 */
 		public Object getAttribute(String name) {
 			if (BOUNDING_BOX_ATTRIBUTE.equals(name) && (this.bounds != null))
 				return this.bounds;
+			else if (CLIP_BOX_ATTRIBUTE.equals(name) && (this.clipBounds != null))
+				return this.clipBounds;
 			else return super.getAttribute(name);
 		}
 		
@@ -574,6 +607,8 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		public Object getAttribute(String name, Object def) {
 			if (BOUNDING_BOX_ATTRIBUTE.equals(name) && (this.bounds != null))
 				return this.bounds;
+			else if (CLIP_BOX_ATTRIBUTE.equals(name) && (this.clipBounds != null))
+				return this.clipBounds;
 			else return super.getAttribute(name, def);
 		}
 		
@@ -584,6 +619,8 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			TreeSet ans = new TreeSet(Arrays.asList(super.getAttributeNames()));
 			if (this.bounds != null)
 				ans.add(BOUNDING_BOX_ATTRIBUTE);
+			if ((this.clipBounds != null) && !this.clipBounds.equals(this.bounds))
+				ans.add(CLIP_BOX_ATTRIBUTE);
 			return ((String[]) ans.toArray(new String[ans.size()]));
 		}
 		
@@ -593,6 +630,8 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		public boolean hasAttribute(String name) {
 			if (BOUNDING_BOX_ATTRIBUTE.equals(name))
 				return (this.bounds != null);
+			else if (BOUNDING_BOX_ATTRIBUTE.equals(name))
+				return ((this.clipBounds != null) && !this.clipBounds.equals(this.bounds));
 			else return super.hasAttribute(name);
 		}
 		
@@ -609,20 +648,17 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 				else this.bounds = BoundingBox.parse(value.toString());
 				return oldBounds;
 			}
+			else if (CLIP_BOX_ATTRIBUTE.equals(name)) {
+				BoundingBox oldClipBounds = this.clipBounds;
+				if (value == null)
+					this.clipBounds = null;
+				else if (value instanceof BoundingBox)
+					this.clipBounds = ((BoundingBox) value);
+				else this.clipBounds = BoundingBox.parse(value.toString());
+				return oldClipBounds;
+			}
 			else return super.setAttribute(name, value);
 		}
-//		
-//		/* (non-Javadoc)
-//		 * @see de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed#removeAttribute(java.lang.String)
-//		 */
-//		public Object removeAttribute(String name) {
-//			if (BOUNDING_BOX_ATTRIBUTE.equals(name)) {
-//				BoundingBox oldBounds = this.bounds;
-//				this.bounds = null;
-//				return oldBounds;
-//			}
-//			else return super.removeAttribute(name);
-//		}
 		
 		/**
 		 * Create a Figure around a <code>BufferedImage</code>. The argument
@@ -638,15 +674,36 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		 * @param dpi the resolution of the scan
 		 * @param figure the object representation of the figure
 		 * @param bounds the bounding box of the figure on the document page
-		 * @return the newly created scan
+		 * @return the newly created figure
 		 */
 		public static Figure createFigure(ImDocument doc, int pageId, int renderOrderNumber, int dpi, BufferedImage figure, BoundingBox bounds) {
+			return createFigure(doc, pageId, renderOrderNumber, dpi, figure, bounds, bounds);
+		}
+		
+		/**
+		 * Create a Figure around a <code>BufferedImage</code>. The argument
+		 * image is serialized into a byte stream in PNG format, so it can be
+		 * modified later without breaking the created Figure supplement. The
+		 * bounding box of the figure has to be in page image resolution, not
+		 * in figure resolution, to facilitate relating an original figure to
+		 * an ImRegion marking its counterpart in a document page. Further, the
+		 * created Figure is automatically added to the argument document.
+		 * @param doc the document the source belongs to
+		 * @param pageId the ID of the page the scan belongs to
+		 * @param renderOrderNumber the page internal position at which the figure is rendered
+		 * @param dpi the resolution of the scan
+		 * @param figure the object representation of the figure
+		 * @param bounds the bounding box of the figure on the document page
+		 * @param clipBounds the bounding box of the visible portion of the figure on the document page
+		 * @return the newly created figure
+		 */
+		public static Figure createFigure(ImDocument doc, int pageId, int renderOrderNumber, int dpi, BufferedImage figure, BoundingBox bounds, BoundingBox clipBounds) {
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
 			try {
 				ImageIO.write(figure, "PNG", baos);
 			} catch (IOException ioe) { /* never gonna happen, but Java don't know */ }
 			final byte[] figureBytes = baos.toByteArray();
-			return new Figure(doc, "image/png", pageId, renderOrderNumber, dpi, bounds) {
+			return new Figure(doc, "image/png", pageId, renderOrderNumber, dpi, bounds, clipBounds) {
 				public InputStream getInputStream() throws IOException {
 					return new ByteArrayInputStream(figureBytes);
 				}
@@ -668,13 +725,17 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 	 */
 	public static abstract class Graphics extends Image {
 		
+		/** the attribute for marking a graphics object as part of page layout artwork, namely 'pageDecoration' */
+		public static final String PAGE_DECORATION_ATTRIBUTE = "pageDecoration";
+		
 		/** the MIME type vector based graphics objects are stored in, namely 'application/json' */
 		public static final String MIME_TYPE = "application/json";
 		
-		/** the resolution of the unscaled vector based graphics, namely 72 DPI*/
+		/** the resolution of the unscaled vector based graphics, namely 72 DPI */
 		public static final int RESOLUTION = 72;
 		
 		private BoundingBox bounds = null;
+		private BoundingBox clipBounds = null;
 		private boolean modifiable = false;
 		ArrayList paths = null; // needs to be accessible from anonymous sub class used in createGraphics() ...
 		
@@ -692,12 +753,24 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		 * @param bounds the bounding box of the graphics (in page image resolution)
 		 */
 		public Graphics(ImDocument doc, int pageId, int renderOrderNumber, BoundingBox bounds) {
-			this(doc, pageId, renderOrderNumber, bounds, false);
+			this(doc, pageId, renderOrderNumber, bounds, null);
 		}
 		
-		private Graphics(ImDocument doc, int pageId, int renderOrderNumber, BoundingBox bounds, boolean modifiable) {
+		/** Constructor
+		 * @param doc the document the graphics belongs to
+		 * @param pageId the ID of the page the graphics lies on
+		 * @param renderOrderNumber the page internal position at which the graphics is rendered
+		 * @param bounds the bounding box of the graphics (in page image resolution)
+		 * @param clipBounds the bounding box of the visible portion of the graphics on the document page
+		 */
+		public Graphics(ImDocument doc, int pageId, int renderOrderNumber, BoundingBox bounds, BoundingBox clipBounds) {
+			this(doc, pageId, renderOrderNumber, bounds, clipBounds, false);
+		}
+		
+		private Graphics(ImDocument doc, int pageId, int renderOrderNumber, BoundingBox bounds, BoundingBox clipBounds, boolean modifiable) {
 			super(doc, GRAPHICS_TYPE, MIME_TYPE, pageId, renderOrderNumber, RESOLUTION);
 			this.bounds = bounds;
+			this.clipBounds = ((clipBounds == null) ? this.bounds : clipBounds);
 			if (modifiable) {
 				this.modifiable = true;
 				this.paths = new ArrayList();
@@ -714,10 +787,17 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		}
 		
 		/**
-		 * @return the bounding box of the figure (in page image resolution)
+		 * @return the bounding box of the graphics (in page image resolution)
 		 */
 		public BoundingBox getBounds() {
 			return this.bounds;
+		}
+		
+		/**
+		 * @return the bounding box of the visible portion of the graphics on the document page (in page image resolution)
+		 */
+		public BoundingBox getClipBounds() {
+			return ((this.clipBounds == null) ? this.bounds : this.clipBounds);
 		}
 		
 		/* (non-Javadoc)
@@ -726,6 +806,8 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		public Object getAttribute(String name) {
 			if (BOUNDING_BOX_ATTRIBUTE.equals(name) && (this.bounds != null))
 				return this.bounds;
+			else if (CLIP_BOX_ATTRIBUTE.equals(name) && (this.clipBounds != null))
+				return this.clipBounds;
 			else return super.getAttribute(name);
 		}
 		
@@ -735,6 +817,8 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		public Object getAttribute(String name, Object def) {
 			if (BOUNDING_BOX_ATTRIBUTE.equals(name) && (this.bounds != null))
 				return this.bounds;
+			else if (CLIP_BOX_ATTRIBUTE.equals(name) && (this.clipBounds != null))
+				return this.clipBounds;
 			else return super.getAttribute(name, def);
 		}
 		
@@ -745,6 +829,8 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			TreeSet ans = new TreeSet(Arrays.asList(super.getAttributeNames()));
 			if (this.bounds != null)
 				ans.add(BOUNDING_BOX_ATTRIBUTE);
+			if ((this.clipBounds != null) && !this.clipBounds.equals(this.bounds))
+				ans.add(CLIP_BOX_ATTRIBUTE);
 			return ((String[]) ans.toArray(new String[ans.size()]));
 		}
 		
@@ -754,6 +840,8 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		public boolean hasAttribute(String name) {
 			if (BOUNDING_BOX_ATTRIBUTE.equals(name))
 				return (this.bounds != null);
+			else if (BOUNDING_BOX_ATTRIBUTE.equals(name))
+				return ((this.clipBounds != null) && !this.clipBounds.equals(this.bounds));
 			else return super.hasAttribute(name);
 		}
 		
@@ -769,6 +857,15 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 					this.bounds = ((BoundingBox) value);
 				else this.bounds = BoundingBox.parse(value.toString());
 				return oldBounds;
+			}
+			else if (CLIP_BOX_ATTRIBUTE.equals(name)) {
+				BoundingBox oldClipBounds = this.clipBounds;
+				if (value == null)
+					this.clipBounds = null;
+				else if (value instanceof BoundingBox)
+					this.clipBounds = ((BoundingBox) value);
+				else this.clipBounds = BoundingBox.parse(value.toString());
+				return oldClipBounds;
 			}
 			else return super.setAttribute(name, value);
 		}
@@ -852,6 +949,9 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			/** the bounding box of the sub path (in page image resolution) */
 			public final BoundingBox bounds;
 			
+			/** the bounding box of the sub path (in page image resolution) */
+			public final BoundingBox clipBounds;
+			
 			/** the page internal position at which the path is rendered */
 			public final int renderOrderNumber;
 			
@@ -868,16 +968,19 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			private ArrayList subPaths = new ArrayList();
 			
 			/** Constructor
-			 * @param bounds the bounding box of the sub path (in page image resolution)
+			 * @param bounds the bounding box of the path (in page image resolution)
+			 * @param clipBounds the bounding box of the visible portion of the path on the document page
 			 * @param renderOrderNumber the page internal position at which the path is rendered
 			 */
-			public Path(BoundingBox bounds, int renderOrderNumber) {
+			public Path(BoundingBox bounds, BoundingBox clipBounds, int renderOrderNumber) {
 				this.bounds = bounds;
+				this.clipBounds = ((clipBounds == null) ? bounds : clipBounds);
 				this.renderOrderNumber = renderOrderNumber;
 			}
 			
 			/** Constructor
 			 * @param bounds the bounding box of the sub path (in page image resolution)
+			 * @param clipBounds the bounding box of the visible portion of the path on the document page
 			 * @param renderOrderNumber the page internal position at which the path is rendered
 			 * @param strokeColor the color for stroking the path (if it is stroked)
 			 * @param lineWidth the line width to stroke the path with (if it is stroked)
@@ -888,8 +991,8 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			 * @param dashPatternPhase the phase of the dash pattern to use for stroking (if the path is stroked)
 			 * @param fillColor the color to use for filling sub path (if the path is filled)
 			 */
-			public Path(BoundingBox bounds, int renderOrderNumber, Color strokeColor, float lineWidth, byte lineCapStyle, byte lineJointStyle, float miterLimit, Vector dashPattern, float dashPatternPhase, Color fillColor) {
-				this(bounds, renderOrderNumber);
+			public Path(BoundingBox bounds, BoundingBox clipBounds, int renderOrderNumber, Color strokeColor, float lineWidth, byte lineCapStyle, byte lineJointStyle, float miterLimit, Vector dashPattern, float dashPatternPhase, Color fillColor) {
+				this(bounds, clipBounds, renderOrderNumber);
 				this.strokeColor = strokeColor;
 				this.lineWidth = lineWidth;
 				this.lineCapStyle = lineCapStyle;
@@ -931,11 +1034,6 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 				}
 				return new BasicStroke(this.lineWidth, this.lineCapStyle, this.lineJointStyle, ((this.miterLimit < 1) ? 1.0f : this.miterLimit), dashPattern, this.dashPatternPhase);
 			}
-//			public BasicStroke getFallbackStroke() {
-//				if (this.strokeColor == null)
-//					return null;
-//				return new BasicStroke(1, this.lineCapStyle, this.lineJointStyle, ((this.miterLimit < 1) ? 1.0f : this.miterLimit));
-//			}
 			
 			/**
 			 * Retrieve the fill color for this path. If this path is not
@@ -1018,6 +1116,11 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 				out.write("\"bounds\": \"".getBytes("UTF-8"));
 				out.write(this.bounds.toString().getBytes("UTF-8"));
 				out.write("\",".getBytes("UTF-8"));
+				if ((this.clipBounds != null) && !this.clipBounds.equals(this.bounds)) {
+					out.write("\"clipBounds\": \"".getBytes("UTF-8"));
+					out.write(this.clipBounds.toString().getBytes("UTF-8"));
+					out.write("\",".getBytes("UTF-8"));
+				}
 				out.write("\"renderOrderNumber\": ".getBytes("UTF-8"));
 				out.write(("" + this.renderOrderNumber).getBytes("UTF-8"));
 				out.write(",".getBytes("UTF-8"));
@@ -1083,9 +1186,11 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			static Path loadPath(Map data) {
 				String boundsData = JsonParser.getString(data, "bounds");
 				BoundingBox pathBounds = BoundingBox.parse(boundsData);
+				String clipBoundsData = JsonParser.getString(data, "clipBounds");
+				BoundingBox pathClipBounds = ((clipBoundsData == null) ? null : BoundingBox.parse(clipBoundsData));
 				Number renderOrderNumber = JsonParser.getNumber(data, "renderOrderNumber");
 				
-				Path path = new Path(pathBounds, ((renderOrderNumber == null) ? -1 : renderOrderNumber.intValue()));
+				Path path = new Path(pathBounds, pathClipBounds, ((renderOrderNumber == null) ? -1 : renderOrderNumber.intValue()));
 				
 				String strokeColor = JsonParser.getString(data, "strokeColor");
 				if (strokeColor != null)
@@ -1401,7 +1506,26 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		 * @return the newly created Graphics
 		 */
 		public static Graphics createGraphics(ImDocument doc, int pageId, int renderOrderNumber, BoundingBox bounds) {
-			return new Graphics(doc, pageId, renderOrderNumber, bounds, true) {
+			return createGraphics(doc, pageId, renderOrderNumber, bounds, null);
+		}
+		
+		/**
+		 * Create an empty Graphics object. Only Graphics objects obtained from
+		 * this method can be modified via the <code>addPath()</code> method -
+		 * all others will throw an <code>IllegalStateException</code>. The
+		 * bounding box of the graphics has to be in page image resolution to
+		 * facilitate relating a graphics to an ImRegion marking its counterpart
+		 * in a document page. Further, the created Graphics is automatically
+		 * added to the argument document.
+		 * @param doc the document the graphics belongs to
+		 * @param pageId the ID of the page the scan belongs to
+		 * @param renderOrderNumber the page internal position at which the graphics is rendered
+		 * @param bounds the bounding box of the graphics on the document page
+		 * @param clipBounds the bounding box of the visible portion of the graphics on the document page
+		 * @return the newly created Graphics
+		 */
+		public static Graphics createGraphics(ImDocument doc, int pageId, int renderOrderNumber, BoundingBox bounds, BoundingBox clipBounds) {
+			return new Graphics(doc, pageId, renderOrderNumber, bounds, clipBounds, true) {
 				byte[] data = new byte[0];
 				int dataPathCount = 0;
 				public InputStream getInputStream() throws IOException {
@@ -1451,7 +1575,8 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			if ((g1.pageId != -1) && (g2.pageId != -1) && (g1.pageId != g2.pageId))
 				throw new IllegalArgumentException("Can only merge Graphics objects from the same page.");
 			BoundingBox[] gBounds = {g1.bounds, g2.bounds};
-			Graphics m = createGraphics(g1.getDocument(), Math.max(g1.pageId, g2.pageId), Math.max(g1.renderOrderNumber, g2.renderOrderNumber), BoundingBox.aggregate(gBounds));
+			BoundingBox[] gClipBounds = {g1.clipBounds, g2.clipBounds};
+			Graphics m = createGraphics(g1.getDocument(), Math.max(g1.pageId, g2.pageId), Math.max(g1.renderOrderNumber, g2.renderOrderNumber), BoundingBox.aggregate(gBounds), BoundingBox.aggregate(gClipBounds));
 			Path[] ps1 = g1.getPaths();
 			for (int p = 0; p < ps1.length; p++)
 				m.addPath(ps1[p]);
@@ -1533,7 +1658,10 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 	 * objects to lie in the argument page, the latter is the most sensible
 	 * scenario. If the argument rendering DPI is a positive integer, it is
 	 * used as it is; otherwise, the maximum resolution of any of the argument
-	 * <code>Figure</code> and <code>Graphics</code> supplements is used.
+	 * <code>Figure</code> and <code>Graphics</code> supplements is used.<br/>
+	 * Rendering adds two pixels of margin on every edge of the returned image,
+	 * so the image slightly exceeds the aggregate bounds of the rendered
+	 * objects.
 	 * @param figures the figures to include
 	 * @param scaleToDpi the resolution to render at
 	 * @param graphics the graphics to include
@@ -1542,6 +1670,31 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 	 * @return the composed image
 	 */
 	public static BufferedImage getCompositeImage(Figure[] figures, int scaleToDpi, Graphics[] graphics, ImWord[] words, ImPage page) {
+		return getCompositeImage(figures, scaleToDpi, graphics, words, page, BufferedImage.TYPE_INT_RGB);
+	}
+	
+	/**
+	 * Render an image from a combination of <code>Figure</code> and
+	 * <code>Graphics</code> supplements, overlaid with any labeling
+	 * <code>ImWord</code>s. While there is no strict need for the arguments
+	 * objects to lie in the argument page, the latter is the most sensible
+	 * scenario. If the argument rendering DPI is a positive integer, it is
+	 * used as it is; otherwise, the maximum resolution of any of the argument
+	 * <code>Figure</code> and <code>Graphics</code> supplements is used.<br/>
+	 * Rendering adds two pixels of margin on every edge of the returned image,
+	 * so the image slightly exceeds the aggregate bounds of the rendered
+	 * objects.<br/>
+	 * The argument <code>imageType</code> has to be one of the type constants
+	 * from <code>BufferedImage</code>.
+	 * @param figures the figures to include
+	 * @param scaleToDpi the resolution to render at
+	 * @param graphics the graphics to include
+	 * @param words the labeling words to include
+	 * @param page the page the other argument objects lie in
+	 * @param imageType the type of image (color model) to use
+	 * @return the composed image
+	 */
+	public static BufferedImage getCompositeImage(Figure[] figures, int scaleToDpi, Graphics[] graphics, ImWord[] words, ImPage page, int imageType) {
 		
 		//	compute export figure bounds in page resolution
 		BoundingBox peBounds = getCompositeBounds(figures, graphics, words);
@@ -1622,7 +1775,7 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		}
 		
 		//	set up rendering
-		BufferedImage image = new BufferedImage(((eBounds.right - eBounds.left) + 4), ((eBounds.bottom - eBounds.top) + 4), BufferedImage.TYPE_INT_RGB);
+		BufferedImage image = new BufferedImage((eBounds.getWidth() + 4), (eBounds.getHeight() + 4), imageType);
 		Graphics2D renderer = image.createGraphics();
 		renderer.setColor(Color.WHITE);
 		renderer.fillRect(0, 0, image.getWidth(), image.getHeight());
@@ -2013,13 +2166,8 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 				float x = (eWordBounds[w].left - eBounds.left);
 				float y;
 				
-				//	get font size
-				int fontSize = -1;
-				try {
-					fontSize = Integer.parseInt((String) words[w].getAttribute(ImWord.FONT_SIZE_ATTRIBUTE, "-1"));
-				} catch (NumberFormatException nfe) {}
-				
-				//	get text orientation
+				//	get font size and text orientation
+				int fontSize = words[w].getFontSize();
 				Object to = words[w].getAttribute(ImWord.TEXT_DIRECTION_ATTRIBUTE, ImWord.TEXT_DIRECTION_LEFT_RIGHT);
 				
 				//	write start tag, including rendering properties

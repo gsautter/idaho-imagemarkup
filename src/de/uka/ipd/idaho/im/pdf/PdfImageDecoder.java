@@ -65,6 +65,8 @@ public class PdfImageDecoder {
 		String osName = System.getProperty("os.name");
 		if (osName.matches(".*Linux.*"))
 			return "convert";
+		else if (osName.matches("Mac.*"))
+			return "convert";
 		else {
 			System.out.println("PdfImageDecoder: system command unknown for OS name: " + osName);
 			return null;
@@ -143,7 +145,20 @@ public class PdfImageDecoder {
 	 * @throws IOException
 	 */
 	public BufferedImage decodeImage(byte[] imageBytes, String imageFormat) throws IOException {
-		return this.decodeImage(imageBytes, imageFormat, null);
+		return this.decodeImage(imageBytes, imageFormat, null, null, false);
+	}
+	
+	/**
+	 * Decode an image given as an array of bytes with the help of the Image
+	 * Magick <b>convert</b> tool.
+	 * @param imageBytes the bytes representing the image
+	 * @param imageFormat the format the image data is in
+	 * @param decodeInverted does the Decode parameter indicate an inversion?
+	 * @return the decoded image
+	 * @throws IOException
+	 */
+	public BufferedImage decodeImage(byte[] imageBytes, String imageFormat, boolean decodeInverted) throws IOException {
+		return this.decodeImage(imageBytes, imageFormat, null, null, decodeInverted);
 	}
 	
 	/**
@@ -156,7 +171,21 @@ public class PdfImageDecoder {
 	 * @throws IOException
 	 */
 	public BufferedImage decodeImage(byte[] imageBytes, String imageFormat, String colorSpace) throws IOException {
-		return this.decodeImage(imageBytes, imageFormat, colorSpace, null);
+		return this.decodeImage(imageBytes, imageFormat, colorSpace, null, false);
+	}
+	
+	/**
+	 * Decode an image given as an array of bytes with the help of the Image
+	 * Magick <b>convert</b> tool.
+	 * @param imageBytes the bytes representing the image
+	 * @param imageFormat the format the image data is in
+	 * @param colorSpace the name of the color space used in the input data
+	 * @param decodeInverted does the Decode parameter indicate an inversion?
+	 * @return the decoded image
+	 * @throws IOException
+	 */
+	public BufferedImage decodeImage(byte[] imageBytes, String imageFormat, String colorSpace, boolean decodeInverted) throws IOException {
+		return this.decodeImage(imageBytes, imageFormat, colorSpace, null, decodeInverted);
 	}
 	
 	/**
@@ -170,6 +199,21 @@ public class PdfImageDecoder {
 	 * @throws IOException
 	 */
 	public BufferedImage decodeImage(byte[] imageBytes, String imageFormat, String colorSpace, String altColorSpace) throws IOException {
+		return this.decodeImage(imageBytes, imageFormat, colorSpace, altColorSpace, false);
+	}
+	
+	/**
+	 * Decode an image given as an array of bytes with the help of the Image
+	 * Magick <b>convert</b> tool.
+	 * @param imageBytes the bytes representing the image
+	 * @param imageFormat the format the image data is in
+	 * @param colorSpace the name of the color space used in the input data
+	 * @param altColorSpace the name of the alternative color space specified in the argument color space definition
+	 * @param decodeInverted does the Decode parameter indicate an inversion?
+	 * @return the decoded image
+	 * @throws IOException
+	 */
+	public BufferedImage decodeImage(byte[] imageBytes, String imageFormat, String colorSpace, String altColorSpace, boolean decodeInverted) throws IOException {
 		try {
 			ArrayList command = new ArrayList();
 			if (this.useSystemCommand)
@@ -177,17 +221,28 @@ public class PdfImageDecoder {
 			else command.add(this.imPath.getAbsolutePath() + "/" + getConvertCommand());
 			command.add(imageFormat + ":-");
 			if ((colorSpace != null) && colorSpace.toUpperCase().endsWith("CMYK")) {
-				command.add("-negate");
+				if (!decodeInverted)
+					command.add("-negate");
 				command.add("-profile");
 				command.add(this.imPath.getAbsolutePath() + "/ISOcoated_v2_300_eci.icc");
 			}
 			else if ((colorSpace != null) && colorSpace.toUpperCase().startsWith("ICCB") && (altColorSpace != null) && altColorSpace.toUpperCase().endsWith("CMYK")) {
-				command.add("-negate");
+				if (!decodeInverted)
+					command.add("-negate");
 				command.add("-profile");
 				command.add(this.imPath.getAbsolutePath() + "/ISOcoated_v2_300_eci.icc");
 			}
-			else if ("SeparationBlack".equals(colorSpace) && ("DeviceRGB".equals(altColorSpace) || "DeviceGray".equals(altColorSpace)))
+			else if (!decodeInverted && "SeparationBlack".equals(colorSpace) && ("DeviceRGB".equals(altColorSpace) || "DeviceGray".equals(altColorSpace)))
 				command.add("-negate");
+			else if (!decodeInverted && "SeparationBlack".equals(colorSpace) && "DeviceCMYK".equals(altColorSpace))
+				command.add("-negate");
+			else if (!decodeInverted && "SeparationBlack".equals(colorSpace) && (altColorSpace != null) && altColorSpace.toUpperCase().startsWith("ICCB"))
+				command.add("-negate");
+			else if (!decodeInverted && "DeviceN".equals(colorSpace) && ("DeviceRGB".equals(altColorSpace) || "DeviceGray".equals(altColorSpace)))
+				command.add("-negate");
+			else if (!decodeInverted && "DeviceN".equals(colorSpace) && "DeviceCMYK".equals(altColorSpace))
+				command.add("-negate");
+			//	TODO figure out if we have to negate if only decodeInverted is set ...
 			command.add("png:-");
 			System.out.println("PdfImageDecoder: command is " + command);
 			Process im = Runtime.getRuntime().exec(((String[]) command.toArray(new String[command.size()])), null, imPath.getAbsoluteFile());

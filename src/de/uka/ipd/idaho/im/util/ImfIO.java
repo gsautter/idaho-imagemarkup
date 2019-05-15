@@ -242,7 +242,7 @@ public class ImfIO implements ImagingConstants {
 	 *            argument stream.
 	 * @throws IOException
 	 */
-	public static ImDocument loadDocument(InputStream in, File cacheFolder, ProgressMonitor pm, int inLength) throws IOException {
+	public static ImDocument loadDocument(InputStream in, File cacheFolder, ProgressMonitor pm, long inLength) throws IOException {
 		return ImDocumentIO.loadDocument(in, cacheFolder, pm, inLength);
 //		
 //		//	check progress monitor

@@ -100,10 +100,11 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * is <code>de.uka.ipd.idaho.gamte.Gamta.INNER_PUNCTUATION_TOKENIZER</code> */
 	public static final String TOKENIZER_ATTRIBUTE = "tokenizer";
 	
-	private class ImDocumentAnnotation extends AbstractAttributed implements ImAnnotation {
-		private ImWord firstWord;
-		private ImWord lastWord;
-		private String type;
+	private static class ImDocumentAnnotation extends AbstractAttributed implements ImAnnotation {
+		ImDocument doc;
+		ImWord firstWord;
+		ImWord lastWord;
+		String type;
 		
 		final long createTime;
 		private String id = null;
@@ -127,11 +128,16 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			this.type = type;
 			String oldId = this.id;
 			this.id = null;
-			annotationTypeChanged(this, oldType, oldId);
-			notifyTypeChanged(this, oldType);
+//			annotationTypeChanged(this, oldType, oldId);
+//			notifyTypeChanged(this, oldType);
+			if (this.doc != null) {
+				this.doc.annotationTypeChanged(this, oldType, oldId);
+				this.doc.notifyTypeChanged(this, oldType);
+			}
 		}
 		public ImDocument getDocument() {
-			return ImDocument.this;
+//			return ImDocument.this;
+			return this.doc;
 		}
 		public ImWord getFirstWord() {
 			return this.firstWord;
@@ -141,8 +147,12 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			this.firstWord = firstWord;
 			String oldId = this.id;
 			this.id = null;
-			annotationFirstWordChanged(this, oldFirstWord, oldId);
-			notifyAttributeChanged(this, FIRST_WORD_ATTRIBUTE, oldFirstWord);
+//			annotationFirstWordChanged(this, oldFirstWord, oldId);
+//			notifyAttributeChanged(this, FIRST_WORD_ATTRIBUTE, oldFirstWord);
+			if (this.doc != null) {
+				this.doc.annotationFirstWordChanged(this, oldFirstWord, oldId);
+				this.doc.notifyAttributeChanged(this, FIRST_WORD_ATTRIBUTE, oldFirstWord);
+			}
 		}
 		public ImWord getLastWord() {
 			return this.lastWord;
@@ -152,8 +162,12 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			this.lastWord = lastWord;
 			String oldId = this.id;
 			this.id = null;
-			annotationLastWordChanged(this, oldLastWord, oldId);
-			notifyAttributeChanged(this, LAST_WORD_ATTRIBUTE, oldLastWord);
+//			annotationLastWordChanged(this, oldLastWord, oldId);
+//			notifyAttributeChanged(this, LAST_WORD_ATTRIBUTE, oldLastWord);
+			if (this.doc != null) {
+				this.doc.annotationLastWordChanged(this, oldLastWord, oldId);
+				this.doc.notifyAttributeChanged(this, LAST_WORD_ATTRIBUTE, oldLastWord);
+			}
 		}
 		public Object getAttribute(String name) {
 			if (FIRST_WORD_ATTRIBUTE.equals(name))
@@ -188,7 +202,9 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 				return oldLastWord;
 			}
 			Object oldValue = super.setAttribute(name, value);
-			notifyAttributeChanged(this, name, oldValue);
+//			notifyAttributeChanged(this, name, oldValue);
+			if (this.doc != null)
+				this.doc.notifyAttributeChanged(this, name, oldValue);
 			return oldValue;
 		}
 		public String getDocumentProperty(String propertyName) {
@@ -335,6 +351,14 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 		public abstract void attributeChanged(ImObject object, String attributeName, Object oldValue);
 		
 		/**
+		 * Notify the listener that a supplement has changed in an Image Markup
+		 * document.
+		 * @param supplementId the ID of the supplement
+		 * @param oldValue the old supplement, which was just replaced
+		 */
+		public abstract void supplementChanged(String supplementId, ImSupplement oldValue);
+		
+		/**
 		 * Notify the listener that a region has been added. The runtime type
 		 * of the argument region can also be an Image Markup word or page.
 		 * @param region the region that was just added
@@ -408,7 +432,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * page images for this very document. This causes the page images provided
 	 * by the argument source to be preferred over any other page image coming
 	 * from any other page image sources. If the argument page image source is
-	 * also a gape image store, it is used in the latter function as well.
+	 * also a page image store, it is used in the latter function as well.
 	 * @param pis the preferred page image source for the document
 	 */
 	public void setPageImageSource(PageImageSource pis) {
@@ -628,7 +652,9 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 */
 	public ImSupplement addSupplement(ImSupplement ims) {
 		synchronized (this.supplementsById) {
-			return ((ImSupplement) this.supplementsById.put(ims.getId(), ims));
+			ImSupplement oldIms = ((ImSupplement) this.supplementsById.put(ims.getId(), ims));
+			this.notifySupplementChanged(ims.getId(), oldIms);
+			return oldIms;
 			//	TODO dispose any replaced supplement
 		}
 	}
@@ -662,9 +688,11 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * @param ims the supplement to remove
 	 */
 	public void removeSupplement(ImSupplement ims) {
-		if (ims != null)
-			this.supplementsById.remove(ims.getId());
-		//	TODO dispose any removed supplement
+		if (ims != null) synchronized (this.supplementsById) {
+			ImSupplement oldIms = ((ImSupplement) this.supplementsById.remove(ims.getId()));
+			this.notifySupplementChanged(ims.getId(), oldIms);
+			//	TODO dispose any removed supplement
+		}
 	}
 	
 	/**
@@ -742,22 +770,44 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			page.dispose();
 	}
 	
+//	/**
+//	 * Add an annotation to the document. If the argument annotation originates
+//	 * from this document, this method does nothing. Otherwise, an annotation
+//	 * is added to the document and returned. It is not the same object as the
+//	 * argument annotation, but has the same attributes.
+//	 * @param annot the annotation to add
+//	 * @return the newly added annotation
+//	 * @see de.uka.ipd.idaho.im.ImDocument#cleanupAnnotations()
+//	 */
 	/**
 	 * Add an annotation to the document. If the argument annotation originates
-	 * from this document, this method does nothing. Otherwise, an annotation
-	 * is added to the document and returned. It is not the same object as the
-	 * argument annotation, but has the same attributes.
+	 * from this document, this method simply returns it. Further, if the
+	 * argument annotation was previously removed from this document, it is
+	 * re-attached and returned. Otherwise, an annotation is added to the
+	 * document and returned. It is not the same object as the argument
+	 * annotation, but has the same attributes.
 	 * @param annot the annotation to add
 	 * @return the newly added annotation
 	 * @see de.uka.ipd.idaho.im.ImDocument#cleanupAnnotations()
 	 */
 	public ImAnnotation addAnnotation(ImAnnotation annot) {
-		if ((annot instanceof ImDocumentAnnotation) && (annot.getDocument() == this))
-			return annot;
-		ImAnnotation docAnnot = this.addAnnotation(annot.getFirstWord(), annot.getLastWord(), annot.getType());
-		if (docAnnot != null)
-			docAnnot.copyAttributes(annot);
-		return docAnnot;
+//		if ((annot instanceof ImDocumentAnnotation) && (annot.getDocument() == this))
+//			return annot;
+		if (!annot.getFirstWord().getTextStreamId().equals(annot.getLastWord().getTextStreamId()))
+			return null;
+		if (annot instanceof ImDocumentAnnotation) {
+			if (annot.getDocument() == this)
+				return annot;
+			if ((annot.getDocument() == null) && (annot.getFirstWord().getDocument() == this) && (annot.getLastWord().getDocument() == this))
+				return this.addImDocumentAnnotation((ImDocumentAnnotation) annot);
+		}
+//		ImAnnotation docAnnot = this.addAnnotation(annot.getFirstWord(), annot.getLastWord(), annot.getType());
+//		if (docAnnot != null)
+//			docAnnot.copyAttributes(annot);
+//		return docAnnot;
+		ImDocumentAnnotation docAnnot = new ImDocumentAnnotation(annot.getFirstWord(), annot.getLastWord(), annot.getType());
+		docAnnot.copyAttributes(annot);
+		return this.addImDocumentAnnotation(docAnnot);
 	}
 	
 	/**
@@ -785,16 +835,33 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 		if (!firstWord.getTextStreamId().equals(lastWord.getTextStreamId()))
 			return null;
 		ImDocumentAnnotation annot = new ImDocumentAnnotation(firstWord, lastWord, type);
+//		if (this.annotationsById.containsKey(annot.getId()))
+//			return ((ImAnnotation) this.annotationsById.get(annot.getId()));
+//		synchronized (this.annotationsById) {
+//			this.annotationsById.add(annot);
+//			this.annotations.addAnnot(annot);
+//			updateAnnotationIndex(this.annotationsByType, null, annot.getType(), annot);
+//			updateAnnotationIndex(this.annotationsByFirstWord, null, annot.getFirstWord().getLocalID(), annot);
+//			updateAnnotationIndex(this.annotationsByLastWord, null, annot.getLastWord().getLocalID(), annot);
+//			this.indexAnnotationForPageIDs(annot, firstWord.pageId, lastWord.pageId);
+//		}
+//		this.notifyAnnotationAdded(annot);
+//		return annot;
+		return this.addImDocumentAnnotation(annot);
+	}
+	
+	private ImAnnotation addImDocumentAnnotation(ImDocumentAnnotation annot) {
 		if (this.annotationsById.containsKey(annot.getId()))
 			return ((ImAnnotation) this.annotationsById.get(annot.getId()));
 		synchronized (this.annotationsById) {
 			this.annotationsById.add(annot);
 			this.annotations.addAnnot(annot);
-			updateAnnotationIndex(this.annotationsByType, null, annot.getType(), annot);
-			updateAnnotationIndex(this.annotationsByFirstWord, null, annot.getFirstWord().getLocalID(), annot);
-			updateAnnotationIndex(this.annotationsByLastWord, null, annot.getLastWord().getLocalID(), annot);
-			this.indexAnnotationForPageIDs(annot, firstWord.pageId, lastWord.pageId);
+			updateAnnotationIndex(this.annotationsByType, null, annot.type, annot);
+			updateAnnotationIndex(this.annotationsByFirstWord, null, annot.firstWord.getLocalID(), annot);
+			updateAnnotationIndex(this.annotationsByLastWord, null, annot.lastWord.getLocalID(), annot);
+			this.indexAnnotationForPageIDs(annot, annot.firstWord.pageId, annot.lastWord.pageId);
 		}
+		annot.doc = this; // attach annotation
 		this.notifyAnnotationAdded(annot);
 		return annot;
 	}
@@ -817,6 +884,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 				this.unIndexAnnotationForPageIDs(docAnnot, annot.getFirstWord().pageId, annot.getLastWord().pageId);
 			}
 			this.notifyAnnotationRemoved(annot);
+			docAnnot.doc = null; // detach annotation
 		}
 	}
 	
@@ -1025,7 +1093,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			ImDocumentAnnotationList oldKeyAnnots = ((ImDocumentAnnotationList) index.get(oldKey));
 			if (oldKeyAnnots != null) {
 				oldKeyAnnots.remove(annot); // we have to use this method of removal, as sort order might be compromised by first or last word update
-				if (oldKeyAnnots.size() == 0)
+				if (oldKeyAnnots.isEmpty())
 					index.remove(oldKey);
 			}
 		}
@@ -1392,6 +1460,13 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			return;
 		for (int l = 0; l < this.listeners.size(); l++)
 			((ImDocumentListener) this.listeners.get(l)).attributeChanged(object, attributeName, oldValue);
+	}
+	
+	void notifySupplementChanged(String supplementId, ImSupplement oldValue) {
+		if (this.listeners == null)
+			return;
+		for (int l = 0; l < this.listeners.size(); l++)
+			((ImDocumentListener) this.listeners.get(l)).supplementChanged(supplementId, oldValue);
 	}
 	
 	void notifyRegionAdded(ImRegion region) {

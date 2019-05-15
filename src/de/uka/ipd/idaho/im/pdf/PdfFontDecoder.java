@@ -38,6 +38,7 @@ import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.Reader;
+import java.io.StringReader;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -46,11 +47,18 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Hashtable;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.LinkedList;
+import java.util.Map;
 import java.util.Set;
 import java.util.SortedSet;
+import java.util.TreeSet;
 import java.util.Vector;
 
+import javax.swing.JOptionPane;
+
+import de.uka.ipd.idaho.easyIO.streams.CharSequenceReader;
 import de.uka.ipd.idaho.gamta.Gamta;
 import de.uka.ipd.idaho.gamta.util.CountingSet;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
@@ -62,7 +70,6 @@ import de.uka.ipd.idaho.im.pdf.PdfCharDecoder.ScoredCharSignature;
 import de.uka.ipd.idaho.im.pdf.PdfCharDecoder.UnicodeBlock;
 import de.uka.ipd.idaho.im.pdf.PdfFont.CharNeighbor;
 import de.uka.ipd.idaho.im.pdf.PdfFont.CharUsageStats;
-import de.uka.ipd.idaho.im.pdf.PsParser.PsCommand;
 import de.uka.ipd.idaho.im.pdf.PsParser.PsProcedure;
 import de.uka.ipd.idaho.im.pdf.PsParser.PsString;
 import de.uka.ipd.idaho.im.util.ImFontUtils;
@@ -95,15 +102,29 @@ public class PdfFontDecoder {
 		/** the name of the charset */
 		public final String name;
 		
+		private boolean verifyUnicodeMapped = true;
+		private boolean decodeUnicodeMapped = true;
+		
 		/** Constructor
 		 * @param name the name of the charset
 		 */
 		protected FontDecoderCharset(String name) {
+			this(name, true, true);
+		}
+		
+		/** Constructor
+		 * @param name the name of the charset
+		 * @param vum verify characters that come with a Unicode mapping?
+		 * @param dum decode characters that come with a Unicode mapping?
+		 */
+		protected FontDecoderCharset(String name, boolean vum, boolean dum) {
 			this.name = name;
+			this.verifyUnicodeMapped = vum;
+			this.decodeUnicodeMapped = dum;
 		}
 		
 		/**
-		 * Test if the chaset contains a specific character. If this method
+		 * Test if the charset contains a specific character. If this method
 		 * returns <code>false</code>, the font decoder will not consider the
 		 * argument character for decoding glyphs.
 		 * @param ch the character to test
@@ -111,6 +132,32 @@ public class PdfFontDecoder {
 		 *        decoding, false otherwise
 		 */
 		public abstract boolean containsChar(char ch);
+		
+		/**
+		 * Check whether or not to graphically verify characters that come with
+		 * a Unicode mapping. An if verification is active, characters whose
+		 * Unicode mapping fails to verify will be fully decoded even if full
+		 * decoding is inactive. Refraining from doing so can save some
+		 * decoding effort, while still generating valid decodings of fonts
+		 * and individual characters that come without a mapping. However, it
+		 * will not identify and correct any erroneous of malicious Unicode
+		 * mappings.
+		 * @return true if Unicode mapped characters should be verified
+		 */
+		public boolean verifyUnicodeMapped() {
+			return this.verifyUnicodeMapped;
+		}
+		
+		/**
+		 * Check whether or not to fully decode characters that come with a
+		 * Unicode mapping. Refraining from doing so can save considerable
+		 * decoding effort, while still generating valid decodings of fonts
+		 * and individual characters that come without a mapping.
+		 * @return true if each and every character should be decoded
+		 */
+		public boolean decodeUnicodeMapped() {
+			return this.decodeUnicodeMapped;
+		}
 		
 		/**
 		 * Combine two charsets to form a union. The name of the returned
@@ -125,6 +172,30 @@ public class PdfFontDecoder {
 		public static FontDecoderCharset union(final FontDecoderCharset fdc1, final FontDecoderCharset fdc2) {
 			if (fdc1 == fdc2)
 				return fdc1;
+			else if (fdc1 == VERIFY_MAPPED)
+				return new FontDecoderCharset(fdc2.name, true, false) {
+					public boolean containsChar(char ch) {
+						return fdc2.containsChar(ch);
+					}
+				};
+			else if (fdc2 == VERIFY_MAPPED)
+				return new FontDecoderCharset(fdc1.name, true, false) {
+					public boolean containsChar(char ch) {
+						return fdc1.containsChar(ch);
+					}
+				};
+			else if (fdc1 == DECODE_UNMAPPED)
+				return new FontDecoderCharset(fdc2.name, false, false) {
+					public boolean containsChar(char ch) {
+						return fdc2.containsChar(ch);
+					}
+				};
+			else if (fdc2 == DECODE_UNMAPPED)
+				return new FontDecoderCharset(fdc1.name, false, false) {
+					public boolean containsChar(char ch) {
+						return fdc1.containsChar(ch);
+					}
+				};
 			else if (fdc1 == UNICODE)
 				return fdc1;
 			else if (fdc2 == UNICODE)
@@ -133,11 +204,12 @@ public class PdfFontDecoder {
 				return fdc2;
 			else if ((fdc2 == NO_DECODING) || (fdc2 == RENDER_ONLY))
 				return fdc1;
-			else return new FontDecoderCharset(fdc1.name + '+' + fdc2.name) {
+			FontDecoderCharset fdcUnion = new FontDecoderCharset((fdc1.name + '+' + fdc2.name), (fdc1.verifyUnicodeMapped || fdc2.verifyUnicodeMapped), (fdc1.decodeUnicodeMapped || fdc2.decodeUnicodeMapped)) {
 				public boolean containsChar(char ch) {
 					return (fdc1.containsChar(ch) || fdc2.containsChar(ch));
 				}
 			};
+			return fdcUnion;
 		}
 		
 		/**
@@ -155,6 +227,10 @@ public class PdfFontDecoder {
 		public static FontDecoderCharset intersect(final FontDecoderCharset fdc1, final FontDecoderCharset fdc2) {
 			if (fdc1 == fdc2)
 				return fdc1;
+			if ((fdc1 == VERIFY_MAPPED) || (fdc2 == VERIFY_MAPPED))
+				union(fdc1, fdc2); // need to do union, as 'verify' marker does not contain any chars
+			else if ((fdc1 == DECODE_UNMAPPED) || (fdc2 == DECODE_UNMAPPED))
+				union(fdc1, fdc2); // need to do union, as 'unmapped' marker does not contain any chars
 			else if (fdc1 == UNICODE)
 				return fdc2;
 			else if (fdc2 == UNICODE)
@@ -163,7 +239,7 @@ public class PdfFontDecoder {
 				return fdc1;
 			else if ((fdc2 == NO_DECODING) || (fdc2 == RENDER_ONLY))
 				return fdc2;
-			else return new FontDecoderCharset(fdc1.name + '&' + fdc2.name) {
+			return new FontDecoderCharset(fdc1.name + '&' + fdc2.name) {
 				public boolean containsChar(char ch) {
 					return (fdc1.containsChar(ch) && fdc2.containsChar(ch));
 				}
@@ -213,15 +289,29 @@ public class PdfFontDecoder {
 		}
 	};
 	
+	/** font decoder charset indicating that the glyphs of a font should be verified even if they come with a Unicode mapping (union with any other charset to use) */
+	public static final FontDecoderCharset VERIFY_MAPPED = new FontDecoderCharset("VerifyMapped", true, false) {
+		public boolean containsChar(char ch) {
+			return false;
+		}
+	};
+	
+	/** font decoder charset indicating that the glyphs of a font should be decoded only if they come without a Unicode mapping (union with any other charset to use) */
+	public static final FontDecoderCharset DECODE_UNMAPPED = new FontDecoderCharset("DecodeUnmapped", false, false) {
+		public boolean containsChar(char ch) {
+			return false;
+		}
+	};
+	
 	/** font decoder charset indicating that the glyphs of a font should be rendered for later correction, but not decoded */
-	public static final FontDecoderCharset RENDER_ONLY = new FontDecoderCharset("RenderOnly") {
+	public static final FontDecoderCharset RENDER_ONLY = new FontDecoderCharset("RenderOnly", false, false) {
 		public boolean containsChar(char ch) {
 			return false;
 		}
 	};
 	
 	/** font decoder charset indicating that the glyphs of a font should be neither rendered nor decoded */
-	public static final FontDecoderCharset NO_DECODING = new FontDecoderCharset("NoDecoding") {
+	public static final FontDecoderCharset NO_DECODING = new FontDecoderCharset("NoDecoding", false, false) {
 		public boolean containsChar(char ch) {
 			return false;
 		}
@@ -324,9 +414,11 @@ public class PdfFontDecoder {
 		 * represented characters if separated by a dash. A line staring with a
 		 * double slash is ignored as a comment. A line staring with '#' is
 		 * interpreted (case insensitively) as the ISO name of a Unicode block,
-		 * and all characters in that plain are included. A line staring with
+		 * and all characters in that block are included. A line staring with
 		 * '@' is interpreted (case insensitively) as the name of one of the
-		 * constant charsets available in <code>PdfFontDecoder</code>.
+		 * constant charsets available in <code>PdfFontDecoder</code>, or as
+		 * the name of a charset hosted by a registered custom provider, with
+		 * the latter taking precedence.
 		 * @param name the name for the custom charset
 		 * @param baseCharset a base charset to extend upon
 		 * @param in the stream providing the data for the chatset
@@ -345,6 +437,8 @@ public class PdfFontDecoder {
 					continue; // ignore comments
 				if (csLine.indexOf("//") != -1)
 					csLine = csLine.substring(0, csLine.indexOf("//")).trim(); // truncate tailing comments
+				if (csLine.length() == 0)
+					continue;
 				
 				//	single hex character
 				if (csLine.matches("(0x)?[0-9A-Fa-f]{1,4}"))
@@ -387,6 +481,27 @@ public class PdfFontDecoder {
 		}
 		
 		private static FontDecoderCharset getNamedCharset(String name) {
+			
+			//	check custom provided character sets first
+			for (Iterator cpit = charsetProviders.iterator(); cpit.hasNext();) {
+				FontDecoderCharsetProvider cp = ((FontDecoderCharsetProvider) cpit.next());
+				Reader cr = cp.getNamedCharset(name);
+				if (cr != null) try {
+					if ((cr instanceof StringReader) || (cr instanceof CharSequenceReader))
+						return readCharSet(name, cr); // no use buffering in-memory data
+					StringBuffer csb = new StringBuffer();
+					char[] buffer = new char[1024];
+					for (int r = 0; (r = cr.read(buffer, 0, buffer.length)) != -1;)
+						csb.append(buffer, 0, r);
+					cr.close();
+					return readCharSet(name, new CharSequenceReader(csb));
+				}
+				catch (IOException ioe) {
+					ioe.printStackTrace(System.out);
+				}
+			}
+			
+			//	check built-in character sets TODO extend this
 			if ("LatinFull".equalsIgnoreCase(name))
 				return LATIN_FULL;
 			else if ("Latin".equalsIgnoreCase(name))
@@ -397,8 +512,95 @@ public class PdfFontDecoder {
 				return MATH;
 			else if ("Symbols".equalsIgnoreCase(name))
 				return SYMBOLS;
-			else return null; // TODO extend this
+			
+			//	nothing found
+			return null;
 		}
+		
+		/**
+		 * Provider of custom font decoder character sets, i.e., sets of Unicode
+		 * points to consider in graphics driven character decoding.<br/>
+		 * The syntax of such a custom character set definition is line based,
+		 * with each line specifying a (range of) Unicode point(s) in one of the
+		 * following ways (all other lines will be ignored, as will everything
+		 * between a double slash (<code>//</code>) and the subsequent line
+		 * break):
+		 * <br/>- <code>0x&lt;HHHH&gt;</code>, with <code>&lt;HHHH&gt;</code>
+		 *        representing any HEX code (digits <code>0-F</code>) between
+		 *        (inclusive) <code>0000</code> and <code>FFFF</code>: that
+		 *        very Unicode point (ignored if not printable)
+		 * <br/>- <code>0x&lt;HHHH&gt;-0x&lt;IIII&gt;</code>, with 
+		 *        <code>&lt;HHHH&gt;</code> and <code>&lt;IIII&gt;</code> 
+		 *        representing any HEX code (digits <code>0-F</code>) between
+		 *        (inclusive) <code>0000</code> and <code>FFFF</code>: a range
+		 *        of the above
+		 * <br/>- <code>#&lt;UcBlockName&gt;</code>, with <code>&lt;UcBlockName&gt;</code>
+		 *        representing the name of a Unicode block, e.g. "Basic Latin"
+		 *        or "Latin Extended-B" (mind the spaces); for a full list see
+		 *        http://en.wikipedia.org/wiki/Unicode_block
+		 * <br/>- <code>@&lt;CharSetName&gt;</code>, with <code>&lt;CharSetName&gt;</code>
+		 *        representing the name of a named character set, to be resolved
+		 *        via an implementation of this very interface; this facilitates
+		 *        recursive composition of character sets
+		 * 
+		 * @author sautter
+		 */
+		public static interface FontDecoderCharsetProvider {
+			
+			/**
+			 * Retrieve by name a Reader providing the data of a custom font
+			 * decoder character set. The syntax of the data available from the
+			 * returned Reader has to follow the above specification. If an
+			 * implementation of this interface is not able to resolve a given
+			 * character set name, it should simply return null rather than
+			 * throwing an exception.
+			 * @param name the name of the sought character set
+			 * @return a Reader providing the data for the character set with
+			 *            the argument name
+			 */
+			public abstract Reader getNamedCharset(String name);
+			
+			/**
+			 * Retrieve the available character set names.
+			 * @return an array the available character set names
+			 */
+			public abstract String[] getCharsetNames();
+		}
+		
+		/**
+		 * Retrieve the names of the character sets made available by the
+		 * currently registered providers.
+		 * @return an array holding the character set names
+		 */
+		public static String[] getProviderCharsetNames() {
+			TreeSet pcnSet = new TreeSet(String.CASE_INSENSITIVE_ORDER);
+			for (Iterator cpit = charsetProviders.iterator(); cpit.hasNext();) {
+				FontDecoderCharsetProvider cp = ((FontDecoderCharsetProvider) cpit.next());
+				String[] pcns = cp.getCharsetNames();
+				if (pcns != null)
+					pcnSet.addAll(Arrays.asList(pcns));
+			}
+			return ((String[]) pcnSet.toArray(new String[pcnSet.size()]));
+		}
+		
+		/**
+		 * Register a character set provider to help decoding fonts.
+		 * @param fdcp the character set provider to register
+		 */
+		public static void addCharsetProvider(FontDecoderCharsetProvider fdcp) {
+			if (fdcp != null)
+				charsetProviders.add(fdcp);
+		}
+		
+		/**
+		 * Unregister a character set provider.
+		 * @param fdcp the character set provider to remove
+		 */
+		public static void removeCharsetProvider(FontDecoderCharsetProvider fdcp) {
+			charsetProviders.remove(fdcp);
+		}
+		
+		private static LinkedHashSet charsetProviders = new LinkedHashSet();
 	}
 	
 	private static final boolean DEBUG_TYPE1_LOADING = false;
@@ -425,13 +627,13 @@ public class PdfFontDecoder {
 //		System.out.println("     - main data (encrypted):");
 //		System.out.println(new String(mainData));
 		
-		//	decrypt data (as it seems, this portion always starts with 'dup', but never with a number, so chunk any leading numbers ...)
+		//	decrypt data (according to the spec, this portion always starts with 'dup', but never with a number, so chunk any leading numbers ...)
 		mainData = decryptType1Data(mainData, 55665);
 		String mainDataStr = new String(mainData);
 		if (!mainDataStr.startsWith("dup")) {
 			int mainDataStart = mainDataStr.indexOf("dup");
 			if ((mainDataStart < 1) || (mainDataStart > 8)) {}
-			else if (!mainDataStr.substring(0, mainDataStart).matches("[0-9]+")) {}
+//			else if (!mainDataStr.substring(0, mainDataStart).matches("[0-9]+")) {}
 			else {
 				byte[] cMainData = new byte[mainData.length - mainDataStart];
 				System.arraycopy(mainData, mainDataStart, cMainData, 0, cMainData.length);
@@ -449,7 +651,11 @@ public class PdfFontDecoder {
 			Hashtable psState = new Hashtable();
 			LinkedList psStack = new LinkedList();
 			PsParser.executePs(headData, psState, psStack);
+			System.out.println("     - PostScript state after head is " + psState);
+			System.out.println("     - PostScript stack after head is " + psStack);
 			PsParser.executePs(mainData, psState, psStack);
+			System.out.println("     - PostScript state after main is " + psState);
+			System.out.println("     - PostScript stack after main is " + psStack);
 			for (Iterator sit = psState.keySet().iterator(); sit.hasNext();) {
 				Object fontKey = sit.next();
 				fontName = fontKey.toString();
@@ -464,25 +670,27 @@ public class PdfFontDecoder {
 		if ((fontName == null) || (fontData == null))
 			return;
 		System.out.println("     - font name is " + fontName);
-//		System.out.println("     - font data is " + fontData);
+		System.out.println("     - font data is " + fontData);
 		
 		//	get private dictionary and obfuscation byte count
 		Hashtable privateDict = ((Hashtable) fontData.get("Private"));
-//		System.out.println("     - private dictionaty is " + privateDict);
+		System.out.println("     - private dictionaty is " + privateDict);
 		int n = 4;
 		if (privateDict.containsKey("lenIV"))
 			n = ((Number) privateDict.get("lenIV")).intValue();
 		
 		//	extract char string subroutines
 		Vector charStringSubrs = ((Vector) privateDict.get("Subrs"));
-//		System.out.println("     - char string subroutines are " + charStringSubrs);
+		if (charStringSubrs == null)
+			charStringSubrs = new Vector();
+		System.out.println("     - char string subroutines are " + charStringSubrs);
 		
 		//	decrypt char string subroutines
 		for (int s = 0; s < charStringSubrs.size(); s++) {
 			PsString css = ((PsString) charStringSubrs.get(s));
 			System.out.println("Decrypting char string sub routine " + css);
 			if (css == null) {
-				System.out.println(" ==> scipped");
+				System.out.println(" ==> skipped");
 				continue;
 			}
 			byte[] decryptedCssBytes = decryptType1Data(css.bytes, 4330);
@@ -497,7 +705,7 @@ public class PdfFontDecoder {
 		
 		//	extract other subroutines
 		Vector otherSubrs = ((Vector) privateDict.get("OtherSubrs"));
-//		System.out.println("     - other subroutines are " + otherSubrs);
+		System.out.println("     - other subroutines are " + otherSubrs);
 		
 		//	extract char strings
 		Hashtable charStrings = ((Hashtable) fontData.get("CharStrings"));
@@ -515,6 +723,7 @@ public class PdfFontDecoder {
 				charStringOps[c] = null;
 				continue;
 			}
+			
 			chars[c] = StringUtils.getCharForName(charName);
 			pFont.mapUnicode(new Integer(c), ("" + chars[c]));
 			if (DEBUG_TYPE1_LOADING) System.out.println("     - mapped " + c + " to '" + chars[c] + "' (" + ((int) chars[c]) + " / " + charName + ")");
@@ -535,6 +744,7 @@ public class PdfFontDecoder {
 			
 			//	parse char string
 			try {
+				if (DEBUG_TYPE1_LOADING) System.out.println("Reading char string " + c + " (" + chars[c] + ") " + cs);
 				ArrayList csOps = new ArrayList();
 //				readFontType1CharString(plainCsBytes, charName, charStringSubrs, otherSubrs, csOps, "");
 				readFontType1CharString(pcs.bytes, charName, charStringSubrs, otherSubrs, csOps, "");
@@ -567,6 +777,8 @@ public class PdfFontDecoder {
 		int maxDescent = 0;
 		int maxCapHeight = 0;
 		OpTrackerType1[] otrs = new OpTrackerType1[encoding.size()];
+		HashMap renderingSequencesToCharIndices = new HashMap();
+		HashMap charIndicesToSynonyms = new HashMap();
 		for (int c = 0; c < encoding.size(); c++) {
 			if (chars[c] == 0)
 				continue;
@@ -576,12 +788,35 @@ public class PdfFontDecoder {
 			//	dry run char string operations to measure extent
 			pm.setInfo("     - measuring char " + c + " (" + encoding.get(c) + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
 			if (DEBUG_TYPE1_LOADING) System.out.println("Measuring char " + c + " (" + encoding.get(c) + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
-			otrs[c] = new OpTrackerType1();
-			runFontType1Ops(charStringOps[c], otrs[c], false, false, null, -1, -1); // we don't know if multi-path or not so far ...
+			try {
+				//	render vector glyph
+				otrs[c] = new OpTrackerType1();
+				runFontType1Ops(charStringOps[c], otrs[c], false, false, null, -1, -1, null); // we don't know if multi-path or not so far ...
+				
+				//	index glyph rendering sequence to catch identical characters
+				String renderingSequence = otrs[c].ops.toString();
+				if (DEBUG_TYPE1_LOADING) System.out.println(" ==> " + renderingSequence);
+				if ("Ops:".equals(renderingSequence)) { /* no synonymizing spaces, tend to differ in width */ }
+				else if (renderingSequencesToCharIndices.containsKey(renderingSequence))
+					charIndicesToSynonyms.put(new Integer(c), renderingSequencesToCharIndices.get(renderingSequence));
+				else renderingSequencesToCharIndices.put(renderingSequence, new Integer(c));
+			}
+			catch (RuntimeException re) {
+				pm.setInfo("     ==> removed for invalid PostScript");
+				if (DEBUG_TYPE1_LOADING) {
+					System.out.println("==> Removed for invalid PostScript");
+					re.printStackTrace(System.out);
+				}
+				otrs[c] = null;
+				charStringOps[c] = null;
+				continue;
+			}
 			
-			//	update maximums
-			maxDescent = Math.min(maxDescent, otrs[c].minY);
-			maxCapHeight = Math.max(maxCapHeight, otrs[c].maxY);
+			//	update maximums (if glyph is in sane bounds, the usual being -250 to 750)
+			if ((-1000 < otrs[c].minY) && (otrs[c].maxY < 2500)) {
+				maxDescent = Math.min(maxDescent, otrs[c].minY);
+				maxCapHeight = Math.max(maxCapHeight, otrs[c].maxY);
+			}
 			
 			//	store character width if set
 			if (otrs[c].iWidth > 0)
@@ -610,12 +845,13 @@ public class PdfFontDecoder {
 		CharImage[] charImages = new CharImage[encoding.size()];
 		
 		//	generate images and match against named char
-		ImageDisplayDialog fidd = (DEBUG_TYPE1_RENDRING ? new ImageDisplayDialog("Font " + pFont.name) : null);
+		ImageDisplayDialog fidd = ((DEBUG_TYPE1_RENDRING || DEBUG_TYPE1_LOADING) ? new ImageDisplayDialog("Font " + pFont.name) : null);
 		for (int c = 0; c < encoding.size(); c++) {
 			if (chars[c] == 0)
 				continue;
 			if (charStringOps[c] == null)
 				continue;
+			
 			String chn = encoding.get(c).toString();
 			if (!DEBUG_TYPE1_RENDRING && !pFont.usesCharCode(new Integer(c)) && (chn != null) && !pFont.usedCharNames.contains(chn)) {
 				pm.setInfo("     - ignoring unused char " + c + " (" + chn + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
@@ -628,8 +864,10 @@ public class PdfFontDecoder {
 //			if (DEBUG_TYPE1_LOADING) System.out.println(" - char width is " + chw);
 			if (DEBUG_TYPE1_LOADING) System.out.println(" - stroke count is " + otrs[c].mCount);
 			
-			//	check if char rendering possible
+			//	check if char rendering possible (and in sane bounds)
 			if ((otrs[c].maxX <= otrs[c].minX) || (otrs[c].maxY <= otrs[c].minY))
+				continue;
+			if ((2000 < (otrs[c].maxX - otrs[c].minX)) || (2500 < (otrs[c].maxY - otrs[c].minY)))
 				continue;
 			
 			//	render char
@@ -645,13 +883,18 @@ public class PdfFontDecoder {
 							Math.round((scale * (maxCapHeight - maxDescent + my)) + (2 * glyphOutlineFillSafetyEdge)),
 							BufferedImage.TYPE_INT_RGB)
 					);
-			runFontType1Ops(charStringOps[c], ogr, otrs[c].isMultiPath, false, fidd, c, c);
+			runFontType1Ops(charStringOps[c], ogr, otrs[c].isMultiPath, false, fidd, c, c, chn);
 			if (DEBUG_TYPE1_LOADING) System.out.println(" - image rendered, size is " + ogr.img.getWidth() + "x" + ogr.img.getHeight() + ", OpGraphics height is " + ogr.height);
 			charImages[c] = new CharImage(ogr.img, Math.round(((float) (maxCapHeight * ogr.img.getHeight())) / (maxCapHeight - maxDescent)));
 			if (DEBUG_TYPE1_LOADING) System.out.println(" - char image wrapped, baseline is " + charImages[c].baseline);
 			
 			//	store char image
 			pFont.setCharImage(c, chn, ogr.img);
+			
+			//	check for char code synonymies
+			Integer ci = new Integer(c);
+			if (charIndicesToSynonyms.containsKey(ci))
+				pFont.setCharCodeSynonym(charCodes[c], charCodes[((Integer) charIndicesToSynonyms.get(ci)).intValue()]);
 		}
 		if (fidd != null) {
 			fidd.setLocationRelativeTo(null);
@@ -681,10 +924,13 @@ public class PdfFontDecoder {
 	}
 	
 	private static int readFontType1CharString(byte[] data, String name, Vector subrs, Vector otherSubrs, ArrayList content, String indent) {
+		return readFontType1CharString(data, name, false, subrs, otherSubrs, new LinkedList(), content, indent);
+	}
+	
+	private static int readFontType1CharString(byte[] data, String name, boolean inSubr, Vector subrs, Vector otherSubrs, LinkedList stack, ArrayList content, String indent) {
 		int i = 0;
-		LinkedList stack = new LinkedList();
 		LinkedList psStack = new LinkedList();
-		int hintCount = 0;
+		LinkedList flexArgs = null;
 //		System.out.println("Reading char string of " + data.length + " bytes");
 		while (i < data.length)  {
 			
@@ -699,42 +945,10 @@ public class PdfFontDecoder {
 				op = bs;
 			}
 			else if (bs == 12) {
+				if (i >= data.length)
+					break;
 				op = (1000 + convertUnsigned(data[i++]));
 			}
-//			else if ((13 <= bs) && (bs <= 18)) {
-//				op = bs;
-//			}
-//			else if (bs == 19) {
-//				op = bs;
-//			}
-//			else if (bs == 20) {
-//				op = bs;
-//			}
-//			else if ((21 <= bs) && (bs <= 27)) {
-//				op = bs;
-//			}
-//			else if (bs == 28) {
-//				iVal = 0;
-//				for (int b = 0; b < 2; b++) {
-//					iVal <<= 8;
-//					iVal += convertUnsigned(data[i++]);
-//				}
-//				if (iVal > 32768)
-//					iVal -= 65536;
-//			}
-//			else if (bs == 29) {
-//				iVal = 0;
-//				for (int b = 0; b < 4; b++) {
-//					iVal <<= 8;
-//					iVal += convertUnsigned(data[i++]);
-//				}
-//			}
-//			else if (bs == 30) {
-//				op = bs;
-//			}
-//			else if (bs == 31) {
-//				op = bs;
-//			}
 			else if ((13 <= bs) && (bs <= 31)) {
 				op = bs;
 			}
@@ -742,98 +956,146 @@ public class PdfFontDecoder {
 				iVal = (bs - 139);
 			}
 			else if ((247 <= bs) && (bs <= 250)) {
+				if (i >= data.length)
+					break;
 				int b1 = bs;
 				int b2 = convertUnsigned(data[i++]);
 				iVal = ((b1 - 247) * 256) + b2 + 108;
 			}
 			else if ((251 <= bs) && (bs <= 254)) {
+				if (i >= data.length)
+					break;
 				int b1 = bs;
 				int b2 = convertUnsigned(data[i++]);
 				iVal = -((b1 - 251) * 256) - b2 - 108;
 			}
 			else if (bs == 255) {
-				int ib1 = convertUnsigned(data[i++]);
-				int ib2 = convertUnsigned(data[i++]);
-				int iv = ((ib1 * 256) + ib2);
-				int fb1 = convertUnsigned(data[i++]);
-				int fb2 = convertUnsigned(data[i++]);
-				int fv = ((fb1 * 256) + fb2);
-				dVal = ((iv << 16) + fv);
-				dVal /= 65536;
+				if ((i+4) >= data.length)
+					break;
+//				int ib1 = convertUnsigned(data[i++]);
+//				int ib2 = convertUnsigned(data[i++]);
+//				int iv = ((ib1 * 256) + ib2);
+//				int fb1 = convertUnsigned(data[i++]);
+//				int fb2 = convertUnsigned(data[i++]);
+//				int fv = ((fb1 * 256) + fb2);
+//				dVal = ((iv << 16) + fv);
+//				dVal /= 65536;
+				iVal = 0;
+				iVal <<= 8;
+				iVal |= convertUnsigned(data[i++]);
+				iVal <<= 8;
+				iVal |= convertUnsigned(data[i++]);
+				iVal <<= 8;
+				iVal |= convertUnsigned(data[i++]);
+				iVal <<= 8;
+				iVal |= convertUnsigned(data[i++]);
 			}
 			
 			if (op != Integer.MIN_VALUE) {
+//				System.out.println(indent + "Op is " + type1GlyphProgOpResolver.get(Integer.valueOf(op)) + " (" + op + ")");
+//				System.out.println(indent + "  stack is " + stack);
 				
-				//	hintmask & cntrmask
-				if ((op == 19) || (op == 20)) {
-					
-					//	if last op is hstemhm and we have something on the stack, it's an implicit vstemhm
-					if ((content.size() != 0) && ((((OpType1) content.get(content.size()-1)).op == 1) || (((OpType1) content.get(content.size()-1)).op == 18))) {
-						content.add(new OpType1(23, null, ((Number[]) stack.toArray(new Number[stack.size()]))));
-//						System.out.println(indent + " --> got " + (stack.size() / 2) + " new hints from " + stack.size() + " args, op is " + op);
-						hintCount += (stack.size() / 2);
-						stack.clear();
-//						System.out.println(indent + " ==> stack cleared");
-					}
-					
-					//	read mask bytes
-					int h = 0;
-					int hintmask = 0;
-					while (h < ((hintCount + 7) / 8)) {
-						hintmask <<= 8;
-						hintmask += convertUnsigned(data[i++]);
-						h++;
-//						break;
-					}
-					stack.addLast(new Integer(hintmask));
-//					System.out.println(indent + "Skipped " + h + " hint mask bytes: " + hintmask + " (" + hintCount + " hints)");
-				}
-				
-				//	hstem, vstem, hstemhm & vstemhm (hints are number pairs !!)
-				else if ((op == 1) || (op == 3) || (op == 18) || (op == 23)) {
+				//	hstem, vstem (no need for collecting them here, as Type1 doesn't have flexible-length hint masks)
+				if ((op == 1) || (op == 3)) {
 //					System.out.println(indent + " --> got " + (stack.size() / 2) + " new hints from " + stack.size() + " args, op is " + op);
-					hintCount += (stack.size() / 2);
+					stack.clear();
 				}
 				
-				//	hstem3 & vstem3
+				//	hstem3 & vstem3 (no need for collecting them here, as Type1 doesn't have flexible-length hint masks)
 				else if ((op == 1002) || (op == 1001)) {
 //					System.out.println(indent + " --> got " + (stack.size() / 2) + " new hints from " + stack.size() + " args, op is " + op);
-					hintCount += (stack.size() / 2);
+					stack.clear();
 				}
 				
-				String opStr = ((String) glyphProgOpResolver.get(new Integer(op)));
+				String opStr = ((String) type1GlyphProgOpResolver.get(new Integer(op)));
 //				System.out.println(indent + " --> read operator " + op + " (" + opStr + ")");
 //				System.out.println(indent + "     stack is " + stack);
 				
 				//	callsubr (roll out sub routines right here)
 				if (op == 10) {
-					int subrNr = ((Number) stack.getLast()).intValue();
+					int subrNr = ((Number) stack.removeLast()).intValue();
 //					while (stack.size() != 0)
 //						System.out.print(" " + ((Number) stack.removeFirst()));
-					stack.clear();
-//					System.out.println();
-//					System.out.println(indent + " --> inlining call to subroutine " + subrNr);
+//					System.out.println(indent + " --> inlining call to subroutine " + subrNr + ":");
+					if (subrNr == 0) {
+						System.out.println(indent + "     FLEX sequence finishes recording with call to subroutine 0");
+						System.out.println(indent + "     - finish stack is " + stack);
+						System.out.println(indent + "     - recorded args are " + flexArgs);
+						
+						//	create 1 rlineto (5) command flattening out the whole flex (aggregating all even and all odd commands into the two taken by rlineto)
+						//	(we could also use two rrcurveto (8) commands, which might be more precise in theory, but is unlikely to make any difference in glyph decoding in practice)
+						int rx = 0;
+						int ry = 0;
+						while (flexArgs.size() != 0) {
+							rx += ((Number) flexArgs.removeFirst()).intValue();
+							ry += ((Number) flexArgs.removeFirst()).intValue();
+						}
+						System.out.println(indent + "     - resulting relative movement is " + rx + "/" + ry);
+						Number[] rLineToArgs = {new Integer(rx), new Integer(ry)};
+						content.add(new OpType1(5, "rlineto", rLineToArgs, true));
+						
+						//	ignore 3 subroutine 0 args
+						stack.removeLast();
+						stack.removeLast();
+						stack.removeLast();
+						
+						//	we're done with this one
+						flexArgs = null;
+						continue;
+					}
+					else if (subrNr == 1) {
+						System.out.println(indent + "     FLEX sequence starts recording with call to subroutine 1");
+						flexArgs = new LinkedList();
+						continue;
+					}
+					else if (subrNr == 2) {
+						System.out.println(indent + "     FLEX call to subroutine 2 ignored");
+						continue;
+					}
 					PsString subr = ((PsString) subrs.get(subrNr));
 //					System.out.println(indent + "    subroutine is '" + new String(subr.bytes) + "'");
-					readFontType1CharString(subr.bytes, name, subrs, otherSubrs, content, (indent + "  "));
+//					System.out.println(indent + "    call stack is " + stack);
+					LinkedList preCallStack = new LinkedList(stack);
+					try {
+						readFontType1CharString(subr.bytes, name, true, subrs, otherSubrs, stack, content, (indent + "  "));
+//						System.out.println(indent + "    return stack is " + psStack);
+					}
+					catch (RuntimeException re) {
+						System.out.println("Error reading char string subroutine " + subrNr + " in '" + name + "': " + re.getMessage());
+						System.out.println("  subr char string is: " + new String(subr.bytes));
+						System.out.println("                       " + Arrays.toString(subr.bytes));
+						System.out.println("  pre-call stack was " + preCallStack);
+						re.printStackTrace(System.out);
+						throw new RuntimeException(re);
+					}
 				}
 				
 				//	callothersubr (run PostScript computation or whatever)
 				else if (op == 1016) {
-					int subrNr = ((Number) stack.getLast()).intValue();
-//					while (stack.size() != 0)
-//						System.out.print(" " + ((Number) stack.removeFirst()));
-					stack.clear();
-//					System.out.println();
-//					System.out.println(indent + " --> inlining call to other subroutine " + subrNr);
+					int subrNr = ((Number) stack.removeLast()).intValue();
+					int n = ((Number) stack.removeLast()).intValue();
+					for (int a = 0; a < n; a++)
+						psStack.addLast(stack.removeLast());
+//					System.out.println(indent + " --> inlining call to other subroutine " + subrNr + ":");
 					PsProcedure subr = ((PsProcedure) otherSubrs.get(subrNr));
 //					System.out.println(indent + "    subroutine is '" + new String(subr.bytes) + "'");
+//					System.out.println(indent + "    call stack is " + psStack);
+					LinkedList preCallPsStack = new LinkedList(psStack);
 					try {
 						PsParser.executePs(subr.bytes, new Hashtable(), psStack, (DEBUG_TYPE1_LOADING ? (indent + "  ") : null));
+//						System.out.println(indent + "    return stack is " + psStack);
 					}
 					catch (IOException ioe) {
 						System.out.println("Error executing PostScript sub routine '" + new String(subr.bytes) + "': " + ioe.getMessage());
 						ioe.printStackTrace(System.out);
+					}
+					catch (RuntimeException re) {
+						System.out.println("Error reading other subroutine " + subrNr + " in '" + name + "': " + re.getMessage());
+						System.out.println("  subr char string is: " + new String(subr.bytes));
+						System.out.println("                       " + Arrays.toString(subr.bytes));
+						System.out.println("  pre-call PostScript stack was " + preCallPsStack);
+						re.printStackTrace(System.out);
+						throw new RuntimeException(re);
 					}
 				}
 				
@@ -845,29 +1107,44 @@ public class PdfFontDecoder {
 //					System.out.println(indent + "     stack extended to " + stack);
 				}
 				
-				//	pop (take result from PostScript computation and put it on operand tack)
+				//	pop (take result from PostScript computation and put it on operand stack)
 				else if (op == 1017) {
+					while ((psStack.size() > 1) && !(psStack.getLast() instanceof Number)) {
+//						System.out.println(indent + "     dropping non-number pop " + psStack.getLast());
+						psStack.removeLast();
+					}
+//					System.out.println(indent + "     popping " + psStack.getLast());
 					stack.addLast(psStack.removeLast());
 //					System.out.println(indent + "     stack extended to " + stack);
 				}
 				
-				//	return (end of subroutine, ignore altogether) 
+				//	return (end of subroutine)
 				else if (op == 11) {
 //					while (stack.size() != 0)
 //						System.out.print(" " + ((Number) stack.removeFirst()));
-					stack.clear();
+					if (inSubr)
+						break;
 //					System.out.println();
 //					System.out.println(indent + " --> ignored");
 				}
 				
-				//	store other operator
+				//	rmoveto within flex (cannot record actual op until flex sequence complete)
+				else if ((op == 21) && (flexArgs != null)) {
+					flexArgs.addAll(stack);
+					System.out.println(indent + "     FLEX args extended by " + stack + " to " + flexArgs);
+					stack.clear();
+				}
+				
+				//	store other operator (actual rendering operators)
 				else {
-					content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()]))));
+					content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()])), true));
+					stack.clear();
 //					while (stack.size() != 0)
 //						System.out.print(" " + ((Number) stack.removeFirst()));
-					stack.clear();
 //					System.out.println();
 //					System.out.println(indent + " --> stored for rendering");
+					if ((op == 14) && !inSubr)
+						break; // endchar, we're done here
 				}
 			}
 			else if (iVal != Integer.MIN_VALUE) {
@@ -878,9 +1155,47 @@ public class PdfFontDecoder {
 //				System.out.println(indent + " --> read double " + dVal);
 				stack.addLast(new Double(dVal));
 			}
+			else {
+				System.out.println(indent + "Invalid op is " + op);
+				System.out.println(indent + "  stack is " + stack);
+			}
 		}
 		
 		return i;
+	}
+	
+	private static HashMap type1GlyphProgOpResolver = new HashMap();
+	static {
+		type1GlyphProgOpResolver.put(new Integer(1), "hstem");
+	
+		type1GlyphProgOpResolver.put(new Integer(3), "vstem");
+		type1GlyphProgOpResolver.put(new Integer(4), "vmoveto");
+		type1GlyphProgOpResolver.put(new Integer(5), "rlineto");
+		type1GlyphProgOpResolver.put(new Integer(6), "hlineto");
+		type1GlyphProgOpResolver.put(new Integer(7), "vlineto");
+		type1GlyphProgOpResolver.put(new Integer(8), "rrcurveto");
+		type1GlyphProgOpResolver.put(new Integer(9), "closepath");
+		type1GlyphProgOpResolver.put(new Integer(10), "callsubr");
+		type1GlyphProgOpResolver.put(new Integer(11), "return");
+
+		type1GlyphProgOpResolver.put(new Integer(13), "hsbw");
+		type1GlyphProgOpResolver.put(new Integer(14), "endchar");
+	
+		type1GlyphProgOpResolver.put(new Integer(21), "rmoveto");
+		type1GlyphProgOpResolver.put(new Integer(22), "hmoveto");
+	
+		type1GlyphProgOpResolver.put(new Integer(30), "vhcurveto");
+		type1GlyphProgOpResolver.put(new Integer(31), "hvcurveto");
+	
+		type1GlyphProgOpResolver.put(new Integer(1000), "dotsection");
+		type1GlyphProgOpResolver.put(new Integer(1001), "vstem3");
+		type1GlyphProgOpResolver.put(new Integer(1002), "hstem3");
+		type1GlyphProgOpResolver.put(new Integer(1006), "seac");
+		type1GlyphProgOpResolver.put(new Integer(1007), "sbw");
+		type1GlyphProgOpResolver.put(new Integer(1012), "div");
+		type1GlyphProgOpResolver.put(new Integer(1016), "callothersubr");
+		type1GlyphProgOpResolver.put(new Integer(1017), "pop");
+		type1GlyphProgOpResolver.put(new Integer(1033), "setcurrentpoint");
 	}
 	
 	private static final boolean DEBUG_TYPE1C_LOADING = false;
@@ -908,7 +1223,7 @@ public class PdfFontDecoder {
 		if (DEBUG_TYPE1C_LOADING) System.out.println("Offset size is " + offSize);
 		
 		//	read base data
-		i = readFontType1cIndex(data, i, "name", null, null, false, null);
+		i = readFontType1cIndex(data, i, "name", null, null, null, null, null);
 		if (DEBUG_TYPE1C_LOADING) System.out.println("GOT TO " + i + " of " + data.length + " bytes");
 		HashMap topDict = new HashMap() {
 			public Object put(Object key, Object value) {
@@ -924,22 +1239,51 @@ public class PdfFontDecoder {
 				return super.put(key, value);
 			}
 		};
-		i = readFontType1cIndex(data, i, "TopDICT", topDict, type1cTopDictOpResolver, true, null);
+		i = readFontType1cIndex(data, i, "TopDICT", null, null, topDict, type1cTopDictOpResolver, null);
 		if (DEBUG_TYPE1C_LOADING) System.out.println("GOT TO " + i + " of " + data.length + " bytes");
 		
+		//	read string index
 		ArrayList sidIndex = new ArrayList() {
 			public boolean add(Object o) {
-				System.out.println("StringIndex: " + this.size() + " (SID " + (this.size() + sidResolver.size()) + ") set to " + o);
+				if (DEBUG_TYPE1C_LOADING) System.out.println("StringIndex: " + this.size() + " (SID " + (this.size() + sidResolver.size()) + ") set to " + o);
 				return super.add(o);
 			}
 		};
-		i = readFontType1cIndex(data, i, "String", null, null, false, sidIndex);
+		i = readFontType1cIndex(data, i, "String", null, null, null, null, sidIndex);
 		if (DEBUG_TYPE1C_LOADING) System.out.println("GOT TO " + i + " of " + data.length + " bytes");
 		
-		//	TODO from here onward, Type 1 and Type 1C should be the same
+		//	read global subroutines (if any)
+		ArrayList gSubrIndex = new ArrayList() {
+			public Object get(int index) {
+				int bias;
+				if (this.size() < 1240)
+					bias = 107;
+				else if (this.size() < 33900)
+					bias = 1131;
+				else bias = 32768;
+				if ((0 <= (index + bias)) && ((index + bias) < this.size()))
+					return super.get(index + bias);
+				else return null;
+			}
+		};
+		i = readFontType1cIndex(data, i, "GlobalSubr", null, null, new HashMap(), type1cGlyphProgOpResolver, gSubrIndex);
+		if (DEBUG_TYPE1C_LOADING) System.out.println("GOT TO " + i + " of " + data.length + " bytes");
 		
 		//	read encoding
-		HashMap eDict = new HashMap();
+		HashMap eDict = new HashMap() {
+			public Object put(Object key, Object value) {
+				if (DEBUG_TYPE1C_LOADING) {
+					System.out.print("EncodingDict: " + key + " set to " + value);
+					if (value instanceof Number[]) {
+						Number[] nums = ((Number[]) value);
+						for (int n = 0; n < nums.length; n++)
+							System.out.print(" " + nums[n]);
+					}
+					System.out.println();
+				}
+				return super.put(key, value);
+			}
+		};
 		int eEnd = 0;
 		if (topDict.containsKey("Encoding")) {
 			Number[] eos = ((Number[]) topDict.get("Encoding"));
@@ -949,41 +1293,116 @@ public class PdfFontDecoder {
 			}
 		}
 		
+		HashMap pDict = new HashMap() {
+			public Object put(Object key, Object value) {
+				if (DEBUG_TYPE1C_LOADING) {
+					System.out.print("PrivateDict: " + key + " set to " + value);
+					if (value instanceof Number[]) {
+						Number[] nums = ((Number[]) value);
+						for (int n = 0; n < nums.length; n++)
+							System.out.print(" " + nums[n]);
+					}
+					System.out.println();
+				}
+				return super.put(key, value);
+			}
+		};
+		int pEnd = 0;
+		ArrayList subrIndex = new ArrayList();
+		if (topDict.containsKey("Private")) {
+			Number[] pos = ((Number[]) topDict.get("Private"));
+			if (pos.length == 2) try {
+				int ps = pos[0].intValue();
+				int po = pos[1].intValue();
+				ArrayList pDictContent = new ArrayList();
+				pEnd = readFontType1cDict(data, po, (po + ps), "Private", null, null, pDict, type1cPrivateOpResolver, pDictContent);
+				
+				//	read char string subroutines
+				Number[] sros = ((Number[]) pDict.get("Subrs"));
+				if ((sros != null) && (sros.length != 0)) {
+					int sro = sros[sros.length-1].intValue();
+					subrIndex = new ArrayList() {
+						public Object get(int index) {
+							int bias;
+							if (this.size() < 1240)
+								bias = 107;
+							else if (this.size() < 33900)
+								bias = 1131;
+							else bias = 32768;
+							if ((0 <= (index + bias)) && ((index + bias) < this.size()))
+								return super.get(index + bias);
+							else return null;
+						}
+					};
+					pEnd = readFontType1cIndex(data, (po + sro), "Subrs", null, null, new HashMap(), type1cGlyphProgOpResolver, subrIndex);
+					if (DEBUG_TYPE1C_LOADING) System.out.println("Got " + subrIndex.size() + " char string subroutines");
+				}
+			}
+			catch (RuntimeException re) {
+				System.out.println("Error reading private dictionary: " + re.getMessage());
+				re.printStackTrace(System.out);
+			}
+		}
+		
 		//	read char rendering data
-		HashMap csDict = new HashMap();
+		HashMap csDict = new HashMap() {
+			public Object put(Object key, Object value) {
+				if (DEBUG_TYPE1C_LOADING) {
+					System.out.print("CharStringIndexDict: " + key + " set to " + value);
+					if (value instanceof Number[]) {
+						Number[] nums = ((Number[]) value);
+						for (int n = 0; n < nums.length; n++)
+							System.out.print(" " + nums[n]);
+					}
+					System.out.println();
+				}
+				return super.put(key, value);
+			}
+		};
 		ArrayList csIndexContent = new ArrayList();
 		int csEnd = 0;
 		if (topDict.containsKey("CharStrings")) {
 			Number[] csos = ((Number[]) topDict.get("CharStrings"));
 			if (csos.length != 0) {
 				int cso = csos[0].intValue();
-				csEnd = readFontType1cIndex(data, cso, "CharStrings", csDict, glyphProgOpResolver, false, csIndexContent);
+				csEnd = readFontType1cIndex(data, cso, "CharStrings", subrIndex, gSubrIndex, csDict, type1cGlyphProgOpResolver, csIndexContent);
 			}
 		}
 		ArrayList csContent = new ArrayList();
 		int cEnd = 0;
-		if (topDict.containsKey("Charset") && csDict.containsKey("Count")) {
+//		if (csDict.containsKey("Count")) {
+//			Number[] csos = {new Integer(0)};
+//			if (topDict.containsKey("Charset"))
+//				csos = ((Number[]) topDict.get("Charset"));
+//			Number[] cnts = ((Number[]) csDict.get("Count"));
+//			if ((csos.length * cnts.length) != 0) {
+//				int cso = csos[0].intValue();
+//				int cnt = cnts[0].intValue();
+//				cEnd = readFontType1cCharset(data, cso, cnt, csContent);
+//			}
+//		}
+		if (topDict.containsKey("Charset")) {
 			Number[] csos = ((Number[]) topDict.get("Charset"));
-			Number[] cnts = ((Number[]) csDict.get("Count"));
-			if ((csos.length * cnts.length) != 0) {
-				int cso = csos[0].intValue();
+			int cso = csos[0].intValue();
+			if (cso == 1) {
+				csContent.addAll(type1cExpertCharSet.keySet());
+				if (DEBUG_TYPE1C_LOADING) System.out.println("Using built-in Expert char set");
+			}
+			else if (cso == 2) {
+				csContent.addAll(type1cExpertSubsetCharSet.keySet());
+				if (DEBUG_TYPE1C_LOADING) System.out.println("Using built-in ExpertSubset char set");
+			}
+			else if (csDict.containsKey("Count")) {
+				Number[] cnts = ((Number[]) csDict.get("Count"));
 				int cnt = cnts[0].intValue();
 				cEnd = readFontType1cCharset(data, cso, cnt, csContent);
 			}
 		}
-		HashMap pDict = new HashMap();
-		int pEnd = 0;
-		if (topDict.containsKey("Private")) {
-			Number[] pos = ((Number[]) topDict.get("Private"));
-			if (pos.length != 0) try {
-				int po = pos[0].intValue();
-				ArrayList pDictContent = new ArrayList();
-				pEnd = readFontType1cDict(data, po, "Private", pDict, false, privateOpResolver, pDictContent);
-			}
-			catch (RuntimeException re) {
-				System.out.println("Error reading private dictionary: " + re.getMessage());
-			}
+		else {
+			csContent.addAll(type1cIsoAdobeCharSet.keySet());
+			if (DEBUG_TYPE1C_LOADING) System.out.println("Defaulted to ISOAdobe char set");
 		}
+		
 		i = Math.max(Math.max(i, pEnd), Math.max(csEnd, cEnd));
 		if (DEBUG_TYPE1C_LOADING) {
 			System.out.println("GOT TO " + i + " of " + data.length + " bytes");
@@ -1011,13 +1430,112 @@ public class PdfFontDecoder {
 			dWidth = nWidth;
 		if (DEBUG_TYPE1C_LOADING) System.out.println("Default char width is " + dWidth + ", nominal width is " + nWidth);
 		
+		//	TODO get font box
+		
+		//	get font flags
+		//	TODO maybe use these guys for font style assessment (==> might also decrease effort in verification matches)
+		int flags = 0; // using -1 for 'undefined' would set all the flags, so we need to use 0 here
+		boolean isMonospaced = false;
+		boolean isSerif = false;
+		boolean isSymbolic = false;
+		boolean isScript = false;
+		boolean useIsoAdobeCharSet = false;
+		boolean isItalics = false;
+		boolean isAllCaps = false;
+		boolean isSmallCaps = false;
+		boolean isForcedBold = false;
+		if (pFont.descriptor.containsKey("Flags")) {
+			flags = ((Number) pFont.descriptor.get("Flags")).intValue();
+			if (DEBUG_TYPE1C_LOADING) System.out.println("Flags are " + flags + " (" + Integer.toString(flags, 16) + "/" + Integer.toString(flags, 2) + ")");
+			isMonospaced = ((flags & PdfFont.FLAG_FixedPitch) != 0);
+			isSerif = ((flags & PdfFont.FLAG_Serif) != 0);
+			isSymbolic = ((flags & PdfFont.FLAG_Symbolic) != 0);
+			isScript = ((flags & PdfFont.FLAG_Script) != 0);
+			useIsoAdobeCharSet = ((flags & PdfFont.FLAG_Nonsymbolic) != 0);
+			isItalics = ((flags & PdfFont.FLAG_Italic) != 0);
+			isAllCaps = ((flags & PdfFont.FLAG_AllCaps) != 0);
+			isSmallCaps = ((flags & PdfFont.FLAG_SmallCaps) != 0);
+			isForcedBold = ((flags & PdfFont.FLAG_ForceBold) != 0);
+		}
+		
+		//	collect character codes
+		char[] chars = new char[Math.min(csContent.size(), csIndexContent.size())];
+		Arrays.fill(chars, ((char) 0));
+		Integer[] charCodes = new Integer[Math.min(csContent.size(), csIndexContent.size())];
+		String[] charNames = new String[Math.min(csContent.size(), csIndexContent.size())];
+		if (DEBUG_TYPE1C_LOADING) {
+			System.out.println("Loading character codes and names in font " + pFont.name + " (" + pFont + "):");
+			System.out.println(" - cs content is " + csContent);
+//			System.out.println(" - cs index content is " + csIndexContent); // no use, contains rendering OP arrays, and those work
+			System.out.println(" - resolved codes is " + resolvedCodesOrCidMap);
+			System.out.println(" - unresolved codes is " + unresolvedCodes);
+			System.out.println(" - CharSet is " + pFont.descriptor.get("CharSet"));
+			System.out.println(" - TopDict Charset is " + topDict.get("Charset"));
+			System.out.println(" - Encoding is " + pFont.descriptor.get("Encoding"));
+			System.out.println(" - EncodingScheme is " + pFont.descriptor.get("EncodingScheme"));
+			System.out.println(" - CharacterSet is " + pFont.descriptor.get("CharacterSet"));
+			System.out.println(" - Font-Encoding is " + pFont.data.get("Encoding"));
+			System.out.println(" - BaseFont is " + pFont.data.get("BaseFont"));
+		}
+		for (int c = 0; c < Math.min(csContent.size(), csIndexContent.size()); c++) {
+			
+			//	CID font mode
+			if (unresolvedCodes == null) {
+				Integer chi = ((Integer) resolvedCodesOrCidMap.get(new Integer(c)));
+				if (chi == null)
+					continue;
+				chars[c] = ((char) chi.intValue());
+				charNames[c] = StringUtils.getCharName(chars[c]);
+				charCodes[c] = new Integer((int) chars[c]);
+			}
+			
+			//	Type 1c font mode
+			else {
+				Integer sid = ((Integer) csContent.get(c));
+				if (sid.intValue() == 0)
+					continue;
+				if ((0 < DEBUG_TYPE1C_TARGET_SID) && (sid.intValue() != DEBUG_TYPE1C_TARGET_SID))
+					continue;
+				if (DEBUG_TYPE1C_LOADING) System.out.println(" - found SID " + sid + " at " + c);
+				
+				if (charNames[c] == null)
+					charNames[c] = ((String) sidResolver.get(sid));
+				if ((charNames[c] == null) && (sid.intValue() >= sidResolver.size()) && ((sid.intValue() - sidResolver.size()) < sidIndex.size()))
+					charNames[c] = ((String) sidIndex.get(sid.intValue() - sidResolver.size()));
+				if ((charNames[c] == null) && pFont.diffNameMappings.containsKey(new Integer(c)))
+					charNames[c] = ((String) pFont.diffNameMappings.get(new Integer(c)));
+				if (DEBUG_TYPE1C_LOADING) System.out.println("   char name is " + charNames[c]);
+				
+				chars[c] = StringUtils.getCharForName(charNames[c]);
+				if ((chars[c] == 0) && (charNames[c] != null)) {
+					if (charNames[c].indexOf('.') != -1)
+						chars[c] = StringUtils.getCharForName(charNames[c].substring(0, charNames[c].indexOf('.')));
+					else if (charNames[c].indexOf('_') != -1)
+						chars[c] = StringUtils.getCharForName(charNames[c].replaceAll("_", ""));
+				}
+				if (DEBUG_TYPE1C_LOADING) System.out.println("   char is " + ((int) chars[c]));
+				
+				charCodes[c] = ((Integer) unresolvedCodes.get(charNames[c]));
+				if (charCodes[c] == null)
+					charCodes[c] = ((Integer) resolvedCodesOrCidMap.get(charNames[c]));
+				if (charCodes[c] == null) {
+					charCodes[c] = new Integer((int) StringUtils.getCharForName(charNames[c]));
+					if (charCodes[c].intValue() < 1)
+						continue;
+				}
+				if (DEBUG_TYPE1C_LOADING) System.out.println("   char code is " + charCodes[c]);
+			}
+		}
+		
 		//	measure characters
 		pm.setInfo("   - measuring characters");
 		int maxDescent = 0;
 		int maxCapHeight = 0;
 		OpTrackerType1[] otrs = new OpTrackerType1[Math.min(csIndexContent.size(), csContent.size())];
+		HashMap renderingSequencesToCharIndices = new HashMap();
+		HashMap charIndicesToSynonyms = new HashMap();
 		for (int c = 0; c < Math.min(csIndexContent.size(), csContent.size()); c++) {
-			System.out.println(pFont.name + ", char " + c);
+			if (DEBUG_TYPE1C_LOADING) System.out.println(pFont.name + ", char " + c);
 			OpType1[] cs = ((OpType1[]) csIndexContent.get(c));
 			otrs[c] = new OpTrackerType1();
 			
@@ -1026,8 +1544,10 @@ public class PdfFontDecoder {
 				Integer chi = ((Integer) resolvedCodesOrCidMap.get(new Integer(c)));
 				if (chi == null)
 					continue;
-				char ch = ((char) chi.intValue());
-				String chn = StringUtils.getCharName(ch);
+//				char ch = ((char) chi.intValue());
+				char ch = chars[c];
+//				String chn = StringUtils.getCharName(ch);
+				String chn = charNames[c];
 				pm.setInfo("     - measuring char " + c + " (" + chn + "/'" + ch + "'/'" + StringUtils.getNormalForm(ch) + "'/" + ((int) ch) + ")");
 				if (DEBUG_TYPE1C_LOADING) System.out.println("Measuring char " + c + " (" + chn + "/'" + ch + "'/'" + StringUtils.getNormalForm(ch) + "'/" + ((int) ch) + ")");
 			}
@@ -1037,18 +1557,36 @@ public class PdfFontDecoder {
 				Integer sid = ((Integer) csContent.get(c));
 				if ((0 < DEBUG_TYPE1C_TARGET_SID) && (sid.intValue() != DEBUG_TYPE1C_TARGET_SID))
 					continue;
-				String chn = ((String) sidResolver.get(sid));
-				if ((chn == null) && (sid.intValue() >= sidResolver.size()) && ((sid.intValue() - sidResolver.size()) < sidIndex.size()))
-					chn = ((String) sidIndex.get(sid.intValue() - sidResolver.size()));
-				if ((chn == null) && pFont.diffNameMappings.containsKey(new Integer(c)))
-					chn = ((String) pFont.diffNameMappings.get(new Integer(c)));
-				char ch = StringUtils.getCharForName(chn);
+//				String chn = ((String) sidResolver.get(sid));
+//				if ((chn == null) && (sid.intValue() >= sidResolver.size()) && ((sid.intValue() - sidResolver.size()) < sidIndex.size()))
+//					chn = ((String) sidIndex.get(sid.intValue() - sidResolver.size()));
+//				if ((chn == null) && pFont.diffNameMappings.containsKey(new Integer(c)))
+//					chn = ((String) pFont.diffNameMappings.get(new Integer(c)));
+				String chn = charNames[c];
+//				char ch = StringUtils.getCharForName(chn);
+				char ch = chars[c];
 				pm.setInfo("     - measuring char " + c + " with SID " + sid + " (" + chn + "/'" + ch + "'/'" + StringUtils.getNormalForm(ch) + "'/" + ((int) ch) + ")");
 				if (DEBUG_TYPE1C_LOADING) System.out.println("Measuring char " + c + ", SID is " + sid + " (" + chn + "/'" + ch + "'/'" + StringUtils.getNormalForm(ch) + "'/" + ((int) ch) + ")");
 			}
-			runFontType1Ops(cs, otrs[c], false, false, null, -1, -1); // we don't know if multi-path or not so far ... 
-			maxDescent = Math.min(maxDescent, otrs[c].minY);
-			maxCapHeight = Math.max(maxCapHeight, otrs[c].maxY);
+			
+			//	render and measure glyph
+			runFontType1Ops(cs, otrs[c], false, false, null, -1, -1, null); // we don't know if multi-path or not so far ... 
+			if (DEBUG_TYPE1C_LOADING) System.out.println("Descent is " + otrs[c].minY + ", height is " + otrs[c].maxY);
+			
+			//	update maximums (if glyph is in sane bounds, the usual being -250 to 750)
+			//	TODO use font bounding box here ('FontBBox' in TopDict, as [left,bottom,right, top])
+			if ((-1000 < otrs[c].minY) && (otrs[c].maxY < 2500)) {
+				maxDescent = Math.min(maxDescent, otrs[c].minY);
+				maxCapHeight = Math.max(maxCapHeight, otrs[c].maxY);
+			}
+			
+			//	index glyph rendering sequence to catch identical characters
+			String renderingSequence = otrs[c].ops.toString();
+			if (DEBUG_TYPE1C_LOADING) System.out.println(" ==> " + renderingSequence);
+			if ("Ops:".equals(renderingSequence)) { /* no synonymizing spaces, tend to differ in width */ }
+			else if (renderingSequencesToCharIndices.containsKey(renderingSequence))
+				charIndicesToSynonyms.put(new Integer(c), renderingSequencesToCharIndices.get(renderingSequence));
+			else renderingSequencesToCharIndices.put(renderingSequence, new Integer(c));
 		}
 		if (DEBUG_TYPE1C_LOADING) System.out.println("Max descent is " + maxDescent + ", max cap height is " + maxCapHeight);
 		
@@ -1070,32 +1608,15 @@ public class PdfFontDecoder {
 			sansFonts[s] = sansFont.deriveFont(s);
 		}
 		
-		CharImage[] charImages = new CharImage[Math.min(csContent.size(), csIndexContent.size())];
-		char[] chars = new char[Math.min(csContent.size(), csIndexContent.size())];
-		Arrays.fill(chars, ((char) 0));
-		
 		//	generate images and match against named char
-		ImageDisplayDialog fidd = (DEBUG_TYPE1_RENDRING ? new ImageDisplayDialog("Font " + pFont.name) : null);
+		CharImage[] charImages = new CharImage[Math.min(csContent.size(), csIndexContent.size())];
+		ImageDisplayDialog fidd = ((DEBUG_TYPE1_RENDRING || DEBUG_TYPE1C_LOADING) ? new ImageDisplayDialog("Font " + pFont.name) : null);
 		for (int c = 0; c < Math.min(csContent.size(), csIndexContent.size()); c++) {
 			Integer sid;
-			String chn;
 			
 			//	CID font mode
-			if (unresolvedCodes == null) {
+			if (unresolvedCodes == null)
 				sid = new Integer(-1);
-				Integer chi = ((Integer) resolvedCodesOrCidMap.get(new Integer(c)));
-				if (chi == null)
-					continue;
-				chars[c] = ((char) chi.intValue());
-				chn = StringUtils.getCharName(chars[c]);
-//				if (!DEBUG_TYPE1C_RENDRING && !pFont.usedChars.contains(new Integer(c)) && !pFont.usedCharNames.contains(chn)) {
-				if (!DEBUG_TYPE1_RENDRING && !pFont.usesCharCode(new Integer(c)) && (chn != null) && !pFont.usedCharNames.contains(chn)) {
-					pm.setInfo("     - ignoring unused char " + c + " (" + chn + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
-					continue;
-				}
-				pm.setInfo("     - decoding char " + c + " (" + chn + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
-				if (DEBUG_TYPE1C_LOADING) System.out.println("Decoding char " + c + " (" + chn + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
-			}
 			
 			//	Type 1 font mode
 			else {
@@ -1104,37 +1625,28 @@ public class PdfFontDecoder {
 					continue;
 				if ((0 < DEBUG_TYPE1C_TARGET_SID) && (sid.intValue() != DEBUG_TYPE1C_TARGET_SID))
 					continue;
-				chn = ((String) sidResolver.get(sid));
-				if ((chn == null) && (sid.intValue() >= sidResolver.size()) && ((sid.intValue() - sidResolver.size()) < sidIndex.size()))
-					chn = ((String) sidIndex.get(sid.intValue() - sidResolver.size()));
-				if ((chn == null) && pFont.diffNameMappings.containsKey(new Integer(c)))
-					chn = ((String) pFont.diffNameMappings.get(new Integer(c)));
-				chars[c] = StringUtils.getCharForName(chn);
-				if (chars[c] == 0) {
-					if (chn.indexOf('.') != -1)
-						chars[c] = StringUtils.getCharForName(chn.substring(0, chn.indexOf('.')));
-					else if (chn.indexOf('_') != -1)
-						chars[c] = StringUtils.getCharForName(chn.replaceAll("_", ""));
-				}
-				if (!DEBUG_TYPE1_RENDRING && !pFont.usesCharCode(new Integer(c)) && !pFont.usesCharCode(new Integer((int) chars[c])) && (chn != null) && !pFont.usedCharNames.contains(chn)) {
-					pm.setInfo("     - ignoring unused char " + c + " with SID " + sid + " (" + chn + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
+				if (!DEBUG_TYPE1_RENDRING && !pFont.usesCharCode(new Integer(c)) && !pFont.usesCharCode(new Integer((int) chars[c])) && (charNames[c] != null) && !pFont.usedCharNames.contains(charNames[c])) {
+					pm.setInfo("     - ignoring unused char " + c + " with SID " + sid + " (" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
 					continue;
 				}
-				pm.setInfo("     - decoding char " + c + " with SID " + sid + " (" + chn + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
-				if (DEBUG_TYPE1C_LOADING) System.out.println("Decoding char " + c + ", SID is " + sid + " (" + chn + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
+				pm.setInfo("     - decoding char " + c + " with SID " + sid + " (" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
+				if (DEBUG_TYPE1C_LOADING) System.out.println("Decoding char " + c + ", SID is " + sid + " (" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
 			}
 			int chw = ((otrs[c].rWidth == 0) ? dWidth : (nWidth + otrs[c].rWidth));
 			if (DEBUG_TYPE1C_LOADING) System.out.println(" - char width is " + chw);
 			if (DEBUG_TYPE1C_LOADING) System.out.println(" - stroke count is " + otrs[c].mCount);
 			
-			//	check if char rendering possible
+			//	check if char rendering possible (and in sane bounds)
 			if ((otrs[c].maxX <= otrs[c].minX) || (otrs[c].maxY <= otrs[c].minY))
+				continue;
+			if ((2000 < (otrs[c].maxX - otrs[c].minX)) || (2500 < (otrs[c].maxY - otrs[c].minY)))
 				continue;
 			
 			//	render char
 			OpType1[] cs = ((OpType1[]) csIndexContent.get(c));
 			int mx = 8;
 			int my = ((mx * (maxCapHeight - maxDescent)) / (otrs[c].maxX - otrs[c].minX));
+			if (DEBUG_TYPE1C_LOADING) System.out.println(" - image size is " + Math.round((scale * (otrs[c].maxX - otrs[c].minX + mx)) + (2 * glyphOutlineFillSafetyEdge)) + "x" + Math.round((scale * (maxCapHeight - maxDescent + my)) + (2 * glyphOutlineFillSafetyEdge)));
 			OpGraphicsType1 ogr = new OpGraphicsType1(
 					otrs[c].minX,
 					maxDescent,
@@ -1145,21 +1657,30 @@ public class PdfFontDecoder {
 							Math.round((scale * (maxCapHeight - maxDescent + my)) + (2 * glyphOutlineFillSafetyEdge)),
 							BufferedImage.TYPE_INT_RGB)
 					);
-			runFontType1Ops(cs, ogr, otrs[c].isMultiPath, (0 < DEBUG_TYPE1C_TARGET_SID), fidd, c, sid.intValue());
+			runFontType1Ops(cs, ogr, otrs[c].isMultiPath, (0 < DEBUG_TYPE1C_TARGET_SID), fidd, c, sid.intValue(), charNames[c]);
 			if (DEBUG_TYPE1C_LOADING) System.out.println(" - image rendered, size is " + ogr.img.getWidth() + "x" + ogr.img.getHeight() + ", OpGraphics height is " + ogr.height);
 			charImages[c] = new CharImage(ogr.img, Math.round(((float) (maxCapHeight * ogr.img.getHeight())) / (maxCapHeight - maxDescent)));
 			if (DEBUG_TYPE1C_LOADING) System.out.println(" - char image wrapped, baseline is " + charImages[c].baseline);
 			
 			//	CID font mode
 			if (unresolvedCodes == null)
-				pFont.setCharImage(((int) chars[c]), chn, ogr.img);
+				pFont.setCharImage(((int) chars[c]), charNames[c], ogr.img);
 			
 			//	Type 1 font mode
 			else {
-				Integer chc = ((Integer) resolvedCodesOrCidMap.get(chn));
+				Integer chc = ((Integer) resolvedCodesOrCidMap.get(charNames[c]));
 				if (chc == null)
-					chc = ((Integer) unresolvedCodes.get(chn));
-				pFont.setCharImage(((chc == null) ? ((int) chars[c]) : chc.intValue()), chn, ogr.img);
+					chc = ((Integer) unresolvedCodes.get(charNames[c]));
+				pFont.setCharImage(((chc == null) ? ((int) chars[c]) : chc.intValue()), charNames[c], ogr.img);
+//				pFont.setCharImage(((chc == null) ? (c + 31) : chc.intValue()), charNames[c], ogr.img);
+//				pFont.setCharImage(((chc == null) ? (c + ((c < (127-31) ? 31 : (31 + 34)))) : chc.intValue()), charNames[c], ogr.img);
+//				pFont.setCharImage(((chc == null) ? (c + firstCharCode - firstSid) : chc.intValue()), charNames[c], ogr.img);
+				//	TODO_NEVER try chars[c] + <minChar> - 1 if chc is null
+				//	TODO_NEVER take <minChar> from csContent
+				//	TODO if charset missing, observe font descriptor flags, and use Adobe Default Charset if flag 5 (32) set
+				//	TODO lookup char names in Adobe Default Charset if char code (chc) is null (plainly by index (c))
+				//	TODO ==> Type1CFontFormat.pdf, page 45
+				//	TODO deactivate all the debug flags afterwards
 			}
 		}
 		if (fidd != null) {
@@ -1168,40 +1689,14 @@ public class PdfFontDecoder {
 			fidd.setVisible(true);
 		}
 		
-//		decodeChars(pFont, chars, charImages, dWidth, maxDescent, csContent, sidIndex, unresolvedCodes, resolvedCodesOrCidMap, null, null, serifFonts, sansFonts, pm, DEBUG_TYPE1C_LOADING);
-		
-		Integer[] charCodes = new Integer[Math.min(csContent.size(), csIndexContent.size())];
-		String[] charNames = new String[Math.min(csContent.size(), csIndexContent.size())];
+		//	check for char code synonymies
 		for (int c = 0; c < Math.min(csContent.size(), csIndexContent.size()); c++) {
-			
-			//	CID font mode
-			if (unresolvedCodes == null) {
-				charNames[c] = StringUtils.getCharName(chars[c]);
-				charCodes[c] = new Integer((int) chars[c]);
-			}
-			
-			//	Type 1c font mode
-			else {
-				Integer sid = ((Integer) csContent.get(c));
-				if (sid.intValue() == 0)
-					continue;
-				if ((0 < DEBUG_TYPE1C_TARGET_SID) && (sid.intValue() != DEBUG_TYPE1C_TARGET_SID))
-					continue;
-				charNames[c] = ((String) sidResolver.get(sid));
-				if ((charNames[c] == null) && (sid.intValue() >= sidResolver.size()) && ((sid.intValue() - sidResolver.size()) < sidIndex.size()))
-					charNames[c] = ((String) sidIndex.get(sid.intValue() - sidResolver.size()));
-				if ((charNames[c] == null) && pFont.diffNameMappings.containsKey(new Integer(c)))
-					charNames[c] = ((String) pFont.diffNameMappings.get(new Integer(c)));
-				charCodes[c] = ((Integer) unresolvedCodes.get(charNames[c]));
-				if (charCodes[c] == null)
-					charCodes[c] = ((Integer) resolvedCodesOrCidMap.get(charNames[c]));
-				if (charCodes[c] == null) {
-					charCodes[c] = new Integer((int) StringUtils.getCharForName(charNames[c]));
-					if (charCodes[c].intValue() < 1)
-						continue;
-				}
-			}
+			Integer ci = new Integer(c);
+			if (charIndicesToSynonyms.containsKey(ci) && (charCodes[c] != null))
+				pFont.setCharCodeSynonym(charCodes[c], charCodes[((Integer) charIndicesToSynonyms.get(ci)).intValue()]);
 		}
+		
+		//	decode characters
 		decodeChars(pFont, chars, charCodes, charNames, charImages, dWidth, maxDescent, serifFonts, sansFonts, charSet, pm, DEBUG_TYPE1C_LOADING);
 	}
 	
@@ -1227,6 +1722,7 @@ public class PdfFontDecoder {
 		int maxY = 0;
 		int mCount = 0;
 		boolean isMultiPath = false;
+		StringBuffer ops = new StringBuffer("Ops:");
 		void moveTo(int dx, int dy) {
 			if (this.mCount != 0)
 				this.isMultiPath = true;
@@ -1236,11 +1732,19 @@ public class PdfFontDecoder {
 			this.y += dy;
 			this.minY = Math.min(this.minY, this.y);
 			this.maxY = Math.max(this.maxY, this.y);
+			this.ops.append(" M" + dx + "/" + dy);
 //			System.out.println("Move " + this.id + " to " + dx + "/" + dy + ":");
 //			System.out.println(" " + this.minX + " < X < " + this.maxX);
 //			System.out.println(" " + this.minY + " < Y < " + this.maxY);
 		}
 		void lineTo(int dx, int dy) {
+			this.doLineTo(dx, dy);
+			this.ops.append(" L" + dx + "/" + dy);
+//			System.out.println("Line " + this.id + " to " + dx + "/" + dy + ":");
+//			System.out.println(" " + this.minX + " < X < " + this.maxX);
+//			System.out.println(" " + this.minY + " < Y < " + this.maxY);
+		}
+		void doLineTo(int dx, int dy) {
 			this.minPaintX = Math.min(this.minPaintX, this.x);
 			this.minPaintY = Math.min(this.minPaintY, this.y);
 			this.x += dx;
@@ -1257,9 +1761,10 @@ public class PdfFontDecoder {
 //			System.out.println(" " + this.minY + " < Y < " + this.maxY);
 		}
 		void curveTo(int dx1, int dy1, int dx2, int dy2, int dx3, int dy3) {
-			this.lineTo(dx1, dy1);
-			this.lineTo(dx2, dy2);
-			this.lineTo(dx3, dy3);
+			this.doLineTo(dx1, dy1);
+			this.doLineTo(dx2, dy2);
+			this.doLineTo(dx3, dy3);
+			this.ops.append(" C" + dx1 + "/" + dy1 + "," + dx2 + "/" + dy2 + "," + dx3 + "/" + dy3);
 		}
 		void closePath() {}
 	}
@@ -1341,13 +1846,10 @@ public class PdfFontDecoder {
 		}
 	}
 	
-	//Word 'A' in STTRNB+AGaramond-Regular-SC750: 41
-	//Word 'ubry ' in STTRNB+AGaramond-Regular-SC750: 55425259
-	
 	private static final boolean DEBUG_TYPE1_RENDRING = false;
 	private static final int DEBUG_TYPE1C_TARGET_SID = -1;
 	
-	private static void runFontType1Ops(OpType1[] ops, OpReceiverType1 opr, boolean isMultiPath, boolean show, ImageDisplayDialog fidd, int cc, int sid) {
+	private static void runFontType1Ops(OpType1[] ops, OpReceiverType1 opr, boolean isMultiPath, boolean show, ImageDisplayDialog fidd, int cc, int sid, String cn) {
 		ImageDisplayDialog idd = null;
 		boolean emptyOp = false;
 		
@@ -1358,9 +1860,8 @@ public class PdfFontDecoder {
 //				System.out.print(" " + ops[o].args[a].intValue());
 //			System.out.println();
 			
-//			int a = 0;
-			int skipped = 0;// (skipFirst ? 1 : 0);
-			int a = skipped;
+			int a = 0;
+			int skipped = 0;
 			
 			while (op != -1) {
 /*
@@ -1378,7 +1879,7 @@ public class PdfFontDecoder {
 				}
 				
 				//	dotsection |- dotsection (12 0) |-
-				//	brackets an outline section for the dots in letters such as “i”,“ j”, and “!”. This is a hint command that indicates that a section of a charstring should be understood as describing such a feature, Chapter 6: CharStrings Dictionary 53 rather than as part of the main outline.
+				//	brackets an outline section for the dots in letters such as 'i', 'j', and '!'. This is a hint command that indicates that a section of a charstring should be understood as describing such a feature, Chapter 6: CharStrings Dictionary 53 rather than as part of the main outline.
 				else if (op == 1000) {
 					if (DEBUG_TYPE1_RENDRING)
 						printOp(op, "<hints>", skipped, a, ops[o].args);
@@ -1390,8 +1891,16 @@ public class PdfFontDecoder {
 				else if (op == 13) {
 					if (DEBUG_TYPE1_RENDRING)
 						printOp(op, "hsbw", skipped, a, ops[o].args);
-					opr.iSideBearing = ops[o].args[a++].intValue();
-					opr.iWidth = ops[o].args[a++].intValue();
+					if (ops[o].fixedArgs && ((a+2) <= ops[o].args.length)) {
+						a = (ops[a].args.length - 2);
+						skipped = a;
+						if (DEBUG_TYPE1_RENDRING)
+							System.out.println(" - skipped to parameter " + a);
+					}
+					if ((a + 2) <= ops[o].args.length) {
+						opr.iSideBearing = ops[o].args[a++].intValue();
+						opr.iWidth = ops[o].args[a++].intValue();
+					}
 					op = -1;
 				}
 				
@@ -1400,10 +1909,18 @@ public class PdfFontDecoder {
 				else if (op == 1007) {
 					if (DEBUG_TYPE1_RENDRING)
 						printOp(op, "sbw", skipped, a, ops[o].args);
-					opr.iSideBearing = ops[o].args[a++].intValue();
-					a++; // skip vertical part of side bearing
-					opr.iWidth = ops[o].args[a++].intValue();
-					a++; // skip vertical part of width
+					if (ops[o].fixedArgs && ((a+4) <= ops[o].args.length)) {
+						a = (ops[o].args.length - 4);
+						skipped = a;
+						if (DEBUG_TYPE1_RENDRING)
+							System.out.println(" - skipped to parameter " + a);
+					}
+					if ((a + 3) <= ops[o].args.length) {
+						opr.iSideBearing = ops[o].args[a++].intValue();
+						a++; // skip vertical part of side bearing
+						opr.iWidth = ops[o].args[a++].intValue();
+						a++; // skip vertical part of width
+					}
 					op = -1;
 				}
 				
@@ -1412,7 +1929,6 @@ public class PdfFontDecoder {
 				else if (op == 1006) {
 					if (DEBUG_TYPE1_RENDRING)
 						printOp(op, "seac", skipped, a, ops[o].args);
-					
 					op = -1;
 				}
 				
@@ -1423,9 +1939,18 @@ public class PdfFontDecoder {
 						printOp(op, "rmoveto", skipped, a, ops[o].args);
 					if (ops[o].args.length < 2)
 						emptyOp = true;
-					if ((o == 0) && ((a+2) < ops[o].args.length))
+					if (ops[o].fixedArgs && ((a+2) <= ops[o].args.length)) {
+						a = (ops[o].args.length - 2);
+						skipped = a;
+						if (DEBUG_TYPE1_RENDRING)
+							System.out.println(" - skipped to parameter " + a);
+					}
+					else if ((o == 0) && ((a+2) < ops[o].args.length))
 						opr.rWidth += ops[o].args[a++].intValue();
-					opr.moveTo(ops[o].args[a++].intValue(), ops[o].args[a++].intValue());
+					else if ((a+2) < ops[o].args.length)
+						a = (ops[o].args.length - 2);
+					if ((a + 2) <= ops[o].args.length)
+						opr.moveTo(ops[o].args[a++].intValue(), ops[o].args[a++].intValue());
 					op = -1;
 				}
 				
@@ -1449,9 +1974,16 @@ public class PdfFontDecoder {
 						printOp(op, "hmoveto", skipped, a, ops[o].args);
 					if (ops[o].args.length < 1)
 						emptyOp = true;
-					if ((o == 0) && ((a+1) < ops[o].args.length))
+					if (ops[o].fixedArgs && ((a+1) <= ops[o].args.length)) {
+						a = (ops[o].args.length - 1);
+						skipped = a;
+						if (DEBUG_TYPE1_RENDRING)
+							System.out.println(" - skipped to parameter " + a);
+					}
+					else if ((o == 0) && ((a+1) < ops[o].args.length))
 						opr.rWidth += ops[o].args[a++].intValue(); 
-					opr.moveTo(ops[o].args[a++].intValue(), 0);
+					if ((a + 1) <= ops[o].args.length)
+						opr.moveTo(ops[o].args[a++].intValue(), 0);
 					op = -1;
 				}
 				
@@ -1460,7 +1992,6 @@ public class PdfFontDecoder {
 				else if (op == 1033) {
 					if (DEBUG_TYPE1_RENDRING)
 						printOp(op, "setcurrentpoint", skipped, a, ops[o].args);
-					
 					op = -1;
 				}
 				
@@ -1471,9 +2002,16 @@ public class PdfFontDecoder {
 						printOp(op, "vmoveto", skipped, a, ops[o].args);
 					if (ops[o].args.length < 1)
 						emptyOp = true;
-					if ((o == 0) && ((a+1) < ops[o].args.length))
+					if (ops[o].fixedArgs && ((a+1) <= ops[o].args.length)) {
+						a = (ops[o].args.length - 1);
+						skipped = a;
+						if (DEBUG_TYPE1_RENDRING)
+							System.out.println(" - skipped to parameter " + a);
+					}
+					else if ((o == 0) && ((a+1) < ops[o].args.length))
 						opr.rWidth += ops[o].args[a++].intValue(); 
-					opr.moveTo(0, ops[o].args[a++].intValue());
+					if ((a + 1) <= ops[o].args.length)
+						opr.moveTo(0, ops[o].args[a++].intValue());
 					op = -1;
 				}
 				
@@ -1486,6 +2024,12 @@ public class PdfFontDecoder {
 						a++;
 					if (ops[o].args.length < 2)
 						emptyOp = true;
+					if (ops[o].fixedArgs && ((a+2) <= ops[o].args.length)) {
+						a = (ops[o].args.length - 2);
+						skipped = a;
+						if (DEBUG_TYPE1_RENDRING)
+							System.out.println(" - skipped to parameter " + a);
+					}
 					if ((a+2) <= ops[o].args.length)
 						opr.lineTo(ops[o].args[a++].intValue(), ops[o].args[a++].intValue());
 					else op = -1;
@@ -1500,6 +2044,12 @@ public class PdfFontDecoder {
 						printOp(op, "hlineto", skipped, a, ops[o].args);
 					if (ops[o].args.length < 1)
 						emptyOp = true;
+					if (ops[o].fixedArgs && ((a+1) <= ops[o].args.length)) {
+						a = (ops[o].args.length - 1);
+						skipped = a;
+						if (DEBUG_TYPE1_RENDRING)
+							System.out.println(" - skipped to parameter " + a);
+					}
 					if ((a+1) <= ops[o].args.length) {
 						opr.lineTo(ops[o].args[a++].intValue(), 0);
 						op = 7;
@@ -1516,6 +2066,12 @@ public class PdfFontDecoder {
 						printOp(op, "vlineto", skipped, a, ops[o].args);
 					if (ops[o].args.length < 1)
 						emptyOp = true;
+					if (ops[o].fixedArgs && ((a+1) <= ops[o].args.length)) {
+						a = (ops[o].args.length - 1);
+						skipped = a;
+						if (DEBUG_TYPE1_RENDRING)
+							System.out.println(" - skipped to parameter " + a);
+					}
 					if ((a+1) <= ops[o].args.length) {
 						opr.lineTo(0, ops[o].args[a++].intValue());
 						op = 6;
@@ -1530,7 +2086,13 @@ public class PdfFontDecoder {
 						printOp(op, "rrcurveto", skipped, a, ops[o].args);
 					
 					//	skip superfluous arguments
-					if (a == skipped) {
+					if (ops[o].fixedArgs && ((a+6) <= ops[o].args.length)) {
+						a = (ops[o].args.length - 6);
+						skipped = a;
+						if (DEBUG_TYPE1_RENDRING)
+							System.out.println(" - skipped to parameter " + a);
+					}
+					else if (a == skipped) {
 						while ((a < ops[o].args.length) && (((ops[o].args.length - a) % 6) != 0))
 							a++;
 						if (DEBUG_TYPE1_RENDRING)
@@ -1591,7 +2153,13 @@ public class PdfFontDecoder {
 						printOp(op, "hvcurveto", skipped, a, ops[o].args);
 					
 					//	skip superfluous arguments
-					if (a == skipped) {
+					if (ops[o].fixedArgs && ((a+4) <= ops[o].args.length)) {
+						a = (ops[o].args.length - 4);
+						skipped = a;
+						if (DEBUG_TYPE1_RENDRING)
+							System.out.println(" - skipped to parameter " + a);
+					}
+					else if (a == skipped) {
 						while ((a < ops[o].args.length) && (((ops[o].args.length - a) % 4) > 1)) {
 							a++;
 							skipped++;
@@ -1741,7 +2309,13 @@ public class PdfFontDecoder {
 						printOp(op, "vhcurveto", skipped, a, ops[o].args);
 					
 					//	skip superfluous arguments
-					if (a == skipped) {
+					if (ops[o].fixedArgs && ((a+4) <= ops[o].args.length)) {
+						a = (ops[o].args.length - 4);
+						skipped = a;
+						if (DEBUG_TYPE1_RENDRING)
+							System.out.println(" - skipped to parameter " + a);
+					}
+					else if (a == skipped) {
 						while ((a < ops[o].args.length) && (((ops[o].args.length - a) % 4) > 1)) {
 							a++;
 							skipped++;
@@ -2060,12 +2634,12 @@ public class PdfFontDecoder {
 					op = -1;
 				}
 				
-				//	TODO closepath |- closepath (9) |-
+				//	closepath |- closepath (9) |-
 				//	closepath closes a subpath. Adobe strongly recommends that all character subpaths end with a closepath command, otherwise when an outline is stroked (by setting PaintType equal to 2) you may get unexpected behavior where lines join. Note that, unlike the closepath command in the PostScript language, this command does not reposition the current point. Any subsequent rmoveto must be relative to the current point in force before the Type 1 font format closepath command was given.
 				else if (op == 9) {
 					if (DEBUG_TYPE1_RENDRING)
 						printOp(op, "closepath", skipped, a, ops[o].args);
-					
+					opr.closePath();
 					op = -1;
 				}
 				
@@ -2082,7 +2656,7 @@ public class PdfFontDecoder {
 			if (DEBUG_TYPE1_RENDRING && (opr instanceof OpGraphicsType1))
 				System.out.println(" ==> dot at (" + ((OpGraphicsType1) opr).x + "/" + ((OpGraphicsType1) opr).y + ")");
 			
-			if (DEBUG_TYPE1_RENDRING && (show || emptyOp) && (opr instanceof OpGraphicsType1)) {
+			if (DEBUG_TYPE1_RENDRING && (show /*|| emptyOp*/) && (opr instanceof OpGraphicsType1)) {
 				BufferedImage dImg = new BufferedImage(((OpGraphicsType1) opr).img.getWidth(), ((OpGraphicsType1) opr).img.getHeight(), BufferedImage.TYPE_INT_RGB);
 				Graphics g = dImg.getGraphics();
 				g.drawImage(((OpGraphicsType1) opr).img, 0, 0, dImg.getWidth(), dImg.getHeight(), null);
@@ -2104,184 +2678,13 @@ public class PdfFontDecoder {
 		
 		//	fill outline
 		fillGlyphOutline(((OpGraphicsType1) opr).img, ((OpGraphicsType1) opr).scale, show);
-//		int blackRgb = Color.BLACK.getRGB();
-//		int whiteRgb = Color.WHITE.getRGB();
-//		int outsideRgb = Color.GRAY.getRGB();
-//		int insideRgb = Color.GRAY.darker().getRGB();
-//		HashSet insideRgbs = new HashSet();
-//		HashSet outsideRgbs = new HashSet();
-//		
-//		//	fill outside
-//		fill(((OpGraphicsType1) opr).img, 1, 1, whiteRgb, outsideRgb);
-//		insideRgbs.add(new Integer(insideRgb));
-//		insideRgbs.add(new Integer(blackRgb));
-//		outsideRgbs.add(new Integer(outsideRgb));
-//		
-//		//	fill multi-path characters outside-in
-//		if (isMultiPath || true) {
-//			outsideRgb = (new Color(outsideRgb)).brighter().getRGB();
-//			int seekWidth = Math.max(1, (Math.round(((OpGraphicsType1) opr).scale * 10)));
-//			boolean gotWhite = true;
-//			boolean outmostWhiteIsInside = true;
-//			while (gotWhite) {
-//				
-//				if (DEBUG_TYPE1C_RENDRING && show && (opr instanceof OpGraphicsType1)) {
-//					BufferedImage dImg = new BufferedImage(((OpGraphicsType1) opr).img.getWidth(), ((OpGraphicsType1) opr).img.getHeight(), BufferedImage.TYPE_INT_RGB);
-//					Graphics g = dImg.getGraphics();
-//					g.drawImage(((OpGraphicsType1) opr).img, 0, 0, dImg.getWidth(), dImg.getHeight(), null);
-//					g.setColor(Color.RED);
-//					g.fillRect(((OpGraphicsType1) opr).x-2, ((OpGraphicsType1) opr).y-2, 5, 5);
-//					if (idd == null) {
-//						idd = new ImageDisplayDialog("Rendering Progress");
-//						idd.setSize((dImg.getWidth() + 200), (dImg.getHeight() + 100));
-//					}
-//					idd.addImage(dImg, ("Filling"));
-//					idd.setLocationRelativeTo(null);
-//					idd.setVisible(true);
-//				}
-//				
-//				gotWhite = false;
-//				int fillRgb;
-//				if (outmostWhiteIsInside) {
-//					fillRgb = insideRgb;
-//					insideRgbs.add(new Integer(fillRgb));
-//				}
-//				else {
-//					fillRgb = outsideRgb;
-//					outsideRgbs.add(new Integer(fillRgb));
-//				}
-////				System.out.println("Fill RGB is " + fillRgb);
-//				for (int c = seekWidth; c < ((OpGraphicsType1) opr).img.getWidth(); c += seekWidth) {
-////					System.out.println("Investigating column " + c);
-//					int r = 0;
-//					while ((r < ((OpGraphicsType1) opr).img.getHeight()) && (((OpGraphicsType1) opr).img.getRGB(c, r) != whiteRgb) && (((OpGraphicsType1) opr).img.getRGB(c, r) != fillRgb)) {
-////						if ((r % 10) == 0) System.out.println(" - ignoring pixel with RGB " + img.getRGB(c, r));
-//						r++;
-//					}
-////					System.out.println(" - found interesting pixel at row " + r);
-//					if (r >= ((OpGraphicsType1) opr).img.getHeight()) {
-////						System.out.println(" --> bottom of column");
-//						continue;
-//					}
-////					System.out.println(" - RGB is " + img.getRGB(c, r));
-//					if (((OpGraphicsType1) opr).img.getRGB(c, r) == fillRgb) {
-////						System.out.println(" --> filled before");
-//						continue;
-//					}
-//					
-////					System.out.println(" --> filling at " + c + "/" + r + " with " + fillRgb);
-//					fill(((OpGraphicsType1) opr).img, c, r, whiteRgb, fillRgb);
-//					gotWhite = true;
-//				}
-//				
-//				for (int c = (((OpGraphicsType1) opr).img.getWidth() - seekWidth); c > 0; c -= seekWidth) {
-////					System.out.println("Investigating column " + c);
-//					int r = (((OpGraphicsType1) opr).img.getHeight() - 1);
-//					while ((r >= 0) && (((OpGraphicsType1) opr).img.getRGB(c, r) != whiteRgb) && (((OpGraphicsType1) opr).img.getRGB(c, r) != fillRgb)) {
-////						if ((r % 10) == 0) System.out.println(" - ignoring pixel with RGB " + img.getRGB(c, r));
-//						r--;
-//					}
-////					System.out.println(" - found interesting pixel at row " + r);
-//					if (r < 0) {
-////						System.out.println(" --> bottom of column");
-//						continue;
-//					}
-////					System.out.println(" - RGB is " + img.getRGB(c, r));
-//					if (((OpGraphicsType1) opr).img.getRGB(c, r) == fillRgb) {
-////						System.out.println(" --> filled before");
-//						continue;
-//					}
-//					
-////					System.out.println(" --> filling at " + c + "/" + r + " with " + fillRgb);
-//					fill(((OpGraphicsType1) opr).img, c, r, whiteRgb, fillRgb);
-//					gotWhite = true;
-//				}
-//				
-//				for (int r = seekWidth; r < ((OpGraphicsType1) opr).img.getHeight(); r += seekWidth) {
-////					System.out.println("Investigating row " + r);
-//					int c = 0;
-//					while ((c < ((OpGraphicsType1) opr).img.getWidth()) && (((OpGraphicsType1) opr).img.getRGB(c, r) != whiteRgb) && (((OpGraphicsType1) opr).img.getRGB(c, r) != fillRgb)) {
-////						if ((c % 10) == 0) System.out.println(" - ignoring pixel with RGB " + img.getRGB(c, r));
-//						c++;
-//					}
-////					System.out.println(" - found interesting pixel at column " + r);
-//					if (c >= ((OpGraphicsType1) opr).img.getWidth()) {
-////						System.out.println(" --> right end of row");
-//						continue;
-//					}
-////					System.out.println(" - RGB is " + img.getRGB(c, r));
-//					if (((OpGraphicsType1) opr).img.getRGB(c, r) == fillRgb) {
-////						System.out.println(" --> filled before");
-//						continue;
-//					}
-//					
-////					System.out.println(" --> filling at " + c + "/" + r + " with " + fillRgb);
-//					fill(((OpGraphicsType1) opr).img, c, r, whiteRgb, fillRgb);
-//					gotWhite = true;
-//				}
-//				
-//				for (int r = (((OpGraphicsType1) opr).img.getHeight() - seekWidth); r >= 0; r -= seekWidth) {
-////					System.out.println("Investigating row " + r);
-//					int c = (((OpGraphicsType1) opr).img.getWidth() - 1);
-//					while ((c >= 0) && (((OpGraphicsType1) opr).img.getRGB(c, r) != whiteRgb) && (((OpGraphicsType1) opr).img.getRGB(c, r) != fillRgb)) {
-////						if ((c % 10) == 0) System.out.println(" - ignoring pixel with RGB " + img.getRGB(c, r));
-//						c--;
-//					}
-////					System.out.println(" - found interesting pixel at column " + r);
-//					if (c < 0) {
-////						System.out.println(" --> right end of row");
-//						continue;
-//					}
-////					System.out.println(" - RGB is " + img.getRGB(c, r));
-//					if (((OpGraphicsType1) opr).img.getRGB(c, r) == fillRgb) {
-////						System.out.println(" --> filled before");
-//						continue;
-//					}
-//					
-////					System.out.println(" --> filling at " + c + "/" + r + " with " + fillRgb);
-//					fill(((OpGraphicsType1) opr).img, c, r, whiteRgb, fillRgb);
-//					gotWhite = true;
-//				}
-//				
-//				if (outmostWhiteIsInside) {
-//					outmostWhiteIsInside = false;
-//					insideRgb = (new Color(insideRgb)).darker().getRGB();
-////					System.out.println("Inside RGB set to " + insideRgb);
-//				}
-//				else {
-//					outmostWhiteIsInside = true;
-//					outsideRgb = (new Color(outsideRgb)).brighter().getRGB();
-////					System.out.println("Outside RGB set to " + outsideRgb);
-//				}
-//			}
-//		}
-//		
-//		//	fill single-path character
-//		else insideRgbs.add(new Integer(whiteRgb));
-//		
-//		
-//		//	make it black and white, finally
-//		for (int c = 0; c < ((OpGraphicsType1) opr).img.getWidth(); c++) {
-//			for (int r = 0; r < ((OpGraphicsType1) opr).img.getHeight(); r++) {
-//				int rgb = ((OpGraphicsType1) opr).img.getRGB(c, r);
-//				if (insideRgbs.contains(new Integer(rgb)))
-//					((OpGraphicsType1) opr).img.setRGB(c, r, blackRgb);
-//				else ((OpGraphicsType1) opr).img.setRGB(c, r, whiteRgb);
-//			}
-//		}
 		
 		//	scale down image
 		int maxHeight = 100;
 		((OpGraphicsType1) opr).setImage(scaleImage(((OpGraphicsType1) opr).img, maxHeight));
-//		if (((OpGraphicsType1) opr).img.getHeight() > maxHeight) {
-//			BufferedImage sImg = new BufferedImage(((maxHeight * ((OpGraphicsType1) opr).img.getWidth()) / ((OpGraphicsType1) opr).img.getHeight()), maxHeight, ((OpGraphicsType1) opr).img.getType());
-//			sImg.getGraphics().drawImage(((OpGraphicsType1) opr).img, 0, 0, sImg.getWidth(), sImg.getHeight(), null);
-////			System.out.println("Scaled-down image is " + sImg.getWidth() + " x " + sImg.getHeight() + " (" + (((float) sImg.getWidth()) / sImg.getHeight()) + ")");
-//			((OpGraphicsType1) opr).setImage(sImg);
-//		}
 		
 		//	display result for rendering tests
-		if (DEBUG_TYPE1_RENDRING && (show || emptyOp)) {
+		if (DEBUG_TYPE1_RENDRING && (show/* || emptyOp*/)) {
 			if (idd != null) {
 				idd.addImage(((OpGraphicsType1) opr).img, "Result");
 				idd.setLocationRelativeTo(null);
@@ -2296,7 +2699,7 @@ public class PdfFontDecoder {
 			}
 		}
 		else if (fidd != null)
-			fidd.addImage(((OpGraphicsType1) opr).img, (cc + ": " + sid));
+			fidd.addImage(((OpGraphicsType1) opr).img, (cc + ": " + sid + " (" + cn + ")"));
 	}
 	
 	private static final void printOp(int op, String opName, int skipped, int a, Number[] args) {
@@ -2526,22 +2929,22 @@ public class PdfFontDecoder {
 		if (DEBUG_TYPE1C_LOADING) System.out.println(" - format is " + fmt);
 		if (fmt == 0) {
 			int nCodes = convertUnsigned(data[i++]);
-			if (DEBUG_TYPE1C_LOADING) System.out.println(" - expecting " + nCodes + " codes");
+			if (DEBUG_TYPE1C_LOADING) System.out.println(" - (F0) expecting " + nCodes + " codes");
 			for (int c = 1; c <= nCodes; c++) {
 				int code = convertUnsigned(data[i++]);
-//				if (DEBUG_TYPE1C_LOADING) System.out.println(" - 0 got char " + c + ": " + code);
+				if (DEBUG_TYPE1C_LOADING) System.out.println(" - (F0) got char " + c + ": " + code);
 				eDict.put(new Integer(c), new Integer(code));
 			}
 		}
 		else if (fmt == 1) {
 			int nRanges = convertUnsigned(data[i++]);
-			if (DEBUG_TYPE1C_LOADING) System.out.println(" - expecting " + nRanges + " ranges");
+			if (DEBUG_TYPE1C_LOADING) System.out.println(" - (F1) expecting " + nRanges + " ranges");
 			for (int r = 0; r < nRanges; r++) {
 				int rStart = convertUnsigned(data[i++]);
 				int rSize = convertUnsigned(data[i++]);
 				for (int ro = 0; ro < rSize; ro++) {
 					int code = (rStart + ro);
-//					if (DEBUG_TYPE1C_LOADING) System.out.println(" - 1 got" + ((ro == 0) ? "" : " next") + " char " + (eDict.size()+1) + ": " + code);
+					if (DEBUG_TYPE1C_LOADING) System.out.println("   - (F1) got" + ((ro == 0) ? "" : " next") + " char " + (eDict.size()+1) + ": " + code);
 					eDict.put(new Integer(eDict.size()+1), new Integer(code));
 				}
 			}
@@ -2561,7 +2964,7 @@ public class PdfFontDecoder {
 				int sid = ((convertUnsigned(data[i++]) * 256) + convertUnsigned(data[i++]));
 				if (content != null)
 					content.add(new Integer(sid));
-//				if (DEBUG_TYPE1C_LOADING) System.out.println(" - 0 got char " + c + ": " + sid);
+				if (DEBUG_TYPE1C_LOADING) System.out.println(" - (F0) got char " + c + ": " + sid);
 			}
 		}
 		else if (fmt == 1) {
@@ -2571,15 +2974,15 @@ public class PdfFontDecoder {
 				toCome--;
 				if (content != null)
 					content.add(new Integer(sid));
-//				if (DEBUG_TYPE1C_LOADING) System.out.println(" - 1 got char " + content.size() + ": " + sid);
+				if (DEBUG_TYPE1C_LOADING) System.out.println(" - (F1) got char " + content.size() + ": " + sid);
 				int toComeInRange = convertUnsigned(data[i++]);
-//				if (DEBUG_TYPE1C_LOADING) System.out.println("   - " + toComeInRange + " more in range, " + toCome + " in total");
-				for (int c = 0; c < toComeInRange; c++) {
+				if (DEBUG_TYPE1C_LOADING) System.out.println("   - " + toComeInRange + " more in range, " + toCome + " in total:");
+				for (int c = 0; (c < toComeInRange) && (toCome > 0); c++) {
 					sid++;
 					toCome--;
 					if (content != null)
 						content.add(new Integer(sid));
-//					if (DEBUG_TYPE1C_LOADING) System.out.println(" - 1 got next char " + content.size() + ": " + sid);
+					if (DEBUG_TYPE1C_LOADING) System.out.println("   - (F1) got next char " + content.size() + ": " + sid);
 				}
 			}
 		}
@@ -2590,23 +2993,24 @@ public class PdfFontDecoder {
 				toCome--;
 				if (content != null)
 					content.add(new Integer(sid));
-//				if (DEBUG_TYPE1C_LOADING) System.out.println(" - 2 got char " + content.size() + ": " + sid);
+				if (DEBUG_TYPE1C_LOADING) System.out.println(" - (F2) got char " + content.size() + ": " + sid);
 				int toComeInRange = ((convertUnsigned(data[i++]) * 256) + convertUnsigned(data[i++]));
-				for (int c = 0; c < toComeInRange; c++) {
+				if (DEBUG_TYPE1C_LOADING) System.out.println("   - " + toComeInRange + " more in range, " + toCome + " in total:");
+				for (int c = 0; (c < toComeInRange) && (toCome > 0); c++) {
 					sid++;
 					toCome--;
 					if (content != null)
 						content.add(new Integer(sid));
-//					if (DEBUG_TYPE1C_LOADING) System.out.println(" - 2 got char " + content.size() + ": " + sid);
+					if (DEBUG_TYPE1C_LOADING) System.out.println("   - (F2) got char " + content.size() + ": " + sid);
 				}
 			}
 		}
 		return i;
 	}
 	
-	private static int readFontType1cIndex(byte[] data, int start, String name, HashMap dictEntries, HashMap dictOpResolver, boolean isTopDict, ArrayList content) {
+	private static int readFontType1cIndex(byte[] data, int start, String name, ArrayList subrIndex, ArrayList gSubrIndex, HashMap dictEntries, HashMap dictOpResolver, ArrayList content) {
 		int i = start;
-		System.out.println("Doing " + name + " index:");
+		if (DEBUG_TYPE1C_LOADING) System.out.println("Doing " + name + " index:");
 		int count = (256 * convertUnsigned(data[i++]) + convertUnsigned(data[i++]));
 		System.out.println(" - count is " + count);
 		if (dictEntries != null) {
@@ -2622,15 +3026,20 @@ public class PdfFontDecoder {
 			offsets[c] = 0;
 			for (int b = 0; b < offSize; b++)
 				offsets[c] = ((offsets[c] * 256) + convertUnsigned(data[i++]));
-//			System.out.println(" - offset[" + c + "] is " + offsets[c]);
+//			if (DEBUG_TYPE1C_LOADING) System.out.println(" - offset[" + c + "] is " + offsets[c]);
 		}
 		for (int c = 0; c < count; c++) {
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
 			for (int b = offsets[c]; b < offsets[c+1]; b++)
 				baos.write(convertUnsigned(data[i++]));
-			if ((dictOpResolver != null) && (dictEntries != null)) {
+			if ((dictOpResolver == type1cGlyphProgOpResolver) && (subrIndex == null) && (content != null)) {
+				content.add(baos.toByteArray());
+				if (dictEntries != null)
+					dictEntries.put(Integer.valueOf(c), baos.toByteArray());
+			}
+			else if ((dictOpResolver != null) && (dictEntries != null)) {
 				ArrayList dictContent = ((content == null) ? null : new ArrayList());
-				readFontType1cDict(baos.toByteArray(), 0, (name + "-entry[" + c + "]"), dictEntries, isTopDict, dictOpResolver, dictContent);
+				readFontType1cDict(baos.toByteArray(), 0, baos.size(), (name + "-entry[" + c + "]"), subrIndex, gSubrIndex, dictEntries, dictOpResolver, dictContent);
 				if (content != null)
 					content.add((OpType1[]) dictContent.toArray(new OpType1[dictContent.size()]));
 			}
@@ -2641,39 +3050,58 @@ public class PdfFontDecoder {
 		return i;
 	}
 	
-	private static int readFontType1cDict(byte[] data, int start, String name, HashMap dictEntries, boolean isTopDict, HashMap opResolver, ArrayList content) {
-//		System.out.println("Doing " + name + " dict:");
+	private static int readFontType1cDict(byte[] data, int start, int end, String name, ArrayList subrIndex, ArrayList gSubrIndex, HashMap dictEntries, HashMap opResolver, ArrayList content) {
+		return readFontType1cDict(data, start, end, name, subrIndex, gSubrIndex, new LinkedList(), false, new HashSet(), new HashMap(), dictEntries, opResolver, content);
+	}
+	
+	private static int readFontType1cDict(byte[] data, int start, int end, String name, ArrayList subrIndex, ArrayList gSubrIndex, LinkedList stack, boolean inSubr, HashSet hints, HashMap storage, HashMap dictEntries, HashMap opResolver, ArrayList content) {
+//		System.out.println("Doing " + name + " dict (from " + start + " of " + end + "):");
+//		System.out.println("                        " + Arrays.toString(Arrays.copyOfRange(data, start, end)));
 		int i = start;
-		LinkedList stack = new LinkedList();
-		int hintCount = 0;
-		while (i < data.length)  {
+		while (i < Math.min(end, data.length))  {
 			
 			//	read value
 			int bs = convertUnsigned(data[i++]);
-//			System.out.println(" - first byte is " + bs + " (" + data[i-1] + ")");
+//			System.out.println(" - first byte is " + bs + " (" + data[i-1] + ") at " + (i-1) + " of " + data.length);
 			int op = Integer.MIN_VALUE;
 			int iVal = Integer.MIN_VALUE;
 			double dVal = Double.NEGATIVE_INFINITY;
 			
 			if ((0 <= bs) && (bs <= 11)) {
-				op = bs;
+				if (opResolver.containsKey(Integer.valueOf(bs)))
+					op = bs;
+//				else iVal = bs;
 			}
 			else if (bs == 12) {
-				op = (1000 + convertUnsigned(data[i++]));
+				if (i >= data.length)
+					break;
+				bs = (1000 + convertUnsigned(data[i++]));
+				if (opResolver.containsKey(Integer.valueOf(bs)))
+					op = bs;
 			}
 			else if ((13 <= bs) && (bs <= 18)) {
-				op = bs;
+				if (opResolver.containsKey(Integer.valueOf(bs)))
+					op = bs;
+//				else iVal = bs;
 			}
 			else if (bs == 19) {
-				op = bs;
+				if (opResolver.containsKey(Integer.valueOf(bs)))
+					op = bs;
+//				else iVal = bs;
 			}
 			else if (bs == 20) {
-				op = bs;
+				if (opResolver.containsKey(Integer.valueOf(bs)))
+					op = bs;
+//				else iVal = bs;
 			}
 			else if ((21 <= bs) && (bs <= 27)) {
-				op = bs;
+				if (opResolver.containsKey(Integer.valueOf(bs)))
+					op = bs;
+//				else iVal = bs;
 			}
 			else if (bs == 28) {
+				if ((i + 1) >= data.length)
+					break;
 				iVal = 0;
 				for (int b = 0; b < 2; b++) {
 					iVal <<= 8;
@@ -2682,14 +3110,22 @@ public class PdfFontDecoder {
 				if (iVal > 32768)
 					iVal -= 65536;
 			}
+			else if ((opResolver == type1cGlyphProgOpResolver) && (bs == 29)) {
+				if (opResolver.containsKey(Integer.valueOf(bs)))
+					op = 29;
+			}
 			else if (bs == 29) {
+				if ((i + 4) >= data.length)
+					break;
 				iVal = 0;
 				for (int b = 0; b < 4; b++) {
 					iVal <<= 8;
 					iVal += convertUnsigned(data[i++]);
 				}
 			}
-			else if (isTopDict && (bs == 30)) {
+			else if ((opResolver == type1cTopDictOpResolver) && (bs == 30)) {
+				if (i >= data.length)
+					break;
 				StringBuffer val = new StringBuffer();
 				while (true) {
 					int b = convertUnsigned(data[i++]);
@@ -2729,25 +3165,33 @@ public class PdfFontDecoder {
 				dVal = Double.parseDouble(val.toString());
 			}
 			else if (bs == 30) {
-				op = bs;
+				if (opResolver.containsKey(Integer.valueOf(bs)))
+					op = bs;
 			}
 			else if (bs == 31) {
-				op = bs;
+				if (opResolver.containsKey(Integer.valueOf(bs)))
+					op = bs;
 			}
 			else if ((32 <= bs) && (bs <= 246)) {
 				iVal = (bs - 139);
 			}
 			else if ((247 <= bs) && (bs <= 250)) {
+				if (i >= data.length)
+					break;
 				int b1 = bs;
 				int b2 = convertUnsigned(data[i++]);
 				iVal = ((b1 - 247) * 256) + b2 + 108;
 			}
 			else if ((251 <= bs) && (bs <= 254)) {
+				if (i >= data.length)
+					break;
 				int b1 = bs;
 				int b2 = convertUnsigned(data[i++]);
 				iVal = -((b1 - 251) * 256) - b2 - 108;
 			}
 			else if (bs == 255) {
+				if ((i + 4) >= data.length)
+					break;
 				int ib1 = convertUnsigned(data[i++]);
 				int ib2 = convertUnsigned(data[i++]);
 				int iv = ((ib1 * 256) + ib2);
@@ -2759,51 +3203,364 @@ public class PdfFontDecoder {
 			}
 			
 			if (op != Integer.MIN_VALUE) {
+				String opStr = ((String) opResolver.get(Integer.valueOf(op)));
+//				System.out.println(" --> read operator " + op + " (" + opStr + ")");
+//				System.out.println("     " + stack);
 				
-				//	catch hint and mask operators, as the latter take a few _subsequent_ bytes depending on the number of arguments existing for the former
-				if ((content != null) && (opResolver == glyphProgOpResolver)) {
+				//	catch glyph rendering operators
+				if ((content != null) && (opResolver == type1cGlyphProgOpResolver)) {
 					
-					//	hintmask & cntrmask
+					//	catch hint and mask operators, as the latter take a few _subsequent_ bytes depending on the number of arguments existing for the former
 					if ((op == 19) || (op == 20)) {
 						
-						//	if last op is hstemhm and we have something on the stack, it's an implicit vstemhm
-						if ((content.size() != 0) && ((((OpType1) content.get(content.size()-1)).op == 1) || (((OpType1) content.get(content.size()-1)).op == 18))) {
-							content.add(new OpType1(23, null, ((Number[]) stack.toArray(new Number[stack.size()]))));
-//							System.out.println(" --> got " + (stack.size() / 2) + " new hints from " + stack.size() + " args, op is " + op);
-							hintCount += (stack.size() / 2);
-							stack.clear();
+						//	if last op is hstemhm and we have something on the stack, it's an implicit vstemhm (observe plain hstem as well for good measure)
+						if ((content.size() != 0) && (2 <= stack.size())) {
+							OpType1 pervOp = ((OpType1) content.get(content.size()-1));
+							if ((content.size() != 0) && ((pervOp.op == 1) || (pervOp.op == 18))) {
+								content.add(new OpType1(23, "vstemhm", ((Number[]) stack.toArray(new Number[stack.size()])), false));
+								if ((stack.size() % 2) != 0)
+									stack.removeFirst(); // width is dealt with later
+								int x = ((Number) stack.removeFirst()).intValue();
+								int dx = ((Number) stack.removeFirst()).intValue();
+								hints.add("V " + x + "-" + (x + dx));
+								while (2 <= stack.size()) {
+									x = (x + dx + ((Number) stack.removeFirst()).intValue());
+									dx = ((Number) stack.removeFirst()).intValue();
+									hints.add("V " + x + "-" + (x + dx));
+								}
+							}
 						}
 						
 						//	read mask bytes
 						int h = 0;
 						int hintmask = 0;
-						while (h < ((hintCount + 7) / 8)) {
+						while (h < ((hints.size() + 7) / 8)) {
 							hintmask <<= 8;
 							hintmask += convertUnsigned(data[i++]);
 							h++;
-//							break;
 						}
 						stack.addLast(new Integer(hintmask));
-//						System.out.println("Skipped " + h + " hint mask bytes: " + hintmask + " (" + hintCount + " hints)");
+						content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()])), false));
+						stack.clear();
+//						System.out.println("Skipped " + h + " hint mask bytes: " + hintmask + " (" + Integer.toString(hintmask, 16).toUpperCase() + ", for " + hints.size() + " hints: " + hints.toString() + ")");
 					}
 					
-					//	hstem, vstem, hstemhm & vstemhm (hints are number pairs !!)
-					else if ((op == 1) || (op == 3) || (op == 18) || (op == 23)) {
-//						System.out.println(" --> got " + (stack.size() / 2) + " new hints from " + stack.size() + " args, op is " + op);
-						hintCount += (stack.size() / 2);
+					//	hstem & hstemhm (hints are number pairs !!, hstem3 doesn't seem to exist in Type1C, but we catch it anyway)
+					else if ((op == 1) || (op == 18) || (op == 1002)) {
+						content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()])), false));
+						if ((stack.size() % 2) != 0)
+							stack.removeFirst(); // width is dealt with later
+						int y = ((Number) stack.removeFirst()).intValue();
+						int dy = ((Number) stack.removeFirst()).intValue();
+						hints.add("H " + y + "-" + (y + dy));
+						while (stack.size() != 0) {
+							y = (y + dy + ((Number) stack.removeFirst()).intValue());
+							dy = ((Number) stack.removeFirst()).intValue();
+							hints.add("H " + y + "-" + (y + dy));
+						}
 					}
+					
+					//	vstem & vstemhm (hints are number pairs !!, vstem3 doesn't seem to exist in Type1C, but we catch it anyway)
+					else if ((op == 3) || (op == 23) || (op == 1001)) {
+						content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()])), false));
+						if ((stack.size() % 2) != 0)
+							stack.removeFirst(); // width is dealt with later
+						int x = ((Number) stack.removeFirst()).intValue();
+						int dx = ((Number) stack.removeFirst()).intValue();
+						hints.add("V " + x + "-" + (x + dx));
+						while (stack.size() != 0) {
+							x = (x + dx + ((Number) stack.removeFirst()).intValue());
+							dx = ((Number) stack.removeFirst()).intValue();
+							hints.add("V " + x + "-" + (x + dx));
+						}
+					}
+					
+					//	TODO execute arithmetics right in place
+					//	abs: num abs (12 9) num2
+					//	returns the absolute value of num.
+					else if (op == 1009) {
+						Number num = ((Number) stack.removeLast());
+						if (num instanceof Integer)
+							stack.addLast(Integer.valueOf(Math.abs(num.intValue())));
+						else stack.addLast(Double.valueOf(Math.abs(num.doubleValue())));
+					}
+					
+					//	add: num1 num2 add (12 10) sum
+					//	returns the sum of the two numbers num1 and num2.
+					else if (op == 1010) {
+						Number num2 = ((Number) stack.removeLast());
+						Number num1 = ((Number) stack.removeLast());
+						if ((num1 instanceof Integer) && (num2 instanceof Integer))
+							stack.addLast(Integer.valueOf(num1.intValue() + num2.intValue()));
+						else stack.addLast(Double.valueOf(num1.doubleValue() + num2.doubleValue()));
+					}
+					
+					//	sub: num1 num2 sub (12 11) difference
+					//	returns the result of subtracting num2 from num1.
+					else if (op == 1011) {
+						Number sub = ((Number) stack.removeLast());
+						Number min = ((Number) stack.removeLast());
+						if ((min instanceof Integer) && (sub instanceof Integer))
+							stack.addLast(Integer.valueOf(min.intValue() - sub.intValue()));
+						else stack.addLast(Double.valueOf(min.doubleValue() - sub.doubleValue()));
+					}
+					
+					//	div: num1 num2 div (12 12) quotient
+					//	returns the quotient of num1 divided by num2. The result is undefined if overflow occurs and is zero for underflow.
+					else if (op == 1012) {
+						double denom = ((Number) stack.removeLast()).doubleValue();
+						double nom = ((Number) stack.removeLast()).doubleValue();
+						stack.addLast(Double.valueOf(nom / denom));
+					}
+					
+					//	neg: num neg (12 14) num2
+					//	returns the negative of num.
+					else if (op == 1014) {
+						Number num = ((Number) stack.removeLast());
+						if (num instanceof Integer)
+							stack.addLast(Integer.valueOf(-num.intValue()));
+						else stack.addLast(Double.valueOf(-num.doubleValue()));
+					}
+					
+					//	random: random (12 23) num2
+					//	returns a pseudo random number num2 in the range (0,1], that is, greater than zero and less than or equal to one.
+					else if (op == 1023) {
+						stack.addLast(Double.valueOf(1 - Math.random())); // need to invert interval boundaries
+					}
+					
+					//	mul: num1 num2 mul (12 24) product
+					//	returns the product of num1 and num2. If overflow occurs, the result is undefined, and zero is returned for underflow.
+					else if (op == 1024) {
+						Number num2 = ((Number) stack.removeLast());
+						Number num1 = ((Number) stack.removeLast());
+						if ((num1 instanceof Integer) && (num2 instanceof Integer))
+							stack.addLast(Integer.valueOf(num1.intValue() * num2.intValue()));
+						else stack.addLast(Double.valueOf(num1.doubleValue() * num2.doubleValue()));
+					}
+					
+					//	sqrt: num sqrt (12 26) num2
+					//	returns the square root of num. If num is negative, the result is undefined.
+					else if (op == 1026) {
+						double num = ((Number) stack.removeLast()).doubleValue();
+						stack.addLast(Double.valueOf((num < 0) ? 0 : Math.sqrt(num)));
+					}
+					
+					//	drop: num drop (12 18)
+					//	removes the top element num from the Type 2 argument stack.
+					else if (op == 1018) {
+						stack.removeLast();
+					}
+					
+					//	exch: num1 num2 exch (12 28) num2 num1
+					//	exchanges the top two elements on the argument stack.
+					else if (op == 1028) {
+						Number num2 = ((Number) stack.removeLast());
+						Number num1 = ((Number) stack.removeLast());
+						stack.addLast(num2);
+						stack.addLast(num1);
+					}
+					
+					//	index: numX ... num0 i index (12 29) numX ... num0 numi
+					//	retrieves the element i from the top of the argument stack and pushes a copy of that element onto that stack. If i is negative, the top element is copied. If i is greater than X, the operation is undefined.
+					else if (op == 1029) {
+						int si = ((Number) stack.removeLast()).intValue();
+						if (si < 0)
+							stack.addLast(stack.getLast());
+						else stack.addLast(stack.get((stack.size() - 1) /* index of last element */ - si));
+					}
+					
+					//	roll: num(N–1) ... num0 N J roll (12 30) num((J–1) mod N) ... num0
+					//	num(N–1) ... num(J mod N) performs a circular shift of the elements num(N–1) ... num0 on the argument stack by the amount J. Positive J indicates upward motion of the stack; negative J indicates downward motion.
+					//	The value N must be a non-negative integer, otherwise the operation is undefined.
+					else if (op == 1030) {
+						int j = ((Number) stack.removeLast()).intValue();
+						int n = ((Number) stack.removeLast()).intValue();
+						if ((j != 0) /* save the hassle of zero rolls */ && (n > 0) /* make sure we got something to roll */) {
+							LinkedList rStack = new LinkedList();
+							while (rStack.size() < n)
+								rStack.addFirst(stack.removeLast());
+							if (j < 0) {
+								for (; j < 0; j++)
+									rStack.addFirst(rStack.removeLast()); // move top of stack down
+							}
+							else if (j > 0) {
+								for (; j > 0; j--)
+									rStack.addLast(rStack.removeFirst()); // move down in stack up
+							}
+							while (rStack.size() != 0)
+								stack.addLast(rStack.removeFirst());
+						}
+					}
+					
+					//	dup: any dup (12 27) any any
+					//	duplicates the top element on the argument stack.
+					else if (op == 1027) {
+						stack.addLast(stack.getLast());
+					}
+					
+					//	and: num1 num2 and (12 3) 1_or_0
+					//	puts a 1 on the stack if num1 and num2 are both non-zero, and puts a 0 on the stack if either argument is zero.
+					else if (op == 1003) {
+						Number num2 = ((Number) stack.removeLast());
+						Number num1 = ((Number) stack.removeLast());
+						stack.addLast(Integer.valueOf(((num1.intValue() != 0) && (num2.intValue() != 0)) ? 1 : 0));
+					}
+					
+					//	or: num1 num2 or (12 4) 1_or_0
+					//	puts a 1 on the stack if either num1 or num2 are non-zero, and puts a 0 on the stack if both arguments are zero.
+					else if (op == 1004) {
+						Number num2 = ((Number) stack.removeLast());
+						Number num1 = ((Number) stack.removeLast());
+						stack.addLast(Integer.valueOf(((num1.intValue() != 0) || (num2.intValue() != 0)) ? 1 : 0));
+					}
+					
+					//	not: num1 not (12 5) 1_or_0
+					//	returns a 0 if num1 is non-zero; returns a 1 if num1 is zero.
+					else if (op == 1005) {
+						Number num1 = ((Number) stack.removeLast());
+						stack.addLast(Integer.valueOf((num1.intValue() == 0) ? 1 : 0));
+					}
+					
+					//	eq: num1 num2 eq (12 15) 1_or_0
+					//	puts a 1 on the stack if num1 equals num2, otherwise a 0 (zero) is put on the stack.
+					else if (op == 1015) {
+						Number num2 = ((Number) stack.removeLast());
+						Number num1 = ((Number) stack.removeLast());
+						stack.addLast(Integer.valueOf(num1.equals(num2) ? 1 : 0));
+					}
+					
+					//	ifelse: s1 s2 v1 v2 ifelse (12 22) s1_or_s2
+					//	leaves the value s1 on the stack if v1 <= v2, or leaves s2 on the stack if v1 > v2. The value of s1 and s2 is usually the biased number of a subroutine; see section 2.3.
+					else if (op == 1022) {
+						double v2 = ((Number) stack.removeLast()).doubleValue();
+						double v1 = ((Number) stack.removeLast()).doubleValue();
+						Number s2 = ((Number) stack.removeLast());
+						Number s1 = ((Number) stack.removeLast());
+						stack.addLast((v1 <= v2) ? s1 : s2);
+					}
+					
+					//	put: val i put (12 20)
+					//	stores val into the transient array at the location given by i.
+					else if (op == 1012) {
+						Integer si = Integer.valueOf(((Number) stack.removeLast()).intValue());
+						Number sVal = ((Number) stack.removeLast());
+						storage.put(si, sVal);
+					}
+					
+					//	get: i get (12 21) val
+					//	retrieves the value stored in the transient array at the location given by i and pushes the value onto the argument stack. If get is executed prior to put for i during execution of the current charstring, the value returned is undefined.
+					else if (op == 1021) {
+						Integer si = Integer.valueOf(((Number) stack.removeLast()).intValue());
+						Number sVal = ((Number) storage.get(si));
+						stack.addLast((sVal == null) ? Integer.valueOf(0) : sVal);
+					}
+					
+					//	inline subroutine calls right here
+					else if ((op == 10) && (subrIndex != null)) {
+						int subrNr = ((Number) stack.removeLast()).intValue();
+						byte[] subrData = ((byte[]) subrIndex.get(subrNr));
+						if (subrData == null) {
+							if (DEBUG_TYPE1C_LOADING) System.out.println("Ignoring attempt to call invalid subroutine " + subrNr);
+						}
+						else {
+//							LinkedList preCallStack = new LinkedList(stack);
+							//	TODO catch errors like in Type1
+							if (DEBUG_TYPE1C_LOADING) {
+								System.out.println("Calling subroutine " + subrNr + ": " + Arrays.toString(subrData));
+								System.out.println("  stack is         " + stack);
+							}
+							readFontType1cDict(subrData, 0, subrData.length, (name + "->" + subrNr), subrIndex, gSubrIndex, stack, true, hints, storage, dictEntries, opResolver, content);
+							if (DEBUG_TYPE1C_LOADING) System.out.println("  result stack is " + stack);
+							if ((stack.size() != 0) && "ENDCHAR".equals(stack.getLast()))
+								break;
+						}
+					}
+					
+					//	inline global subroutine calls right here
+					else if ((op == 29) && (gSubrIndex != null)) {
+						int gSubrNr = ((Number) stack.removeLast()).intValue();
+						byte[] gSubrData = ((byte[]) gSubrIndex.get(gSubrNr));
+						if (gSubrData == null) {
+							if (DEBUG_TYPE1C_LOADING) System.out.println("Ignoring attempt to call invalid global subroutine " + gSubrNr);
+						}
+						else {
+//							LinkedList preCallStack = new LinkedList(stack);
+							//	TODO catch errors like in Type1
+							if (DEBUG_TYPE1C_LOADING) {
+								System.out.println("Calling global subroutine " + gSubrNr + ": " + Arrays.toString(gSubrData));
+								System.out.println("  stack is                " + stack);
+							}
+							readFontType1cDict(gSubrData, 0, gSubrData.length, (name + "->" + gSubrNr), subrIndex, gSubrIndex, stack, true, hints, storage, dictEntries, opResolver, content);
+							if (DEBUG_TYPE1C_LOADING) System.out.println("  result stack is " + stack);
+							if ((stack.size() != 0) && "ENDCHAR".equals(stack.getLast()))
+								break;
+						}
+					}
+					
+					//	observe return in subroutine
+					else if (op == 11) {
+						if (inSubr)
+							break;
+					}
+					
+					//	observe endchar (implicitly performing closepath if not done right before)
+					else if (op == 14) {
+						stack.clear();
+						stack.addLast("ENDCHAR"); // add mark to propagate endchar from subroutine
+						if ((content.size() == 0) || (((OpType1) content.get(content.size()-1)).op != 9))
+							content.add(new OpType1(9, "closepath", new Number[0], false));
+						break;
+					}
+					
+					//	store rendering operators (they are all stack clearing)
+					else {
+						content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()])), false));
+						stack.clear();
+					}
+					
+					//	no further action required
+					continue;
 				}
 				
-				String opStr = ((String) opResolver.get(new Integer(op)));
-//				System.out.print(" --> read operator " + op + " (" + opStr + ")");
+				//	catch private dictionary operators (we need them subroutines ...)
+				else if (opResolver == type1cPrivateOpResolver) {
+					
+					//	operators that take stack clearing deltas
+					if ((op == 6) || (op == 7) || (op == 8) || (op == 9) || (op == 1012) || (op == 1013)) {
+//						content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()]))));
+						if (opStr != null)
+							dictEntries.put(opStr, ((Number[]) stack.toArray(new Number[stack.size()])));
+						stack.clear();
+					}
+					
+					//	operators that take a single argument (number or boolean)
+					else if ((op == 1009) || (op == 1010) || (op == 1011) || (op == 10) || (op == 11) || (op == 1014) || (op == 1017) || (op == 1018) || (op == 1019) || (op == 20) || (op == 21)) {
+						Number[] arg = {(Number) stack.removeLast()};
+//						content.add(new OpType1(op, opStr, arg));
+						if (opStr != null)
+							dictEntries.put(opStr, arg);
+					}
+					
+					//	subroutine declarations
+					else if (op == 19) {
+						Number[] arg = {(Number) stack.removeLast()};
+//						content.add(new OpType1(op, opStr, arg));
+						if (opStr != null)
+							dictEntries.put(opStr, arg);
+					}
+					
+					//	no further action required
+					continue;
+				}
+				
 				if (opStr != null)
 					dictEntries.put(opStr, ((Number[]) stack.toArray(new Number[stack.size()])));
 				if (content != null)
-					content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()]))));
+					content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()])), false));
 //				while (stack.size() != 0)
 //					System.out.print(" " + ((Number) stack.removeFirst()));
+//				if (DEBUG_TYPE1C_LOADING) System.out.println();
 				stack.clear();
-//				System.out.println();
 			}
 			else if (iVal != Integer.MIN_VALUE) {
 //				System.out.println(" --> read int " + iVal);
@@ -2813,19 +3570,25 @@ public class PdfFontDecoder {
 //				System.out.println(" --> read double " + dVal);
 				stack.addLast(new Double(dVal));
 			}
+			else {
+//				System.out.println(" --> read invalid byte at " + (i-1) + ": " + bs);
+//				System.out.println("     " + stack);
+			}
 		}
 		
 		return i;
 	}
 	
 	private static class OpType1 {
-		int op;
-//		String name;
-		Number[] args;
-		OpType1(int op, String name, Number[] args) {
+		final int op;
+		final String name;
+		final Number[] args;
+		final boolean fixedArgs;
+		OpType1(int op, String name, Number[] args, boolean fixedArgs) {
 			this.op = op;
-//			this.name = name;
+			this.name = name;
 			this.args = args;
+			this.fixedArgs = fixedArgs;
 		}
 	}
 	
@@ -2881,69 +3644,90 @@ FDSelect12 37//number–, FDSelect offset (0)
 FontName12 38//SID–, FD FontName
 	 */
 	
-	private static HashMap glyphProgOpResolver = new HashMap();
+	private static HashMap type1cPrivateOpResolver = new HashMap();
 	static {
-		glyphProgOpResolver.put(new Integer(1), "hstem");
-		
-		glyphProgOpResolver.put(new Integer(3), "vstem");
-		glyphProgOpResolver.put(new Integer(4), "vmoveto");
-		glyphProgOpResolver.put(new Integer(5), "rlineto");
-		glyphProgOpResolver.put(new Integer(6), "hlineto");
-		glyphProgOpResolver.put(new Integer(7), "vlineto");
-		glyphProgOpResolver.put(new Integer(8), "rrcurveto");
-	glyphProgOpResolver.put(new Integer(9), "closepath");
-		glyphProgOpResolver.put(new Integer(10), "callsubr");
-		glyphProgOpResolver.put(new Integer(11), "return");
-	
-	glyphProgOpResolver.put(new Integer(13), "hsbw");
-		glyphProgOpResolver.put(new Integer(14), "endchar");
-		
-		glyphProgOpResolver.put(new Integer(18), "hstemhm");
-		glyphProgOpResolver.put(new Integer(19), "hintmask");
-		glyphProgOpResolver.put(new Integer(20), "cntrmask");
-		glyphProgOpResolver.put(new Integer(21), "rmoveto");
-		glyphProgOpResolver.put(new Integer(22), "hmoveto");
-		glyphProgOpResolver.put(new Integer(23), "vstemhm");
-		glyphProgOpResolver.put(new Integer(24), "rcurveline");
-		glyphProgOpResolver.put(new Integer(25), "rlinecurve");
-		glyphProgOpResolver.put(new Integer(26), "vvcurveto");
-		glyphProgOpResolver.put(new Integer(27), "hhcurveto");
-		
-		glyphProgOpResolver.put(new Integer(29), "callsubr");
-		glyphProgOpResolver.put(new Integer(30), "vhcurveto");
-		glyphProgOpResolver.put(new Integer(31), "hvcurveto");
-		
-	glyphProgOpResolver.put(new Integer(1000), "dotsection");
-	glyphProgOpResolver.put(new Integer(1001), "vstem3");
-	glyphProgOpResolver.put(new Integer(1002), "hstem3");
-	glyphProgOpResolver.put(new Integer(1006), "seac");
-	glyphProgOpResolver.put(new Integer(1007), "sbw");
-	glyphProgOpResolver.put(new Integer(1012), "div");
-	glyphProgOpResolver.put(new Integer(1016), "callothersubr");
-	glyphProgOpResolver.put(new Integer(1017), "pop");
-	glyphProgOpResolver.put(new Integer(1033), "setcurrentpoint");
+		type1cPrivateOpResolver.put(new Integer(6), "BlueValues");
+		type1cPrivateOpResolver.put(new Integer(7), "OtherBlues");
+		type1cPrivateOpResolver.put(new Integer(8), "FamilyBlues");
+		type1cPrivateOpResolver.put(new Integer(9), "FamilyOtherBlues");
+		type1cPrivateOpResolver.put(new Integer(1009), "BlueScale");
+		type1cPrivateOpResolver.put(new Integer(1010), "BlueSchift");
+		type1cPrivateOpResolver.put(new Integer(1011), "BlueFuzz");
+		type1cPrivateOpResolver.put(new Integer(10), "StdHW");
+		type1cPrivateOpResolver.put(new Integer(11), "StdVW");
+		type1cPrivateOpResolver.put(new Integer(1012), "StemSnapH");
+		type1cPrivateOpResolver.put(new Integer(1013), "StemSnapV");
+		type1cPrivateOpResolver.put(new Integer(1014), "ForceBold");
+		type1cPrivateOpResolver.put(new Integer(1017), "LanguageGroup");
+		type1cPrivateOpResolver.put(new Integer(1018), "ExpansionFactor");
+		type1cPrivateOpResolver.put(new Integer(1019), "InitialRandomSeed");
+		type1cPrivateOpResolver.put(new Integer(19), "Subrs");
+		type1cPrivateOpResolver.put(new Integer(20), "defaultWidthX");
+		type1cPrivateOpResolver.put(new Integer(21), "nominalWidthX");
 	}
 	
-	private static HashMap privateOpResolver = new HashMap();
+	private static HashMap type1cGlyphProgOpResolver = new HashMap();
 	static {
-		privateOpResolver.put(new Integer(6), "BlueValues");
-		privateOpResolver.put(new Integer(7), "OtherBlues");
-		privateOpResolver.put(new Integer(8), "FamilyBlues");
-		privateOpResolver.put(new Integer(9), "FamilyOtherBlues");
-		privateOpResolver.put(new Integer(1009), "BlueScale");
-		privateOpResolver.put(new Integer(1010), "BlueSchift");
-		privateOpResolver.put(new Integer(1011), "BlueFuzz");
-		privateOpResolver.put(new Integer(10), "StdHW");
-		privateOpResolver.put(new Integer(11), "StdVW");
-		privateOpResolver.put(new Integer(1012), "StemSnapH");
-		privateOpResolver.put(new Integer(1013), "StemSnapV");
-		privateOpResolver.put(new Integer(1014), "ForceBold");
-		privateOpResolver.put(new Integer(1017), "LanguageGroup");
-		privateOpResolver.put(new Integer(1018), "ExpansionFactor");
-		privateOpResolver.put(new Integer(1019), "InitialRandomSeed");
-		privateOpResolver.put(new Integer(19), "Subrs");
-		privateOpResolver.put(new Integer(20), "defaultWidthX");
-		privateOpResolver.put(new Integer(21), "nominalWidthX");
+		type1cGlyphProgOpResolver.put(new Integer(1), "hstem");
+		
+		type1cGlyphProgOpResolver.put(new Integer(3), "vstem");
+		type1cGlyphProgOpResolver.put(new Integer(4), "vmoveto");
+		type1cGlyphProgOpResolver.put(new Integer(5), "rlineto");
+		type1cGlyphProgOpResolver.put(new Integer(6), "hlineto");
+		type1cGlyphProgOpResolver.put(new Integer(7), "vlineto");
+		type1cGlyphProgOpResolver.put(new Integer(8), "rrcurveto");
+		type1cGlyphProgOpResolver.put(new Integer(9), "closepath"); // deprecated, but might still be used
+		type1cGlyphProgOpResolver.put(new Integer(10), "callsubr");
+		type1cGlyphProgOpResolver.put(new Integer(11), "return");
+	
+		type1cGlyphProgOpResolver.put(new Integer(14), "endchar");
+		
+		type1cGlyphProgOpResolver.put(new Integer(18), "hstemhm");
+		type1cGlyphProgOpResolver.put(new Integer(19), "hintmask");
+		type1cGlyphProgOpResolver.put(new Integer(20), "cntrmask");
+		type1cGlyphProgOpResolver.put(new Integer(21), "rmoveto");
+		type1cGlyphProgOpResolver.put(new Integer(22), "hmoveto");
+		type1cGlyphProgOpResolver.put(new Integer(23), "vstemhm");
+		type1cGlyphProgOpResolver.put(new Integer(24), "rcurveline");
+		type1cGlyphProgOpResolver.put(new Integer(25), "rlinecurve");
+		type1cGlyphProgOpResolver.put(new Integer(26), "vvcurveto");
+		type1cGlyphProgOpResolver.put(new Integer(27), "hhcurveto");
+		
+		type1cGlyphProgOpResolver.put(new Integer(29), "callsubr");
+		type1cGlyphProgOpResolver.put(new Integer(30), "vhcurveto");
+		type1cGlyphProgOpResolver.put(new Integer(31), "hvcurveto");
+		
+		type1cGlyphProgOpResolver.put(new Integer(1000), "dotsection"); // deprecated, but might still be used
+		
+		type1cGlyphProgOpResolver.put(new Integer(1003), "and");
+		type1cGlyphProgOpResolver.put(new Integer(1004), "or");
+		type1cGlyphProgOpResolver.put(new Integer(1005), "not");
+		
+		type1cGlyphProgOpResolver.put(new Integer(1009), "abs");
+		type1cGlyphProgOpResolver.put(new Integer(1010), "add");
+		type1cGlyphProgOpResolver.put(new Integer(1011), "sub");
+		type1cGlyphProgOpResolver.put(new Integer(1012), "div");
+		type1cGlyphProgOpResolver.put(new Integer(1014), "neg");
+		type1cGlyphProgOpResolver.put(new Integer(1015), "eq");
+		
+		type1cGlyphProgOpResolver.put(new Integer(1018), "drop");
+		
+		type1cGlyphProgOpResolver.put(new Integer(1020), "put");
+		type1cGlyphProgOpResolver.put(new Integer(1021), "get");
+		type1cGlyphProgOpResolver.put(new Integer(1022), "ifelse");
+		type1cGlyphProgOpResolver.put(new Integer(1023), "random");
+		type1cGlyphProgOpResolver.put(new Integer(1024), "mul");
+		
+		type1cGlyphProgOpResolver.put(new Integer(1026), "sqrt");
+		type1cGlyphProgOpResolver.put(new Integer(1027), "dup");
+		type1cGlyphProgOpResolver.put(new Integer(1028), "exch");
+		type1cGlyphProgOpResolver.put(new Integer(1029), "index");
+		type1cGlyphProgOpResolver.put(new Integer(1030), "roll");
+		
+		type1cGlyphProgOpResolver.put(new Integer(1034), "hflex");
+		type1cGlyphProgOpResolver.put(new Integer(1035), "flex");
+		type1cGlyphProgOpResolver.put(new Integer(1036), "hflex1");
+		type1cGlyphProgOpResolver.put(new Integer(1037), "flex1");
 	}
 	
 	private static final boolean DEBUG_TRUE_TYPE_LOADING = false;
@@ -3385,7 +4169,11 @@ FontName12 38//SID–, FD FontName
 		int maxDescent = 0;
 		int maxCapHeight = 0;
 		OpTrackerTrueType[] otrs = new OpTrackerTrueType[glyphData.size()];
+		HashMap renderingSequencesToCharIndices = new HashMap();
+		HashMap charIndicesToSynonyms = new HashMap();
 		for (int c = 0; c < glyphData.size(); c++) {
+			
+			//	render glyph
 			GlyphDataTrueType glyph = ((GlyphDataTrueType) glyphData.get(c));
 			otrs[c] = new OpTrackerTrueType();
 			pm.setInfo("     - measuring char " + c + " with CID " + glyph.cid + " (" + pFont.getUnicode(glyph.cid) + ")");
@@ -3393,11 +4181,20 @@ FontName12 38//SID–, FD FontName
 				runFontTrueTypeOps(((SimpleGlyphDataTrueType) glyph), false, otrs[c], false);
 			else runFontTrueTypeOps(((CompoundGlyphDataTrueType) glyph), glyphsByIndex, otrs[c], false);
 			if (DEBUG_TRUE_TYPE_LOADING) {
+				System.out.println(" ==> " + otrs[c].ops);
 				System.out.println("     --> " + otrs[c].minX + " < X < " + otrs[c].maxX);
 				System.out.println("     --> " + otrs[c].minY + " < Y < " + otrs[c].maxY);
 			}
 			maxDescent = Math.min(maxDescent, otrs[c].minY);
 			maxCapHeight = Math.max(maxCapHeight, otrs[c].maxY);
+			
+			//	index glyph rendering sequence to catch identical characters
+			String renderingSequence = otrs[c].ops.toString();
+			if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" ==> " + renderingSequence);
+			if ("Ops:".equals(renderingSequence)) { /* no synonymizing spaces, tend to differ in width */ }
+			else if (renderingSequencesToCharIndices.containsKey(renderingSequence))
+				charIndicesToSynonyms.put(new Integer(c), renderingSequencesToCharIndices.get(renderingSequence));
+			else renderingSequencesToCharIndices.put(renderingSequence, new Integer(c));
 		}
 		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("Max descent is " + maxDescent + ", max cap height is " + maxCapHeight);
 		
@@ -3422,15 +4219,15 @@ FontName12 38//SID–, FD FontName
 		CharImage[] charImages = new CharImage[glyphData.size()];
 		char[] chars = new char[glyphData.size()];
 		Arrays.fill(chars, ((char) 0));
-		HashSet unresolvedCIDs = new HashSet() {
-			public boolean add(Object e) {
-				System.out.println("Marked as unresolved CID: " + e);
-				return super.add(e);
-			}
-		};
+//		HashSet unresolvedCIDs = new HashSet() {
+//			public boolean add(Object e) {
+//				System.out.println("Marked as unresolved CID: " + e);
+//				return super.add(e);
+//			}
+//		};
 		
 		//	generate images and match against named char
-		ImageDisplayDialog fidd = (DEBUG_TRUE_TYPE_RENDERING ? new ImageDisplayDialog("Font " + pFont.name) : null);
+		ImageDisplayDialog fidd = ((DEBUG_TRUE_TYPE_RENDERING || DEBUG_TRUE_TYPE_LOADING) ? new ImageDisplayDialog("Font " + pFont.name) : null);
 		for (int c = 0; c < glyphData.size(); c++) {
 			GlyphDataTrueType glyph = ((GlyphDataTrueType) glyphData.get(c));
 			String chn = null;
@@ -3444,8 +4241,8 @@ FontName12 38//SID–, FD FontName
 				pm.setInfo("     - ignoring unused char " + c + " with CID " + glyph.cid + " (" + ucCh + ", " + chn + ")");
 				continue;
 			}
-			if (chn == null)
-				unresolvedCIDs.add(new Integer(glyph.cid));
+//			if (chn == null)
+//				unresolvedCIDs.add(new Integer(glyph.cid));
 			pm.setInfo("     - decoding char " + c + " with CID " + glyph.cid + " (" + ucCh + ", " + chn + ")");
 			if (DEBUG_TRUE_TYPE_LOADING) System.out.println("Decoding char " + c + ", CID " + glyph.cid + " (" + ucCh + ", " + chn + ")");
 //			String chs = ("" + chars[c]);
@@ -3479,16 +4276,19 @@ FontName12 38//SID–, FD FontName
 			charImages[c] = new CharImage(ogr.img, Math.round(((float) (maxCapHeight * ogr.img.getHeight())) / (maxCapHeight - maxDescent)));
 			if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" - char image wrapped, baseline is " + charImages[c].baseline);
 			if (fidd != null)
-				fidd.addImage(ogr.img, (glyph.cid + " (" + glyph.gid + "): " + ucCh));
+				fidd.addImage(ogr.img, (glyph.cid + " (" + glyph.gid + "): " + ucCh + " (" + chn + ")"));
+//			
+//			//	no use going on without a char name
+//			if (chn == null) {
+//				unresolvedCIDs.add(new Integer(glyph.cid));
+//				continue;
+//			}
+//			
+//			//	store char image
+//			pFont.setCharImage(glyph.cid, chn, ogr.img);
 			
-			//	no use going on without a char name
-			if (chn == null) {
-				unresolvedCIDs.add(new Integer(glyph.cid));
-				continue;
-			}
-			
-			//	store char image
-			pFont.setCharImage(glyph.cid, chn, ogr.img);
+			//	store char image (substitute name if none exists)
+			pFont.setCharImage(glyph.cid, ((chn == null) ? ("ch-" + glyph.cid) : chn), ogr.img);
 		}
 		if (fidd != null) {
 			fidd.setLocationRelativeTo(null);
@@ -3496,7 +4296,7 @@ FontName12 38//SID–, FD FontName
 			fidd.setVisible(true);
 		}
 		
-//		decodeChars(pFont, chars, charImages, -1, maxDescent, null, null, null, null, glyphData, unresolvedCIDs, serifFonts, sansFonts, pm, DEBUG_TRUE_TYPE_LOADING);
+		//	create char codes and names for visual glyph decoding
 		Integer[] charCodes = new Integer[glyphData.size()];
 		String[] charNames = new String[glyphData.size()];
 		for (int c = 0; c < glyphData.size(); c++) {
@@ -3508,6 +4308,11 @@ FontName12 38//SID–, FD FontName
 				charNames[c] = StringUtils.getCharName(chars[c]);
 			}
 			else charNames[c] = null;
+			
+			//	check for char code synonymies
+			Integer ci = new Integer(c);
+			if (charIndicesToSynonyms.containsKey(ci))
+				pFont.setCharCodeSynonym(charCodes[c], charCodes[((Integer) charIndicesToSynonyms.get(ci)).intValue()]);
 		}
 		decodeChars(pFont, chars, charCodes, charNames, charImages, -1, maxDescent, serifFonts, sansFonts, charSet, pm, DEBUG_TRUE_TYPE_LOADING);
 	}
@@ -3901,6 +4706,7 @@ FontName12 38//SID–, FD FontName
 		int maxY = 0;
 		int mCount = 0;
 		boolean isMultiPath = false;
+		StringBuffer ops = new StringBuffer("Ops:");
 		void moveTo(int dx, int dy) {
 			if (this.mCount != 0)
 				this.isMultiPath = true;
@@ -3910,6 +4716,7 @@ FontName12 38//SID–, FD FontName
 			this.y += dy;
 			this.minY = Math.min(this.minY, this.y);
 			this.maxY = Math.max(this.maxY, this.y);
+			this.ops.append(" M" + dx + "/" + dy);
 //			System.out.println("Move to " + dx + "/" + dy + ":");
 //			System.out.println(" " + this.minX + " < X < " + this.maxX);
 //			System.out.println(" " + this.minY + " < Y < " + this.maxY);
@@ -3923,6 +4730,7 @@ FontName12 38//SID–, FD FontName
 			this.y = y;
 			this.minY = Math.min(this.minY, this.y);
 			this.maxY = Math.max(this.maxY, this.y);
+			this.ops.append(" MA" + x + "/" + y);
 //			System.out.println("Move abs to " + x + "/" + y + ":");
 //			System.out.println(" " + this.minX + " < X < " + this.maxX);
 //			System.out.println(" " + this.minY + " < Y < " + this.maxY);
@@ -3939,13 +4747,14 @@ FontName12 38//SID–, FD FontName
 			this.minPaintX = Math.min(this.minPaintX, this.x);
 			this.minPaintY = Math.min(this.minPaintY, this.y);
 			this.mCount++;
+			this.ops.append(" L" + dx + "/" + dy);
 //			System.out.println("Line to " + dx + "/" + dy + ":");
 //			System.out.println(" " + this.minX + " < X < " + this.maxX);
 //			System.out.println(" " + this.minY + " < Y < " + this.maxY);
 		}
 		void curveTo(int dx1, int dy1, int dx2, int dy2) {
 			/* simply line to control point if lying inside rectagle spanned
-			 * opened by current position and target point, which is basically
+			 * open by current position and target point, which is basically
 			 * the case if both deltas have the same direction (signum) in both
 			 * dimensions */
 			if ((((dx1 <= 0) && (dx2 <= 0)) || ((dx1 >= 0) && (dx2 >= 0))) && (((dy1 <= 0) && (dy2 <= 0)) || ((dy1 >= 0) && (dy2 >= 0)))) {
@@ -3980,6 +4789,7 @@ FontName12 38//SID–, FD FontName
 				this.lineTo(dx1, dy1);
 				this.lineTo(dx2, dy2);
 			}
+			this.ops.append(" C" + dx1 + "/" + dy1 + "," + dx2 + "/" + dy2);
 		}
 		void closePath() {}
 		void closePath(int dx, int dy) {
@@ -4123,6 +4933,13 @@ dy1 = vy;
 		for (int c = 0; c < chars.length; c++) {
 			if (charImages[c] == null)
 				continue;
+			
+			//	check if char code has a synonym
+			if (pFont.charCodeSynonyms.containsKey(charCodes[c])) {
+				pm.setInfo("     - Exempting char " + c + " (" + charCodes[c] + "/" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ") from decoding for synonymy");
+				if (debug) System.out.println("Exempting char " + c + " (" + charCodes[c] + "/" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ") from decoding for synonymy");
+				charImages[c] = null; // that prevents all further analysis (no data loss, though, as image is stored in font before we ever get here)
+			}
 			
 			//	get Unicode mapping
 			String ucStr = ((String) pFont.ucMappings.get(charCodes[c]));
@@ -4287,8 +5104,19 @@ dy1 = vy;
 					if (bestSims[c] < serifStyleCims[c][s].sim) {
 						bestSims[c] = serifStyleCims[c][s].sim;
 						bestCims[c] = serifStyleCims[c][s];
-						if (DEBUG_SHOW_VERIFICATION_CHAR_MATCHES) PdfCharDecoder.displayCharMatch(serifStyleCims[c][s], "Verification char match (serif)");
+						if (DEBUG_SHOW_VERIFICATION_CHAR_MATCHES) {
+							System.out.println("Char code " + charCodes[c] + " at " + c + " with name " + charNames[c] + ", UC mapped to " + pFont.getUnicode(charCodes[c]));
+							int choice = PdfCharDecoder.displayCharMatch(serifStyleCims[c][s], "Verification char match (serif)");
+							if (choice == JOptionPane.CANCEL_OPTION)
+								throw new RuntimeException("GOTCHA");
+						}
 					}
+//					if (DEBUG_SHOW_VERIFICATION_CHAR_MATCHES) {
+//						System.out.println("Char code " + charCodes[c] + " at " + c + " with name " + charNames[c] + ", UC mapped to " + pFont.getUnicode(charCodes[c]));
+//						int choice = PdfCharDecoder.displayCharMatch(serifStyleCims[c][s], "Verification char match (serif)");
+//						if (choice == JOptionPane.CANCEL_OPTION)
+//							throw new RuntimeException("GOTCHA");
+//					}
 					if (!ignoreForMin)
 						serifStyleSimMins[s] = Math.min(serifStyleCims[c][s].sim, serifStyleSimMins[s]);
 					if (((s & Font.ITALIC) == 0) || (skewChars.indexOf(chars[c]) == -1)) {
@@ -4310,8 +5138,19 @@ dy1 = vy;
 					if (bestSims[c] < sansStyleCims[c][s].sim) {
 						bestSims[c] = sansStyleCims[c][s].sim;
 						bestCims[c] = sansStyleCims[c][s];
-						if (DEBUG_SHOW_VERIFICATION_CHAR_MATCHES) PdfCharDecoder.displayCharMatch(sansStyleCims[c][s], "Verification char match (sans)");
+						if (DEBUG_SHOW_VERIFICATION_CHAR_MATCHES) {
+							System.out.println("Char code " + charCodes[c] + " at " + c + " with name " + charNames[c] + ", UC mapped to " + pFont.getUnicode(charCodes[c]));
+							int choice = PdfCharDecoder.displayCharMatch(sansStyleCims[c][s], "Verification char match (sans serif)");
+							if (choice == JOptionPane.CANCEL_OPTION)
+								throw new RuntimeException("GOTCHA");
+						}
 					}
+//					if (DEBUG_SHOW_VERIFICATION_CHAR_MATCHES) {
+//						System.out.println("Char code " + charCodes[c] + " at " + c + " with name " + charNames[c] + ", UC mapped to " + pFont.getUnicode(charCodes[c]));
+//						int choice = PdfCharDecoder.displayCharMatch(sansStyleCims[c][s], "Verification char match (sans serif)");
+//						if (choice == JOptionPane.CANCEL_OPTION)
+//							throw new RuntimeException("GOTCHA");
+//					}
 					if (!ignoreForMin)
 						sansStyleSimMins[s] = Math.min(sansStyleCims[c][s].sim, sansStyleSimMins[s]);
 					if (((s & Font.ITALIC) == 0) || (skewChars.indexOf(chars[c]) == -1)) {
@@ -4332,23 +5171,26 @@ dy1 = vy;
 			
 			//	we might want to revisit this one
 			if (bestSims[c] < 0.5) {
-//				if (bestCims[c] != null)
-//					PdfCharDecoder.displayCharMatch(bestCims[c], "Bad verification match");
-				bestCims[c] = null;
-				if (debug) System.out.println(" --> marked for revisiting");
+				if (DEBUG_SHOW_VERIFICATION_CHAR_MATCHES && (bestCims[c] != null))
+					PdfCharDecoder.displayCharMatch(bestCims[c], "Bad verification match");
+				if (charSet.verifyUnicodeMapped()) {
+					bestCims[c] = null;
+					if (debug) System.out.println(" --> marked for revisiting");
+				}
+				else if (debug) System.out.println(" --> retained despite bad verification match");
 				continue;
 			}
 			
 			//	remember small-caps match (whichever way)
 			if (bestCims[c].match.ch != chars[c]) {
-//				if (bestCims[c] != null)
-//					PdfCharDecoder.displayCharMatch(bestCims[c], "Small-caps match");
+				if (DEBUG_SHOW_VERIFICATION_CHAR_MATCHES && (bestCims[c] != null))
+					PdfCharDecoder.displayCharMatch(bestCims[c], "Small-caps match");
 				smallCapsChars.add(new Integer(c));
 				if (debug) System.out.println(" --> small-caps match");
 			}
 			else if (isSmallCapsMatch(chars[c], ((String) pFont.ucMappings.get(chc)))) {
-//				if (bestCims[c] != null)
-//					PdfCharDecoder.displayCharMatch(bestCims[c], "Small-caps match");
+				if (DEBUG_SHOW_VERIFICATION_CHAR_MATCHES && (bestCims[c] != null))
+					PdfCharDecoder.displayCharMatch(bestCims[c], "Small-caps match");
 				smallCapsChars.add(new Integer(c));
 				if (debug) System.out.println(" --> lower case mapped capital");
 			}
@@ -4405,9 +5247,13 @@ dy1 = vy;
 				if (bestCims[c] == null)
 					continue;
 				
+				//	retain mapping if char has Unicode mapping and we're only decoding unmapped codes
+				if (!charSet.decodeUnicodeMapped() && pFont.ucMappings.containsKey(charCodes[c]))
+					continue;
+				
 				//	mark char for revisiting if similarity too far below average
 				if (bestCims[c].sim < minAcceptSim) {
-					if (debug) System.out.println("   --> marked char " + c + " (" + charCodes[c] + "/" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ") for revistitin at similarity " + bestCims[c].sim);
+					if (debug) System.out.println("   --> marked char " + c + " (" + charCodes[c] + "/" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ") for revistiting at similarity " + bestCims[c].sim);
 					bestCims[c] = null;
 				}
 			}
@@ -4462,8 +5308,6 @@ dy1 = vy;
 		//	do we have a match?
 		if (((simMin > 0.5) && (sim > 0.6)) || ((simMin > 0.375) && (sim > 0.7)) || ((simMin > 0.25) && (sim > 0.8))) {
 			if (debug) System.out.println(" ==> match");
-//			
-//			//	TODO somehow assess the number or fraction of black pixels in the font being decoded and the comparison fonts, and penalize all too big differences in style detection
 //			
 //			//	try to select font style if pool sufficiently large
 //			int bestStyle = -1;
@@ -4525,6 +5369,8 @@ dy1 = vy;
 			//	TODO test with 'o' in font 'PAPCAD+AdvOT6504bca5.I' of 'Carbayo_et_al-2013-Zoologica_Scripta.pdf'
 			//	TODO test with 'l' in font 'PAPCBD+AdvPSMP10' of 'Carbayo_et_al-2013-Zoologica_Scripta.pdf'
 			//	TODO test with 't'/'T' in font 'OXCEMO+TimesNewRomanPSMT-SC700' of 'laciny_et_al_2015_z_arbeitsgem_osterr_entomol_new_diacamma.pdf'
+			HashSet smallCapsCharsAccepted = new HashSet();
+			HashSet smallCapsCharsRefused = new HashSet();
 			for (int c = 0; c < chars.length; c++) {
 				if (charImages[c] == null)
 					continue;
@@ -4546,7 +5392,7 @@ dy1 = vy;
 					continue;
 				
 				boolean lowerCaseOK = true;
-				if (debug) System.out.println(" - double-checking potential small-caps char " + chars[c]);
+				if (debug) System.out.println(" - double-checking potential small-caps char (size & position) " + chars[c]);
 				
 				//	get basic data
 				Integer chc = charCodes[c];
@@ -4648,6 +5494,7 @@ dy1 = vy;
 				
 				//	this one looks OK by the means at hand
 				if (lowerCaseOK) {
+					smallCapsCharsRefused.add(new Integer(c));
 					pFont.mapUnicode(chc, ("" + Character.toLowerCase(chars[c])));
 					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toLowerCase(chars[c])), charImages[c].img);
 					if (debug) System.out.println("   ==> looks OK in lower case");
@@ -4656,6 +5503,7 @@ dy1 = vy;
 				
 				//	do actual correction
 				else {
+					smallCapsCharsAccepted.add(new Integer(c));
 					pFont.mapUnicode(chc, ("" + Character.toUpperCase(chars[c])));
 					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toUpperCase(chars[c])), charImages[c].img);
 					if (debug) System.out.println("   ==> small-caps corrected " + chc + " to " + Character.toUpperCase(chars[c]));
@@ -4664,6 +5512,16 @@ dy1 = vy;
 				
 				//	mark as handled either way
 				smallCapsChars.remove(new Integer(c));
+			}
+			
+			//	re-consider the refused small-caps matches if there are many corrections
+			if (debug) System.out.println(" - corrected " + smallCapsCharsAccepted.size() + " small-caps, refused " + smallCapsCharsRefused.size());
+			if (smallCapsCharsAccepted.size() > smallCapsCharsRefused.size()) {
+				smallCapsChars.addAll(smallCapsCharsRefused);
+				smallCapsCharsRefused.clear();
+				if (debug) System.out.println("   ==> re-considering refused small-caps due to many corrections");
+				
+				//	TODO if we've had a good few small-caps corrections, include their neighbors in analysis (even though they might actually have lower case best optical match)
 			}
 			
 			//	run neighborhood analysis for remaining potential small-caps
@@ -4684,13 +5542,124 @@ dy1 = vy;
 				}
 				
 				boolean lowerCaseOK = true;
-				if (debug) System.out.println(" - double-checking potential small-caps char " + chars[c]);
+				if (debug) System.out.println(" - double-checking potential small-caps char (neighborhood) " + chars[c]);
 				
 				//	get basic data
 				Integer chc = charCodes[c];
 				
 				//	get usage stats
 				CharUsageStats cus = pFont.getCharUsageStats(chc);
+				if (cus == null) {
+					if (debug) System.out.println("   ==> usage stats not found");
+					continue;
+				}
+				int lcScore = 0;
+				int ucScore = 0;
+				if (debug) System.out.println(" - doing neighborhood analysis for potential small-caps char " + chars[c] + " in font " + pFont.name);
+				
+				//	count lower case predecessors as indicators for lower case, and upper case predecessors as weak indicatos for small-caps
+				for (Iterator pit = cus.predecessors.iterator(); pit.hasNext();) {
+					Integer pChc = ((Integer) pit.next());
+					String pch = pFont.getUnicode(pChc.intValue());
+					if (pch == null)
+						continue;
+					if (pch.toLowerCase().equals(pch.toUpperCase())) { /* don't count neighbors that don't have a case*/ }
+					else if (pch.equals(pch.toUpperCase()))
+						ucScore += 1;
+					else lcScore += 2;
+				}
+				if (debug) System.out.println(" - after predecessors, lower case score is " + lcScore + ", small-caps score is " + ucScore);
+				
+				//	count upper case successors as indicators for small-caps, and lower case successors as weak indicators for lower case
+				for (Iterator sit = cus.successors.iterator(); sit.hasNext();) {
+					Integer sChc = ((Integer) sit.next());
+					String sch = pFont.getUnicode(sChc.intValue());
+					if (sch == null)
+						continue;
+					if (sch.toLowerCase().equals(sch.toUpperCase())) { /* don't count neighbors that don't have a case*/ }
+					else if (sch.equals(sch.toUpperCase()))
+						ucScore += 2;
+					else lcScore += 1;
+				}
+				if (debug) System.out.println(" - after successors, lower case score is " + lcScore + ", small-caps score is " + ucScore);
+				
+				//	check scores
+				lowerCaseOK = (lcScore > ucScore);
+				
+				//	this one looks OK by the means at hand
+				if (lowerCaseOK) {
+					smallCapsCharsRefused.add(new Integer(c));
+					pFont.mapUnicode(chc, ("" + Character.toLowerCase(chars[c])));
+					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toLowerCase(chars[c])), charImages[c].img);
+					if (debug) System.out.println("   ==> looks OK in lower case");
+					if (DEBUG_SHOW_SMALL_CAPS_CHAR_MATCHES) PdfCharDecoder.displayCharMatch(bestCims[c], "Small-caps match refused");
+				}
+				
+				//	do actual correction
+				else {
+					smallCapsCharsAccepted.add(new Integer(c));
+					pFont.mapUnicode(chc, ("" + Character.toUpperCase(chars[c])));
+					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toUpperCase(chars[c])), charImages[c].img);
+					if (debug) System.out.println("   ==> small-caps corrected " + chc + " to " + Character.toUpperCase(chars[c]));
+					if (DEBUG_SHOW_SMALL_CAPS_CHAR_MATCHES) PdfCharDecoder.displayCharMatch(bestCims[c], "Small-caps match accepted");
+				}
+				
+				//	mark as handled either way
+				smallCapsChars.remove(new Integer(c));
+			}
+			
+			//	collect small-caps neighbors (we might even have an actual small-cap Unicode-mapped _and_ decoded to lower case)
+			HashSet smallCapsNeighborCharCodes = new HashSet();
+			for (Iterator scait = smallCapsCharsAccepted.iterator(); scait.hasNext();) {
+				Integer scai = ((Integer) scait.next());
+				Integer scaChc = charCodes[scai.intValue()];
+				CharUsageStats scaCus = pFont.getCharUsageStats(scaChc);
+				if (scaCus == null)
+					continue;
+				for (Iterator pit = scaCus.predecessors.iterator(); pit.hasNext();)
+					smallCapsNeighborCharCodes.add(pit.next());
+				for (Iterator sit = scaCus.successors.iterator(); sit.hasNext();)
+					smallCapsNeighborCharCodes.add(sit.next());
+			}
+			
+			//	map small-caps neighbors to character indices for handling
+			for (int c = 0; c < chars.length; c++) {
+				if (charImages[c] == null)
+					continue;
+				if (bestCims[c] == null)
+					continue;
+				if (bestCims[c] == UNICODE_MAPPING_UNRENDERABLE)
+					continue;
+				if (smallCapsNeighborCharCodes.contains(charCodes[c]))
+					smallCapsChars.add(new Integer(c));
+			}
+			smallCapsChars.removeAll(smallCapsCharsAccepted);
+			
+			//	run neighborhood analysis for neighbots of accepted small-caps
+			for (int c = 0; c < chars.length; c++) {
+				if (charImages[c] == null)
+					continue;
+				if (bestCims[c] == null)
+					continue;
+				if (bestCims[c] == UNICODE_MAPPING_UNRENDERABLE)
+					continue;
+				if (!smallCapsChars.contains(new Integer(c)))
+					continue;
+				if (chars[c] == Character.toUpperCase(chars[c]))
+					continue;
+				
+				boolean lowerCaseOK = true;
+				if (debug) System.out.println(" - double-checking potential small-caps char (as neighbor) " + chars[c]);
+				
+				//	get basic data
+				Integer chc = charCodes[c];
+				
+				//	get usage stats
+				CharUsageStats cus = pFont.getCharUsageStats(chc);
+				if (cus == null) {
+					if (debug) System.out.println("   ==> usage stats not found");
+					continue;
+				}
 				int lcScore = 0;
 				int ucScore = 0;
 				if (debug) System.out.println(" - doing neighborhood analysis for potential small-caps char " + chars[c] + " in font " + pFont.name);
@@ -4724,6 +5693,7 @@ dy1 = vy;
 				
 				//	this one looks OK by the means at hand
 				if (lowerCaseOK) {
+					smallCapsCharsRefused.add(new Integer(c));
 					pFont.mapUnicode(chc, ("" + Character.toLowerCase(chars[c])));
 					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toLowerCase(chars[c])), charImages[c].img);
 					if (debug) System.out.println("   ==> looks OK in lower case");
@@ -4732,11 +5702,15 @@ dy1 = vy;
 				
 				//	do actual correction
 				else {
+					smallCapsCharsAccepted.add(new Integer(c));
 					pFont.mapUnicode(chc, ("" + Character.toUpperCase(chars[c])));
 					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toUpperCase(chars[c])), charImages[c].img);
 					if (debug) System.out.println("   ==> small-caps corrected " + chc + " to " + Character.toUpperCase(chars[c]));
 					if (DEBUG_SHOW_SMALL_CAPS_CHAR_MATCHES) PdfCharDecoder.displayCharMatch(bestCims[c], "Small-caps match accepted");
 				}
+				
+				//	mark as handled either way
+				smallCapsChars.remove(new Integer(c));
 			}
 		}
 		
@@ -4747,6 +5721,8 @@ dy1 = vy;
 			//	cancel out what we have only with OCR enabled
 			if ((charSet != NO_DECODING) && (charSet != RENDER_ONLY))
 				for (int c = 0; c < bestCims.length; c++) {
+					if (!charSet.decodeUnicodeMapped() && pFont.ucMappings.containsKey(charCodes[c]))
+						continue;
 					if (bestCims[c] != UNICODE_MAPPING_UNRENDERABLE)
 						bestCims[c] = null;
 				}
@@ -4759,7 +5735,7 @@ dy1 = vy;
 				unresolvedCharCount++;
 		}
 		
-		//	use OCR to decode glyphs whose mapped characters does not match sufficiently well
+		//	use OCR to decode glyphs that are lacking mapped characters as well as those whose mapped characters do not match sufficiently well
 		if (FORCE_OCR_DECODING || ((charSet != NO_DECODING) && (charSet != RENDER_ONLY) && (unresolvedCharCount != 0)))
 			ocrDecodeChars(pFont, chars, charImages, bestCims, charSet, maxDescent, charCodes, charNames, serifFonts, sansFonts, pm, debug);
 		
@@ -4791,7 +5767,7 @@ dy1 = vy;
 			if (debug) System.out.println("Font style vote between " + styleCharCount + " chars: " + boldCount + " bold, " + italicsCount + " italics, " + serifCount + " serif");
 		}
 		
-		//	correct base font if required
+		//	correct base font if required TODO consider sans-serif and monspaced fonts as well
 		if ((pFont.baseFont == null) || (pFont.bold != pFont.baseFont.bold) || (pFont.italics != pFont.baseFont.italic)) {
 			String bfn = "Times-";
 			if (pFont.bold && pFont.italics)
@@ -4873,6 +5849,7 @@ dy1 = vy;
 		//	nominal char width way larger than measured char width, we have implicit spaces
 		if (debug) System.out.println(" ==> char widths appear to imply spaces");
 		pFont.hasImplicitSpaces = true;
+		pFont.monospaced = false; // TODO actually this _might_ still hold, but what are the odds ?!?
 		
 		//	add measured char widths
 		for (int c = 0; c < charImages.length; c++) {
@@ -4880,8 +5857,6 @@ dy1 = vy;
 				continue;
 			
 			//	get basic data
-//			Integer sid;
-//			String chn = charNames[c];
 			Integer chc = charCodes[c];
 			
 			//	store actual width
@@ -4907,6 +5882,9 @@ dy1 = vy;
 		 * - switch off early finish detection above ...
 		 * - ... and null out any char matches
 		 */
+		
+		//	TODO somehow handle small-caps occurring in font alongside normal upper and lower case characters (upper case in duplicates)
+		//	TODO TEST true type font with added small-caps in page 17 (bibliography author names) of londt_2014d.pdf
 		
 		//	union argument charset with whatever characters are Unicode mapped to in argument font
 		final HashSet unicodeMappedChars = new HashSet();
@@ -4950,20 +5928,25 @@ dy1 = vy;
 		CharImageMatch[][] topCims = new CharImageMatch[chars.length][];
 		boolean[] isOcrDecoded = new boolean[chars.length];
 		for (int c = 0; c < chars.length; c++) {
-			if (charImages[c] == null)
+			if (debug) System.out.println("Assessing char " + c + " (" + charCodes[c] + "/" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
+			if (charImages[c] == null) {
+				if (debug) System.out.println(" ==> not rendered (1)");
 				continue;
+			}
 			
 			//	we have a Unicode mpping we cannot verify
 			if (bestCims[c] == UNICODE_MAPPING_UNRENDERABLE) {
 				isOcrDecoded[c] = false;
+				if (debug) System.out.println(" ==> not rendered (2)");
 				continue;
 			}
 			
-			//	we already have a match for this one
+			//	we already have a match for this one (automatically catches existing Unicode mappings if forced by charset to retained above)
 			if (bestCims[c] != null) {
 				topCims[c] = new CharImageMatch[1];
 				topCims[c][0] = bestCims[c];
 				isOcrDecoded[c] = false;
+				if (debug) System.out.println(" ==> reliably mapped to '" + bestCims[c].match.ch + "'");
 				continue;
 			}
 			
@@ -6857,6 +7840,500 @@ dy1 = vy;
 			return Float.compare(cim2.sim, cim1.sim);
 		}
 	};
+	
+	private static final Map type1cIsoAdobeCharSet = Collections.synchronizedMap(new LinkedHashMap());
+	static {
+		type1cIsoAdobeCharSet.put(new Integer(0), ".notdef");
+		type1cIsoAdobeCharSet.put(new Integer(1), "space");
+		type1cIsoAdobeCharSet.put(new Integer(2), "exclam");
+		type1cIsoAdobeCharSet.put(new Integer(3), "quotedbl");
+		type1cIsoAdobeCharSet.put(new Integer(4), "numbersign");
+		type1cIsoAdobeCharSet.put(new Integer(5), "dollar");
+		type1cIsoAdobeCharSet.put(new Integer(6), "percent");
+		type1cIsoAdobeCharSet.put(new Integer(7), "ampersand");
+		type1cIsoAdobeCharSet.put(new Integer(8), "quoteright");
+		type1cIsoAdobeCharSet.put(new Integer(9), "parenleft");
+		type1cIsoAdobeCharSet.put(new Integer(10), "parenright");
+		type1cIsoAdobeCharSet.put(new Integer(11), "asterisk");
+		type1cIsoAdobeCharSet.put(new Integer(12), "plus");
+		type1cIsoAdobeCharSet.put(new Integer(13), "comma");
+		type1cIsoAdobeCharSet.put(new Integer(14), "hyphen");
+		type1cIsoAdobeCharSet.put(new Integer(15), "period");
+		type1cIsoAdobeCharSet.put(new Integer(16), "slash");
+		type1cIsoAdobeCharSet.put(new Integer(17), "zero");
+		type1cIsoAdobeCharSet.put(new Integer(18), "one");
+		type1cIsoAdobeCharSet.put(new Integer(19), "two");
+		type1cIsoAdobeCharSet.put(new Integer(20), "three");
+		type1cIsoAdobeCharSet.put(new Integer(21), "four");
+		type1cIsoAdobeCharSet.put(new Integer(22), "five");
+		type1cIsoAdobeCharSet.put(new Integer(23), "six");
+		type1cIsoAdobeCharSet.put(new Integer(24), "seven");
+		type1cIsoAdobeCharSet.put(new Integer(25), "eight");
+		type1cIsoAdobeCharSet.put(new Integer(26), "nine");
+		type1cIsoAdobeCharSet.put(new Integer(27), "colon");
+		type1cIsoAdobeCharSet.put(new Integer(28), "semicolon");
+		type1cIsoAdobeCharSet.put(new Integer(29), "less");
+		type1cIsoAdobeCharSet.put(new Integer(30), "equal");
+		type1cIsoAdobeCharSet.put(new Integer(31), "greater");
+		type1cIsoAdobeCharSet.put(new Integer(32), "question");
+		type1cIsoAdobeCharSet.put(new Integer(33), "at");
+		type1cIsoAdobeCharSet.put(new Integer(34), "A");
+		type1cIsoAdobeCharSet.put(new Integer(35), "B");
+		type1cIsoAdobeCharSet.put(new Integer(36), "C");
+		type1cIsoAdobeCharSet.put(new Integer(37), "D");
+		type1cIsoAdobeCharSet.put(new Integer(38), "E");
+		type1cIsoAdobeCharSet.put(new Integer(39), "F");
+		type1cIsoAdobeCharSet.put(new Integer(40), "G");
+		type1cIsoAdobeCharSet.put(new Integer(41), "H");
+		type1cIsoAdobeCharSet.put(new Integer(42), "I");
+		type1cIsoAdobeCharSet.put(new Integer(43), "J");
+		type1cIsoAdobeCharSet.put(new Integer(44), "K");
+		type1cIsoAdobeCharSet.put(new Integer(45), "L");
+		type1cIsoAdobeCharSet.put(new Integer(46), "M");
+		type1cIsoAdobeCharSet.put(new Integer(47), "N");
+		type1cIsoAdobeCharSet.put(new Integer(48), "O");
+		type1cIsoAdobeCharSet.put(new Integer(49), "P");
+		type1cIsoAdobeCharSet.put(new Integer(50), "Q");
+		type1cIsoAdobeCharSet.put(new Integer(51), "R");
+		type1cIsoAdobeCharSet.put(new Integer(52), "S");
+		type1cIsoAdobeCharSet.put(new Integer(53), "T");
+		type1cIsoAdobeCharSet.put(new Integer(54), "U");
+		type1cIsoAdobeCharSet.put(new Integer(55), "V");
+		type1cIsoAdobeCharSet.put(new Integer(56), "W");
+		type1cIsoAdobeCharSet.put(new Integer(57), "X");
+		type1cIsoAdobeCharSet.put(new Integer(58), "Y");
+		type1cIsoAdobeCharSet.put(new Integer(59), "Z");
+		type1cIsoAdobeCharSet.put(new Integer(60), "bracketleft");
+		type1cIsoAdobeCharSet.put(new Integer(61), "backslash");
+		type1cIsoAdobeCharSet.put(new Integer(62), "bracketright");
+		type1cIsoAdobeCharSet.put(new Integer(63), "asciicircum");
+		type1cIsoAdobeCharSet.put(new Integer(64), "underscore");
+		type1cIsoAdobeCharSet.put(new Integer(65), "quoteleft");
+		type1cIsoAdobeCharSet.put(new Integer(66), "a");
+		type1cIsoAdobeCharSet.put(new Integer(67), "b");
+		type1cIsoAdobeCharSet.put(new Integer(68), "c");
+		type1cIsoAdobeCharSet.put(new Integer(69), "d");
+		type1cIsoAdobeCharSet.put(new Integer(70), "e");
+		type1cIsoAdobeCharSet.put(new Integer(71), "f");
+		type1cIsoAdobeCharSet.put(new Integer(72), "g");
+		type1cIsoAdobeCharSet.put(new Integer(73), "h");
+		type1cIsoAdobeCharSet.put(new Integer(74), "i");
+		type1cIsoAdobeCharSet.put(new Integer(75), "j");
+		type1cIsoAdobeCharSet.put(new Integer(76), "k");
+		type1cIsoAdobeCharSet.put(new Integer(77), "l");
+		type1cIsoAdobeCharSet.put(new Integer(78), "m");
+		type1cIsoAdobeCharSet.put(new Integer(79), "n");
+		type1cIsoAdobeCharSet.put(new Integer(80), "o");
+		type1cIsoAdobeCharSet.put(new Integer(81), "p");
+		type1cIsoAdobeCharSet.put(new Integer(82), "q");
+		type1cIsoAdobeCharSet.put(new Integer(83), "r");
+		type1cIsoAdobeCharSet.put(new Integer(84), "s");
+		type1cIsoAdobeCharSet.put(new Integer(85), "t");
+		type1cIsoAdobeCharSet.put(new Integer(86), "u");
+		type1cIsoAdobeCharSet.put(new Integer(87), "v");
+		type1cIsoAdobeCharSet.put(new Integer(88), "w");
+		type1cIsoAdobeCharSet.put(new Integer(89), "x");
+		type1cIsoAdobeCharSet.put(new Integer(90), "y");
+		type1cIsoAdobeCharSet.put(new Integer(91), "z");
+		type1cIsoAdobeCharSet.put(new Integer(92), "braceleft");
+		type1cIsoAdobeCharSet.put(new Integer(93), "bar");
+		type1cIsoAdobeCharSet.put(new Integer(94), "braceright");
+		type1cIsoAdobeCharSet.put(new Integer(95), "asciitilde");
+		type1cIsoAdobeCharSet.put(new Integer(96), "exclamdown");
+		type1cIsoAdobeCharSet.put(new Integer(97), "cent");
+		type1cIsoAdobeCharSet.put(new Integer(98), "sterling");
+		type1cIsoAdobeCharSet.put(new Integer(99), "fraction");
+		type1cIsoAdobeCharSet.put(new Integer(100), "yen");
+		type1cIsoAdobeCharSet.put(new Integer(101), "florin");
+		type1cIsoAdobeCharSet.put(new Integer(102), "section");
+		type1cIsoAdobeCharSet.put(new Integer(103), "currency");
+		type1cIsoAdobeCharSet.put(new Integer(104), "quotesingle");
+		type1cIsoAdobeCharSet.put(new Integer(105), "quotedblleft");
+		type1cIsoAdobeCharSet.put(new Integer(106), "guillemotleft");
+		type1cIsoAdobeCharSet.put(new Integer(107), "guilsinglleft");
+		type1cIsoAdobeCharSet.put(new Integer(108), "guilsinglright");
+		type1cIsoAdobeCharSet.put(new Integer(109), "fi");
+		type1cIsoAdobeCharSet.put(new Integer(110), "fl");
+		type1cIsoAdobeCharSet.put(new Integer(111), "endash");
+		type1cIsoAdobeCharSet.put(new Integer(112), "dagger");
+		type1cIsoAdobeCharSet.put(new Integer(113), "daggerdbl");
+		type1cIsoAdobeCharSet.put(new Integer(114), "periodcentered");
+		type1cIsoAdobeCharSet.put(new Integer(115), "paragraph");
+		type1cIsoAdobeCharSet.put(new Integer(116), "bullet");
+		type1cIsoAdobeCharSet.put(new Integer(117), "quotesinglbase");
+		type1cIsoAdobeCharSet.put(new Integer(118), "quotedblbase");
+		type1cIsoAdobeCharSet.put(new Integer(119), "quotedblright");
+		type1cIsoAdobeCharSet.put(new Integer(120), "guillemotright");
+		type1cIsoAdobeCharSet.put(new Integer(121), "ellipsis");
+		type1cIsoAdobeCharSet.put(new Integer(122), "perthousand");
+		type1cIsoAdobeCharSet.put(new Integer(123), "questiondown");
+		type1cIsoAdobeCharSet.put(new Integer(124), "grave");
+		type1cIsoAdobeCharSet.put(new Integer(125), "acute");
+		type1cIsoAdobeCharSet.put(new Integer(126), "circumflex");
+		type1cIsoAdobeCharSet.put(new Integer(127), "tilde");
+		type1cIsoAdobeCharSet.put(new Integer(128), "macron");
+		type1cIsoAdobeCharSet.put(new Integer(129), "breve");
+		type1cIsoAdobeCharSet.put(new Integer(130), "dotaccent");
+		type1cIsoAdobeCharSet.put(new Integer(131), "dieresis");
+		type1cIsoAdobeCharSet.put(new Integer(132), "ring");
+		type1cIsoAdobeCharSet.put(new Integer(133), "cedilla");
+		type1cIsoAdobeCharSet.put(new Integer(134), "hungarumlaut");
+		type1cIsoAdobeCharSet.put(new Integer(135), "ogonek");
+		type1cIsoAdobeCharSet.put(new Integer(136), "caron");
+		type1cIsoAdobeCharSet.put(new Integer(137), "emdash");
+		type1cIsoAdobeCharSet.put(new Integer(138), "AE");
+		type1cIsoAdobeCharSet.put(new Integer(139), "ordfeminine");
+		type1cIsoAdobeCharSet.put(new Integer(140), "Lslash");
+		type1cIsoAdobeCharSet.put(new Integer(141), "Oslash");
+		type1cIsoAdobeCharSet.put(new Integer(142), "OE");
+		type1cIsoAdobeCharSet.put(new Integer(143), "ordmasculine");
+		type1cIsoAdobeCharSet.put(new Integer(144), "ae");
+		type1cIsoAdobeCharSet.put(new Integer(145), "dotlessi");
+		type1cIsoAdobeCharSet.put(new Integer(146), "lslash");
+		type1cIsoAdobeCharSet.put(new Integer(147), "oslash");
+		type1cIsoAdobeCharSet.put(new Integer(148), "oe");
+		type1cIsoAdobeCharSet.put(new Integer(149), "germandbls");
+		type1cIsoAdobeCharSet.put(new Integer(150), "onesuperior");
+		type1cIsoAdobeCharSet.put(new Integer(151), "logicalnot");
+		type1cIsoAdobeCharSet.put(new Integer(152), "mu");
+		type1cIsoAdobeCharSet.put(new Integer(153), "trademark");
+		type1cIsoAdobeCharSet.put(new Integer(154), "Eth");
+		type1cIsoAdobeCharSet.put(new Integer(155), "onehalf");
+		type1cIsoAdobeCharSet.put(new Integer(156), "plusminus");
+		type1cIsoAdobeCharSet.put(new Integer(157), "Thorn");
+		type1cIsoAdobeCharSet.put(new Integer(158), "onequarter");
+		type1cIsoAdobeCharSet.put(new Integer(159), "divide");
+		type1cIsoAdobeCharSet.put(new Integer(160), "brokenbar");
+		type1cIsoAdobeCharSet.put(new Integer(161), "degree");
+		type1cIsoAdobeCharSet.put(new Integer(162), "thorn");
+		type1cIsoAdobeCharSet.put(new Integer(163), "threequarters");
+		type1cIsoAdobeCharSet.put(new Integer(164), "twosuperior");
+		type1cIsoAdobeCharSet.put(new Integer(165), "registered");
+		type1cIsoAdobeCharSet.put(new Integer(166), "minus");
+		type1cIsoAdobeCharSet.put(new Integer(167), "eth");
+		type1cIsoAdobeCharSet.put(new Integer(168), "multiply");
+		type1cIsoAdobeCharSet.put(new Integer(169), "threesuperior");
+		type1cIsoAdobeCharSet.put(new Integer(170), "copyright");
+		type1cIsoAdobeCharSet.put(new Integer(171), "Aacute");
+		type1cIsoAdobeCharSet.put(new Integer(172), "Acircumflex");
+		type1cIsoAdobeCharSet.put(new Integer(173), "Adieresis");
+		type1cIsoAdobeCharSet.put(new Integer(174), "Agrave");
+		type1cIsoAdobeCharSet.put(new Integer(175), "Aring");
+		type1cIsoAdobeCharSet.put(new Integer(176), "Atilde");
+		type1cIsoAdobeCharSet.put(new Integer(177), "Ccedilla");
+		type1cIsoAdobeCharSet.put(new Integer(178), "Eacute");
+		type1cIsoAdobeCharSet.put(new Integer(179), "Ecircumflex");
+		type1cIsoAdobeCharSet.put(new Integer(180), "Edieresis");
+		type1cIsoAdobeCharSet.put(new Integer(181), "Egrave");
+		type1cIsoAdobeCharSet.put(new Integer(182), "Iacute");
+		type1cIsoAdobeCharSet.put(new Integer(183), "Icircumflex");
+		type1cIsoAdobeCharSet.put(new Integer(184), "Idieresis");
+		type1cIsoAdobeCharSet.put(new Integer(185), "Igrave");
+		type1cIsoAdobeCharSet.put(new Integer(186), "Ntilde");
+		type1cIsoAdobeCharSet.put(new Integer(187), "Oacute");
+		type1cIsoAdobeCharSet.put(new Integer(188), "Ocircumflex");
+		type1cIsoAdobeCharSet.put(new Integer(189), "Odieresis");
+		type1cIsoAdobeCharSet.put(new Integer(190), "Ograve");
+		type1cIsoAdobeCharSet.put(new Integer(191), "Otilde");
+		type1cIsoAdobeCharSet.put(new Integer(192), "Scaron");
+		type1cIsoAdobeCharSet.put(new Integer(193), "Uacute");
+		type1cIsoAdobeCharSet.put(new Integer(194), "Ucircumflex");
+		type1cIsoAdobeCharSet.put(new Integer(195), "Udieresis");
+		type1cIsoAdobeCharSet.put(new Integer(196), "Ugrave");
+		type1cIsoAdobeCharSet.put(new Integer(197), "Yacute");
+		type1cIsoAdobeCharSet.put(new Integer(198), "Ydieresis");
+		type1cIsoAdobeCharSet.put(new Integer(199), "Zcaron");
+		type1cIsoAdobeCharSet.put(new Integer(200), "aacute");
+		type1cIsoAdobeCharSet.put(new Integer(201), "acircumflex");
+		type1cIsoAdobeCharSet.put(new Integer(202), "adieresis");
+		type1cIsoAdobeCharSet.put(new Integer(203), "agrave");
+		type1cIsoAdobeCharSet.put(new Integer(204), "aring");
+		type1cIsoAdobeCharSet.put(new Integer(205), "atilde");
+		type1cIsoAdobeCharSet.put(new Integer(206), "ccedilla");
+		type1cIsoAdobeCharSet.put(new Integer(207), "eacute");
+		type1cIsoAdobeCharSet.put(new Integer(208), "ecircumflex");
+		type1cIsoAdobeCharSet.put(new Integer(209), "edieresis");
+		type1cIsoAdobeCharSet.put(new Integer(210), "egrave");
+		type1cIsoAdobeCharSet.put(new Integer(211), "iacute");
+		type1cIsoAdobeCharSet.put(new Integer(212), "icircumflex");
+		type1cIsoAdobeCharSet.put(new Integer(213), "idieresis");
+		type1cIsoAdobeCharSet.put(new Integer(214), "igrave");
+		type1cIsoAdobeCharSet.put(new Integer(215), "ntilde");
+		type1cIsoAdobeCharSet.put(new Integer(216), "oacute");
+		type1cIsoAdobeCharSet.put(new Integer(217), "ocircumflex");
+		type1cIsoAdobeCharSet.put(new Integer(218), "odieresis");
+		type1cIsoAdobeCharSet.put(new Integer(219), "ograve");
+		type1cIsoAdobeCharSet.put(new Integer(220), "otilde");
+		type1cIsoAdobeCharSet.put(new Integer(221), "scaron");
+		type1cIsoAdobeCharSet.put(new Integer(222), "uacute");
+		type1cIsoAdobeCharSet.put(new Integer(223), "ucircumflex");
+		type1cIsoAdobeCharSet.put(new Integer(224), "udieresis");
+		type1cIsoAdobeCharSet.put(new Integer(225), "ugrave");
+		type1cIsoAdobeCharSet.put(new Integer(226), "yacute");
+		type1cIsoAdobeCharSet.put(new Integer(227), "ydieresis");
+		type1cIsoAdobeCharSet.put(new Integer(228), "zcaron");
+	}
+	
+	private static final Map type1cExpertCharSet = Collections.synchronizedMap(new LinkedHashMap());
+	static {
+		type1cExpertCharSet.put(new Integer(0), ".notdef");
+		type1cExpertCharSet.put(new Integer(1), "space");
+		type1cExpertCharSet.put(new Integer(229), "exclamsmall");
+		type1cExpertCharSet.put(new Integer(230), "Hungarumlautsmall");
+		type1cExpertCharSet.put(new Integer(231), "dollaroldstyle");
+		type1cExpertCharSet.put(new Integer(232), "dollarsuperior");
+		type1cExpertCharSet.put(new Integer(233), "ampersandsmall");
+		type1cExpertCharSet.put(new Integer(234), "Acutesmall");
+		type1cExpertCharSet.put(new Integer(235), "parenleftsuperior");
+		type1cExpertCharSet.put(new Integer(236), "parenrightsuperior");
+		type1cExpertCharSet.put(new Integer(237), "twodotenleader");
+		type1cExpertCharSet.put(new Integer(238), "onedotenleader");
+		type1cExpertCharSet.put(new Integer(13), "comma");
+		type1cExpertCharSet.put(new Integer(14), "hyphen");
+		type1cExpertCharSet.put(new Integer(15), "period");
+		type1cExpertCharSet.put(new Integer(99), "fraction");
+		type1cExpertCharSet.put(new Integer(239), "zerooldstyle");
+		type1cExpertCharSet.put(new Integer(240), "oneoldstyle");
+		type1cExpertCharSet.put(new Integer(241), "twooldstyle");
+		type1cExpertCharSet.put(new Integer(242), "threeoldstyle");
+		type1cExpertCharSet.put(new Integer(243), "fouroldstyle");
+		type1cExpertCharSet.put(new Integer(244), "fiveoldstyle");
+		type1cExpertCharSet.put(new Integer(245), "sixoldstyle");
+		type1cExpertCharSet.put(new Integer(246), "sevenoldstyle");
+		type1cExpertCharSet.put(new Integer(247), "eightoldstyle");
+		type1cExpertCharSet.put(new Integer(248), "nineoldstyle");
+		type1cExpertCharSet.put(new Integer(27), "colon");
+		type1cExpertCharSet.put(new Integer(28), "semicolon");
+		type1cExpertCharSet.put(new Integer(249), "commasuperior");
+		type1cExpertCharSet.put(new Integer(250), "threequartersemdash");
+		type1cExpertCharSet.put(new Integer(251), "periodsuperior");
+		type1cExpertCharSet.put(new Integer(252), "questionsmall");
+		type1cExpertCharSet.put(new Integer(253), "asuperior");
+		type1cExpertCharSet.put(new Integer(254), "bsuperior");
+		type1cExpertCharSet.put(new Integer(255), "centsuperior");
+		type1cExpertCharSet.put(new Integer(256), "dsuperior");
+		type1cExpertCharSet.put(new Integer(257), "esuperior");
+		type1cExpertCharSet.put(new Integer(258), "isuperior");
+		type1cExpertCharSet.put(new Integer(259), "lsuperior");
+		type1cExpertCharSet.put(new Integer(260), "msuperior");
+		type1cExpertCharSet.put(new Integer(261), "nsuperior");
+		type1cExpertCharSet.put(new Integer(262), "osuperior");
+		type1cExpertCharSet.put(new Integer(263), "rsuperior");
+		type1cExpertCharSet.put(new Integer(264), "ssuperior");
+		type1cExpertCharSet.put(new Integer(265), "tsuperior");
+		type1cExpertCharSet.put(new Integer(266), "ff");
+		type1cExpertCharSet.put(new Integer(109), "fi");
+		type1cExpertCharSet.put(new Integer(110), "fl");
+		type1cExpertCharSet.put(new Integer(267), "ffi");
+		type1cExpertCharSet.put(new Integer(268), "ffl");
+		type1cExpertCharSet.put(new Integer(269), "parenleftinferior");
+		type1cExpertCharSet.put(new Integer(270), "parenrightinferior");
+		type1cExpertCharSet.put(new Integer(271), "Circumflexsmall");
+		type1cExpertCharSet.put(new Integer(272), "hyphensuperior");
+		type1cExpertCharSet.put(new Integer(273), "Gravesmall");
+		type1cExpertCharSet.put(new Integer(274), "Asmall");
+		type1cExpertCharSet.put(new Integer(275), "Bsmall");
+		type1cExpertCharSet.put(new Integer(276), "Csmall");
+		type1cExpertCharSet.put(new Integer(277), "Dsmall");
+		type1cExpertCharSet.put(new Integer(278), "Esmall");
+		type1cExpertCharSet.put(new Integer(279), "Fsmall");
+		type1cExpertCharSet.put(new Integer(280), "Gsmall");
+		type1cExpertCharSet.put(new Integer(281), "Hsmall");
+		type1cExpertCharSet.put(new Integer(282), "Ismall");
+		type1cExpertCharSet.put(new Integer(283), "Jsmall");
+		type1cExpertCharSet.put(new Integer(284), "Ksmall");
+		type1cExpertCharSet.put(new Integer(285), "Lsmall");
+		type1cExpertCharSet.put(new Integer(286), "Msmall");
+		type1cExpertCharSet.put(new Integer(287), "Nsmall");
+		type1cExpertCharSet.put(new Integer(288), "Osmall");
+		type1cExpertCharSet.put(new Integer(289), "Psmall");
+		type1cExpertCharSet.put(new Integer(290), "Qsmall");
+		type1cExpertCharSet.put(new Integer(291), "Rsmall");
+		type1cExpertCharSet.put(new Integer(292), "Ssmall");
+		type1cExpertCharSet.put(new Integer(293), "Tsmall");
+		type1cExpertCharSet.put(new Integer(294), "Usmall");
+		type1cExpertCharSet.put(new Integer(295), "Vsmall");
+		type1cExpertCharSet.put(new Integer(296), "Wsmall");
+		type1cExpertCharSet.put(new Integer(297), "Xsmall");
+		type1cExpertCharSet.put(new Integer(298), "Ysmall");
+		type1cExpertCharSet.put(new Integer(299), "Zsmall");
+		type1cExpertCharSet.put(new Integer(300), "colonmonetary");
+		type1cExpertCharSet.put(new Integer(301), "onefitted");
+		type1cExpertCharSet.put(new Integer(302), "rupiah");
+		type1cExpertCharSet.put(new Integer(303), "Tildesmall");
+		type1cExpertCharSet.put(new Integer(304), "exclamdownsmall");
+		type1cExpertCharSet.put(new Integer(305), "centoldstyle");
+		type1cExpertCharSet.put(new Integer(306), "Lslashsmall");
+		type1cExpertCharSet.put(new Integer(307), "Scaronsmall");
+		type1cExpertCharSet.put(new Integer(308), "Zcaronsmall");
+		type1cExpertCharSet.put(new Integer(309), "Dieresissmall");
+		type1cExpertCharSet.put(new Integer(310), "Brevesmall");
+		type1cExpertCharSet.put(new Integer(311), "Caronsmall");
+		type1cExpertCharSet.put(new Integer(312), "Dotaccentsmall");
+		type1cExpertCharSet.put(new Integer(313), "Macronsmall");
+		type1cExpertCharSet.put(new Integer(314), "figuredash");
+		type1cExpertCharSet.put(new Integer(315), "hypheninferior");
+		type1cExpertCharSet.put(new Integer(316), "Ogoneksmall");
+		type1cExpertCharSet.put(new Integer(317), "Ringsmall");
+		type1cExpertCharSet.put(new Integer(318), "Cedillasmall");
+		type1cExpertCharSet.put(new Integer(158), "onequarter");
+		type1cExpertCharSet.put(new Integer(155), "onehalf");
+		type1cExpertCharSet.put(new Integer(163), "threequarters");
+		type1cExpertCharSet.put(new Integer(319), "questiondownsmall");
+		type1cExpertCharSet.put(new Integer(320), "oneeighth");
+		type1cExpertCharSet.put(new Integer(321), "threeeighths");
+		type1cExpertCharSet.put(new Integer(322), "fiveeighths");
+		type1cExpertCharSet.put(new Integer(323), "seveneighths");
+		type1cExpertCharSet.put(new Integer(324), "onethird");
+		type1cExpertCharSet.put(new Integer(325), "twothirds");
+		type1cExpertCharSet.put(new Integer(326), "zerosuperior");
+		type1cExpertCharSet.put(new Integer(150), "onesuperior");
+		type1cExpertCharSet.put(new Integer(164), "twosuperior");
+		type1cExpertCharSet.put(new Integer(169), "threesuperior");
+		type1cExpertCharSet.put(new Integer(327), "foursuperior");
+		type1cExpertCharSet.put(new Integer(328), "fivesuperior");
+		type1cExpertCharSet.put(new Integer(329), "sixsuperior");
+		type1cExpertCharSet.put(new Integer(330), "sevensuperior");
+		type1cExpertCharSet.put(new Integer(331), "eightsuperior");
+		type1cExpertCharSet.put(new Integer(332), "ninesuperior");
+		type1cExpertCharSet.put(new Integer(333), "zeroinferior");
+		type1cExpertCharSet.put(new Integer(334), "oneinferior");
+		type1cExpertCharSet.put(new Integer(335), "twoinferior");
+		type1cExpertCharSet.put(new Integer(336), "threeinferior");
+		type1cExpertCharSet.put(new Integer(337), "fourinferior");
+		type1cExpertCharSet.put(new Integer(338), "fiveinferior");
+		type1cExpertCharSet.put(new Integer(339), "sixinferior");
+		type1cExpertCharSet.put(new Integer(340), "seveninferior");
+		type1cExpertCharSet.put(new Integer(341), "eightinferior");
+		type1cExpertCharSet.put(new Integer(342), "nineinferior");
+		type1cExpertCharSet.put(new Integer(343), "centinferior");
+		type1cExpertCharSet.put(new Integer(344), "dollarinferior");
+		type1cExpertCharSet.put(new Integer(345), "periodinferior");
+		type1cExpertCharSet.put(new Integer(346), "commainferior");
+		type1cExpertCharSet.put(new Integer(347), "Agravesmall");
+		type1cExpertCharSet.put(new Integer(348), "Aacutesmall");
+		type1cExpertCharSet.put(new Integer(349), "Acircumflexsmall");
+		type1cExpertCharSet.put(new Integer(350), "Atildesmall");
+		type1cExpertCharSet.put(new Integer(351), "Adieresissmall");
+		type1cExpertCharSet.put(new Integer(352), "Aringsmall");
+		type1cExpertCharSet.put(new Integer(353), "AEsmall");
+		type1cExpertCharSet.put(new Integer(354), "Ccedillasmall");
+		type1cExpertCharSet.put(new Integer(355), "Egravesmall");
+		type1cExpertCharSet.put(new Integer(356), "Eacutesmall");
+		type1cExpertCharSet.put(new Integer(357), "Ecircumflexsmall");
+		type1cExpertCharSet.put(new Integer(358), "Edieresissmall");
+		type1cExpertCharSet.put(new Integer(359), "Igravesmall");
+		type1cExpertCharSet.put(new Integer(360), "Iacutesmall");
+		type1cExpertCharSet.put(new Integer(361), "Icircumflexsmall");
+		type1cExpertCharSet.put(new Integer(362), "Idieresissmall");
+		type1cExpertCharSet.put(new Integer(363), "Ethsmall");
+		type1cExpertCharSet.put(new Integer(364), "Ntildesmall");
+		type1cExpertCharSet.put(new Integer(365), "Ogravesmall");
+		type1cExpertCharSet.put(new Integer(366), "Oacutesmall");
+		type1cExpertCharSet.put(new Integer(367), "Ocircumflexsmall");
+		type1cExpertCharSet.put(new Integer(368), "Otildesmall");
+		type1cExpertCharSet.put(new Integer(369), "Odieresissmall");
+		type1cExpertCharSet.put(new Integer(370), "OEsmall");
+		type1cExpertCharSet.put(new Integer(371), "Oslashsmall");
+		type1cExpertCharSet.put(new Integer(372), "Ugravesmall");
+		type1cExpertCharSet.put(new Integer(373), "Uacutesmall");
+		type1cExpertCharSet.put(new Integer(374), "Ucircumflexsmall");
+		type1cExpertCharSet.put(new Integer(375), "Udieresissmall");
+		type1cExpertCharSet.put(new Integer(376), "Yacutesmall");
+		type1cExpertCharSet.put(new Integer(377), "Thornsmall");
+		type1cExpertCharSet.put(new Integer(378), "Ydieresissmall");
+	}
+	
+	private static final Map type1cExpertSubsetCharSet = Collections.synchronizedMap(new LinkedHashMap());
+	static {
+		type1cExpertSubsetCharSet.put(new Integer(0), ".notdef");
+		type1cExpertSubsetCharSet.put(new Integer(1), "space");
+		type1cExpertSubsetCharSet.put(new Integer(231), "dollaroldstyle");
+		type1cExpertSubsetCharSet.put(new Integer(232), "dollarsuperior");
+		type1cExpertSubsetCharSet.put(new Integer(235), "parenleftsuperior");
+		type1cExpertSubsetCharSet.put(new Integer(236), "parenrightsuperior");
+		type1cExpertSubsetCharSet.put(new Integer(237), "twodotenleader");
+		type1cExpertSubsetCharSet.put(new Integer(238), "onedotenleader");
+		type1cExpertSubsetCharSet.put(new Integer(13), "comma");
+		type1cExpertSubsetCharSet.put(new Integer(14), "hyphen");
+		type1cExpertSubsetCharSet.put(new Integer(15), "period");
+		type1cExpertSubsetCharSet.put(new Integer(99), "fraction");
+		type1cExpertSubsetCharSet.put(new Integer(239), "zerooldstyle");
+		type1cExpertSubsetCharSet.put(new Integer(240), "oneoldstyle");
+		type1cExpertSubsetCharSet.put(new Integer(241), "twooldstyle");
+		type1cExpertSubsetCharSet.put(new Integer(242), "threeoldstyle");
+		type1cExpertSubsetCharSet.put(new Integer(243), "fouroldstyle");
+		type1cExpertSubsetCharSet.put(new Integer(244), "fiveoldstyle");
+		type1cExpertSubsetCharSet.put(new Integer(245), "sixoldstyle");
+		type1cExpertSubsetCharSet.put(new Integer(246), "sevenoldstyle");
+		type1cExpertSubsetCharSet.put(new Integer(247), "eightoldstyle");
+		type1cExpertSubsetCharSet.put(new Integer(248), "nineoldstyle");
+		type1cExpertSubsetCharSet.put(new Integer(27), "colon");
+		type1cExpertSubsetCharSet.put(new Integer(28), "semicolon");
+		type1cExpertSubsetCharSet.put(new Integer(249), "commasuperior");
+		type1cExpertSubsetCharSet.put(new Integer(250), "threequartersemdash");
+		type1cExpertSubsetCharSet.put(new Integer(251), "periodsuperior");
+		type1cExpertSubsetCharSet.put(new Integer(253), "asuperior");
+		type1cExpertSubsetCharSet.put(new Integer(254), "bsuperior");
+		type1cExpertSubsetCharSet.put(new Integer(255), "centsuperior");
+		type1cExpertSubsetCharSet.put(new Integer(256), "dsuperior");
+		type1cExpertSubsetCharSet.put(new Integer(257), "esuperior");
+		type1cExpertSubsetCharSet.put(new Integer(258), "isuperior");
+		type1cExpertSubsetCharSet.put(new Integer(259), "lsuperior");
+		type1cExpertSubsetCharSet.put(new Integer(260), "msuperior");
+		type1cExpertSubsetCharSet.put(new Integer(261), "nsuperior");
+		type1cExpertSubsetCharSet.put(new Integer(262), "osuperior");
+		type1cExpertSubsetCharSet.put(new Integer(263), "rsuperior");
+		type1cExpertSubsetCharSet.put(new Integer(264), "ssuperior");
+		type1cExpertSubsetCharSet.put(new Integer(265), "tsuperior");
+		type1cExpertSubsetCharSet.put(new Integer(266), "ff");
+		type1cExpertSubsetCharSet.put(new Integer(109), "fi");
+		type1cExpertSubsetCharSet.put(new Integer(110), "fl");
+		type1cExpertSubsetCharSet.put(new Integer(267), "ffi");
+		type1cExpertSubsetCharSet.put(new Integer(268), "ffl");
+		type1cExpertSubsetCharSet.put(new Integer(269), "parenleftinferior");
+		type1cExpertSubsetCharSet.put(new Integer(270), "parenrightinferior");
+		type1cExpertSubsetCharSet.put(new Integer(272), "hyphensuperior");
+		type1cExpertSubsetCharSet.put(new Integer(300), "colonmonetary");
+		type1cExpertSubsetCharSet.put(new Integer(301), "onefitted");
+		type1cExpertSubsetCharSet.put(new Integer(302), "rupiah");
+		type1cExpertSubsetCharSet.put(new Integer(305), "centoldstyle");
+		type1cExpertSubsetCharSet.put(new Integer(314), "figuredash");
+		type1cExpertSubsetCharSet.put(new Integer(315), "hypheninferior");
+		type1cExpertSubsetCharSet.put(new Integer(158), "onequarter");
+		type1cExpertSubsetCharSet.put(new Integer(155), "onehalf");
+		type1cExpertSubsetCharSet.put(new Integer(163), "threequarters");
+		type1cExpertSubsetCharSet.put(new Integer(320), "oneeighth");
+		type1cExpertSubsetCharSet.put(new Integer(321), "threeeighths");
+		type1cExpertSubsetCharSet.put(new Integer(322), "fiveeighths");
+		type1cExpertSubsetCharSet.put(new Integer(323), "seveneighths");
+		type1cExpertSubsetCharSet.put(new Integer(324), "onethird");
+		type1cExpertSubsetCharSet.put(new Integer(325), "twothirds");
+		type1cExpertSubsetCharSet.put(new Integer(326), "zerosuperior");
+		type1cExpertSubsetCharSet.put(new Integer(150), "onesuperior");
+		type1cExpertSubsetCharSet.put(new Integer(164), "twosuperior");
+		type1cExpertSubsetCharSet.put(new Integer(169), "threesuperior");
+		type1cExpertSubsetCharSet.put(new Integer(327), "foursuperior");
+		type1cExpertSubsetCharSet.put(new Integer(328), "fivesuperior");
+		type1cExpertSubsetCharSet.put(new Integer(329), "sixsuperior");
+		type1cExpertSubsetCharSet.put(new Integer(330), "sevensuperior");
+		type1cExpertSubsetCharSet.put(new Integer(331), "eightsuperior");
+		type1cExpertSubsetCharSet.put(new Integer(332), "ninesuperior");
+		type1cExpertSubsetCharSet.put(new Integer(333), "zeroinferior");
+		type1cExpertSubsetCharSet.put(new Integer(334), "oneinferior");
+		type1cExpertSubsetCharSet.put(new Integer(335), "twoinferior");
+		type1cExpertSubsetCharSet.put(new Integer(336), "threeinferior");
+		type1cExpertSubsetCharSet.put(new Integer(337), "fourinferior");
+		type1cExpertSubsetCharSet.put(new Integer(338), "fiveinferior");
+		type1cExpertSubsetCharSet.put(new Integer(339), "sixinferior");
+		type1cExpertSubsetCharSet.put(new Integer(340), "seveninferior");
+		type1cExpertSubsetCharSet.put(new Integer(341), "eightinferior");
+		type1cExpertSubsetCharSet.put(new Integer(342), "nineinferior");
+		type1cExpertSubsetCharSet.put(new Integer(343), "centinferior");
+		type1cExpertSubsetCharSet.put(new Integer(344), "dollarinferior");
+		type1cExpertSubsetCharSet.put(new Integer(345), "periodinferior");
+		type1cExpertSubsetCharSet.put(new Integer(346), "commainferior");
+	}
 	
 	private static final String skewChars = "AIJSVWXYfgsvwxy7()[]{}/\\!%&"; // chars that can cause trouble in italic fonts due to varying angle
 	private static final String diacriticMarkerChars = (""

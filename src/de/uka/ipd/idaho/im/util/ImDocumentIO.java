@@ -70,6 +70,7 @@ import de.uka.ipd.idaho.im.ImPage;
 import de.uka.ipd.idaho.im.ImRegion;
 import de.uka.ipd.idaho.im.ImSupplement;
 import de.uka.ipd.idaho.im.ImWord;
+import de.uka.ipd.idaho.im.util.ImDocumentData.DataBackedImDocument;
 import de.uka.ipd.idaho.im.util.ImDocumentData.FolderImDocumentData;
 import de.uka.ipd.idaho.im.util.ImDocumentData.ImDocumentEntry;
 import de.uka.ipd.idaho.stringUtils.StringVector;
@@ -197,7 +198,7 @@ public class ImDocumentIO implements ImagingConstants {
 		//	assume file to be zipped-up IMF
 		else {
 			InputStream fis = new FileInputStream(file);
-			ImDocument doc = loadDocument(fis, null, pm, ((int) file.length()));
+			ImDocument doc = loadDocument(fis, null, pm, file.length());
 			fis.close();
 			return doc;
 		}
@@ -235,7 +236,7 @@ public class ImDocumentIO implements ImagingConstants {
 	 *            argument stream.
 	 * @throws IOException
 	 */
-	public static ImDocument loadDocument(InputStream in, ProgressMonitor pm, int inLength) throws IOException {
+	public static ImDocument loadDocument(InputStream in, ProgressMonitor pm, long inLength) throws IOException {
 		return loadDocument(in, null, pm, inLength);
 	}
 	
@@ -280,7 +281,7 @@ public class ImDocumentIO implements ImagingConstants {
 	 *            argument stream.
 	 * @throws IOException
 	 */
-	public static ImDocument loadDocument(InputStream in, File cacheFolder, ProgressMonitor pm, int inLength) throws IOException {
+	public static ImDocument loadDocument(InputStream in, File cacheFolder, ProgressMonitor pm, long inLength) throws IOException {
 		
 		//	check progress monitor
 		if (pm == null)
@@ -289,14 +290,23 @@ public class ImDocumentIO implements ImagingConstants {
 		//	make reading observable if we know how many bytes to expect
 		if (inLength != -1) {
 			final ProgressMonitor fpm = pm;
-			final int fInLength = (inLength / 100);
+			long iInLength = inLength;
+			int iInShift = 0;
+			while (iInLength > Integer.MAX_VALUE) {
+				iInLength >>>= 1;
+				iInShift++;
+			}
+			final int fInLength = (((int) iInLength) / 100);
+			final int fInShift = iInShift;
 			in = new FilterInputStream(in) {
-				int read = 0;
+				long read = 0;
+				int iRead = 0;
 				public int read() throws IOException {
 					int r = super.read();
 					if (r != -1) {
 						this.read++;
-						fpm.setProgress(this.read / fInLength);
+						this.iRead = ((int) (this.read >>> fInShift));
+						fpm.setProgress(this.iRead / fInLength);
 					}
 					return r;
 				}
@@ -307,14 +317,16 @@ public class ImDocumentIO implements ImagingConstants {
 					int r = super.read(b, off, len);
 					if (r != -1) {
 						this.read += r;
-						fpm.setProgress(this.read / fInLength);
+						this.iRead = ((int) (this.read >>> fInShift));
+						fpm.setProgress(this.iRead / fInLength);
 					}
 					return r;
 				}
 				public long skip(long n) throws IOException {
 					long s = super.skip(n);
-					this.read += ((int) s);
-					fpm.setProgress(this.read / fInLength);
+					this.read += s;
+					this.iRead = ((int) (this.read >>> fInShift));
+					fpm.setProgress(this.iRead / fInLength);
 					return s;
 				}
 			};
@@ -371,10 +383,6 @@ public class ImDocumentIO implements ImagingConstants {
 				if (entryData == null)
 					throw new FileNotFoundException(entryName);
 				else return new ByteArrayInputStream(entryData);
-//				ByteArrayBuffer entryData = ((ByteArrayBuffer) this.entryDataCache.get(entryName));
-//				if (entryData == null)
-//					throw new FileNotFoundException(entryName);
-//				else return entryData.getInputStream();
 			}
 			else {
 				File entryDataFile = new File(this.entryDataCacheFolder, entryName);
@@ -392,12 +400,6 @@ public class ImDocumentIO implements ImagingConstants {
 						entryDataCache.put(entryName, this.toByteArray());
 					}
 				};
-//				out = new ByteArrayBuffer() {
-//					public void close() throws IOException {
-//						super.close();
-//						entryDataCache.put(entryName, this);
-//					}
-//				};
 			
 			//	we do have a cache folder, use it
 			else {
@@ -475,7 +477,7 @@ public class ImDocumentIO implements ImagingConstants {
 	 * @return the document instantiated from the argument data
 	 * @throws IOException
 	 */
-	public static ImDocument loadDocument(ImDocumentData data, ProgressMonitor pm) throws IOException {
+	public static DataBackedImDocument loadDocument(ImDocumentData data, ProgressMonitor pm) throws IOException {
 		
 		//	check progress monitor
 		if (pm == null)
@@ -517,6 +519,7 @@ public class ImDocumentIO implements ImagingConstants {
 					font.setBold(fontStyle.indexOf("B") != -1);
 					font.setItalics(fontStyle.indexOf("I") != -1);
 					font.setSerif(fontStyle.indexOf("S") != -1);
+					font.setMonospaced(fontStyle.indexOf("M") != -1);
 					doc.addFont(font);
 				}
 				int charId = Integer.parseInt(charData.getValue(ImFont.CHARACTER_ID_ATTRIBUTE, "-1"), 16);
@@ -734,7 +737,7 @@ public class ImDocumentIO implements ImagingConstants {
 		return docAttributes;
 	}
 	
-	private static class DataBoundImDocument extends ImDocument {
+	private static class DataBoundImDocument extends DataBackedImDocument {
 		ImDocumentData docData;
 		DbidPageImageStore dbidPis;
 		HashSet dirtySupplementNames = new HashSet();
@@ -743,9 +746,11 @@ public class ImDocumentIO implements ImagingConstants {
 			this.docData = docData;
 		}
 		
-		public void setPageImageSource(PageImageSource pis) {
-			super.setPageImageSource(pis);
-			this.dbidPis = (((pis instanceof DbidPageImageStore) && (((DbidPageImageStore) pis).doc == this)) ? ((DbidPageImageStore) pis) : null);
+		public ImDocumentData getDocumentData() {
+			return this.docData;
+		}
+		void bindToData(ImDocumentData docData) {
+			this.docData = docData;
 		}
 		
 		public ImSupplement addSupplement(ImSupplement ims) {
@@ -765,11 +770,13 @@ public class ImDocumentIO implements ImagingConstants {
 		void markSupplementsNotDirty() {
 			this.dirtySupplementNames.clear();
 		}
-		void bindToData(ImDocumentData docData) {
-			this.docData = docData;
+		
+		public void setPageImageSource(PageImageSource pis) {
+			super.setPageImageSource(pis);
+			this.dbidPis = (((pis instanceof DbidPageImageStore) && (((DbidPageImageStore) pis).doc == this)) ? ((DbidPageImageStore) pis) : null);
 		}
 		boolean isInputStreamAvailable(String entryName) {
-			return this.docData.hasEntry(entryName);
+			return this.docData.hasEntryData(entryName);
 		}
 		InputStream getInputStream(String entryName) throws IOException {
 			return this.docData.getInputStream(entryName);
@@ -783,7 +790,6 @@ public class ImDocumentIO implements ImagingConstants {
 			};
 		}
 	}
-	
 	
 	private static class DbidPageImageStore extends AbstractPageImageStore {
 		final DataBoundImDocument doc;
@@ -1004,12 +1010,14 @@ public class ImDocumentIO implements ImagingConstants {
 		
 		//	we have a directory, store document without zipping
 		if (file.isDirectory()) {
-			ImDocumentData data = new FolderImDocumentData(file);
+			ImDocumentData data = null;
 			if (doc instanceof DataBoundImDocument) {
 				ImDocumentData docData = ((DataBoundImDocument) doc).docData;
 				if (file.getAbsolutePath().equals(docData.getDocumentDataId()))
 					data = docData;
 			}
+			if (data == null)
+				data = new FolderImDocumentData(file);
 			return storeDocument(doc, data, pm);
 		}
 		
@@ -1208,7 +1216,9 @@ public class ImDocumentIO implements ImagingConstants {
 				fontStyle += "I";
 			if (fonts[f].isSerif())
 				fontStyle += "S";
-			int[] charIDs = fonts[f].getCharacterIDs(); // no need to dort here, those IDs come sorted
+			if (fonts[f].isMonospaced())
+				fontStyle += "M";
+			int[] charIDs = fonts[f].getCharacterIDs(); // no need to sort here, those IDs come sorted
 			for (int c = 0; c < charIDs.length; c++) {
 				StringTupel charData = new StringTupel();
 				charData.setValue(ImFont.NAME_ATTRIBUTE, fonts[f].name);

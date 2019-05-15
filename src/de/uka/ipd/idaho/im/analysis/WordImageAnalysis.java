@@ -188,15 +188,15 @@ public class WordImageAnalysis {
 				continue;
 			
 			//	get word font size
-			Integer wordFontSize = new Integer((String) wi.word.getAttribute(ImWord.FONT_SIZE_ATTRIBUTE));
-			minFontSize = Math.min(minFontSize, wordFontSize.intValue());
-			maxFontSize = Math.max(maxFontSize, wordFontSize.intValue());
+			int wordFontSize = wi.word.getFontSize();
+			minFontSize = Math.min(minFontSize, wordFontSize);
+			maxFontSize = Math.max(maxFontSize, wordFontSize);
 			
 			//	record image word weight
 			FontSizeWeightRelation fswr = ((FontSizeWeightRelation) fontSizesToWeightRelations.get(wordFontSize));
 			if (fswr == null) {
-				fswr = new FontSizeWeightRelation(wordFontSize.intValue());
-				fontSizesToWeightRelations.put(wordFontSize, fswr);
+				fswr = new FontSizeWeightRelation(wordFontSize);
+				fontSizesToWeightRelations.put(Integer.valueOf(wordFontSize), fswr);
 			}
 			fswr.addWord(wim);
 			weightRelationWordCount++;
@@ -374,15 +374,15 @@ public class WordImageAnalysis {
 				continue;
 			
 			//	get word font size
-			Integer wordFontSize = new Integer((String) wi.word.getAttribute(ImWord.FONT_SIZE_ATTRIBUTE));
-			minFontSize = Math.min(minFontSize, wordFontSize.intValue());
-			maxFontSize = Math.max(maxFontSize, wordFontSize.intValue());
+			int wordFontSize = new Integer(wi.word.getFontSize());
+			minFontSize = Math.min(minFontSize, wordFontSize);
+			maxFontSize = Math.max(maxFontSize, wordFontSize);
 			
 			//	record image word weight
 			FontSizeWeightRelation fswr = ((FontSizeWeightRelation) fontSizesToWeightRelations.get(wordFontSize));
 			if (fswr == null) {
-				fswr = new FontSizeWeightRelation(wordFontSize.intValue());
-				fontSizesToWeightRelations.put(wordFontSize, fswr);
+				fswr = new FontSizeWeightRelation(wordFontSize);
+				fontSizesToWeightRelations.put(Integer.valueOf(wordFontSize), fswr);
 			}
 			fswr.addWord(wim);
 			weightRelationWordCount++;
@@ -505,7 +505,7 @@ public class WordImageAnalysis {
 				wordImages[w] = new WordImage(wi.img, wi.word, wi.baseline, wi.pageImageDpi);
 				if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" ==> italics property adjusted");
 			}
-			wi.word.setAttribute(ImWord.FONT_SIZE_ATTRIBUTE, ("" + wim.rendered.fontSize));
+			wi.word.setFontSize(wim.rendered.fontSize);
 			if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" ==> font size set to " + wim.rendered.fontSize);
 		}
 	}
@@ -543,7 +543,7 @@ public class WordImageAnalysis {
 			
 			//	count in font size
 			if (words[w].hasAttribute(ImWord.FONT_SIZE_ATTRIBUTE)) {
-				wordFontSizeSum += Integer.parseInt((String) words[w].getAttribute(ImWord.FONT_SIZE_ATTRIBUTE));
+				wordFontSizeSum += words[w].getFontSize();
 				fontSizeWordCount++;
 			}
 		}
@@ -555,7 +555,7 @@ public class WordImageAnalysis {
 		//	compute and set average font size
 		int paragraphFontSize = ((wordFontSizeSum + (fontSizeWordCount / 2)) / fontSizeWordCount);
 		for (int w = 0; w < words.length; w++)
-			words[w].setAttribute(ImWord.FONT_SIZE_ATTRIBUTE, ("" + paragraphFontSize));
+			words[w].setFontSize(paragraphFontSize);
 		if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" ==> font size set to " + paragraphFontSize);
 	}
 	
@@ -576,10 +576,10 @@ public class WordImageAnalysis {
 		//	little we can do without font size
 		if (!wi.word.hasAttribute(ImWord.FONT_SIZE_ATTRIBUTE))
 			return;
-		Integer wordFontSize = new Integer((String) wi.word.getAttribute(ImWord.FONT_SIZE_ATTRIBUTE));
+		int wordFontSize = wi.word.getFontSize();
 		
 		//	compute relative weights against plain rendering
-		float avgFontSizeWeightRelation = fontSizeWeightRelations[wordFontSize.intValue() - minFontSize];
+		float avgFontSizeWeightRelation = fontSizeWeightRelations[wordFontSize - minFontSize];
 		if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" - average image to rendered weight relation for font size " + wordFontSize + " is " + avgFontSizeWeightRelation);
 		float plainWordWeightRelation = getWeightRelation(wim);
 		if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" - word image to rendered weight relation is " + plainWordWeightRelation);
@@ -602,7 +602,7 @@ public class WordImageAnalysis {
 		}
 		
 		//	compare word stem width to font size average
-		float avgFontSizeStemWidth = fontSizeStemWidths[wordFontSize.intValue() - minFontSize];
+		float avgFontSizeStemWidth = fontSizeStemWidths[wordFontSize - minFontSize];
 		if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" - average stem width for font size " + wordFontSize + " is " + avgFontSizeStemWidth);
 		float wordStemWidth = getStemWidth(wi);
 		if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" - word stem widht is " + wordStemWidth);

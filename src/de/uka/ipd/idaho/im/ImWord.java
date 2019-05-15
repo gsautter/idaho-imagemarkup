@@ -34,6 +34,7 @@ import java.awt.font.FontRenderContext;
 import java.awt.font.LineMetrics;
 import java.awt.font.TextLayout;
 import java.awt.geom.AffineTransform;
+import java.util.Arrays;
 import java.util.Comparator;
 
 import de.uka.ipd.idaho.gamta.Gamta;
@@ -350,12 +351,16 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	 * via the generic <code>getAttribute()</code> methods */
 	public static final String PREVIOUS_WORD_ATTRIBUTE = "prevWord";
 	
-	/** the name to use to retrieve the next word as a virtual attribute via the
-	 * generic <code>getAttribute()</code> methods */
+	/** the name to use to retrieve the next word as a virtual attribute via
+	 * the generic <code>getAttribute()</code> methods */
 	public static final String NEXT_WORD_ATTRIBUTE = "nextWord";
 	
-	/** the name to use to retrieve the next word relation as a virtual attribute
-	 * via the generic <code>getAttribute()</code> methods */
+	/** the name to use to retrieve the previous word relation as a virtual
+	 * attribute via the generic <code>getAttribute()</code> methods */
+	public static final String PREVIOUS_RELATION_ATTRIBUTE = "prevRelation";
+	
+	/** the name to use to retrieve the next word relation as a virtual
+	 * attribute via the generic <code>getAttribute()</code> methods */
 	public static final String NEXT_RELATION_ATTRIBUTE = "nextRelation";
 	
 	/** the name to use to retrieve and set the words text stream type as a
@@ -377,6 +382,7 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	public final int centerY;
 	
 	private String string;
+	private int fontSize = -1;
 	
 	private ImWord prevWord;
 	private ImWord nextWord;
@@ -514,8 +520,35 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	public void setString(String string) {
 		String oldString = this.string;
 		this.string = string;
-		if (this.getPage() != null)
+		if ((this.getPage() != null) && ((oldString == null) ? (this.string != null) : !oldString.equals(this.string)))
 			this.getDocument().notifyAttributeChanged(this, STRING_ATTRIBUTE, oldString);
+	}
+	
+	/**
+	 * Retrieves the font size of the word (if known), otherwise returns -1.
+	 * @return the font size
+	 */
+	public int getFontSize() {
+		return this.fontSize;
+	}
+	
+	/**
+	 * Set the font size of the word. This method should rarely be used outside
+	 * of generating or loading an image markup document.
+	 * @param fontSize the font size to set
+	 */
+	public void setFontSize(int fontSize) {
+		int oldFontSize = this.fontSize;
+		this.fontSize = fontSize;
+		if ((this.getPage() != null) && (oldFontSize != this.fontSize))
+			this.getDocument().notifyAttributeChanged(this, FONT_SIZE_ATTRIBUTE, ("" + oldFontSize));
+	}
+	private void setFontSize(String fontSize) {
+		int fs = -1;
+		if (fontSize != null) try {
+			fs = Integer.parseInt(fontSize.trim());
+		} catch (NumberFormatException nfe) {}
+		this.setFontSize(fs);
 	}
 	
 	/* (non-Javadoc)
@@ -696,7 +729,18 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	
 	/**
 	 * Retrieve the relation of this image word's string value to the one of its
-	 * successor. This method always returns one of the three respective
+	 * predecessor. This method always returns one of the four respective
+	 * constants defined by this class. If the next word is null, it always
+	 * returns <code>NEXT_RELATION_PARAGRAPH_END</code>.
+	 * @return the relation to the previous word
+	 */
+	public char getPreviousRelation() {
+		return ((this.prevWord == null) ? NEXT_RELATION_PARAGRAPH_END : this.prevWord.getNextRelation());
+	}
+	
+	/**
+	 * Retrieve the relation of this image word's string value to the one of its
+	 * successor. This method always returns one of the four respective
 	 * constants defined by this class. If the next word is null, it always
 	 * returns <code>NEXT_RELATION_PARAGRAPH_END</code>.
 	 * @return the relation to the next word
@@ -726,24 +770,27 @@ public class ImWord extends ImRegion implements ImAnnotation {
 		if (this.getPage() != null)
 			this.getDocument().notifyAttributeChanged(this, NEXT_RELATION_ATTRIBUTE, oldNextRelation);
 	}
-
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed#getAttributeNames()
+	 */
+	public String[] getAttributeNames() {
+		String[] ans = super.getAttributeNames();
+		if (this.fontSize != -1) {
+			String[] eAns = new String[ans.length + 1];
+			System.arraycopy(ans, 0, eAns, 0, ans.length);
+			eAns[ans.length] = FONT_SIZE_ATTRIBUTE;
+			Arrays.sort(eAns);
+			ans = eAns;
+		}
+		return ans;
+	}
+	
 	/* (non-Javadoc)
 	 * @see de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed#getAttribute(java.lang.String)
 	 */
 	public Object getAttribute(String name) {
-		if (STRING_ATTRIBUTE.equals(name))
-			return this.string;
-		if (BOUNDING_BOX_ATTRIBUTE.equals(name))
-			return this.bounds;
-		if (PREVIOUS_WORD_ATTRIBUTE.equals(name))
-			return this.prevWord;
-		if (NEXT_WORD_ATTRIBUTE.equals(name))
-			return this.nextWord;
-		if (NEXT_RELATION_ATTRIBUTE.equals(name))
-			return ("" + this.nextRelation);
-		if (TEXT_STREAM_TYPE_ATTRIBUTE.equals(name))
-			return this.textStreamType;
-		return super.getAttribute(name);
+		return this.getAttribute(name, null);
 	}
 	
 	/* (non-Javadoc)
@@ -752,17 +799,21 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	public Object getAttribute(String name, Object def) {
 		if (STRING_ATTRIBUTE.equals(name))
 			return ((this.string == null) ? def : this.string);
-		if (BOUNDING_BOX_ATTRIBUTE.equals(name))
+		else if (BOUNDING_BOX_ATTRIBUTE.equals(name))
 			return this.bounds;
-		if (PREVIOUS_WORD_ATTRIBUTE.equals(name))
+		else if (PREVIOUS_WORD_ATTRIBUTE.equals(name))
 			return ((this.prevWord == null) ? def : this.prevWord);
-		if (NEXT_WORD_ATTRIBUTE.equals(name))
+		else if (NEXT_WORD_ATTRIBUTE.equals(name))
 			return ((this.nextWord == null) ? def : this.nextWord);
-		if (NEXT_RELATION_ATTRIBUTE.equals(name))
-			return ("" + this.nextRelation);
-		if (TEXT_STREAM_TYPE_ATTRIBUTE.equals(name))
+		else if (NEXT_RELATION_ATTRIBUTE.equals(name))
+			return ("" + this.getNextRelation());
+		else if (PREVIOUS_RELATION_ATTRIBUTE.equals(name))
+			return ("" + this.getPreviousRelation());
+		else if (TEXT_STREAM_TYPE_ATTRIBUTE.equals(name))
 			return this.textStreamType;
-		return super.getAttribute(name, def);
+		else if (FONT_SIZE_ATTRIBUTE.equals(name))
+			return ((this.fontSize == -1) ? def : ("" + this.fontSize));
+		else return super.getAttribute(name, def);
 	}
 	
 	/* (non-Javadoc)
@@ -771,17 +822,21 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	public boolean hasAttribute(String name) {
 		if (STRING_ATTRIBUTE.equals(name))
 			return (this.string != null);
-		if (BOUNDING_BOX_ATTRIBUTE.equals(name))
+		else if (BOUNDING_BOX_ATTRIBUTE.equals(name))
 			return true;
-		if (PREVIOUS_WORD_ATTRIBUTE.equals(name))
+		else if (PREVIOUS_WORD_ATTRIBUTE.equals(name))
 			return (this.prevWord != null);
-		if (NEXT_WORD_ATTRIBUTE.equals(name))
+		else if (NEXT_WORD_ATTRIBUTE.equals(name))
 			return (this.nextWord != null);
-		if (NEXT_RELATION_ATTRIBUTE.equals(name))
+		else if (PREVIOUS_RELATION_ATTRIBUTE.equals(name))
 			return true;
-		if (TEXT_STREAM_TYPE_ATTRIBUTE.equals(name))
+		else if (NEXT_RELATION_ATTRIBUTE.equals(name))
 			return true;
-		return super.hasAttribute(name);
+		else if (TEXT_STREAM_TYPE_ATTRIBUTE.equals(name))
+			return true;
+		else if (FONT_SIZE_ATTRIBUTE.equals(name))
+			return (this.fontSize != -1);
+		else return super.hasAttribute(name);
 	}
 	
 	/* (non-Javadoc)
@@ -793,35 +848,45 @@ public class ImWord extends ImRegion implements ImAnnotation {
 			this.setString((value == null) ? null : value.toString());
 			return oldString;
 		}
-		if (BOUNDING_BOX_ATTRIBUTE.equals(name))
+		else if (BOUNDING_BOX_ATTRIBUTE.equals(name))
 			return this.bounds;
-		if (TEXT_STREAM_TYPE_ATTRIBUTE.equals(name)) {
+		else if (TEXT_STREAM_TYPE_ATTRIBUTE.equals(name)) {
 			if (value == null)
 				return this.getTextStreamType();
 			else return this.setTextStreamType(value.toString());
 		}
-		if (NEXT_RELATION_ATTRIBUTE.equals(name) && (value != null) && (value.toString().length() == 1)) {
+		else if (NEXT_RELATION_ATTRIBUTE.equals(name)) {
 			String oldNextRelation = ("" + this.getNextRelation());
-			this.setNextRelation(value.toString().charAt(0));
+			if ((value != null) && (value.toString().length() == 1))
+				this.setNextRelation(value.toString().charAt(0));
 			return oldNextRelation;
 		}
-		if (NEXT_RELATION_ATTRIBUTE.equals(name))
-			return ("" + this.nextRelation);
-		if (PREVIOUS_WORD_ATTRIBUTE.equals(name) && ((value == null) || (value instanceof ImWord))) {
+		else if (PREVIOUS_RELATION_ATTRIBUTE.equals(name)) {
+			String oldPrevRelation = ("" + this.getPreviousRelation());
+			if ((value != null) && (value.toString().length() == 1) && (this.prevWord != null))
+				this.prevWord.setNextRelation(value.toString().charAt(0));
+			return oldPrevRelation;
+		}
+		else if (PREVIOUS_WORD_ATTRIBUTE.equals(name) && ((value == null) || (value instanceof ImWord))) {
 			ImWord oldPrev = this.getPreviousWord();
 			this.setPreviousWord((ImWord) value);
 			return oldPrev;
 		}
-		if (PREVIOUS_WORD_ATTRIBUTE.equals(name))
+		else if (PREVIOUS_WORD_ATTRIBUTE.equals(name))
 			return this.prevWord;
-		if (NEXT_WORD_ATTRIBUTE.equals(name) && ((value == null) || (value instanceof ImWord))) {
+		else if (NEXT_WORD_ATTRIBUTE.equals(name) && ((value == null) || (value instanceof ImWord))) {
 			ImWord oldNext = this.getNextWord();
 			this.setNextWord((ImWord) value);
 			return oldNext;
 		}
-		if (NEXT_WORD_ATTRIBUTE.equals(name))
+		else if (NEXT_WORD_ATTRIBUTE.equals(name))
 			return this.nextWord;
-		return super.setAttribute(name, value);
+		else if (FONT_SIZE_ATTRIBUTE.equals(name)) {
+			String oldFontSize = ((this.fontSize == -1) ? null : ("" + this.fontSize));
+			this.setFontSize((value == null) ? null : value.toString());
+			return oldFontSize;
+		}
+		else return super.setAttribute(name, value);
 	}
 	
 	/**
@@ -1003,18 +1068,16 @@ public class ImWord extends ImRegion implements ImAnnotation {
 		
 		//	adjust font size and vertical position
 		int renderingWidth = ((TEXT_DIRECTION_BOTTOM_UP.equals(to) || TEXT_DIRECTION_TOP_DOWN.equals(to)) ? renderingBounds.getHeight() : renderingBounds.getWidth());
-		FontRenderContext fontRenderContext = renderer.getFontRenderContext();
+		FontRenderContext fontRenderContext = new FontRenderContext(renderer.getTransform(), true, true);
 		LineMetrics lineMetrics = renderingFont.getLineMetrics(word.getString(), fontRenderContext);
 		TextLayout textLayout = new TextLayout(word.getString(), renderingFont, fontRenderContext);
 		if (zoomToBounds) {
-//			while (textLayout.getBounds().getHeight() < (renderingBounds.bottom - renderingBounds.top)) {
 			while (textLayout.getBounds().getHeight() < renderingWidth) {
 				fontSize++;
 				renderingFont = font.deriveFont(fontStyle, fontSize);
 				lineMetrics = renderingFont.getLineMetrics(word.getString(), fontRenderContext);
 				textLayout = new TextLayout(word.getString(), renderingFont, fontRenderContext);
 			}
-//			while ((renderingBounds.bottom - renderingBounds.top) < textLayout.getBounds().getHeight())  {
 			while (renderingWidth < textLayout.getBounds().getHeight())  {
 				fontSize--;
 				renderingFont = font.deriveFont(fontStyle, fontSize);
@@ -1024,41 +1087,44 @@ public class ImWord extends ImRegion implements ImAnnotation {
 		}
 		renderer.setFont(renderingFont);
 		
-		//	make sure word fits horizontally
+		//	adjust word size and position
 		AffineTransform preAt = renderer.getTransform();
-//		double hScale = (((double) renderingBounds.getWidth()) / textLayout.getBounds().getWidth());
-//		float leftShift = ((float) -textLayout.getBounds().getMinX());
-//		if (hScale < 1)
-//			renderer.scale(hScale, 1);
-//		else leftShift += ((renderingBounds.getWidth() - textLayout.getBounds().getWidth()) / 2);
 		float leftShift = ((float) -textLayout.getBounds().getMinX());
 		double hScale = 1;
 		
-		//	rotate word if required
+		//	rotate and scale word as required
 		if (TEXT_DIRECTION_BOTTOM_UP.equals(to)) {
 			renderer.rotate((-Math.PI / 2), (((float) renderingBounds.getWidth()) / 2), -(((float) renderingBounds.getWidth()) / 2));
-			hScale = (((double) renderingBounds.getHeight()) / textLayout.getBounds().getWidth());
-			if (hScale < 1)
-				renderer.scale(1, hScale);
-			else leftShift += ((renderingBounds.getHeight() - textLayout.getBounds().getWidth()) / 2);
+			if (word.hasAttribute(ImWord.ITALICS_ATTRIBUTE))
+				hScale = (((double) renderingBounds.getHeight()) / textLayout.getBounds().getWidth());
+			else {
+				hScale = (((double) renderingBounds.getHeight()) / textLayout.getAdvance());
+				leftShift = 0;
+			}
+			renderer.scale(1, hScale);
 		}
 		else if (TEXT_DIRECTION_TOP_DOWN.equals(to)) {
 			renderer.rotate((Math.PI / 2), (((float) renderingBounds.getHeight()) / 2), -(((float) renderingBounds.getHeight()) / 2));
-			hScale = (((double) renderingBounds.getHeight()) / textLayout.getBounds().getWidth());
-			if (hScale < 1)
-				renderer.scale(1, hScale);
-			else leftShift += ((renderingBounds.getHeight() - textLayout.getBounds().getWidth()) / 2);
+			if (word.hasAttribute(ImWord.ITALICS_ATTRIBUTE))
+				hScale = (((double) renderingBounds.getHeight()) / textLayout.getBounds().getWidth());
+			else {
+				hScale = (((double) renderingBounds.getHeight()) / textLayout.getAdvance());
+				leftShift = 0;
+			}
+			renderer.scale(1, hScale);
 		}
 		else {
-			hScale = (((double) renderingBounds.getWidth()) / textLayout.getBounds().getWidth());
-			if (hScale < 1)
-				renderer.scale(hScale, 1);
-			else leftShift += ((renderingBounds.getWidth() - textLayout.getBounds().getWidth()) / 2);
+			if (word.hasAttribute(ImWord.ITALICS_ATTRIBUTE))
+				hScale = (((double) renderingBounds.getWidth()) / textLayout.getBounds().getWidth());
+			else {
+				hScale = (((double) renderingBounds.getWidth()) / textLayout.getAdvance());
+				leftShift = 0;
+			}
+			renderer.scale(hScale, 1);
 		}
 		
 		//	render word
 		try {
-//			renderer.drawGlyphVector(renderingFont.createGlyphVector(new FontRenderContext(preAt, true, true), word.getString()), leftShift, (renderingBounds.getHeight() - Math.round((zoomToBounds && !hasDescender(word)) ? 1 : lineMetrics.getDescent())));
 			renderer.drawGlyphVector(renderingFont.createGlyphVector(new FontRenderContext(preAt, true, true), word.getString()), leftShift, -Math.round((zoomToBounds && !hasDescender(word)) ? 1 : lineMetrics.getDescent()));
 		}
 		catch (InternalError ie) {

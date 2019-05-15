@@ -79,6 +79,12 @@ public class PdfExtractorTool {
 	
 	public static void main(String[] args) throws Exception {
 		
+		//	catch absence of all arguments
+		if (args.length == 0) {
+			printError("Invalid arguments, use '-?' or '-h' to list available arguments");
+			return;
+		}
+		
 		//	read parameters
 		String sourcePath = null;
 		String sourceType = "G";
@@ -124,6 +130,8 @@ public class PdfExtractorTool {
 			}
 			/* font mode parameter -f
 			 * - missing or set to D: fully decode embedded fonts
+			 * - set to V: fully decode only un-mapped fonts or characters, i.e., ones that do not have a Unicode mapping, but also verify ones that do
+			 * - set to U: fully decode only un-mapped fonts or characters, i.e., ones that do not have a Unicode mapping
 			 * - set to R: render embedded fonts, but do not decode glyphs
 			 * - set to Q: quick mode, use Unicode mapping only */
 			else if ("-f".equalsIgnoreCase(args[a]) && ((a+1) < args.length)) {
@@ -172,7 +180,7 @@ public class PdfExtractorTool {
 			}
 			/* mode parameter -m
 			 * - missing or set to A: convert entire PDF, store as IMF
-			 * - set to D: convert entire PDF, store as IMD (better for file system based hand-over to master process if running as slave)
+			 * - set to D: convert entire PDF, store as IMD (better for file system based hand-over to master process if running as slave to some other JVM)
 			 * - set to F: extract figures only (requires output set to file path)
 			 * - set to R: extract text only, output as raw XML
 			 * - set to X: extract text only, output as XML
@@ -199,15 +207,15 @@ public class PdfExtractorTool {
 			printError("Invalid source type '" + sourceType + "'");
 			return;
 		}
-		if ("D".equals(sourceType) && ("DRQ".indexOf(fontMode) == -1)) {
+		if ("D".equals(sourceType) && ("DVURQ".indexOf(fontMode) == -1)) {
 			printError("Invalid font mode '" + fontMode + "'");
 			return;
 		}
-		if ("D".equals(sourceType) && "D".equals(fontMode) && ("USMFLBC".indexOf(fontCharSet) == -1)) {
+		if ("D".equals(sourceType) && ("DVU".indexOf(fontMode) != -1) && ("USMFLBC".indexOf(fontCharSet) == -1)) {
 			printError("Invalid font decoding charset '" + fontCharSet + "'");
 			return;
 		}
-		if ("D".equals(sourceType) && "D".equals(fontMode) && "C".equals(fontCharSet) && (fontCharSetPath == null)) {
+		if ("D".equals(sourceType) && ("DVU".indexOf(fontMode) != -1) && "C".equals(fontCharSet) && (fontCharSetPath == null)) {
 			printError("Font decoding charset file missing for font mode D and char set C");
 			return;
 		}
@@ -234,7 +242,7 @@ public class PdfExtractorTool {
 				fontDecoderCharSet = PdfFontDecoder.NO_DECODING;
 			else if ("R".equals(fontMode))
 				fontDecoderCharSet = PdfFontDecoder.RENDER_ONLY;
-			else if ("D".equals(fontMode)) {
+			else if ("U".equals(fontMode) || "V".equals(fontMode) || "D".equals(fontMode)) {
 				if ("U".equals(fontCharSet))
 					fontDecoderCharSet = PdfFontDecoder.UNICODE;
 				else if ("S".equals(fontCharSet))
@@ -250,7 +258,7 @@ public class PdfExtractorTool {
 				else if ("C".equals(fontCharSet)) {
 					String charSetName;
 					BufferedReader charSetReader;
-					if (fontCharSetPath.startsWith("http://")) {
+					if (fontCharSetPath.startsWith("http://") || fontCharSetPath.startsWith("https://")) {
 						charSetName = fontCharSetPath.substring(fontCharSetPath.lastIndexOf('/') + "/".length());
 						charSetReader = new BufferedReader(new InputStreamReader((new URL(fontCharSetPath)).openStream(), "UTF-8"));
 					}
@@ -269,6 +277,10 @@ public class PdfExtractorTool {
 					charSetReader.close();
 				}
 				else fontDecoderCharSet = PdfFontDecoder.UNICODE;
+				if ("U".equals(fontMode)) // add "unmapped-only" behavior if requested
+					fontDecoderCharSet = FontDecoderCharset.union(fontDecoderCharSet, PdfFontDecoder.DECODE_UNMAPPED); 
+				else if ("V".equals(fontMode)) // add "only-verify-mapped" behavior if requested
+					fontDecoderCharSet = FontDecoderCharset.union(fontDecoderCharSet, PdfFontDecoder.VERIFY_MAPPED); 
 			}
 			else fontDecoderCharSet = PdfFontDecoder.UNICODE;
 		}
@@ -405,8 +417,11 @@ public class PdfExtractorTool {
 		}));
 		
 		//	create page image store
+		File pageImageFolder = new File(cacheBasePath + "/PageImages/");
+		if (!pageImageFolder.exists())
+			pageImageFolder.mkdirs();
 		ImageIO.setUseCache(false);
-		PageImageStore pis = new PetPageImageStore(new File(cacheBasePath + "/PageImages/"));
+		PageImageStore pis = new PetPageImageStore(pageImageFolder);
 		PageImage.addPageImageSource(pis);
 		
 		//	create PDF extractor
@@ -538,7 +553,25 @@ public class PdfExtractorTool {
 			}
 		}
 		
-		//	TODO clean up cached data (if we get here, we have stored all the user wanted)
+		//	clean up cached data (if we get here, we have stored all the user wanted)
+		cleanCacheFolder(pageImageFolder, ("./Temp".equals(cacheBasePath) ? 1 : 0));
+		cleanCacheFolder(supplementFolder, ("./Temp".equals(cacheBasePath) ? 1 : 0));
+	}
+	
+	private static void cleanCacheFolder(File folder, int depth) {
+		File[] folderContent = folder.listFiles();
+		for (int c = 0; c < folderContent.length; c++) try {
+			if (folderContent[c].isDirectory()) {
+				cleanCacheFolder(folderContent[c], (depth+1));
+				if (depth != 0)
+					folderContent[c].delete();
+			}
+			else folderContent[c].delete();
+		}
+		catch (Throwable t) {
+			System.out.println("Error cleaning up cached file '" + folderContent[c].getAbsolutePath() + "': " + t.getMessage());
+			t.printStackTrace(System.out);
+		}
 	}
 	
 	private static class PetPageImageStore extends AbstractPageImageStore {
@@ -608,122 +641,6 @@ public class PdfExtractorTool {
 			super.removeSupplement(ims);
 		}
 	}
-//	private static class PetImDocument extends ImDocument {
-//		private File supplementFolder;
-//		PetImDocument(String docId, File supplementFolder) {
-//			super(docId);
-//			this.supplementFolder = supplementFolder;
-//		}
-//		
-//		private long inMemorySupplementBytes = 0;
-//		public ImSupplement addSupplement(ImSupplement ims) {
-//			
-//			//	store known type supplements on disc if there are too many or too large
-//			if ((ims instanceof ImSupplement.Figure) || (ims instanceof ImSupplement.Graphics) || (ims instanceof ImSupplement.Scan) || (ims instanceof ImSupplement.Source)) try {
-//				
-//				//	make sure not to call disk caching recursively
-//				if (ims.getClass().getName().startsWith(PdfExtractorTool.class.getName())) {}
-//				
-//				//	threshold already exceeded, disc cache right away
-//				else if (this.inMemorySupplementBytes > maxInMemorySupplementBytes)
-//					ims = this.createDiscSupplement(ims, null);
-//				
-//				//	still below threshold, check source
-//				else {
-//					InputStream sis = ims.getInputStream();
-//					
-//					//	this one resides in memory, count it
-//					if (sis instanceof ByteArrayInputStream)
-//						this.inMemorySupplementBytes += sis.available();
-//					
-//					//	threshold just exceeded
-//					if (this.inMemorySupplementBytes > maxInMemorySupplementBytes) {
-//						
-//						//	disc cache all existing image supplements
-//						ImSupplement[] imss = this.getSupplements();
-//						for (int s = 0; s < imss.length; s++) {
-//							if ((imss[s] instanceof ImSupplement.Figure) || (imss[s] instanceof ImSupplement.Graphics) || (imss[s] instanceof ImSupplement.Scan) || (ims instanceof ImSupplement.Source))
-//								super.addSupplement(this.createDiscSupplement(imss[s], null));
-//						}
-//						
-//						//	disc cache argument supplement
-//						ims = this.createDiscSupplement(ims, sis);
-//					}
-//				}
-//			}
-//			catch (IOException ioe) {
-//				System.out.println("Error caching supplement '" + ims.getId() + "': " + ioe.getMessage());
-//				ioe.printStackTrace(System.out);
-//			}
-//			
-//			//	store (possibly modified) supplement
-//			return super.addSupplement(ims);
-//		}
-//		
-//		private ImSupplement createDiscSupplement(ImSupplement ims, InputStream sis) throws IOException {
-//			
-//			//	make sure not to call disk caching recursively
-//			if (ims.getClass().getName().startsWith(PdfExtractorTool.class.getName()))
-//				return ims;
-//			
-//			//	get input stream if not already done
-//			if (sis == null)
-//				sis = ims.getInputStream();
-//			
-//			//	this one's not in memory, close input stream and we're done
-//			if (!(sis instanceof ByteArrayInputStream)) {
-//				sis.close();
-//				return ims;
-//			}
-//			
-//			//	get file name and extension
-//			String sDataName = ims.getId().replaceAll("[^a-zA-Z0-9]", "_");
-//			String sDataType = ims.getMimeType();
-//			if (sDataType.indexOf('/') != -1)
-//				sDataType = sDataType.substring(sDataType.indexOf('/') + "/".length());
-//			
-//			//	create file
-//			final File sFile = new File(supplementFolder, (this.docId + "." + sDataName + "." + sDataType));
-//			
-//			//	store supplement in file (if not done in previous run)
-//			if (!sFile.exists()) {
-//				sFile.createNewFile();
-//				OutputStream sos = new BufferedOutputStream(new FileOutputStream(sFile));
-//				byte[] sBuffer = new byte[1024];
-//				for (int r; (r = sis.read(sBuffer, 0, sBuffer.length)) != -1;)
-//					sos.write(sBuffer, 0, r);
-//				sos.flush();
-//				sos.close();
-//			}
-//			
-//			//	replace supplement with disc based one
-//			if (ims instanceof ImSupplement.Figure)
-//				return new ImSupplement.Figure(this, ims.getMimeType(), ((ImSupplement.Figure) ims).getPageId(), ((ImSupplement.Figure) ims).getRenderOrderNumber(), ((ImSupplement.Figure) ims).getDpi(), ((ImSupplement.Figure) ims).getBounds()) {
-//					public InputStream getInputStream() throws IOException {
-//						return new BufferedInputStream(new FileInputStream(sFile));
-//					}
-//				};
-//			else if (ims instanceof ImSupplement.Graphics)
-//				return new ImSupplement.Graphics(this, ((ImSupplement.Graphics) ims).getPageId(), ((ImSupplement.Graphics) ims).getRenderOrderNumber(), ((ImSupplement.Graphics) ims).getBounds()) {
-//					public InputStream getInputStream() throws IOException {
-//						return new BufferedInputStream(new FileInputStream(sFile));
-//					}
-//				};
-//			else if (ims instanceof ImSupplement.Scan)
-//				return new ImSupplement.Scan(this, ims.getMimeType(), ((ImSupplement.Scan) ims).getPageId(), ((ImSupplement.Scan) ims).getRenderOrderNumber(), ((ImSupplement.Scan) ims).getDpi()) {
-//					public InputStream getInputStream() throws IOException {
-//						return new BufferedInputStream(new FileInputStream(sFile));
-//					}
-//				};
-//			else if (ims instanceof ImSupplement.Source)
-//				return new ImSupplement.Source(this, ims.getMimeType()) {
-//					public InputStream getInputStream() throws IOException {
-//						return new BufferedInputStream(new FileInputStream(sFile));
-//					}
-//				};
-//			else return ims; // never gonna happen, but Java don't know
-//		}
-//	}
 	
 	private static void printHelp() {
 		System.out.println("=== PDF to IMF Converter / Data Extractor ===");
@@ -738,9 +655,11 @@ public class PdfExtractorTool {
 				"\r\n\t- G: generic PDF, let converter determine type (the default)");
 		System.out.println("-f <fontMode>\tSelect how to handle embedded fonts (relevant only for '-t D' and '-t G'):" +
 				"\r\n\t- D: completely decode embedded fonts (the default)" +
+				"\r\n\t- V: completely decode un-mapped characters from embedded fonts (ones without a Unicode mapping), and verify existing Unicode mappings" +
+				"\r\n\t- U: completely decode un-mapped characters from embedded fonts (ones without a Unicode mapping)" +
 				"\r\n\t- R: render embedded fonts, but do not decode glyphs" +
 				"\r\n\t- Q: quick mode, use Unicode mapping only");
-		System.out.println("-cs <charSet>\tSelect char set for decoding embedded fonts (relevant only for '-f D'):" +
+		System.out.println("-cs <charSet>\tSelect char set for decoding embedded fonts (relevant only for '-f D' and '-f U'):" +
 				"\r\n\t- U: use all of Unicode (the default)" +
 				"\r\n\t- S: use Latin characters and scientific symbols only" +
 				"\r\n\t- M: use Latin characters and mathematical symbols only" +

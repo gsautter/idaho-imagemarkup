@@ -69,6 +69,7 @@ import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
 import de.uka.ipd.idaho.im.ImAnnotation;
 import de.uka.ipd.idaho.im.ImDocument;
+import de.uka.ipd.idaho.im.ImObject;
 import de.uka.ipd.idaho.im.ImPage;
 import de.uka.ipd.idaho.im.ImRegion;
 import de.uka.ipd.idaho.im.ImWord;
@@ -88,24 +89,205 @@ import de.uka.ipd.idaho.im.util.ImUtils;
  */
 public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, ImagingConstants, TableConstants {
 	
-	class ImAnnotationBase {
-		private ImAnnotation aData;
-		private ImRegion rData;
-		private ImWord[] rDataWords;
-		private int leftEmptyCellsToSpan = 0;
-		private int rightEmptyCellsToSpan = 0;
-		private ImToken tData;
-		private ImWord pFirstWord;
-		private ImWord pLastWord;
-		private Attributed pAttributes;
-		private BoundingBox boundingBox = null;
+	static final String GRID_LEFT_COL_ATTRIBUTE = "gridcol";
+	static final String GRID_TOP_ROW_ATTRIBUTE = "gridrow";
+	static final String GRID_COL_COUNT_ATTRIBUTE = "gridcols";
+	static final String GRID_ROW_COUNT_ATTRIBUTE = "gridrows";
+	
+	private class ImAnnotationBase {
+		
+		//	use container for table specific attributes to reduce dead weight fields
+		class TableAnnotationAttributes {
+			int gridLeft = -1;
+			int gridTop = -1;
+			
+			int gridCols = 0;
+			int gridRows = 0;
+			
+			int leftCellsToSpan = 0;
+			int rightCellsToSpan = 0;
+			final int aboveCellsToSpan = 0; // we cannot span upwards, as tables are filled row by row
+			int belowCellsToSpan = 0;
+			int[] emptyCellsToSpan = null;
+			
+			void addAttributeNames(TreeSet ans) {
+				if ((this.leftCellsToSpan + this.rightCellsToSpan) != 0)
+					ans.add(TableConstants.COL_SPAN_ATTRIBUTE);
+				if (this.leftCellsToSpan != 0)
+					ans.add(TableConstants.COL_SPAN_ATTRIBUTE + "Left");
+				if (this.rightCellsToSpan != 0)
+					ans.add(TableConstants.COL_SPAN_ATTRIBUTE + "Right");
+				if ((this.aboveCellsToSpan + this.belowCellsToSpan) != 0)
+					ans.add(TableConstants.ROW_SPAN_ATTRIBUTE);
+				if (this.aboveCellsToSpan != 0)
+					ans.add(TableConstants.ROW_SPAN_ATTRIBUTE + "Above");
+				if (this.belowCellsToSpan != 0)
+					ans.add(TableConstants.ROW_SPAN_ATTRIBUTE + "Below");
+				if (this.gridLeft != -1)
+					ans.add(GRID_LEFT_COL_ATTRIBUTE);
+				if (this.gridTop != -1)
+					ans.add(GRID_TOP_ROW_ATTRIBUTE);
+				if (this.gridCols != 0)
+					ans.add(GRID_COL_COUNT_ATTRIBUTE);
+				if (this.gridRows != 0)
+					ans.add(GRID_ROW_COUNT_ATTRIBUTE);
+				if (this.emptyCellsToSpan != null)
+					for (int c = 0; c < this.emptyCellsToSpan.length; c++) {
+						if (this.emptyCellsToSpan[c] != 0)
+							ans.add(TableConstants.ROW_SPAN_ATTRIBUTE + "-" + c);
+					}
+			}
+			boolean hasAttribute(String name) {
+				if (name == null)
+					return false;
+				else if (TableConstants.COL_SPAN_ATTRIBUTE.equals(name) && ((this.leftCellsToSpan + this.rightCellsToSpan) != 0))
+					return true;
+				else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Left").equals(name) && (this.leftCellsToSpan != 0))
+					return true;
+				else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Right").equals(name) && (this.rightCellsToSpan != 0))
+					return true;
+				else if (TableConstants.ROW_SPAN_ATTRIBUTE.equals(name) && ((this.aboveCellsToSpan + this.belowCellsToSpan) != 0))
+					return true;
+				else if ((TableConstants.ROW_SPAN_ATTRIBUTE + "Above").equals(name) && (this.aboveCellsToSpan != 0))
+					return true;
+				else if ((TableConstants.ROW_SPAN_ATTRIBUTE + "Below").equals(name) && (this.belowCellsToSpan != 0))
+					return true;
+				else if (GRID_LEFT_COL_ATTRIBUTE.equals(name) && (this.gridLeft != -1))
+					return true;
+				else if (GRID_TOP_ROW_ATTRIBUTE.equals(name) && (this.gridTop != -1))
+					return true;
+				else if (GRID_COL_COUNT_ATTRIBUTE.equals(name) && (this.gridCols != 0))
+					return true;
+				else if (GRID_ROW_COUNT_ATTRIBUTE.equals(name) && (this.gridRows != 0))
+					return true;
+				else if ((this.emptyCellsToSpan != null) && name.startsWith(TableConstants.ROW_SPAN_ATTRIBUTE + "-")) {
+					try {
+						int col = Integer.parseInt(name.substring((TableConstants.ROW_SPAN_ATTRIBUTE + "-").length()));
+						return ((0 <= col) && (col < this.emptyCellsToSpan.length) && (this.emptyCellsToSpan[col] != 0));
+					} catch (RuntimeException re) {}
+					return false;
+				}
+				else return false;
+			}
+			Object getAttribute(String name, Object def) {
+				if (name == null)
+					return null;
+				else if (TableConstants.COL_SPAN_ATTRIBUTE.equals(name) && ((this.leftCellsToSpan + this.rightCellsToSpan) != 0))
+					return ("" + (this.leftCellsToSpan + 1 + this.rightCellsToSpan));
+				else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Left").equals(name) && (this.leftCellsToSpan != 0))
+					return ("" + this.leftCellsToSpan);
+				else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Right").equals(name) && (this.rightCellsToSpan != 0))
+					return ("" + this.rightCellsToSpan);
+				else if (TableConstants.ROW_SPAN_ATTRIBUTE.equals(name) && ((this.aboveCellsToSpan + this.belowCellsToSpan) != 0))
+					return ("" + (this.aboveCellsToSpan + 1 + this.belowCellsToSpan));
+				else if ((TableConstants.ROW_SPAN_ATTRIBUTE + "Above").equals(name) && (this.aboveCellsToSpan != 0))
+					return ("" + this.aboveCellsToSpan);
+				else if ((TableConstants.ROW_SPAN_ATTRIBUTE + "Below").equals(name) && (this.belowCellsToSpan != 0))
+					return ("" + this.belowCellsToSpan);
+				else if (GRID_LEFT_COL_ATTRIBUTE.equals(name) && (this.gridLeft != -1))
+					return ("" + this.gridLeft);
+				else if (GRID_TOP_ROW_ATTRIBUTE.equals(name) && (this.gridTop != -1))
+					return ("" + this.gridTop);
+				else if (GRID_COL_COUNT_ATTRIBUTE.equals(name) && (this.gridCols != -1))
+					return ("" + this.gridCols);
+				else if (GRID_ROW_COUNT_ATTRIBUTE.equals(name) && (this.gridRows != -1))
+					return ("" + this.gridRows);
+				else if ((this.emptyCellsToSpan != null) && name.startsWith(TableConstants.ROW_SPAN_ATTRIBUTE + "-")) {
+					try {
+						int col = Integer.parseInt(name.substring((TableConstants.ROW_SPAN_ATTRIBUTE + "-").length()));
+						if ((0 <= col) && (col < this.emptyCellsToSpan.length) && (this.emptyCellsToSpan[col] != 0))
+							return ("" + this.emptyCellsToSpan[col]);
+					} catch (RuntimeException re) {}
+					return def;
+				}
+				else return getAttributed().getAttribute(name, def);
+			}
+		}
+		
+		//	we need an attribute container for logical paragraphs, as they have no direct counterpart in image based model
+		private class ParagraphAnnotationAttributes extends AbstractAttributed {
+			public Object getAttribute(String name, Object def) {
+				if (PAGE_ID_ATTRIBUTE.equals(name))
+					return ("" + pFirstWord.pageId);
+				else if (LAST_PAGE_ID_ATTRIBUTE.equals(name))
+					return ("" + pLastWord.pageId);
+				else if (BLOCK_ID_ATTRIBUTE.equals(name))
+					return pFirstBlockId;
+				else if (LAST_BLOCK_ID_ATTRIBUTE.equals(name))
+					return pLastBlockId;
+				else if (PAGE_NUMBER_ATTRIBUTE.equals(name) && pFirstWord.getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
+					return pFirstWord.getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE);
+				else if (LAST_PAGE_NUMBER_ATTRIBUTE.equals(name) && pLastWord.getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
+					return pLastWord.getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE);
+				else if (TYPE_ATTRIBUTE.equals(name))
+					return pFirstWord.getTextStreamType();
+				else return super.getAttribute(name, def);
+			}
+			public Object getAttribute(String name) {
+				if (PAGE_ID_ATTRIBUTE.equals(name))
+					return ("" + pFirstWord.pageId);
+				else if (LAST_PAGE_ID_ATTRIBUTE.equals(name))
+					return ("" + pLastWord.pageId);
+				else if (BLOCK_ID_ATTRIBUTE.equals(name))
+					return pFirstBlockId;
+				else if (LAST_BLOCK_ID_ATTRIBUTE.equals(name))
+					return pLastBlockId;
+				else if (PAGE_NUMBER_ATTRIBUTE.equals(name) && pFirstWord.getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
+					return pFirstWord.getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE);
+				else if (LAST_PAGE_NUMBER_ATTRIBUTE.equals(name) && pLastWord.getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
+					return pLastWord.getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE);
+				else if (TYPE_ATTRIBUTE.equals(name))
+					return pFirstWord.getTextStreamType();
+				else return super.getAttribute(name);
+			}
+			public boolean hasAttribute(String name) {
+				if (PAGE_ID_ATTRIBUTE.equals(name))
+					return true;
+				else if (LAST_PAGE_ID_ATTRIBUTE.equals(name))
+					return (pFirstWord.pageId != pLastWord.pageId);
+				else if (BLOCK_ID_ATTRIBUTE.equals(name))
+					return (pFirstBlockId != null);
+				else if (LAST_BLOCK_ID_ATTRIBUTE.equals(name))
+					return (pLastBlockId != null);
+				else if (PAGE_NUMBER_ATTRIBUTE.equals(name) && pFirstWord.getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
+					return pFirstWord.getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE);
+				else if (LAST_PAGE_NUMBER_ATTRIBUTE.equals(name) && pLastWord.getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
+					return ((pFirstWord.pageId != pLastWord.pageId) && pLastWord.getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE));
+				else if (TYPE_ATTRIBUTE.equals(name))
+					return true;
+				return super.hasAttribute(name);
+			}
+		}
+		
+		ImAnnotation aData;
+		
+		ImRegion rData;
+		ImWord[] rDataWords;
+		TableAnnotationAttributes rTableAttributes = null;
+		
+//		int leftCellsToSpan = 0;
+//		int rightCellsToSpan = 0;
+//		final int aboveCellsToSpan = 0; // we cannot span upwards, as tables are filled row by row
+//		int belowCellsToSpan = 0;
+//		
+		ImToken tData;
+		
+		ImWord pFirstWord;
+		ImWord pLastWord;
+		String pFirstBlockId;
+		String pLastBlockId;
+		Attributed pAttributes;
+		
+		BoundingBox boundingBox = null;
 		ImAnnotationBase(ImAnnotation aData) {
 			this.aData = aData;
 		}
-		ImAnnotationBase(ImRegion rData, ImWord[] rDataWords) {
+		ImAnnotationBase(ImRegion rData, ImWord[] rDataWords, boolean rIsTable) {
 			this.rData = rData;
 			this.rDataWords = rDataWords;
 			Arrays.sort(this.rDataWords, ImUtils.textStreamOrder);
+			if (rIsTable)
+				this.rTableAttributes = new TableAnnotationAttributes();
 		}
 		ImAnnotationBase(ImToken tData) {
 			this.tData = tData;
@@ -113,47 +295,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		ImAnnotationBase(ImWord pfw, ImWord plw) {
 			this.pFirstWord = pfw;
 			this.pLastWord = plw;
-			this.pAttributes = new AbstractAttributed() {
-				public Object getAttribute(String name, Object def) {
-					if (PAGE_ID_ATTRIBUTE.equals(name))
-						return ("" + pFirstWord.pageId);
-					if (LAST_PAGE_ID_ATTRIBUTE.equals(name))
-						return ("" + pLastWord.pageId);
-					if (PAGE_NUMBER_ATTRIBUTE.equals(name) && pFirstWord.getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
-						return pFirstWord.getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE);
-					if (LAST_PAGE_NUMBER_ATTRIBUTE.equals(name) && pLastWord.getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
-						return pLastWord.getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE);
-					if (TYPE_ATTRIBUTE.equals(name))
-						return pFirstWord.getTextStreamType();
-					return super.getAttribute(name, def);
-				}
-				public Object getAttribute(String name) {
-					if (PAGE_ID_ATTRIBUTE.equals(name))
-						return ("" + pFirstWord.pageId);
-					if (LAST_PAGE_ID_ATTRIBUTE.equals(name))
-						return ("" + pLastWord.pageId);
-					if (PAGE_NUMBER_ATTRIBUTE.equals(name) && pFirstWord.getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
-						return pFirstWord.getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE);
-					if (LAST_PAGE_NUMBER_ATTRIBUTE.equals(name) && pLastWord.getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
-						return pLastWord.getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE);
-					if (TYPE_ATTRIBUTE.equals(name))
-						return pFirstWord.getTextStreamType();
-					return super.getAttribute(name);
-				}
-				public boolean hasAttribute(String name) {
-					if (PAGE_ID_ATTRIBUTE.equals(name))
-						return true;
-					if (LAST_PAGE_ID_ATTRIBUTE.equals(name))
-						return (pFirstWord.pageId != pLastWord.pageId);
-					if (PAGE_NUMBER_ATTRIBUTE.equals(name) && pFirstWord.getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
-						return pFirstWord.getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE);
-					if (LAST_PAGE_NUMBER_ATTRIBUTE.equals(name) && pLastWord.getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
-						return ((pFirstWord.pageId != pLastWord.pageId) && pLastWord.getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE));
-					if (TYPE_ATTRIBUTE.equals(name))
-						return true;
-					return super.hasAttribute(name);
-				}
-			};
+			this.pAttributes = new ParagraphAnnotationAttributes();
 		}
 		Attributed getAttributed() {
 			if (this.aData != null)
@@ -344,7 +486,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			//	BUT THEN, IS THAT A BAD THING IN EXPORT MODE?
 			/* TODO make selection of points dependent on document orientation
 			 * - top-left + bottom-right in left-right + top-down orientation (also top-down + left-right, like in Chinese)
-			 * - top-right + bottom-left in right-left + top-down orientation (also top-down + right-left, like in Chinese)
+			 * - top-right + bottom-left in right-left + top-down orientation (like in Hebrew and Arabic)
 			 * - and so forth ...
 			 */
 		}
@@ -352,7 +494,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		private String randomId = null;
 	}
 	
-	class ImAnnotationView implements MutableAnnotation {
+	private class ImAnnotationView implements MutableAnnotation {
 		ImAnnotationBase base;
 		ImAnnotationBase sourceBase;
 		ImAnnotationView(ImAnnotationBase base, ImAnnotationBase sourceBase) {
@@ -395,6 +537,9 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		}
 		public String getValue() {
 			return TokenSequenceUtils.concatTokens(this, false, false);
+		}
+		public String toString() {
+			return this.getValue();
 		}
 		public String toXML() {
 			return (AnnotationUtils.produceStartTag(this, true) + AnnotationUtils.escapeForXml(TokenSequenceUtils.concatTokens(this, true, true)) + AnnotationUtils.produceEndTag(this));
@@ -449,64 +594,50 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		public void addAnnotationListener(AnnotationListener al) {/* no use listening on a short-lived wrapper */}
 		public void removeAnnotationListener(AnnotationListener al) {/* no use listening on a short-lived wrapper */}
 		public boolean hasAttribute(String name) {
-			if (PAGE_ID_ATTRIBUTE.equals(name))
+			if (name == null)
+				return false;
+			else if (PAGE_ID_ATTRIBUTE.equals(name))
 				return true;
 			else if (LAST_PAGE_ID_ATTRIBUTE.equals(name))
 				return true;
+			else if (BLOCK_ID_ATTRIBUTE.equals(name))
+				return ((this.base.pFirstBlockId != null) || this.base.getAttributed().hasAttribute(name));
+			else if (LAST_BLOCK_ID_ATTRIBUTE.equals(name))
+				return ((this.base.pLastBlockId != null) || this.base.getAttributed().hasAttribute(name));
 			else if (BOUNDING_BOX_ATTRIBUTE.equals(name))
 				return (this.base.getBoundingBox() != null);
 			else if (PAGE_NUMBER_ATTRIBUTE.equals(name) || this.base.getAttributed().hasAttribute(name) && this.base.firstWord().getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
 				return true;
 			else if (LAST_PAGE_NUMBER_ATTRIBUTE.equals(name) || this.base.getAttributed().hasAttribute(name) && this.base.lastWord().getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
 				return true;
-			else if (TableConstants.COL_SPAN_ATTRIBUTE.equals(name) && ((this.base.leftEmptyCellsToSpan + this.base.rightEmptyCellsToSpan) != 0))
-				return true;
-			else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Left").equals(name) && (this.base.leftEmptyCellsToSpan != 0))
-				return true;
-			else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Right").equals(name) && (this.base.rightEmptyCellsToSpan != 0))
+			else if ((this.base.rTableAttributes != null) && this.base.rTableAttributes.hasAttribute(name))
 				return true;
 			else return this.base.getAttributed().hasAttribute(name);
 		}
 		public Object getAttribute(String name) {
-			if (PAGE_ID_ATTRIBUTE.equals(name))
-				return ("" + this.base.firstWord().getPage().pageId);
-			else if (LAST_PAGE_ID_ATTRIBUTE.equals(name))
-				return ("" + this.base.lastWord().getPage().pageId);
-			else if (BOUNDING_BOX_ATTRIBUTE.equals(name)) {
-				BoundingBox bb  = this.base.getBoundingBox();
-				return ((bb == null) ? null : bb.toString());
-			}
-			else if (PAGE_NUMBER_ATTRIBUTE.equals(name) && !this.base.getAttributed().hasAttribute(name) && this.base.firstWord().getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
-				return ("" + this.base.firstWord().getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE));
-			else if (LAST_PAGE_NUMBER_ATTRIBUTE.equals(name) && !this.base.getAttributed().hasAttribute(name) && this.base.lastWord().getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
-				return ("" + this.base.lastWord().getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE));
-			else if (TableConstants.COL_SPAN_ATTRIBUTE.equals(name) && ((this.base.leftEmptyCellsToSpan + this.base.rightEmptyCellsToSpan) != 0))
-				return ("" + (this.base.leftEmptyCellsToSpan + 1 + this.base.rightEmptyCellsToSpan));
-			else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Left").equals(name) && (this.base.leftEmptyCellsToSpan != 0))
-				return ("" + this.base.leftEmptyCellsToSpan);
-			else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Right").equals(name) && (this.base.rightEmptyCellsToSpan != 0))
-				return ("" + this.base.rightEmptyCellsToSpan);
-			else return this.base.getAttributed().getAttribute(name);
+			return this.getAttribute(name, null);
 		}
 		public Object getAttribute(String name, Object def) {
-			if (PAGE_ID_ATTRIBUTE.equals(name))
+			if (name == null)
+				return def;
+			else if (PAGE_ID_ATTRIBUTE.equals(name))
 				return ("" + this.base.firstWord().getPage().pageId);
 			else if (LAST_PAGE_ID_ATTRIBUTE.equals(name))
 				return ("" + this.base.lastWord().getPage().pageId);
+			else if (BLOCK_ID_ATTRIBUTE.equals(name) && (this.base.pFirstBlockId != null))
+				return this.base.pFirstBlockId;
+			else if (LAST_BLOCK_ID_ATTRIBUTE.equals(name) && (this.base.pLastBlockId != null))
+				return this.base.pLastBlockId;
 			else if (BOUNDING_BOX_ATTRIBUTE.equals(name)) {
 				BoundingBox bb  = this.base.getBoundingBox();
-				return ((bb == null) ? null : bb.toString());
+				return ((bb == null) ? def : bb.toString());
 			}
 			else if (PAGE_NUMBER_ATTRIBUTE.equals(name) && !this.base.getAttributed().hasAttribute(name) && this.base.firstWord().getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
 				return ("" + this.base.firstWord().getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE));
 			else if (LAST_PAGE_NUMBER_ATTRIBUTE.equals(name) && !this.base.getAttributed().hasAttribute(name) && this.base.lastWord().getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
 				return ("" + this.base.lastWord().getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE));
-			else if (TableConstants.COL_SPAN_ATTRIBUTE.equals(name) && ((this.base.leftEmptyCellsToSpan + this.base.rightEmptyCellsToSpan) != 0))
-				return ("" + (this.base.leftEmptyCellsToSpan + 1 + this.base.rightEmptyCellsToSpan));
-			else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Left").equals(name) && (this.base.leftEmptyCellsToSpan != 0))
-				return ("" + this.base.leftEmptyCellsToSpan);
-			else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Right").equals(name) && (this.base.rightEmptyCellsToSpan != 0))
-				return ("" + this.base.rightEmptyCellsToSpan);
+			else if (this.base.rTableAttributes != null)
+				return this.base.rTableAttributes.getAttribute(name, def);
 			else return this.base.getAttributed().getAttribute(name, def);
 		}
 		public String[] getAttributeNames() {
@@ -519,28 +650,24 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 				if (this.base.lastWord().getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE))
 					ans.add(LAST_PAGE_NUMBER_ATTRIBUTE);
 			}
+			if (this.base.pFirstBlockId != null)
+				ans.add(BLOCK_ID_ATTRIBUTE);
+			if ((this.base.pLastBlockId != null) && !this.base.pLastBlockId.equals(this.base.pFirstBlockId))
+				ans.add(LAST_BLOCK_ID_ATTRIBUTE);
 			if (this.base.getBoundingBox() != null)
 				ans.add(BOUNDING_BOX_ATTRIBUTE);
-			if ((this.base.leftEmptyCellsToSpan + this.base.rightEmptyCellsToSpan) != 0)
-				ans.add(TableConstants.COL_SPAN_ATTRIBUTE);
-			if (this.base.leftEmptyCellsToSpan != 0)
-				ans.add(TableConstants.COL_SPAN_ATTRIBUTE + "Left");
-			if (this.base.rightEmptyCellsToSpan != 0)
-				ans.add(TableConstants.COL_SPAN_ATTRIBUTE + "Right");
+			if (this.base.rTableAttributes != null)
+				this.base.rTableAttributes.addAttributeNames(ans);
 			return ((String[]) ans.toArray(new String[ans.size()]));
 		}
 		public void setAttribute(String name) {
-			if ((name != null) && name.startsWith(TableConstants.COL_SPAN_ATTRIBUTE) && ((this.base.leftEmptyCellsToSpan + this.base.rightEmptyCellsToSpan) != 0))
+			if ((this.base.rTableAttributes != null) && this.base.rTableAttributes.hasAttribute(name))
 				return;
 			this.base.getAttributed().setAttribute(name);
 		}
 		public Object setAttribute(String name, Object value) {
-			if (TableConstants.COL_SPAN_ATTRIBUTE.equals(name) && ((this.base.leftEmptyCellsToSpan + this.base.rightEmptyCellsToSpan) != 0))
-				return ("" + (this.base.leftEmptyCellsToSpan + 1 + this.base.rightEmptyCellsToSpan));
-			else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Left").equals(name) && (this.base.leftEmptyCellsToSpan != 0))
-				return ("" + this.base.leftEmptyCellsToSpan);
-			else if ((TableConstants.COL_SPAN_ATTRIBUTE + "Right").equals(name) && (this.base.rightEmptyCellsToSpan != 0))
-				return ("" + this.base.rightEmptyCellsToSpan);
+			if ((this.base.rTableAttributes != null) && this.base.rTableAttributes.hasAttribute(name))
+				return this.base.rTableAttributes.getAttribute(name, null);
 			else return this.base.getAttributed().setAttribute(name, value);
 		}
 		public void copyAttributes(Attributed source) {
@@ -749,6 +876,10 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	public static final int USE_RANDOM_ANNOTATION_IDS = 64;
 	
 	private ImDocument doc;
+	private ImAnnotation annotation;
+	private ImRegion region;
+	private ImWord firstWord;
+	private ImWord lastWord;
 	
 	private int configFlags;
 	private ImDocumentRoot fullDoc;
@@ -759,11 +890,10 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	private HashMap annotationBasesByRegions = new HashMap();
 	private HashMap annotationViewsByBases = new HashMap();
 	
-	private String annotationNestingOrder;
+	private String annotationNestingOrder = Gamta.getAnnotationNestingOrder();
 	
 	private boolean paragraphsAreLogical;
 	private boolean showTokensAsWordAnnotations = false;
-//	private LinkedList regionAnnotationBaseAttic = null;
 	
 	private boolean useRandomAnnotationIDs = true;
 	
@@ -816,6 +946,12 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		this.configFlags = configFlags;
 		this.fullDoc = this;
 		
+		//	set first and last word if only single text stream
+		if (textStreamHeads.length == 1) {
+			this.firstWord = this.firstWordOf(this.firstToken());
+			this.lastWord = this.lastWordOf(this.lastToken());
+		}
+		
 		//	read normalization level
 		int normalizationLevel = (configFlags & NORMALIZATION_LEVEL_STREAMS);
 		this.paragraphsAreLogical = ((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS));
@@ -832,9 +968,11 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 				this.addAnnotation(annotations[a]);
 		}
 		
+		//	get document pages
+		ImPage[] pages = this.doc.getPages();
+		
 		//	add annotation overlay for regions, including pages, for low normalization levels
 		if ((normalizationLevel == NORMALIZATION_LEVEL_RAW) || (normalizationLevel == NORMALIZATION_LEVEL_WORDS)) {
-			ImPage[] pages = this.doc.getPages();
 			for (int p = 0; p < pages.length; p++) {
 				
 				//	get page words
@@ -850,7 +988,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 					continue;
 				
 				//	annotate page
-				this.addAnnotation(pages[p], ((ImWord[]) filteredPageWords.toArray(new ImWord[filteredPageWords.size()])));
+				this.addAnnotation(pages[p], ((ImWord[]) filteredPageWords.toArray(new ImWord[filteredPageWords.size()])), false);
 				
 				//	add regions
 				ImRegion[] regions = pages[p].getRegions();
@@ -869,20 +1007,27 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 					
 					//	annotate region if not empty
 					if (filteredRegionWords.size() != 0)
-						this.addAnnotation(regions[r], ((ImWord[]) filteredRegionWords.toArray(new ImWord[filteredRegionWords.size()])));
+						this.addAnnotation(regions[r], ((ImWord[]) filteredRegionWords.toArray(new ImWord[filteredRegionWords.size()])), false);
 				}
 			}
 		}
 		
 		//	emulate paragraphs based on word relations for high normalization levels
 		else if ((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS)) {
+			ImRegion[][] pageBlocks = new ImRegion[pages.length][];
 			for (int h = 0; h < textStreamHeads.length; h++) {
 				ImWord pFirstWord = null;
 				for (ImWord imw = textStreamHeads[h]; imw != null; imw = imw.getNextWord()) {
 					if (pFirstWord == null)
 						pFirstWord = imw;
 					if ((imw.getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END) || (imw.getNextWord() == null)) {
-						this.addAnnotation(pFirstWord, imw);
+						ImAnnotationBase imab = this.addAnnotation(pFirstWord, imw);
+						if (pageBlocks[pFirstWord.pageId] == null)
+							pageBlocks[pFirstWord.pageId] = pages[pFirstWord.pageId].getRegions(BLOCK_ANNOTATION_TYPE);
+						imab.pFirstBlockId = getParentBlockId(pageBlocks[pFirstWord.pageId], pFirstWord);
+						if (pageBlocks[imw.pageId] == null)
+							pageBlocks[imw.pageId] = pages[imw.pageId].getRegions(BLOCK_ANNOTATION_TYPE);
+						imab.pLastBlockId = getParentBlockId(pageBlocks[imw.pageId], imw);
 						pFirstWord = null;
 					}
 				}
@@ -891,13 +1036,10 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		
 		//	annotate tables (if not filtered out)
 		if ((configFlags & EXCLUDE_TABLES) == 0) {
-			ImPage[] pages = this.doc.getPages();
 			for (int p = 0; p < pages.length; p++) {
-				ImRegion[] regions = pages[p].getRegions();
-				for (int r = 0; r < regions.length; r++) {
-					if (TABLE_ANNOTATION_TYPE.equals(regions[r].getType()))
-						this.annotateTableStructure(regions[r]);
-				}
+				ImRegion[] tabels = pages[p].getRegions(TABLE_ANNOTATION_TYPE);
+				for (int t = 0; t < tabels.length; t++)
+					this.annotateTableStructure(tabels[t]);
 			}
 		}
 		
@@ -915,6 +1057,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	 */
 	public ImDocumentRoot(ImAnnotation annotation, int configFlags) {
 		this(annotation.getFirstWord(), annotation.getLastWord(), configFlags);
+		this.annotation = annotation;
 	}
 	
 	/**
@@ -928,8 +1071,10 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	 *            text streams
 	 */
 	public ImDocumentRoot(ImWord firstWord, ImWord lastWord, int configFlags) {
-		super(((Tokenizer) firstWord.getDocument().getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER)), firstWord, lastWord);
+		super(((Tokenizer) firstWord.getDocument().getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER)), firstWord, lastWord, ((configFlags & NORMALIZE_CHARACTERS) != 0));
 		this.doc = firstWord.getDocument();
+		this.firstWord = firstWord;
+		this.lastWord = lastWord;
 		this.configFlags = configFlags;
 		
 		//	read normalization level
@@ -962,9 +1107,11 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			this.addAnnotation(annotations[a]);
 		}
 		
+		//	get document pages
+		ImPage[] pages = this.doc.getPages();
+		
 		//	add annotation overlay for regions, including pages
 		if ((normalizationLevel == NORMALIZATION_LEVEL_RAW) || (normalizationLevel == NORMALIZATION_LEVEL_WORDS)) {
-			ImPage[] pages = this.doc.getPages();
 			for (int p = 0; p < pages.length; p++) {
 				
 				//	check if page within range
@@ -997,7 +1144,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 					continue;
 				
 				//	annotate page
-				this.addAnnotation(pages[p], ((ImWord[]) filteredPageWords.toArray(new ImWord[filteredPageWords.size()])));
+				this.addAnnotation(pages[p], ((ImWord[]) filteredPageWords.toArray(new ImWord[filteredPageWords.size()])), false);
 				
 				//	annotate regions
 				ImRegion[] regions = pages[p].getRegions();
@@ -1016,19 +1163,26 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 					
 					//	annotate region if not empty
 					if (filteredRegionWords.size() != 0)
-						this.addAnnotation(regions[r], ((ImWord[]) filteredRegionWords.toArray(new ImWord[filteredRegionWords.size()])));
+						this.addAnnotation(regions[r], ((ImWord[]) filteredRegionWords.toArray(new ImWord[filteredRegionWords.size()])), false);
 				}
 			}
 		}
 		
 		//	emulate paragraphs based on word relations for high normalization levels
 		else if ((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS)) {
+			ImRegion[][] pageBlocks = new ImRegion[pages.length][];
 			ImWord pFirstWord = null;
 			for (ImWord imw = firstWord; imw != null; imw = imw.getNextWord()) {
 				if (pFirstWord == null)
 					pFirstWord = imw;
 				if ((imw.getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END) || (imw.getNextWord() == null) || (imw == lastWord)) {
-					this.addAnnotation(pFirstWord, imw);
+					ImAnnotationBase imab = this.addAnnotation(pFirstWord, imw);
+					if (pageBlocks[pFirstWord.pageId] == null)
+						pageBlocks[pFirstWord.pageId] = pages[pFirstWord.pageId].getRegions(BLOCK_ANNOTATION_TYPE);
+					imab.pFirstBlockId = getParentBlockId(pageBlocks[pFirstWord.pageId], pFirstWord);
+					if (pageBlocks[imw.pageId] == null)
+						pageBlocks[imw.pageId] = pages[imw.pageId].getRegions(BLOCK_ANNOTATION_TYPE);
+					imab.pLastBlockId = getParentBlockId(pageBlocks[imw.pageId], imw);
 					pFirstWord = null;
 				}
 				if (imw == lastWord)
@@ -1038,7 +1192,6 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		
 		//	annotate tables
 		if ((configFlags & EXCLUDE_TABLES) == 0) {
-			ImPage[] pages = this.doc.getPages();
 			for (int p = 0; p < pages.length; p++) {
 				
 				//	check if page within range
@@ -1106,6 +1259,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	public ImDocumentRoot(ImRegion region, int configFlags) {
 		super(((Tokenizer) region.getDocument().getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER)));
 		this.doc = region.getDocument();
+		this.region = region;
 		this.configFlags = configFlags;
 		
 		//	read normalization level
@@ -1135,7 +1289,13 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 				if (textStreamIDs[s].equals(regionWords[w].getTextStreamId()) && ((textStreamHeads[s] == null) || (regionWords[w].getTextStreamPos() < textStreamHeads[s].getTextStreamPos())))
 					textStreamHeads[s] = regionWords[w];
 			}
-		this.addTextStreams(textStreamHeads, normalizationLevel, new HashSet(Arrays.asList(regionWords)));
+		this.addTextStreams(textStreamHeads, configFlags, new HashSet(Arrays.asList(regionWords)));
+		
+		//	set first and last word if only single text stream
+		if (textStreamHeads.length == 1) {
+			this.firstWord = this.firstWordOf(this.firstToken());
+			this.lastWord = this.lastWordOf(this.lastToken());
+		}
 		
 		//	add annotation overlay for annotations
 		ImAnnotation[] annotations = this.doc.getAnnotations();
@@ -1158,7 +1318,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		}
 		
 		//	add annotation for argument region
-		this.addAnnotation(region, regionWords);
+		this.addAnnotation(region, regionWords, false);
 		
 		//	annotate regions for low normalization levels
 		if ((normalizationLevel == NORMALIZATION_LEVEL_RAW) || (normalizationLevel == NORMALIZATION_LEVEL_WORDS)) {
@@ -1181,6 +1341,8 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		
 		//	emulate paragraphs based on word relations for high normalization levels
 		else if ((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS)) {
+			ImPage page = region.getPage();
+			ImRegion[] pageBlocks = page.getRegions(BLOCK_ANNOTATION_TYPE);
 			for (int h = 0; h < textStreamHeads.length; h++) {
 				ImWord pFirstWord = null;
 				for (ImWord imw = textStreamHeads[h]; imw != null; imw = imw.getNextWord()) {
@@ -1191,7 +1353,9 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 					if (pFirstWord == null)
 						pFirstWord = imw;
 					if ((imw.getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END) || (imw.getNextWord() == null) || (imw.getNextWord().pageId != region.pageId) || !region.bounds.includes(imw.getNextWord().bounds, true)) {
-						this.addAnnotation(pFirstWord, imw);
+						ImAnnotationBase imab = this.addAnnotation(pFirstWord, imw);
+						imab.pFirstBlockId = getParentBlockId(pageBlocks, pFirstWord);
+						imab.pLastBlockId = getParentBlockId(pageBlocks, imw);
 						pFirstWord = null;
 					}
 				}
@@ -1221,44 +1385,112 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	}
 	
 	//	represent a table with annotations
-	//	TODO observe multi-column cells
+	private static final boolean DEBUG_ANNOTATE_TABLE = false;
 	private void annotateTableStructure(ImRegion table) {
-		this.addAnnotation(table);
+		if (DEBUG_ANNOTATE_TABLE) System.out.println("Annotating table at " + table.bounds + " in page " + table.pageId + ")");
+		ImAnnotationBase tableImab = this.addAnnotation(table, table.getWords(), true);
+		
+		//	get table details
 		ImRegion[] rows = table.getRegions(ImRegion.TABLE_ROW_TYPE);
 		Arrays.sort(rows, ImUtils.topDownOrder);
+		ImRegion[] cols = table.getRegions(ImRegion.TABLE_COL_TYPE);
+		Arrays.sort(cols, ImUtils.leftRightOrder);
+		ImRegion[][] cells = ImUtils.getTableCells(table, rows, cols);
+		if (DEBUG_ANNOTATE_TABLE) System.out.println(" - got " + rows.length + " rows and " + cols.length + " columns");
+		
+		//	set table attributes
+		tableImab.rTableAttributes.gridCols = cols.length;
+		tableImab.rTableAttributes.gridRows = rows.length;
+		
+		//	reflect whole table as grid
+		ImAnnotationBase[][] cellImabs = new ImAnnotationBase[rows.length][cols.length];
+		
+		//	go row by row
+		int[][] emptyCellSpannersPerCol = new int[cols.length][]; // for each column points to latest empty cell counter array to extend
 		for (int r = 0; r < rows.length; r++) {
-			ImWord[] rowWords = rows[r].getWords();
-			if (rowWords.length != 0) {
-				Arrays.sort(rowWords, ImUtils.textStreamOrder);
-				this.addAnnotation(rows[r], rowWords);
-			}
-			ImRegion[] rowCells = rows[r].getRegions(ImRegion.TABLE_CELL_TYPE);
-			Arrays.sort(rowCells, ImUtils.leftRightOrder);
-			int emptyLeftCellsToSpan = 0;
-			ImAnnotationBase leftCellImab = null;
-			for (int c = 0; c < rowCells.length; c++) {
-				ImWord[] cellWords = rowCells[c].getWords();
-				if (cellWords.length != 0) {
-					Arrays.sort(cellWords, ImUtils.textStreamOrder);
-					ImAnnotationBase cellImab = this.addAnnotation(rowCells[c], cellWords);
-					if (cellImab == null) {
-						if (leftCellImab != null)
-							leftCellImab.rightEmptyCellsToSpan++;
-						else emptyLeftCellsToSpan++;
+			if (DEBUG_ANNOTATE_TABLE) System.out.println(" - doing row " + r);
+			ImWord rowStart = null;
+			ImWord rowEnd = null;
+			int[] emptyCellsToSpan = new int[cols.length];
+			Arrays.fill(emptyCellsToSpan, 0);
+			boolean gotEmptyCellsToSpan = false;
+			
+			//	annotate cells
+			for (int c = 0; c < cells[r].length; c++) {
+				if (DEBUG_ANNOTATE_TABLE) System.out.println("   - doing column " + c);
+				if ((r != 0) && (cells[r][c] == cells[r-1][c])) {
+					if (DEBUG_ANNOTATE_TABLE) System.out.println("     - downwards extending cell in row " + r + ", col " + c + " (page " + rows[r].pageId + ")");
+					if (cellImabs[r-1][c] != null) {
+						cellImabs[r][c] = cellImabs[r-1][c];
+						cellImabs[r][c].rTableAttributes.belowCellsToSpan++;
+					}
+					else emptyCellSpannersPerCol[c][c]++;
+					continue; // we already have these words spanned
+				}
+				if ((c != 0) && (cells[r][c] == cells[r][c-1])) {
+					if (DEBUG_ANNOTATE_TABLE) System.out.println("     - rightwards extending cell in row " + r + ", col " + c + " (page " + rows[r].pageId + ")");
+					if (cellImabs[r][c-1] != null) {
+						cellImabs[r][c] = cellImabs[r][c-1];
+						cellImabs[r][c].rTableAttributes.rightCellsToSpan++;
 					}
 					else {
-						leftCellImab = cellImab;
-						if (emptyLeftCellsToSpan != 0) {
-							leftCellImab.leftEmptyCellsToSpan += emptyLeftCellsToSpan;
-							emptyLeftCellsToSpan = 0;
-						}
+						emptyCellsToSpan[c]++;
+						gotEmptyCellsToSpan = true;
+					}
+					continue; // we already have these words spanned
+				}
+				ImWord[] cellWords = cells[r][c].getWords();
+				if (DEBUG_ANNOTATE_TABLE) System.out.println("     - got " + cellWords.length + " words");
+				if (cellWords.length != 0) {
+					Arrays.sort(cellWords, ImUtils.textStreamOrder);
+					if (rowStart == null)
+						rowStart = cellWords[0];
+					rowEnd = cellWords[cellWords.length - 1];
+					cellImabs[r][c] = this.addAnnotation(cells[r][c], cellWords, true);
+					if (cellImabs[r][c] == null) {
+						emptyCellsToSpan[c]++;
+						gotEmptyCellsToSpan = true;
+					}
+					else {
+						cellImabs[r][c].rTableAttributes.gridLeft = c;
+						cellImabs[r][c].rTableAttributes.gridTop = r;
 					}
 				}
-				else if (leftCellImab != null)
-					leftCellImab.rightEmptyCellsToSpan++;
-				else emptyLeftCellsToSpan++;
+				else {
+					emptyCellsToSpan[c]++;
+					gotEmptyCellsToSpan = true;
+				}
+			}
+			
+			//	nothing to annotate row on
+			if ((rowStart == null) || (rowEnd == null))
+				continue;
+			
+			//	try and annotate row proper
+			ImAnnotationBase rowImab = this.addAnnotation(rows[r], getRowWords(rowStart, rowEnd), true);
+			if (rowImab == null)
+				continue;
+			rowImab.rTableAttributes.gridTop = r;
+			
+			//	take care of cells to span
+			if (gotEmptyCellsToSpan) {
+				rowImab.rTableAttributes.emptyCellsToSpan = emptyCellsToSpan;
+				for (int c = 0; c < rowImab.rTableAttributes.emptyCellsToSpan.length; c++) {
+					if (rowImab.rTableAttributes.emptyCellsToSpan[c] != 0)
+						emptyCellSpannersPerCol[c] = rowImab.rTableAttributes.emptyCellsToSpan;
+				}
 			}
 		}
+	}
+	
+	private static ImWord[] getRowWords(ImWord rowStart, ImWord rowEnd) {
+		ArrayList rowWords = new ArrayList();
+		for (ImWord imw = rowStart; imw != null; imw = imw.getNextWord()) {
+			rowWords.add(imw);
+			if (imw == rowEnd)
+				break;
+		}
+		return ((ImWord[]) rowWords.toArray(new ImWord[rowWords.size()]));
 	}
 	
 	/**
@@ -1338,20 +1570,140 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		this.useRandomAnnotationIDs = uraids;
 	}
 	
+	/**
+	 * Retrieve the underlying Image Markup document. If the document is
+	 * modified in any way, this XML wrapper document becomes invalid and
+	 * should not be used any further.
+	 * @return the underlying Image Markup document
+	 */
+	public ImDocument document() {
+		return this.doc;
+	}
+	
+	/**
+	 * Retrieve the underlying Image Markup object of some annotation. If the
+	 * object is modified in any way, this XML wrapper document becomes invalid
+	 * and should not be used any further. If the argument annotation has not
+	 * been retrieved from this wrapper in any way, results are meaningless.
+	 * @param annot the annotation to get the basis of
+	 * @return the underlying Image Markup object
+	 */
+	public ImObject basisOf(Annotation annot) {
+		if (annot == this) {
+			if (this.annotation != null)
+				return this.annotation;
+			if (this.region != null)
+				return this.region;
+			return this.doc;
+		}
+		if (annot instanceof ImAnnotationView) {
+			ImAnnotationBase base = ((ImAnnotationView) annot).base;
+			if (base.aData != null)
+				return base.aData;
+			if (base.rData != null)
+				return base.rData;
+		}
+		return null;
+	}
+	
+	/**
+	 * Retrieve the first word of the underlying Image Markup object of some
+	 * annotation. If the word is modified in any way, this XML wrapper document
+	 * becomes invalid and should not be used any further. If the argument
+	 * annotation has not been retrieved from this wrapper in any way, results
+	 * are meaningless.
+	 * @param annot the annotation to get the first word of
+	 * @return the first word of the underlying Image Markup object
+	 */
+	public ImWord firstWordOf(Annotation annot) {
+		if (annot == this)
+			return this.firstWord;
+		if (annot instanceof ImAnnotationView)
+			return ((ImAnnotationView) annot).base.firstWord();
+		return null;
+	}
+	
+	/**
+	 * Retrieve the last word of the underlying Image Markup object of some
+	 * annotation. If the word is modified in any way, this XML wrapper document
+	 * becomes invalid and should not be used any further. If the argument
+	 * annotation has not been retrieved from this wrapper in any way, results
+	 * are meaningless.
+	 * @param annot the annotation to get the last word of
+	 * @return the last word of the underlying Image Markup object
+	 */
+	public ImWord lastWordOf(Annotation annot) {
+		if (annot == this)
+			return this.lastWord;
+		if (annot instanceof ImAnnotationView)
+			return ((ImAnnotationView) annot).base.lastWord();
+		return null;
+	}
+	
+	/**
+	 * Retrieve the underlying Image Markup object of some token. If the object
+	 * is modified in any way, this XML wrapper document becomes invalid and
+	 * should not be used any further. If the argument token has not been
+	 * retrieved from this wrapper in any way, results are meaningless.
+	 * @param token the token to get the first word of
+	 * @return the underlying Image Markup word
+	 */
+	public ImWord basisOf(Token token) {
+		if (token instanceof ImTokenView) {
+			ImToken base = ((ImTokenView) token).base;
+			return ((ImWord) base.imWords.get(0));
+		}
+		return null;
+	}
+	
+	/**
+	 * Retrieve the first word of the underlying Image Markup object of some
+	 * token. If the word is modified in any way, this XML wrapper document
+	 * becomes invalid and should not be used any further. If the argument
+	 * annotation has not been retrieved from this wrapper in any way, results
+	 * are meaningless.
+	 * @param token the token to get the first word of
+	 * @return the first underlying word of the token
+	 */
+	public ImWord firstWordOf(Token token) {
+		if (token instanceof ImTokenView) {
+			ImToken base = ((ImTokenView) token).base;
+			return ((ImWord) base.imWords.get(0));
+		}
+		return null;
+	}
+	
+	/**
+	 * Retrieve the last word of the underlying Image Markup object of some
+	 * token. If the word is modified in any way, this XML wrapper document
+	 * becomes invalid and should not be used any further. If the argument
+	 * annotation has not been retrieved from this wrapper in any way, results
+	 * are meaningless.
+	 * @param token the token to get the last word of
+	 * @return the last underlying word of the token
+	 */
+	public ImWord lastWordOf(Token token) {
+		if (token instanceof ImTokenView) {
+			ImToken base = ((ImTokenView) token).base;
+			return ((ImWord) base.imWords.get(base.imWords.size()-1));
+		}
+		return null;
+	}
+	
 	private ImAnnotationBase addAnnotation(ImAnnotation annot) {
 		ImAnnotationBase imab = this.getAnnotationBase(annot);
 		this.indexAnnotationBase(imab);
 		return imab;
 	}
 	private ImAnnotationBase addAnnotation(ImRegion region) {
-		return this.addAnnotation(region, region.getWords());
+		return this.addAnnotation(region, region.getWords(), false);
 	}
 	private ImAnnotationBase addAnnotation(ImWord pFirstWord, ImWord pLastWord) {
 		ImAnnotationBase imab = new ImAnnotationBase(pFirstWord, pLastWord);
 		this.indexAnnotationBase(imab);
 		return imab;
 	}
-	private ImAnnotationBase addAnnotation(ImRegion region, ImWord[] regionWords) {
+	private ImAnnotationBase addAnnotation(ImRegion region, ImWord[] regionWords, boolean imrIsTable) {
 		if (regionWords.length == 0)
 			return null;
 		ArrayList docRegionWords = new ArrayList();
@@ -1363,10 +1715,15 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			return null;
 		if (docRegionWords.size() < regionWords.length)
 			regionWords = ((ImWord[]) docRegionWords.toArray(new ImWord[docRegionWords.size()]));
-		ImAnnotationBase imab = this.getAnnotationBase(region, regionWords);
+		ImAnnotationBase imab = this.getAnnotationBase(region, regionWords, imrIsTable);
 		this.indexAnnotationBase(imab);
 		return imab;
 	}
+	//	TODO check where paragraphs end up
+	//	TODO TEST https://github.com/plazi/EJT-testbed/issues/358
+	//	TODO TEST https://github.com/plazi/EJT-testbed/issues/360
+	//	TODO TEST https://github.com/plazi/EJT-testbed/issues/366
+	//	TODO TEST https://github.com/plazi/EJT-testbed/issues/367
 	private void indexAnnotationBase(ImAnnotationBase base) {
 		indexAnnotationBase(this.annotations, base, this.typedAnnotationBaseOrder);
 		ArrayList typeAnnots = ((ArrayList) this.annotationsByType.get(base.getType()));
@@ -1396,12 +1753,12 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		}
 		while ((index != 0) && (annotBaseOrder.compare(base, annotList.get(index)) < 0))
 			index--;
-		while ((index < annotList.size()) && (0 < annotBaseOrder.compare(base, annotList.get(index))))
+		while ((index < annotList.size()) && (annotBaseOrder.compare(base, annotList.get(index)) > 0))
 			index++;
 		int cIndex = index;
 		while ((cIndex != 0) && ((annotList.size() <= cIndex) || (annotationBaseOrder.compare(base, annotList.get(cIndex)) <= 0)))
 			cIndex--;
-		while ((cIndex < annotList.size()) && ((cIndex < 0) || (0 <= annotationBaseOrder.compare(base, annotList.get(cIndex))))) {
+		while ((cIndex < annotList.size()) && ((cIndex < 0) || (annotationBaseOrder.compare(base, annotList.get(cIndex)) >= 0))) {
 			if ((-1 < cIndex) && (base == annotList.get(cIndex)))
 				return;
 			cIndex++;
@@ -1422,7 +1779,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 				ti1 = annotationNestingOrder.length();
 			int ti2 = annotationNestingOrder.indexOf(((ImAnnotationBase) obj2).getType());
 			if (ti2 == -1)
-				ti2 = -annotationNestingOrder.length();
+				ti2 = annotationNestingOrder.length();
 			return (ti1 - ti2);
 		}
 	};
@@ -1491,8 +1848,10 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		return (AnnotationUtils.produceStartTag(this, true) + TokenSequenceUtils.concatTokens(this, true, true) + AnnotationUtils.produceEndTag(this));
 	}
 	public QueriableAnnotation getDocument() {
-		if (this.fullDoc == null)
+		if (this.fullDoc == null) {
 			this.fullDoc = new ImDocumentRoot(this.doc, this.configFlags);
+			this.fullDoc.setAnnotationNestingOrder(this.annotationNestingOrder);
+		}
 		return this.fullDoc;
 	}
 	
@@ -1616,6 +1975,10 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			
 			//	... and return emulated paragraph
 			ImAnnotationBase imab = this.addAnnotation(firstWord, lastWord);
+			ImRegion[] firstWordPageBlocks = firstWord.getPage().getRegions(BLOCK_ANNOTATION_TYPE);
+			imab.pFirstBlockId = getParentBlockId(firstWordPageBlocks, firstWord);
+			ImRegion[] lastWordPageBlocks = firstWord.getPage().getRegions(BLOCK_ANNOTATION_TYPE);
+			imab.pFirstBlockId = getParentBlockId(lastWordPageBlocks, lastWord);
 			return this.getAnnotationView(imab, sourceBase);
 		}
 		
@@ -1643,11 +2006,11 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		}
 		return imab;
 	}
-	private ImAnnotationBase getAnnotationBase(ImRegion imr, ImWord[] imrWords) {
+	private ImAnnotationBase getAnnotationBase(ImRegion imr, ImWord[] imrWords, boolean imrIsTable) {
 		String imrKey = this.getRegionKey(imr, null);
 		ImAnnotationBase imab = ((ImAnnotationBase) this.annotationBasesByAnnotations.get(imrKey));
 		if (imab == null) {
-			imab = new ImAnnotationBase(imr, imrWords);
+			imab = new ImAnnotationBase(imr, imrWords, imrIsTable);
 			this.annotationBasesByRegions.put(imrKey, imab);
 		}
 		return imab;
@@ -1706,10 +2069,13 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	}
 	private void unIndexAnnotationBase(ImAnnotationBase base, String oldType) {
 		unIndexAnnotationBase(this.annotations, base, this.typedAnnotationBaseOrder);
-		ArrayList typeAnnots = ((ArrayList) this.annotationsByType.get((oldType == null) ? base.getType() : oldType));
-		unIndexAnnotationBase(typeAnnots, base, annotationBaseOrder);
-		if (typeAnnots.isEmpty())
-			this.annotationsByType.remove((oldType == null) ? base.getType() : oldType);
+		String uiType = ((oldType == null) ? base.getType() : oldType);
+		ArrayList typeAnnots = ((ArrayList) this.annotationsByType.get(uiType));
+		if (typeAnnots != null) {
+			unIndexAnnotationBase(typeAnnots, base, annotationBaseOrder);
+			if (typeAnnots.isEmpty())
+				this.annotationsByType.remove(uiType);
+		}
 	}
 	private static void unIndexAnnotationBase(ArrayList annotationList, ImAnnotationBase base, Comparator annotationBaseOrder) {
 		if ((annotationList == null) || annotationList.isEmpty())
@@ -1910,6 +2276,14 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		if (obj instanceof Annotation)
 			return AnnotationUtils.compare(this, ((Annotation) obj));
 		else return -1;
+	}
+	
+	private static String getParentBlockId(ImRegion[] blocks, ImWord word) {
+		for (int b = 0; b < blocks.length; b++) {
+			if (blocks[b].bounds.includes(word.bounds, true))
+				return (blocks[b].pageId + "." + blocks[b].bounds.toString());
+		}
+		return null; // should never happen for main text words, unless we have no blocks
 	}
 	
 	private static String asHex(int i, int bytes) {

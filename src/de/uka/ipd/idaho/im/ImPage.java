@@ -35,6 +35,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.TreeMap;
 import java.util.TreeSet;
 
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
@@ -136,15 +137,16 @@ public class ImPage extends ImRegion {
 	 */
 	private static final Comparator sizeRegionOrder = new Comparator() {
 		public int compare(Object obj1, Object obj2) {
-			ImRegion reg1 = ((ImRegion) obj1);
-			ImRegion reg2 = ((ImRegion) obj2);
-			return (getSize(reg2.bounds) - getSize(reg1.bounds));
+//			ImRegion reg1 = ((ImRegion) obj1);
+//			ImRegion reg2 = ((ImRegion) obj2);
+//			return (getSize(reg2.bounds) - getSize(reg1.bounds));
+			return (((ImRegion) obj2).bounds.getArea() - ((ImRegion) obj1).bounds.getArea());
 		}
 	};
-	
-	private static final int getSize(BoundingBox bb) {
-		return ((bb.right - bb.left) * (bb.bottom - bb.top));
-	}
+//	
+//	private static final int getSize(BoundingBox bb) {
+//		return ((bb.right - bb.left) * (bb.bottom - bb.top));
+//	}
 	
 	/* TODO keep regions sorted according to document reading order contract
 	 * This might not even be possible with wildly intersecting and overlapping
@@ -168,6 +170,7 @@ public class ImPage extends ImRegion {
 	private WordIndex wordsByPoints;
 	
 	private ArrayList regions = new ArrayList();
+	private TreeMap regionsByType = new TreeMap();
 	private Comparator regionOrder;
 	
 	private int imageDpi = -1;
@@ -179,10 +182,8 @@ public class ImPage extends ImRegion {
 	 */
 	public ImPage(ImDocument doc, int pageId, BoundingBox bounds) {
 		super(doc, pageId, bounds, PAGE_TYPE);
-//		super.setType(PAGE_TYPE);
 		this.words = new TreeSet(ImWord.getComparator(doc.orientation));
 		this.wordsByPoints = new WordIndex((this.bounds.right - this.bounds.left), (this.bounds.bottom - this.bounds.top));
-//		this.regionOrder = ((doc.orientation == ComponentOrientation.RIGHT_TO_LEFT) ? rightLeftRegionOrder : leftRightRegionOrder);
 		this.regionOrder = sizeRegionOrder;
 		doc.addPage(this);
 	}
@@ -224,6 +225,7 @@ public class ImPage extends ImRegion {
 	void dispose() {
 		synchronized (this.regions) {
 			this.regions.clear();
+			this.regionsByType.clear();
 		}
 		synchronized (this.words) {
 			this.words.clear();
@@ -369,8 +371,8 @@ public class ImPage extends ImRegion {
 		}
 		
 		//	detach word & notify listeners
-		word.setPage(null);
 		this.getDocument().notifyRegionRemoved(word);
+		word.setPage(null);
 		
 		//	finally ...
 		return true;
@@ -453,6 +455,31 @@ public class ImPage extends ImRegion {
 		return ((ImWord[]) tshs.toArray(new ImWord[tshs.size()]));
 	}
 	
+	void layoutObjectTypeChanged(ImLayoutObject imlo, String oldType) {
+		if (imlo instanceof ImRegion) synchronized (this.regions) {
+			ArrayList imrs = this.getRegionList(oldType, false);
+			if (imrs != null) {
+				imrs.remove(imlo);
+				if (imrs.isEmpty())
+					this.regionsByType.remove(oldType);
+			}
+			imrs = this.getRegionList(imlo.getType(), true);
+			imrs.add(imlo);
+			Collections.sort(imrs, this.regionOrder);
+		}
+	}
+	
+	private ArrayList getRegionList(String type, boolean create) {
+		if (type == null)
+			return this.regions;
+		ArrayList regions = ((ArrayList) this.regionsByType.get(type));
+		if ((regions == null) && create) {
+			regions = new ArrayList();
+			this.regionsByType.put(type, regions);
+		}
+		return regions;
+	}
+	
 	/**
 	 * Add a region to the page. The region is automatically associated with
 	 * the page. If the page ID of the region does not match the ID of the
@@ -472,6 +499,9 @@ public class ImPage extends ImRegion {
 			synchronized (this.regions) {
 				this.regions.add(region);
 				Collections.sort(this.regions, this.regionOrder);
+				ArrayList imrs = this.getRegionList(region.getType(), true);
+				imrs.add(region);
+				Collections.sort(imrs, this.regionOrder);
 			}
 			region.setPage(this);
 			this.getDocument().notifyRegionAdded(region);
@@ -492,9 +522,15 @@ public class ImPage extends ImRegion {
 		else if (region.getPage() == this) {
 			synchronized (this.regions) {
 				this.regions.remove(region);
+				ArrayList imrs = this.getRegionList(region.getType(), false);
+				if (imrs != null) {
+					imrs.remove(region);
+					if (imrs.isEmpty())
+						this.regionsByType.remove(region.getType());
+				}
 			}
-			region.setPage(null);
 			this.getDocument().notifyRegionRemoved(region);
+			region.setPage(null);
 		}
 	}
 	
@@ -510,12 +546,32 @@ public class ImPage extends ImRegion {
 	 * @return an array holding the regions that include the argument box
 	 */
 	public ImRegion[] getRegionsIncluding(BoundingBox box, boolean fuzzy) {
+		return this.getRegionsIncluding(null, box, fuzzy);
+	}
+	
+	/**
+	 * Retrieve the regions (e.g. columns or blocks) of a given type that
+	 * include a given bounding box. Regions higher up in the hierarchy appear
+	 * before the ones nested in them in the returned array. If <code>fuzzy</code>
+	 * is set to <code>true</code>, the result also includes all regions that
+	 * contain the center point of the argument box, even if they do not fully
+	 * include the argument box.
+	 * @param type the type of the sought regions
+	 * @param box the bounding box whose parent regions to retrieve
+	 * @param fuzzy do fuzzy matching?
+	 * @return an array holding the regions of the argument type that include
+	 *            the argument box
+	 */
+	public ImRegion[] getRegionsIncluding(String type, BoundingBox box, boolean fuzzy) {
 		ArrayList rs = new ArrayList();
-		for (Iterator rit = this.regions.iterator(); rit.hasNext();) {
+		ArrayList imrs = this.getRegionList(type, false);
+		if (imrs == null)
+			return new ImRegion[0];
+		for (Iterator rit = imrs.iterator(); rit.hasNext();) {
 			ImRegion imr = ((ImRegion) rit.next());
 			if (imr.bounds.includes(box, fuzzy))
 				rs.add(imr);
-			if (!fuzzy && (getSize(imr.bounds) < getSize(box)))
+			if (!fuzzy && (imr.bounds.getArea() < box.getArea()))
 				break; // all to come is smaller than argument box, so we can stop right here if full inclusion required
 		}
 		return ((ImRegion[]) rs.toArray(new ImRegion[rs.size()]));
@@ -526,15 +582,34 @@ public class ImPage extends ImRegion {
 	 * bounding box. Regions higher up in the hierarchy appear before the ones
 	 * nested in them in the returned array. If <code>fuzzy</code> is set to
 	 * <code>true</code>, the result also includes all regions whose center
-	 * point lies inside the argument box, even if they do not fully inside the
-	 * argument box.
+	 * point lies inside the argument box, even if they do not fully lie inside
+	 * the argument box.
 	 * @param box the bounding box whose child regions to retrieve
 	 * @param fuzzy do fuzzy matching?
 	 * @return an array holding the regions that lie inside the argument box
 	 */
 	public ImRegion[] getRegionsInside(BoundingBox box, boolean fuzzy) {
+		return this.getRegionsInside(null, box, fuzzy);
+	}
+	
+	/**
+	 * Retrieve the regions (e.g. columns or blocks) of a given type that lie
+	 * inside a given bounding box. Regions higher up in the hierarchy appear
+	 * before the ones nested in them in the returned array. If <code>fuzzy</code>
+	 * is set to <code>true</code>, the result also includes all regions whose
+	 * center point lies inside the argument box, even if they do not fully lie
+	 * inside the argument box.
+	 * @param type type the type of the sought regions
+	 * @param box the bounding box whose child regions to retrieve
+	 * @param fuzzy do fuzzy matching?
+	 * @return an array holding the regions that lie inside the argument box
+	 */
+	public ImRegion[] getRegionsInside(String type, BoundingBox box, boolean fuzzy) {
 		ArrayList rs = new ArrayList();
-		for (Iterator rit = this.regions.iterator(); rit.hasNext();) {
+		ArrayList imrs = this.getRegionList(type, false);
+		if (imrs == null)
+			return new ImRegion[0];
+		for (Iterator rit = imrs.iterator(); rit.hasNext();) {
 			ImRegion imr = ((ImRegion) rit.next());
 			if (box.includes(imr.bounds, fuzzy))
 				rs.add(imr);
@@ -562,20 +637,13 @@ public class ImPage extends ImRegion {
 	 * @return an array holding the regions representing the layout of the page
 	 */
 	public ImRegion[] getRegions(String type) {
-		Collection regions;
+		Collection imrs;
 		if (type == null)
-			regions = this.regions;
+			imrs = this.regions;
 		else if (WORD_ANNOTATION_TYPE.equals(type))
-			regions = this.words;
-		else {
-			regions = new ArrayList();
-			for (Iterator rit = this.regions.iterator(); rit.hasNext();) {
-				ImRegion imr = ((ImRegion) rit.next());
-				if (type.equals(imr.getType()))
-					regions.add(imr);
-			}
-		}
-		return ((ImRegion[]) regions.toArray(new ImRegion[regions.size()]));
+			imrs = this.words;
+		else imrs = this.getRegionList(type, false);
+		return ((imrs == null) ? new ImRegion[0] : ((ImRegion[]) imrs.toArray(new ImRegion[imrs.size()])));
 	}
 	
 	/**
@@ -584,10 +652,7 @@ public class ImPage extends ImRegion {
 	 * @return an array holding the region types
 	 */
 	public String[] getRegionTypes() {
-		TreeSet regionTypes = new TreeSet();
-		for (int r = 0; r < this.regions.size(); r++)
-			regionTypes.add(((ImRegion) this.regions.get(r)).getType());
-		return ((String[]) regionTypes.toArray(new String[regionTypes.size()]));
+		return ((String[]) this.regionsByType.keySet().toArray(new String[this.regionsByType.size()]));
 	}
 	
 	/**

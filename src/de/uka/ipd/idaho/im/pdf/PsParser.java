@@ -54,11 +54,51 @@ public class PsParser {
 	}
 	
 	static void executePs(byte[] data, Hashtable state, LinkedList stack, String indent) throws IOException {
+		try {
+			doExecutePs(data, state, stack, indent);
+		}
+		catch (RuntimeException re) {
+			if (DEBUG_PARSE_PS) {
+				System.out.println(" ==== PostScript error: " + re.getMessage() + " ==== ");
+				System.out.println(" ==== START DATA ==== ");
+				System.out.println(new String(data));
+				System.out.println(" ==== END DATA ==== ");
+			}
+			throw re;
+		}
+	}
+	
+	private static void doExecutePs(byte[] data, Hashtable state, LinkedList stack, String indent) throws IOException {
 		PdfByteInputStream pbis = new PdfByteInputStream(new ByteArrayInputStream(data));
+		
+		Hashtable errorDict = new Hashtable();
+		Hashtable errorStatusDict = new Hashtable();
+		Hashtable userDict = new Hashtable();
+		Hashtable globalDict = new Hashtable();
+		Hashtable statusDict = new Hashtable();
+		Hashtable internalDict = new Hashtable();
+		Hashtable fontDict = new Hashtable();
+		Hashtable systemDict = new Hashtable();
+		
+//		systemDict.put(new Name("errordict"), errorDict);
+//		systemDict.put(new Name("$error"), errorStatusDict);
+//		systemDict.put(new Name("userdict"), userDict);
+//		systemDict.put(new Name("globaldict"), globalDict);
+//		systemDict.put(new Name("statusdict"), statusDict);
+		systemDict.put(new Name("internaldict"), internalDict);
+//		systemDict.put(new Name("FontDictionary"), fontDict);
+		
 		LinkedList dictStack = new LinkedList();
+		dictStack.addLast(systemDict);
+		dictStack.addLast(globalDict);
+		dictStack.addLast(userDict);
+		
 		for (Object next; (next = cropNext(pbis)) != null;) {
 			if (next instanceof PsCommand) {
 				PsCommand psc = ((PsCommand) next);
+//				System.out.println("PsExecuting " + psc.command);
+//				System.out.println(" - stack is " + stack);
+//				System.out.println(" - dict stack is " + dictStack);
 				//	TODO implement remaining commands
 				
 				//	skip access modifiers
@@ -69,19 +109,46 @@ public class PsParser {
 				if ("noaccess".equals(psc.command))
 					continue;
 				
-				//	skip 'FontDirectory'
-				if ("FontDirectory".equals(psc.command))
-					continue;
-				
 				//	skip file getters (we already have the data)
 				if ("currentfile".equals(psc.command))
 					continue;
 				if ("closefile".equals(psc.command))
-					continue;
+//					continue; // TODO_indeed simply stop right here?
+					break;
+				
+				/* There might be a few of the 512 zeros left in the stream if it
+				 * represents a Type1 font, but those are irrelevant according to
+				 * the Type1 font specification. And the end of the encrypted part
+				 * of the font file is the only point where the 'closefile'
+				 * command can occur at all according to the same specification.
+				 * 
+				 * In a tint transformation function of a color space, in turn,
+				 * the 'closefile' command will never occur at all, according to
+				 * the PDF specification.
+				 * 
+				 * That means: either way, we're done here (as long as the scope
+				 * of this PostScript interpreter exclusively is handling any
+				 * Type1 fonts and color space tint transformation functions that
+				 * may be embedded in a PDF file up to and including version 1.6)
+				 */
 				
 				//	skip marker of encrypted section
 				if ("eexec".equals(psc.command))
 					continue;
+				
+				//	exex command with internal dictionary, something hinky going on, so check magic number
+				else if ("exec".equals(psc.command) && (stack.getLast() == internalDict)) {
+					stack.removeLast();
+					Number internalDictMagic = ((Number) stack.removeLast());
+					if (internalDictMagic.equals(Integer.valueOf(1183615869)))
+						stack.addLast(internalDict);
+					else {
+						stack.addLast(internalDictMagic);
+						stack.addLast(internalDict);
+					}
+					continue;
+				}
+				
 				
 				//	start of cascade ...
 				if (false) {}
@@ -117,18 +184,36 @@ public class PsParser {
 				}
 				
 				//	roll the n topmost stack elements by j
+				//	TODO better transfer last n elements to separate LinkedList ...
+				//	... roll them j times (put tail to front or front to tail) ...
+				//	... and re-add them to stack?
 				else if ("roll".equals(psc.command)) {
 					int j = ((Number) stack.removeLast()).intValue();
 					int n = ((Number) stack.removeLast()).intValue();
-					if (j < 0) {
-						for (int i = 0; i < -j; i++)
-							stack.addLast(stack.remove(stack.size() - n));
-					}
-					else if (j > 0)
-						for (int i = 0; i < j; i++) {
-							stack.add((stack.size() - n), stack.getLast());
-							stack.removeLast();
+					if ((j != 0) /* save the hassle of zero rolls */ && (n > 0) /* make sure we got something to roll */) {
+						LinkedList rStack = new LinkedList();
+						while (rStack.size() < n)
+							rStack.addFirst(stack.removeLast());
+						if (j < 0) {
+							for (; j < 0; j++)
+								rStack.addFirst(rStack.removeLast()); // move top of stack down
 						}
+						else if (j > 0) {
+							for (; j > 0; j--)
+								rStack.addLast(rStack.removeFirst()); // move down in stack up
+						}
+						while (rStack.size() != 0)
+							stack.addLast(rStack.removeFirst());
+					}
+//					if (j < 0) {
+//						for (int i = 0; i < -j; i++)
+//							stack.addLast(stack.remove(stack.size() - n));
+//					}
+//					else if (j > 0)
+//						for (int i = 0; i < j; i++) {
+//							stack.add((stack.size() - n), stack.getLast());
+//							stack.removeLast();
+//						}
 				}
 				
 				//	copy the topmost n stack elements
@@ -156,6 +241,47 @@ public class PsParser {
 				else if ("currentdict".equals(psc.command)) {
 					stack.addLast(dictStack.getLast());
 				}
+				
+				//	duplicate error dictionary onto the stack
+				else if ("errordict".equals(psc.command)) {
+					stack.addLast(errorDict);
+				}
+				
+				//	duplicate status dictionary onto the stack
+				else if ("$error".equals(psc.command)) {
+					stack.addLast(errorStatusDict);
+				}
+				
+				//	duplicate system dictionary onto the stack
+				else if ("systemdict".equals(psc.command)) {
+					stack.addLast(systemDict);
+				}
+				
+				//	duplicate user dictionary onto the stack
+				else if ("userdict".equals(psc.command)) {
+					stack.addLast(userDict);
+				}
+				
+				//	duplicate global dictionary onto the stack
+				else if ("globaldict".equals(psc.command)) {
+					stack.addLast(globalDict);
+				}
+				
+				//	duplicate status dictionary onto the stack
+				else if ("statusdict".equals(psc.command)) {
+					stack.addLast(statusDict);
+				}
+				
+				//	count elements on dictionary stack
+				else if ("countdictstack".equals(psc.command)) {
+					stack.addLast(new Integer(dictStack.size()));
+				}
+				
+				//	skip 'FontDirectory'
+				else if ("FontDirectory".equals(psc.command)) {
+					stack.addLast(fontDict);
+				}
+				
 				
 				//	put an element into an array or dictionary
 				else if ("put".equals(psc.command)) {
@@ -262,10 +388,21 @@ public class PsParser {
 //					System.out.println("Stack is: " + stack);
 				}
 				
+				//	undefine a variable in state
+				else if ("undef".equals(psc.command)) {
+					Name key = ((Name) stack.removeLast());
+//					Hashtable dict = (dictStack.isEmpty() ? state : ((Hashtable) dictStack.getLast()));
+					Hashtable dict = ((Hashtable) stack.removeLast());
+					dict.remove(key);
+//					System.out.println("Set " + key + " to " + value);
+//					System.out.println("Stack is: " + stack);
+				}
+				
 				//	known command
 				else if ("known".equals(psc.command)) {
 					Name key = ((Name) stack.removeLast());
-					Hashtable dict = (dictStack.isEmpty() ? state : ((Hashtable) dictStack.getLast()));
+//					Hashtable dict = (dictStack.isEmpty() ? state : ((Hashtable) dictStack.getLast()));
+					Hashtable dict = ((Hashtable) stack.removeLast());
 					stack.addLast(new Boolean(dict.containsKey(key)));
 				}
 				
@@ -282,7 +419,6 @@ public class PsParser {
 				}
 				
 				
-				
 				//	if command
 				else if ("if".equals(psc.command)) {
 					System.out.println("If stack is: " + stack);
@@ -290,18 +426,19 @@ public class PsParser {
 					Object bObj = stack.removeLast();
 					while (bObj instanceof PsProcedure) {
 						PsProcedure bProc = ((PsProcedure) bObj);
-						System.out.println("Executing " + bProc.toString());
+						System.out.println("IfExecuting " + bProc.toString());
 						bProc.execute(state, stack, ((indent == null) ? null : (indent + "  ")));
 						bObj = stack.removeLast();
 					}
 					if (((Boolean) bObj).booleanValue()) {
 						if (tObj instanceof PsProcedure) {
 							PsProcedure tProc = ((PsProcedure) tObj);
-							System.out.println("Executing " + tProc.toString());
+							System.out.println("TrueExecuting " + tProc.toString());
 							tProc.execute(state, stack, ((indent == null) ? null : (indent + "  ")));
 						}
 						else stack.addLast(tObj);
 					}
+					System.out.println("Post-If stack is: " + stack);
 				}
 				
 				//	if/else command
@@ -312,14 +449,14 @@ public class PsParser {
 					Object bObj = stack.removeLast();
 					while (bObj instanceof PsProcedure) {
 						PsProcedure bProc = ((PsProcedure) bObj);
-						System.out.println("Executing " + bProc.toString());
+						System.out.println("IfElseExecuting " + bProc.toString());
 						bProc.execute(state, stack, ((indent == null) ? null : (indent + "  ")));
 						bObj = stack.removeLast();
 					}
 					if (((Boolean) bObj).booleanValue()) {
 						if (tObj instanceof PsProcedure) {
 							PsProcedure tProc = ((PsProcedure) tObj);
-							System.out.println("Executing " + tProc.toString());
+							System.out.println("TrueExecuting " + tProc.toString());
 							tProc.execute(state, stack, ((indent == null) ? null : (indent + "  ")));
 						}
 						else stack.addLast(tObj);
@@ -327,11 +464,12 @@ public class PsParser {
 					else {
 						if (fObj instanceof PsProcedure) {
 							PsProcedure fProc = ((PsProcedure) fObj);
-							System.out.println("Executing " + fProc.toString());
+							System.out.println("FalseExecuting " + fProc.toString());
 							fProc.execute(state, stack, ((indent == null) ? null : (indent + "  ")));
 						}
 						else stack.addLast(fObj);
 					}
+					System.out.println("Post-IfElse stack is: " + stack);
 				}
 				
 				//	for command
@@ -342,7 +480,7 @@ public class PsParser {
 					Number initial = ((Number) stack.removeLast());
 					for (int i = initial.intValue(); i <= limit.intValue(); i += increment.intValue()) {
 						stack.addLast(new Integer(i));
-						System.out.println("Executing (" + i + ") " + proc.toString());
+						System.out.println("ForExecuting (" + i + ") " + proc.toString());
 						proc.execute(state, stack, ((indent == null) ? null : (indent + "  ")));
 					}
 					System.out.println("Post-for stack is " + stack);
@@ -768,8 +906,8 @@ public class PsParser {
 			}
 			
 			//	what are we dealing with?
-			boolean croppingInteger = lookaheadStr.matches("\\-?[0-9]++.*");
 			boolean croppingDouble = lookaheadStr.matches("\\-?[0-9]*+\\.[0-9]++.*");
+			boolean croppingInteger = (!croppingDouble && lookaheadStr.matches("\\-?[0-9]++.*"));
 			
 			if (DEBUG_PARSE_PS) System.out.println(" --> other object");
 			StringBuffer valueBuffer = new StringBuffer();
@@ -800,13 +938,13 @@ public class PsParser {
 				if (DEBUG_PARSE_PS) System.out.println(" ==> command");
 				return new PsCommand(value);
 			}
-			else if (value.matches("\\-?[0-9]++")) {
-				if (DEBUG_PARSE_PS) System.out.println(" ==> integer");
-				return new Integer(value);
-			}
 			else if (value.matches("\\-?[0-9]*+\\.[0-9]++")) {
 				if (DEBUG_PARSE_PS) System.out.println(" ==> double");
 				return new Double(value);
+			}
+			else if (value.matches("\\-?[0-9]++")) {
+				if (DEBUG_PARSE_PS) System.out.println(" ==> integer");
+				return new Integer(value);
 			}
 			else {
 				if (DEBUG_PARSE_PS) System.out.println(" ==> double");
@@ -1676,6 +1814,7 @@ public class PsParser {
 		}
 		public String toString() {
 //			return ("{" + new String(this.bytes) + "}");
+//			return ("Proc<" + this.bytes.length + ">: " + Arrays.toString(this.bytes) + " {" + new String(this.bytes) + "}");
 			return ("Proc<" + this.bytes.length + ">");
 		}
 		public void execute(Hashtable state, LinkedList stack, String indent) throws IOException {

@@ -177,6 +177,12 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 			return (this.value.length() + this.whitespace.length());
 		}
 		
+		ImWord wordAt(int offset) {
+			if ((offset >= 0) && (offset < this.imWordAt.size()))
+				return ((ImWord) this.imWordAt.get(offset));
+			else return null;
+		}
+		
 		public int length() {
 			return this.value.length();
 		}
@@ -211,6 +217,10 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 			else if (LAST_PAGE_NUMBER_ATTRIBUTE.equals(name))
 				return (((ImWord) this.imWords.get(this.imWords.size()-1)).getPage().hasAttribute(PAGE_NUMBER_ATTRIBUTE));
 			else if (ImWord.TEXT_STREAM_TYPE_ATTRIBUTE.equals(name))
+				return true;
+			else if (ImWord.PREVIOUS_RELATION_ATTRIBUTE.equals(name))
+				return true;
+			else if (ImWord.NEXT_RELATION_ATTRIBUTE.equals(name))
 				return true;
 			else if (ImWord.BOLD_ATTRIBUTE.equals(name))
 				return ((ImWord) this.imWords.get(0)).hasAttribute(ImWord.BOLD_ATTRIBUTE);
@@ -252,6 +262,10 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 				return ((ImWord) this.imWords.get(this.imWords.size()-1)).getPage().getAttribute(PAGE_NUMBER_ATTRIBUTE);
 			else if (ImWord.TEXT_STREAM_TYPE_ATTRIBUTE.equals(name))
 				return ((ImWord) this.imWords.get(0)).getTextStreamType();
+			else if (ImWord.PREVIOUS_RELATION_ATTRIBUTE.equals(name))
+				return ("" + ((ImWord) this.imWords.get(0)).getPreviousRelation());
+			else if (ImWord.NEXT_RELATION_ATTRIBUTE.equals(name))
+				return ("" + ((ImWord) this.imWords.get(this.imWords.size()-1)).getNextRelation());
 			else if (ImWord.BOLD_ATTRIBUTE.equals(name))
 				return ((ImWord) this.imWords.get(0)).getAttribute(ImWord.BOLD_ATTRIBUTE, def);
 			else if (ImWord.ITALICS_ATTRIBUTE.equals(name))
@@ -341,6 +355,18 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 					return ((ImWord) this.imWords.get(0)).getTextStreamType();
 				else return ((ImWord) this.imWords.get(0)).setTextStreamType(value.toString());
 			}
+			else if (ImWord.PREVIOUS_RELATION_ATTRIBUTE.equals(name)) {
+				String oldValue = ("" + ((ImWord) this.imWords.get(0)).getPreviousRelation());
+				if ((value != null) && (value.toString().length() == 1) && ("SCHP".indexOf(value.toString()) != -1) && (((ImWord) this.imWords.get(0)).getPreviousWord() != null))
+					((ImWord) this.imWords.get(0)).getPreviousWord().setNextRelation(value.toString().charAt(0));
+				return oldValue;
+			}
+			else if (ImWord.NEXT_RELATION_ATTRIBUTE.equals(name)) {
+				String oldValue = ("" + ((ImWord) this.imWords.get(this.imWords.size()-1)).getNextRelation());
+				if ((value != null) && (value.toString().length() == 1) && ("SCHP".indexOf(value.toString()) != -1))
+					((ImWord) this.imWords.get(this.imWords.size()-1)).setNextRelation(value.toString().charAt(0));
+				return oldValue;
+			}
 			if (this.imWords.size() == 1) // just avoiding the computational effort of a for loop in the most common case
 				return ((ImWord) this.imWords.get(0)).setAttribute(name, value);
 			Object oldValue = null;
@@ -378,6 +404,7 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 		}
 	}
 	
+	private static final boolean DEBUG_NORMALIZE_STRING = false;
 	private static final String normalizeString(String str) {
 		StringBuffer nStr = new StringBuffer();
 		for (int c = 0; c < str.length(); c++) {
@@ -422,6 +449,8 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 		}
 		
 		//	... finally
+		if (DEBUG_NORMALIZE_STRING && !str.equals(nStr.toString()))
+			System.out.println("Normalized '" + str + "' to '" + nStr.toString() + "'");
 		return nStr.toString();
 	}
 	private static final String getNormalizedChar(char ch) {
@@ -676,10 +705,6 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 		this(((Tokenizer) firstWord.getDocument().getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER)), firstWord, lastWord, normalizeChars);
 	}
 	
-	ImTokenSequence(Tokenizer tokenizer, ImWord firstWord, ImWord lastWord) {
-		this(tokenizer, firstWord, lastWord, false);
-	}
-	
 	ImTokenSequence(Tokenizer tokenizer, ImWord firstWord, ImWord lastWord, boolean normalizeChars) {
 		this.tokenizer = tokenizer;
 		for (ImWord imw = firstWord; imw != null; imw = imw.getNextWord()) {
@@ -785,6 +810,30 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 			tao = this.imTokenAtIndex(index);
 		}
 		return tao;
+	}
+	
+	/**
+	 * Retrieve the underlying word at some char offset. If the string value of
+	 * the returned word is modified in any way, this token sequence becomes
+	 * invalid and should not be used any further.
+	 * @param offset the offset to find the word for
+	 * @return the word including the argument char offset
+	 */
+	public ImWord wordAtOffset(int offset) {
+		ImToken tao = this.imTokenAtOffset(offset);
+		return ((tao == null) ? null : tao.wordAt(offset - tao.getStartOffset()));
+	}
+	
+	/**
+	 * Retrieve the underlying word at some token index. If the string value of
+	 * the returned word is modified in any way, this token sequence becomes
+	 * invalid and should not be used any further.
+	 * @param index the index to find the word for
+	 * @return the word at the argument token index
+	 */
+	public ImWord wordAtIndex(int index) {
+		ImToken tao = this.imTokenAtIndex(index);
+		return ((tao == null) ? null : tao.wordAt(0));
 	}
 	
 	public char charAt(int index) {
@@ -1091,7 +1140,6 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 	public void removeCharSequenceListener(CharSequenceListener csl) {/* no use listening on a short-lived wrapper */}
 	
 	public Token tokenAt(int index) {
-//		System.out.println("ImTokenSequence: getting token at " + index);
 		return this.imTokenAtIndex(index);
 	}
 	public Token firstToken() {
@@ -1101,7 +1149,6 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 		return this.imTokenAtIndex(this.size()-1);
 	}
 	public String valueAt(int index) {
-//		System.out.println("ImTokenSequence: getting value at " + index);
 		return this.tokenAt(index).getValue();
 	}
 	public String firstValue() {
@@ -1114,7 +1161,7 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 		return "";
 	}
 	public String getWhitespaceAfter(int index) {
-		return ((ImToken) this.tokens.get(index)).whitespace;
+		return this.imTokenAtIndex(index).whitespace;
 	}
 	public int size() {
 		return this.tokens.size();
@@ -1126,17 +1173,56 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 		return this.tokenizer;
 	}
 	public CharSequence setLeadingWhitespace(CharSequence whitespace) throws IllegalArgumentException {
-		return this.getLeadingWhitespace(); // we're not modifying any chars or tokens in this wrapper for now
+		if (this.tokens.isEmpty())
+			return this.getLeadingWhitespace();
+		ImToken imt = this.imTokenAtIndex(0);
+		ImWord imw = ((ImWord) imt.imWords.get(0));
+		return this.setNextWordRelationByWhitespace(null, imw.getPreviousWord(), whitespace);
+//		return this.getLeadingWhitespace(); // we're not modifying any chars or tokens in this wrapper for now
 	}
 	public CharSequence setWhitespaceAfter(CharSequence whitespace, int index) throws IllegalArgumentException {
-		ImToken imt = imTokenAtIndex(index);
-		if (index < this.size())
-			return this.setChars(whitespace, imt.getEndOffset(), imt.whitespace.length());
-		//	we have to handle last token separately, as its end offset is out of bounds
-		else return (imt.whitespace = whitespace.toString());
+		ImToken imt = this.imTokenAtIndex(index);
+		ImWord imw = ((ImWord) imt.imWords.get(imt.imWords.size() - 1));
+		return this.setNextWordRelationByWhitespace(imt, imw, whitespace);
+//		if (index < this.size())
+//			return this.setChars(whitespace, imt.getEndOffset(), imt.whitespace.length());
+//		//	we have to handle last token separately, as its end offset is out of bounds
+//		else return (imt.whitespace = whitespace.toString());
+	}
+	private String setNextWordRelationByWhitespace(ImToken imt, ImWord imw, CharSequence whitespace) throws IllegalArgumentException {
+		if (imw == null)
+			return this.getLeadingWhitespace();
+		if (whitespace == null)
+			whitespace = "";
+		
+		String ws = whitespace.toString();
+		if (ws.trim().length() != 0)
+			throw new IllegalArgumentException("Whitespace must not include non-space characters.");
+		
+		String oWs;
+		if (imt == null)
+			oWs = (((imw.getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END) || (imw.getNextRelation() == ImWord.NEXT_RELATION_SEPARATE)) ? " " : "");
+		else oWs = imt.whitespace;
+		if (ws.equals(oWs))
+			return oWs;
+		
+		if (ws.length() == 0) {
+			if (imw.getNextRelation() != ImWord.NEXT_RELATION_HYPHENATED)
+				imw.setNextRelation(ImWord.NEXT_RELATION_CONTINUE);
+			if (imt != null)
+				imt.whitespace = "";
+		}
+		else {
+			if (imw.getNextRelation() != ImWord.NEXT_RELATION_PARAGRAPH_END)
+				imw.setNextRelation(ImWord.NEXT_RELATION_SEPARATE);
+			if (imt != null)
+				imt.whitespace = " ";
+		}
+		
+		return oWs;
 	}
 	public CharSequence setValueAt(CharSequence value, int index) throws IllegalArgumentException {
-		ImToken imt = imTokenAtIndex(index);
+		ImToken imt = this.imTokenAtIndex(index);
 		return this.setChars(value, imt.getStartOffset(), imt.length());
 	}
 	public TokenSequence removeTokensAt(int index, int size) {

@@ -54,12 +54,24 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 	
 	/** Constructor
 	 * @param doc the document the layout object belongs to
-	 * @param pageId the ID of the page the object lies on
+	 * @param pageId the ID of the page the object lies in
+	 * @param bounds the bounding box defining the layout object
 	 */
-	public ImLayoutObject(ImDocument doc, int pageId, BoundingBox bounds) {
+	protected ImLayoutObject(ImDocument doc, int pageId, BoundingBox bounds) {
+		this(doc, pageId, bounds, null);
+	}
+	
+	/** Constructor
+	 * @param doc the document the layout object belongs to
+	 * @param pageId the ID of the page the layout object lies in
+	 * @param bounds the bounding box defining the layout object
+	 * @param type the type of the layout object
+	 */
+	protected ImLayoutObject(ImDocument doc, int pageId, BoundingBox bounds, String type) {
 		this.doc = doc;
 		this.pageId = pageId;
 		this.bounds = bounds;
+		this.type = ((type == null) ? "object" : type);
 	}
 	
 	/* (non-Javadoc)
@@ -75,8 +87,10 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 	public void setType(String type) {
 		String oldType = this.type;
 		this.type = type;
-		if (this.getPage() != null)
+		if (this.getPage() != null) {
+			this.getPage().layoutObjectTypeChanged(this, oldType);
 			this.doc.notifyTypeChanged(this, oldType);
+		}
 	}
 	
 	/* (non-Javadoc)

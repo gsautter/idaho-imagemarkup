@@ -449,25 +449,25 @@ public class OcrEngine implements ImagingConstants {
 	 * to this method. If that is undesired, it is best to work on a copy.
 	 * @param block the block to run Tesseract on
 	 * @param pageImage the image of the page
-	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 * @param timeout the maximum time to wait for an OCR instance to become
 	 *            available (in milliseconds, relevant only in thread pool mode)
 	 * @throws OcrInstanceUnavailableException
 	 * @throws IOException
 	 */
-	public void doBlockOcr(ImRegion block, PageImage pageImage, ProgressMonitor psm, long timeout) throws IOException {
+	public void doBlockOcr(ImRegion block, PageImage pageImage, ProgressMonitor pm, long timeout) throws IOException {
 		
 		//	create single-page document for structure analysis
 		ImDocument structDoc = new ImDocument(block.getDocument().docId);
 		ImPage structPage = new ImPage(structDoc, block.getPage().pageId, block.getPage().bounds);
 		
 		//	do OCR without further checks
-		this.doBlockOcr(block, pageImage, psm, ((int) (Thread.currentThread().getId() & Integer.MAX_VALUE)), structPage, timeout);
+		this.doBlockOcr(block, pageImage, pm, ((int) (Thread.currentThread().getId() & Integer.MAX_VALUE)), structPage, timeout);
 	}
 	
-	private void doBlockOcr(ImRegion block, PageImage pageImage, ProgressMonitor psm, int blockNr, ImPage structPage, long timeout) throws IOException {
-		if (psm == null)
-			psm = ProgressMonitor.dummy;
+	private void doBlockOcr(ImRegion block, PageImage pageImage, ProgressMonitor pm, int blockNr, ImPage structPage, long timeout) throws IOException {
+		if (pm == null)
+			pm = ProgressMonitor.dummy;
 		
 		//	build text image
 		BufferedImage blockTextImage = this.getOcrImage(block.bounds, pageImage);
@@ -476,14 +476,14 @@ public class OcrEngine implements ImagingConstants {
 		Tokenizer tokenizer = ((Tokenizer) block.getDocument().getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER));
 		
 		//	do OCR
-		OcrWord[] blockWords = this.doBlockOcr(blockNr, blockTextImage, pageImage.currentDpi, psm, false, timeout, tokenizer);
+		OcrWord[] blockWords = this.doBlockOcr(blockNr, blockTextImage, pageImage.currentDpi, pm, false, timeout, tokenizer);
 		if (blockWords.length == 0) {
-			psm.setInfo(" ==> no text found");
+			pm.setInfo(" ==> no text found");
 			return;
 		}
-		psm.setInfo(" ==> found " + blockWords.length + " words:");
+		pm.setInfo(" ==> found " + blockWords.length + " words:");
 		for (int w = 0; w < blockWords.length; w++)
-			psm.setInfo("   - '" + blockWords[w].str + "' at " + blockWords[w].box.toString());
+			pm.setInfo("   - '" + blockWords[w].str + "' at " + blockWords[w].box.toString());
 		
 		//	split up words that tokenize apart
 		blockWords = this.checkTokenization(blockWords, blockTextImage, tokenizer);
@@ -500,15 +500,15 @@ public class OcrEngine implements ImagingConstants {
 		}
 		
 		//	do own content analysis to find words missed by Tessearct (tends to happen with page numbers ...)
-		psm.setInfo(" - analyzing block structure without words");
+		pm.setInfo(" - analyzing block structure without words");
 		ImRegion structBlock = new ImRegion(structPage, block.bounds);
-		PageImageConverter.fillInTextBlockStructure(structBlock, pageImage, ((BoundingBox[]) null), psm);
+		PageImageConverter.fillInTextBlockStructure(structBlock, pageImage, ((BoundingBox[]) null), pm);
 		
 		//	get words
 		ImWord[] blockStructureWords = structBlock.getWords();
-		psm.setInfo(" ==> found " + blockStructureWords.length + " own words:");
+		pm.setInfo(" ==> found " + blockStructureWords.length + " own words:");
 		for (int w = 0; w < blockStructureWords.length; w++)
-			psm.setInfo("   - " + blockStructureWords[w].bounds);
+			pm.setInfo("   - " + blockStructureWords[w].bounds);
 		
 		//	index and sort result of own layout analysis
 		TreeMap blockStructureWordsByBoxes = new TreeMap(new Comparator() {
@@ -545,19 +545,19 @@ public class OcrEngine implements ImagingConstants {
 				bswbit.remove();
 			}
 		}
-		psm.setInfo(" ==> " + blockStructureWordsByBoxes.size() + " words missed by Tesseract");
+		pm.setInfo(" ==> " + blockStructureWordsByBoxes.size() + " words missed by Tesseract");
 		
 		//	individually OCR whatever Tesseract did not find in full block pass
-		psm.setInfo(" - recovering possible words missed by Tesseract");
+		pm.setInfo(" - recovering possible words missed by Tesseract");
 		int blockStructureWordNr = 0;
 		for (Iterator bswbit = blockStructureWordsByBoxes.keySet().iterator(); bswbit.hasNext();) {
 			BoundingBox blockStructureWordBox = ((BoundingBox) bswbit.next());
-			psm.setInfo("   - OCRing " + blockStructureWordBox.toString());
+			pm.setInfo("   - OCRing " + blockStructureWordBox.toString());
 			BufferedImage blockStructureWordImage = this.getOcrImage(blockStructureWordBox, pageImage);
-			OcrWord[] blockStructureWordContent = this.doBlockOcr(((blockNr * 100) + blockStructureWordNr++), blockStructureWordImage, pageImage.currentDpi, psm, false, timeout, tokenizer);
+			OcrWord[] blockStructureWordContent = this.doBlockOcr(((blockNr * 100) + blockStructureWordNr++), blockStructureWordImage, pageImage.currentDpi, pm, false, timeout, tokenizer);
 			blockStructureWordContent = this.checkTokenization(blockStructureWordContent, blockStructureWordImage, tokenizer);
 			for (int w = 0; w < blockStructureWordContent.length; w++) {
-				psm.setInfo("     - '" + blockStructureWordContent[w].str + "' at " + blockStructureWordContent[w].box.toString());
+				pm.setInfo("     - '" + blockStructureWordContent[w].str + "' at " + blockStructureWordContent[w].box.toString());
 				if (blockStructureWordContent[w].str.length() == 0)
 					continue;
 				BoundingBox blockStructureWordContentBox = new BoundingBox((blockStructureWordContent[w].box.left + blockStructureWordBox.left), (blockStructureWordContent[w].box.right + blockStructureWordBox.left), (blockStructureWordContent[w].box.top + blockStructureWordBox.top), (blockStructureWordContent[w].box.bottom + blockStructureWordBox.top));

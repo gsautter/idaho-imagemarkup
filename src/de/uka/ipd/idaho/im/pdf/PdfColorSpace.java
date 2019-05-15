@@ -71,7 +71,11 @@ abstract class PdfColorSpace {
 		else if ("DeviceGray".equalsIgnoreCase(name) || "CalGray".equalsIgnoreCase(name)) {
 			this.colorantNames[0] = "Black";
 		}
-		//	TODO initialize components of Lab color space (once we have an example PDF, that is ...)
+		else if ("Lab".equalsIgnoreCase(name)) {
+			this.colorantNames[0] = "A";
+			this.colorantNames[1] = "B";
+			this.colorantNames[2] = "C";
+		}
 	}
 	Color getColor(LinkedList stack, String indent) {
 		while (!(stack.getLast() instanceof Number))
@@ -161,6 +165,27 @@ abstract class PdfColorSpace {
 		else return getColorSpace(csObj.toString());
 	}
 	
+	static PdfColorSpace getImageMaskColorSpace(Hashtable params, Map objects) {
+		Object decodeObj = PdfParser.dereference(params.get("Decode"), objects);
+		//	Decode: [0, 1] => 0 is black, 1 is white; [1, 0] => the other way around
+		boolean zeroIsBlack = true;
+		if ((decodeObj instanceof Vector) && (((Vector) decodeObj).size() == 2))
+			zeroIsBlack = (((Number) ((Vector) decodeObj).get(0)).intValue() == 0);
+		return (zeroIsBlack ? imageMask01 : imageMask10);
+	}
+	private static PdfColorSpace imageMask01 = new PdfColorSpace("ImageMask01", 1, true) {
+		Color decodeColor(LinkedList stack, String indent) {
+			boolean pixelIsZero = (((Number) stack.removeLast()).floatValue() < 0.5);
+			return (pixelIsZero ? Color.BLACK : Color.WHITE);
+		}
+	};
+	private static PdfColorSpace imageMask10 = new PdfColorSpace("ImageMask10", 1, true) {
+		Color decodeColor(LinkedList stack, String indent) {
+			boolean pixelIsZero = (((Number) stack.removeLast()).floatValue() < 0.5);
+			return (pixelIsZero ? Color.WHITE : Color.BLACK);
+		}
+	};
+	
 	private static PdfColorSpace deviceCmyk = new PdfColorSpace("DeviceCMYK", 4, false) {
 		Color decodeColor(LinkedList stack, String indent) {
 			float k = ((Number) stack.removeLast()).floatValue();
@@ -218,8 +243,8 @@ abstract class PdfColorSpace {
 			
 			//	from http://www.easyrgb.com/index.php?X=MATH&H=01#text1
 			x = (x / 100);
-			y = (y * 100);
-			z = (z * 100);
+			y = (y / 100);
+			z = (z / 100);
 			
 			float r = ((x * 3.2406f) + (y * -1.5372f) + (z * -0.4986f));
 			float g = ((x * -0.9689f) + (y * 1.8758f) + (z * 0.0415f));
@@ -449,6 +474,8 @@ abstract class PdfColorSpace {
 		private String[] colorantNames;
 		private PdfColorSpace altColorSpace;
 		private Function tintTransformer;
+		private String[] altComponentNames;
+		private int[] colorantAltComponentIndices;
 		private HashMap colorCache = new HashMap();
 		DeviceNColorSpace(String name, Vector data, PdfColorSpace altCs, Map objects) {
 			super(name, ((Vector) data.get(1)).size(), ((data.size() < 5) || !(data.get(4) instanceof Hashtable) || (((Hashtable) data.get(4)).get("Subtype") == null) || !"NChannel".equals(((Hashtable) data.get(4)).get("Subtype"))));
@@ -469,7 +496,45 @@ abstract class PdfColorSpace {
 			}
 			else this.tintTransformer = new Function(((Hashtable) ttObj), null, objects);
 			
-			//	TODO implement and observe Process attribute (dictionary with entries ColorSpace and Components, see PDF 1.6 Spec page number 244)
+			if (data.size() == 5) {
+				Object attribObj = PdfParser.dereference(data.get(4), objects);
+				System.out.println(this.name + ": attributes are " + attribObj);
+				if (attribObj instanceof Hashtable)
+					this.processAttributes(((Hashtable) attribObj), objects);
+			}
+		}
+		
+		private void processAttributes(Hashtable attribs, Map objects) {
+			Object subTypeObj = attribs.get("Subtype");
+			System.out.println(this.name + ": subtype is " + subTypeObj);
+			if ((subTypeObj == null) || !subTypeObj.equals("NChannel"))
+				return;
+			
+			Object processObj = PdfParser.dereference(attribs.get("Process"), objects);
+			System.out.println(this.name + ": process is " + processObj);
+			if (!(processObj instanceof Hashtable))
+				return;
+			Hashtable process = ((Hashtable) processObj);
+			
+			this.altColorSpace = getColorSpace(PdfParser.dereference(process.get("ColorSpace"), objects), objects);
+			if (this.altColorSpace == null)
+				throw new RuntimeException("Invalid process Color Space '" + PdfParser.dereference(process.get("ColorSpace"), objects) + "'");
+			
+			Vector processComponents = ((Vector) PdfParser.dereference(process.get("Components"), objects));
+			this.altComponentNames = new String[processComponents.size()];
+			for (int c = 0; c < processComponents.size(); c++)
+				this.altComponentNames[c] = processComponents.get(c).toString();
+			
+			this.colorantAltComponentIndices = new int[this.colorantNames.length];
+			for (int c = 0; c < this.colorantNames.length; c++) {
+				for (int ac = 0; ac < this.altComponentNames.length; ac++)
+					if (this.altComponentNames[ac].equals(this.colorantNames[c])) {
+						this.colorantAltComponentIndices[c] = ac;
+						break;
+					}
+			}
+			
+			this.tintTransformer = null;
 		}
 		
 		Color decodeColor(LinkedList stack, String indent) {
@@ -489,7 +554,7 @@ abstract class PdfColorSpace {
 					x[d] = ((Number) lStack.removeFirst()).floatValue();
 				if (indent != null)
 					System.out.println(indent + this.name + ": X is " + Arrays.toString(x));
-				float[] y = this.tintTransformer.evaluate(x, ((indent == null) ? null : (indent + "  ")));
+				float[] y = this.transformTints(x, indent);
 				if (indent != null)
 					System.out.println(indent + this.name + ": Y is " + Arrays.toString(y));
 				for (int r = 0; r < y.length; r++)
@@ -503,6 +568,16 @@ abstract class PdfColorSpace {
 			}
 			this.colorStats.add(colorCacheKey);
 			return color;
+		}
+		private float[] transformTints(float[] x, String indent) {
+			if (this.tintTransformer == null) {
+				float[] y = new float[this.altComponentNames.length];
+				Arrays.fill(y, 0);
+				for (int c = 0; c < this.colorantNames.length; c++)
+					y[this.colorantAltComponentIndices[c]] = x[c];
+				return y;
+			}
+			else return this.tintTransformer.evaluate(x, ((indent == null) ? null : (indent + "  ")));
 		}
 		private CountingSet colorStats = new CountingSet(new TreeMap());
 		void printStats() {

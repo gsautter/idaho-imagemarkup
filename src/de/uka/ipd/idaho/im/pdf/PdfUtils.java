@@ -110,6 +110,10 @@ class PdfUtils {
 		return true;
 	}
 	
+	static boolean startsWith(byte[] bytes, String str) {
+		return startsWith(bytes, str, 0);
+	}
+	
 	static boolean startsWith(byte[] bytes, String str, int offset) {
 		if (bytes.length < (offset + str.length()))
 			return false;
@@ -120,6 +124,27 @@ class PdfUtils {
 		}
 		
 		return true;
+	}
+	
+	static int indexOf(byte[] bytes, String str) {
+		return indexOf(bytes, str, 0, (bytes.length - str.length()));
+	}
+	
+	static int indexOf(byte[] bytes, String str, int seekStart, int seekLimit) {
+		if (bytes.length < (str.length() + seekStart))
+			return -1;
+		
+		if (str.length() == 0)
+			return 0;
+		
+		seekLimit = Math.min(seekLimit, (bytes.length - str.length()));
+		char sc = str.charAt(0);
+		for (int o = seekStart; o < seekLimit; o++) {
+			if ((bytes[o] == sc) && startsWith(bytes, str, o))
+				return o;
+		}
+		
+		return -1;
 	}
 	
 	static boolean endsWith(byte[] bytes, String str) {

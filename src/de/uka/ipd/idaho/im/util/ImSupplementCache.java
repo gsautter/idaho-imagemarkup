@@ -141,7 +141,7 @@ public class ImSupplementCache {
 					for (int s = 0; s < imss.length; s++) {
 						if (imss[s] instanceof CachedSupplement)
 							continue; // no use caching twice
-						if ((imss[s] instanceof ImSupplement.Figure)/* || (imss[s] instanceof ImSupplement.Graphics)*/ || (imss[s] instanceof ImSupplement.Scan) || (imss[s] instanceof ImSupplement.Scan))
+						if ((imss[s] instanceof ImSupplement.Figure)/* || (imss[s] instanceof ImSupplement.Graphics)*/ || (imss[s] instanceof ImSupplement.Scan) || (imss[s] instanceof ImSupplement.Source))
 							this.doc.addSupplement(this.createDiskSupplement(imss[s], null));
 					}
 					
@@ -182,7 +182,6 @@ public class ImSupplementCache {
 		
 		//	store supplement in file (if not done previously)
 		if (!sFile.exists()) {
-//			OutputStream sos = new BufferedOutputStream(new FileOutputStream(sFile));
 			File sFileCaching = new File(this.supplementFolder, (this.doc.docId + "." + sDataName + "." + sDataType + ".caching"));
 			OutputStream sos = new BufferedOutputStream(new FileOutputStream(sFileCaching));
 			byte[] sBuffer = new byte[1024];
@@ -195,7 +194,7 @@ public class ImSupplementCache {
 		
 		//	replace supplement with disk based one
 		if (ims instanceof ImSupplement.Figure)
-			return new CachedFigure(this.doc, ims.getMimeType(), ((ImSupplement.Figure) ims).getPageId(), ((ImSupplement.Figure) ims).getRenderOrderNumber(), ((ImSupplement.Figure) ims).getDpi(), ((ImSupplement.Figure) ims).getBounds(), sFile);
+			return new CachedFigure(this.doc, ims.getMimeType(), ((ImSupplement.Figure) ims).getPageId(), ((ImSupplement.Figure) ims).getRenderOrderNumber(), ((ImSupplement.Figure) ims).getDpi(), ((ImSupplement.Figure) ims).getBounds(), ((ImSupplement.Figure) ims).getClipBounds(), sFile);
 //		else if (ims instanceof ImSupplement.Graphics)
 //			return new CachedGraphics(this.doc, ((ImSupplement.Graphics) ims).getPageId(), ((ImSupplement.Graphics) ims).getRenderOrderNumber(), ((ImSupplement.Graphics) ims).getBounds(), sFile);
 		else if (ims instanceof ImSupplement.Scan)
@@ -249,8 +248,8 @@ public class ImSupplementCache {
 	
 	private static class CachedFigure extends ImSupplement.Figure implements CachedSupplement {
 		private File cacheFile;
-		CachedFigure(ImDocument doc, String mimeType, int pageId, int renderOrderNumber, int dpi, BoundingBox bounds, File cacheFile) {
-			super(doc, mimeType, pageId, renderOrderNumber, dpi, bounds);
+		CachedFigure(ImDocument doc, String mimeType, int pageId, int renderOrderNumber, int dpi, BoundingBox bounds, BoundingBox clipBounds, File cacheFile) {
+			super(doc, mimeType, pageId, renderOrderNumber, dpi, bounds, clipBounds);
 			this.cacheFile = cacheFile;
 		}
 		public File getCacheFile() {

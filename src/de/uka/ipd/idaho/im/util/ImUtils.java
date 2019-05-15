@@ -106,9 +106,30 @@ public class ImUtils implements ImagingConstants {
 //				return -1;
 //			if (w2.centerX <= w1.bounds.left)
 //				return 1;
-			
-			//	now, either center lies in the other box (massive overlap, not peripheral)
+//			
+//			//	now, either center lies in the other box (massive overlap, not peripheral)
 			return ((w1.centerY == w2.centerY) ? (w1.centerX - w2.centerX) : (w1.centerY - w2.centerY));
+		}
+	};
+	
+	/** Counterpart of <code>leftRightTopDownOrder</code> for words written in
+	 * bottom-up direction */
+	public static Comparator bottomUpLeftRightOrder = new Comparator() {
+		public int compare(Object obj1, Object obj2) {
+			ImWord w1 = ((ImWord) obj1);
+			ImWord w2 = ((ImWord) obj2);
+			return ((w1.centerX == w2.centerX) ? (w2.centerY - w1.centerY) : (w1.centerX - w2.centerX));
+		}
+	};
+	
+	
+	/** Counterpart of <code>leftRightTopDownOrder</code> for words written in
+	 * top-down direction */
+	public static Comparator topDownRightLeftOrder = new Comparator() {
+		public int compare(Object obj1, Object obj2) {
+			ImWord w1 = ((ImWord) obj1);
+			ImWord w2 = ((ImWord) obj2);
+			return ((w1.centerX == w2.centerX) ? (w1.centerY - w2.centerY) : (w2.centerX - w1.centerX));
 		}
 	};
 	
@@ -219,6 +240,58 @@ public class ImUtils implements ImagingConstants {
 		
 		//	sort last line
 		Arrays.sort(words, lineStart, words.length, leftRightOrder);
+	}
+	
+	/**
+	 * Sorts an array of bottom-up words in bottom-up-left-right order, in two
+	 * steps. This facilitates use of this topological order without the need
+	 * to define it in a single <code>Comparator</code>, which is not generally
+	 * possible in all cases, thus violating the contracts of <code>Arrays.sort()</code>.
+	 * @param words the array of words to sort
+	 */
+	public static void sortBottomUpLeftRight(ImWord[] words) {
+		
+		//	sort left-right first
+		Arrays.sort(words, leftRightOrder);
+		
+		//	sort individual lines bottom to top
+		int lineStart = 0;
+		for (int w = 1; w < words.length; w++)
+			
+			//	this word starts a new line, sort previous one
+			if ((words[w].centerX > words[lineStart].bounds.right) && (words[lineStart].centerX < words[w].bounds.left)) {
+				Arrays.sort(words, lineStart, w, Collections.reverseOrder(topDownOrder));
+				lineStart = w;
+			}
+		
+		//	sort last line
+		Arrays.sort(words, lineStart, words.length, Collections.reverseOrder(topDownOrder));
+	}
+	
+	/**
+	 * Sorts an array of top-down words in top-down-right-left order, in two
+	 * steps. This facilitates use of this topological order without the need
+	 * to define it in a single <code>Comparator</code>, which is not generally
+	 * possible in all cases, thus violating the contracts of <code>Arrays.sort()</code>.
+	 * @param words the array of words to sort
+	 */
+	public static void sortTopDownRightLeft(ImWord[] words) {
+		
+		//	sort right-left first
+		Arrays.sort(words, Collections.reverseOrder(leftRightOrder));
+		
+		//	sort individual lines left to right
+		int lineStart = 0;
+		for (int w = 1; w < words.length; w++)
+			
+			//	this word starts a new line, sort previous one
+			if ((words[w].centerX < words[lineStart].bounds.left) && (words[lineStart].centerX > words[w].bounds.right)) {
+				Arrays.sort(words, lineStart, w, topDownOrder);
+				lineStart = w;
+			}
+		
+		//	sort last line
+		Arrays.sort(words, lineStart, words.length, topDownOrder);
 	}
 	
 	/**
@@ -548,6 +621,10 @@ public class ImUtils implements ImagingConstants {
 		//	order words (use dedicated sort method for left-right-top-down)
 		if (wordOrder == leftRightTopDownOrder)
 			sortLeftRightTopDown(words);
+		else if (wordOrder == bottomUpLeftRightOrder)
+			sortBottomUpLeftRight(words);
+		else if (wordOrder == topDownRightLeftOrder)
+			sortTopDownRightLeft(words);
 		else Arrays.sort(words, wordOrder);
 		
 		//	index words from array
@@ -731,7 +808,7 @@ public class ImUtils implements ImagingConstants {
 			sb.append(imw.getString());
 			if (imw == lastWord)
 				break;
-			if ((imw.getNextRelation() == ImWord.NEXT_RELATION_SEPARATE) && (imw.getNextWord() != null) && Gamta.insertSpace(imw.getString(), imw.getNextWord().getString()))
+			if ((imw.getNextRelation() == ImWord.NEXT_RELATION_SEPARATE) && (imw.getNextWord() != null) && isSpace(imw, imw.getNextWord()) && Gamta.insertSpace(imw.getString(), imw.getNextWord().getString()))
 				sb.append(" ");
 			else if (imw.getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END)
 				sb.append(ignoreLineBreaks ? " " : "\r\n");
@@ -742,23 +819,74 @@ public class ImUtils implements ImagingConstants {
 	}
 	
 	/**
-	 * Find potential captions for a given target area (the region marking what
-	 * a caption can refer to, e.g. a table of figure) in a page of an Image
-	 * Markup document. In particular, this method seeks caption annotations
-	 * above and/or below (depending on the respective arguments) the target
-	 * region within on inch distance. If target type matching is active, this
-	 * method only returns captions starting with 'Tab' if the target region is
-	 * a table, and exclude those captions if the target region is not a table. 
-	 * @param page the page to search captions in
-	 * @param target the caption target region
-	 * @param above search captions above the target region?
-	 * @param below search captions below the target region?
-	 * @param matchTargetType match caption type and target type?
-	 * @return an array holding potential captions for the argument target region
-	 * @see de.uka.ipd.idaho.im.util.ImUtils#isCaptionTargetMatch(BoundingBox, BoundingBox, int))
+	 * Concatenate the text of a sequence of words, regardless of what logical
+	 * text stream they belong to, and regardless of whether or not they form
+	 * a coherent sequence in their respective logical text stream. Adjacent
+	 * words are treated as separate unless they are directly adjacent in the
+	 * same logical text stream, in which case their defined relationship comes
+	 * to bear.
+	 * @param words the words to concatenate
+	 * @param ignoreLineBreaks represent line breaks as simple spaces?
+	 * @return the concatenated text;
 	 */
-	public static ImAnnotation[] findCaptions(ImRegion target, boolean above, boolean below, boolean matchTargetType) {
-		return findCaptions(target, above, below, false, matchTargetType);
+	public static String getString(ImWord[] words, boolean ignoreLineBreaks) {
+		return getString(words, null, ignoreLineBreaks);
+	}
+	
+	/**
+	 * Concatenate the text of a sequence of words, regardless of what logical
+	 * text stream they belong to, and regardless of whether or not they form
+	 * a coherent sequence in their respective logical text stream. Adjacent
+	 * words are treated as separate unless they are directly adjacent in the
+	 * same logical text stream, in which case their defined relationship comes
+	 * to bear. If the argument comparator is not null it will be used to sort
+	 * the argument array before concatenation.
+	 * @param words the words to concatenate
+	 * @param wordOrder the comparator to sort the argument words with
+	 * @param ignoreLineBreaks represent line breaks as simple spaces?
+	 * @return the concatenated text;
+	 */
+	public static String getString(ImWord[] words, Comparator wordOrder, boolean ignoreLineBreaks) {
+		if (wordOrder == leftRightTopDownOrder)
+			sortLeftRightTopDown(words);
+		else if (wordOrder == bottomUpLeftRightOrder)
+			sortBottomUpLeftRight(words);
+		else if (wordOrder == topDownRightLeftOrder)
+			sortTopDownRightLeft(words);
+		else if (wordOrder != null)
+			Arrays.sort(words, wordOrder);
+		StringBuffer sb = new StringBuffer();
+		for (int w = 0; w < words.length; w++) {
+			sb.append(words[w].getString());
+			if ((w+1) < words.length) {
+				if (words[w].getNextWord() != words[w+1])
+					sb.append(" ");
+				else if ((words[w].getNextRelation() == ImWord.NEXT_RELATION_SEPARATE) && (words[w].getNextWord() != null) && isSpace(words[w], words[w].getNextWord()) && Gamta.insertSpace(words[w].getString(), words[w].getNextWord().getString()))
+					sb.append(" ");
+				else if (words[w].getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END)
+					sb.append(ignoreLineBreaks ? " " : "\r\n");
+				else if ((words[w].getNextRelation() == ImWord.NEXT_RELATION_HYPHENATED) && (sb.length() != 0))
+					sb.deleteCharAt(sb.length()-1);
+			}
+		}
+		return sb.toString();
+	}
+	
+	private static boolean isSpace(ImWord word1, ImWord word2) {
+		if (word1.bounds.bottom < word2.centerY)
+			return true; // line offset
+		if (word2.bounds.bottom < word1.centerY)
+			return true; // line offset
+		if (word2.centerY < word1.bounds.top)
+			return true; // line offset
+		if (word1.centerY < word2.bounds.top)
+			return true; // line offset
+		if (word2.bounds.left < word1.centerX)
+			return true; // second word to the left ... WTF
+		int wordDist = (word2.bounds.left - word1.bounds.right);
+		int wordHeight = ((word1.bounds.getHeight() + word2.bounds.getHeight()) / 2);
+//		return (wordHeight <= (wordDist * 5)); // should be OK as an estimate, and with some safety margin, at least for born-digital text (0.25 is smallest defaulting space width)
+		return ((wordHeight * 3) <= (wordDist * 20)); // 15% should be OK as an estimate lower bound, and with some safety margin, at least for born-digital text (0.25 is smallest defaulting space width)
 	}
 	
 	/**
@@ -769,7 +897,27 @@ public class ImUtils implements ImagingConstants {
 	 * region within on inch distance. If target type matching is active, this
 	 * method only returns captions starting with 'Tab' if the target region is
 	 * a table, and exclude those captions if the target region is not a table. 
-	 * @param page the page to search captions in
+	 * @param pages the page to search captions in
+	 * @param target the caption target region
+	 * @param above search captions above the target region?
+	 * @param below search captions below the target region?
+	 * @param matchTargetType match caption type and target type?
+	 * @return an array holding potential captions for the argument target region
+	 * @see de.uka.ipd.idaho.im.util.ImUtils#isCaptionTargetMatch(BoundingBox, BoundingBox, int))
+	 */
+	public static ImAnnotation[] findCaptions(ImRegion target, boolean above, boolean below, boolean matchTargetType) {
+		return findCaptions(target, above, below, false, false, matchTargetType);
+	}
+	
+	/**
+	 * Find potential captions for a given target area (the region marking what
+	 * a caption can refer to, e.g. a table of figure) in a page of an Image
+	 * Markup document. In particular, this method seeks caption annotations
+	 * above and/or below (depending on the respective arguments) the target
+	 * region within on inch distance. If target type matching is active, this
+	 * method only returns captions starting with 'Tab' if the target region is
+	 * a table, and exclude those captions if the target region is not a table. 
+	 * @param pages the page to search captions in
 	 * @param target the caption target region
 	 * @param above search captions above the target region?
 	 * @param below search captions below the target region?
@@ -779,6 +927,28 @@ public class ImUtils implements ImagingConstants {
 	 * @see de.uka.ipd.idaho.im.util.ImUtils#isCaptionTargetMatch(BoundingBox, BoundingBox, int))
 	 */
 	public static ImAnnotation[] findCaptions(ImRegion target, boolean above, boolean below, boolean beside, boolean matchTargetType) {
+		return findCaptions(target, above, below, beside, false, matchTargetType);
+	}
+	
+	/**
+	 * Find potential captions for a given target area (the region marking what
+	 * a caption can refer to, e.g. a table of figure) in a page of an Image
+	 * Markup document. In particular, this method seeks caption annotations
+	 * above and/or below (depending on the respective arguments) the target
+	 * region within on inch distance. If target type matching is active, this
+	 * method only returns captions starting with 'Tab' if the target region is
+	 * a table, and exclude those captions if the target region is not a table. 
+	 * @param pages the page to search captions in
+	 * @param target the caption target region
+	 * @param above search captions above the target region?
+	 * @param below search captions below the target region?
+	 * @param beside search captions to left and right of the target region?
+	 * @param inside search captions inside the target region?
+	 * @param matchTargetType match caption type and target type?
+	 * @return an array holding potential captions for the argument target region
+	 * @see de.uka.ipd.idaho.im.util.ImUtils#isCaptionTargetMatch(BoundingBox, BoundingBox, int))
+	 */
+	public static ImAnnotation[] findCaptions(ImRegion target, boolean above, boolean below, boolean beside, boolean inside, boolean matchTargetType) {
 		
 		//	quick check alignment switches
 		if (!above && !below)
@@ -894,6 +1064,34 @@ public class ImUtils implements ImagingConstants {
 				//	keep start word for getting annotations
 				captionStartWord = paragraphWords[0];
 				minHorizontalDist = horizontalDist;
+			}
+			
+			//	get annotations for caption start closest above target
+			if (captionStartWord != null) {
+				ImAnnotation[] captionAnnots = page.getDocument().getAnnotations(captionStartWord, null);
+				for (int a = 0; a < captionAnnots.length; a++) {
+					if (ImAnnotation.CAPTION_TYPE.equals(captionAnnots[a].getType()))
+						captionList.add(captionAnnots[a]);
+				}
+			}
+		}
+		
+		//	add captions inside target area
+		if (inside) {
+			ImWord captionStartWord = null;
+			for (int p = 0; p < paragraphs.length; p++) {
+				
+				//	this one is not inside the target region
+				if (!target.bounds.includes(paragraphs[p].bounds, true))
+					continue;
+				
+				//	check words
+				ImWord[] paragraphWords = paragraphs[p].getWords();
+				if (!checkCaptionWords(paragraphWords, (matchTargetType ? target.getType() : null)))
+					continue;
+				
+				//	keep start word for getting annotations
+				captionStartWord = paragraphWords[0];
 			}
 			
 			//	get annotations for caption start closest above target
@@ -1125,7 +1323,7 @@ public class ImUtils implements ImagingConstants {
 		
 		//	generate rows if none exist
 		if (tableRows.length == 0)
-			tableRows = createTableRows(table, minRowMargin, minRowCount);
+			tableRows = createTableRows(table, ignoreWords, minRowMargin, minRowCount);
 		
 		//	finally ...
 		return tableRows;
@@ -1206,7 +1404,7 @@ public class ImUtils implements ImagingConstants {
 		if (tableWords.length == 0)
 			return null;
 		
-		//	assess column occupancy
+		//	assess column occupation
 		int[] rowWordCols = new int[table.bounds.bottom - table.bounds.top];
 		Arrays.fill(rowWordCols, 0);
 		for (int w = 0; w < tableWords.length; w++) {
@@ -1314,7 +1512,7 @@ public class ImUtils implements ImagingConstants {
 		
 		//	generate columns if none exist
 		if (tableCols.length == 0)
-			tableCols = createTableColumns(table, minColumnMargin, minColumnCount);
+			tableCols = createTableColumns(table, ignoreWords, minColumnMargin, minColumnCount);
 		
 		//	finally ...
 		return tableCols;
@@ -1395,12 +1593,12 @@ public class ImUtils implements ImagingConstants {
 		if (tableWords.length == 0)
 			return null;
 		
-		//	assess column occupancy
-		int[] colWordRows = new int[table.bounds.right - table.bounds.left];
+		//	assess column occupation
+		int[] colWordRows = new int[table.bounds.getWidth()];
 		Arrays.fill(colWordRows, 0);
 		for (int w = 0; w < tableWords.length; w++) {
 			for (int c = Math.max(table.bounds.left, tableWords[w].bounds.left); c < Math.min(table.bounds.right, tableWords[w].bounds.right); c++)
-				colWordRows[c - table.bounds.left] += (tableWords[w].bounds.bottom - tableWords[w].bounds.top);
+				colWordRows[c - table.bounds.left] += tableWords[w].bounds.getHeight();
 		}
 		
 		//	collect column gaps
@@ -1423,305 +1621,305 @@ public class ImUtils implements ImagingConstants {
 				tableColList.add(new ImRegion(page.getDocument(), page.pageId, new BoundingBox(tableColLeft, tableColRight, table.bounds.top, table.bounds.bottom), ImRegion.TABLE_COL_TYPE));
 		}
 		ImRegion[] tableCols = ((ImRegion[]) tableColList.toArray(new ImRegion[tableColList.size()]));
-		
-		//	compute word density and average space widths in columns
-		int[] colRowCount = new int[tableCols.length];
-		int[] colWordCount = new int[tableCols.length];
-		int[] colWordHeightSum = new int[tableCols.length];
-		int[] colWordSpaceCount = new int[tableCols.length];
-		int[] colWordSpaceWidthSum = new int[tableCols.length];
-		int[] maxColWordSpace = new int[tableCols.length];
-		for (int c = 0; c < tableCols.length; c++) {
-			if (DEBUG_CREATE_TABLE_COLS) System.out.println("Investigating column " + tableCols[c].bounds + " for spaces");
-			int rowBreakCount = 0;
-			int wordHeightSum = 0;
-			int wordSpaceCount = 0;
-			int wordSpaceWidthSum = 0;
-			int minWordSpace = Integer.MAX_VALUE;
-			int maxWordSpace = 0;
-			ImWord[] colWords = page.getWordsInside(tableCols[c].bounds);
-			if (ignoreWords != null)
-				colWords = filterWords(colWords, ignoreWords);
-			if (colWords.length == 0) {
-				colWordCount[c] = 0;
-				colWordHeightSum[c] = 0;
-				colWordSpaceCount[c] = 0;
-				colWordSpaceWidthSum[c] = 0;
-				maxColWordSpace[c] = 0;
-				if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - no words to compute spacing from");
-			}
-			sortLeftRightTopDown(colWords);
-			for (int w = 0; w < colWords.length; w++) {
-				wordHeightSum += (colWords[w].bounds.bottom - colWords[w].bounds.top);
-				if ((w+1) == colWords.length)
-					continue;
-				if (colWords[w].bounds.bottom < colWords[w+1].bounds.top) {
-					rowBreakCount++;
-					continue;
-				}
-				if ((colWords[w].centerY < colWords[w+1].bounds.top) || (colWords[w].centerY >= colWords[w+1].bounds.bottom))
-					continue;
-				int wordSpace = (colWords[w+1].bounds.left - colWords[w].bounds.right);
-				if (wordSpace <= 0)
-					continue;
-				wordSpaceCount++;
-				wordSpaceWidthSum += wordSpace;
-				minWordSpace = Math.min(minWordSpace, wordSpace);
-				maxWordSpace = Math.max(maxWordSpace, wordSpace);
-			}
-			colRowCount[c] = (rowBreakCount + 1);
-			colWordCount[c] = colWords.length;
-			colWordHeightSum[c] = wordHeightSum;
-			colWordSpaceCount[c] = wordSpaceCount;
-			colWordSpaceWidthSum[c] = wordSpaceWidthSum;
-			if (wordSpaceCount == 0) {
-				maxColWordSpace[c] = 0;
-				if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - could not compute word spacing");
-			}
-			else {
-				maxColWordSpace[c] = maxWordSpace;
-				if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - avg word space is " + (((float) wordSpaceWidthSum) / wordSpaceCount) + " (min " + minWordSpace + ", max " + maxColWordSpace[c] + ") from " + wordSpaceCount + " spaces, norm is " + (((float) wordHeightSum) / (colWords.length * 2)));
-			}
-		}
-		
-		//	compute average space width across _all_ columns
-		int rowCountSum = 0;
-		int wordCount = 0;
-		int wordHeightSum = 0;
-		int wordSpaceCount = 0;
-		int wordSpaceWidthSum = 0;
-		for (int c = 0; c < tableCols.length; c++) {
-			rowCountSum += colRowCount[c];
-			wordCount += colWordCount[c];
-			wordHeightSum += colWordHeightSum[c];
-			wordSpaceCount += colWordSpaceCount[c];
-			wordSpaceWidthSum += colWordSpaceWidthSum[c];
-		}
-		float avgRowCount = (((float) rowCountSum) / tableCols.length);
-		if (DEBUG_CREATE_TABLE_COLS) System.out.println("Average row count is " + avgRowCount);
-		float normWordSpace = (((float) wordHeightSum) / (wordCount * 2)); // assume regular space as 0.5, i.e., half the word height of 1.0 (it's actually between 0.25 and 0.33 in most fonts)
-		float maxNormWordSpace = (((float) wordHeightSum) / wordCount); // cap average off at 1.0 (it's rarely wider in any font, if at all, and the cap helps with cases of a shunned column gap being the only space in the table at all)
-		float avgWordSpace = ((wordSpaceCount == 0) ? normWordSpace : (((float) wordSpaceWidthSum) / wordSpaceCount));
-		if (DEBUG_CREATE_TABLE_COLS) System.out.println("Average word space is " + avgWordSpace + " from " + wordSpaceCount + " spaces, norm is " + normWordSpace + ", capped at " + maxNormWordSpace);
-		if (avgWordSpace > maxNormWordSpace) {
-			avgWordSpace = maxNormWordSpace;
-			if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - capped to norm maximum");
-		}
-		else if (avgWordSpace < normWordSpace) {
-			avgWordSpace = normWordSpace;
-			if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - increase to norm");
-		}
-		
-		//	re-assess columns that contain potential further splits
-		for (int c = 0; c < tableCols.length; c++) {
-			if (DEBUG_CREATE_TABLE_COLS) System.out.println("Investigating column " + tableCols[c].bounds + " for splits");
-			if (colWordSpaceCount[c] == 0) {
-				if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - no spaces at all");
-				continue;
-			}
-			if (maxColWordSpace[c] <= avgWordSpace) {
-				if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - all spaces below average");
-				continue;
-			}
-			
-			//	flag each pixel column in each column as non-gap that (a) is covered by a word or (b) by a space below that average
-			boolean[] isWideGap = new boolean[tableCols[c].bounds.right - tableCols[c].bounds.left];
-			Arrays.fill(isWideGap, true);
-			int[] pxColWordCounts = new int[tableCols[c].bounds.right - tableCols[c].bounds.left];
-			Arrays.fill(pxColWordCounts, 0);
-			ImWord[] colWords = page.getWordsInside(tableCols[c].bounds);
-			if (ignoreWords != null)
-				colWords = filterWords(colWords, ignoreWords);
-			sortLeftRightTopDown(colWords);
-			for (int w = 0; w < colWords.length; w++) {
-				for (int pc = colWords[w].bounds.left; pc < colWords[w].bounds.right; pc++) {
-					isWideGap[pc - tableCols[c].bounds.left] = false;
-					pxColWordCounts[pc - tableCols[c].bounds.left]++;
-				}
-				if ((w+1) == colWords.length)
-					continue;
-				if ((colWords[w].centerY < colWords[w+1].bounds.top) || (colWords[w].centerY >= colWords[w+1].bounds.bottom))
-					continue;
-				int wordSpace = (colWords[w+1].bounds.left - colWords[w].bounds.right);
-				if (wordSpace <= avgWordSpace)
-					for (int pc = colWords[w].bounds.right; pc < colWords[w+1].bounds.left; pc++) {
-						isWideGap[pc - tableCols[c].bounds.left] = false;
-						pxColWordCounts[pc - tableCols[c].bounds.left]++;
-					}
-			}
-			
-			//	also assess width of sparse areas next to non-wide gaps
-			boolean[] isSparselyConstrictedGap = new boolean[tableCols[c].bounds.right - tableCols[c].bounds.left];
-			Arrays.fill(isSparselyConstrictedGap, false);
-			for (int pc = 0; pc < pxColWordCounts.length; pc++) {
-				if (colWordRows[pc + (tableCols[c].bounds.left - table.bounds.left)] != 0)
-					continue; // this one _is_ obstructed
-				if (isWideGap[pc])
-					continue; // we've already found this one
-				int gapStart = pc;
-				int gapEnd = (pc+1);
-				while (gapEnd < pxColWordCounts.length) {
-					if (colWordRows[gapEnd + (tableCols[c].bounds.left - table.bounds.left)] != 0)
-						break;
-					else gapEnd++;
-				}
-				int gapWidth = (gapEnd - gapStart);
-				for (int sl = (gapStart - 1); sl >= 0; sl--) {
-					if ((pxColWordCounts[sl] * 3) < avgRowCount)
-						gapWidth++;
-					else break;
-				}
-				for (int sr = gapStart; sr < pxColWordCounts.length; sr++) {
-					if ((pxColWordCounts[sr] * 3) < avgRowCount)
-						gapWidth++;
-					else break;
-				}
-				if (gapWidth > avgWordSpace) {
-					for (int gc = gapStart; gc < gapEnd; gc++)
-						isSparselyConstrictedGap[gc] = true;
-				}
-			}
-			
-			/* split up column if any space pixel columns remain; it's OK to
-			 * check both wide gaps and sparsely constricted ones in a single
-			 * loop, as they cannot be adjacent to one another: each instance
-			 * of the latter would be absorbed in an instance of the former
-			 * if they were adjacent */
-			ArrayList subColGaps = new ArrayList();
-			int gapStart = -1;
-			for (int pc = 0; pc < isWideGap.length; pc++) {
-				if (isWideGap[pc]) {
-					if (gapStart == -1)
-						gapStart = (pc + (tableCols[c].bounds.left - table.bounds.left));
-				}
-				else if (isSparselyConstrictedGap[pc]) {
-					if (gapStart == -1)
-						gapStart = (pc + (tableCols[c].bounds.left - table.bounds.left));
-				}
-				else {
-					if (gapStart != -1) {
-						int gapEnd = (pc + (tableCols[c].bounds.left - table.bounds.left));
-						subColGaps.add(new Gap(gapStart, gapEnd));
-						if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - found gap from " + (table.bounds.left + gapStart) + " to " + (table.bounds.left + gapEnd));
-					}
-					gapStart = -1;
-				}
-			}
-			
-			//	any new gaps found?
-			if (subColGaps.isEmpty())
-				continue;
-			
-			//	assess maximum row count on both sides of gaps, just to make sure we're not merely splitting some protruding word off a column
-			ArrayList subColMaxRowCounts = new ArrayList(subColGaps.size() + 1);
-			for (int g = 0; g <= subColGaps.size(); g++) {
-				int subColLeft = ((g == 0) ? tableCols[c].bounds.left : (table.bounds.left + ((Gap) subColGaps.get(g-1)).end));
-				int subColRight = ((g == subColGaps.size()) ? tableCols[c].bounds.right : (table.bounds.left + ((Gap) subColGaps.get(g)).start));
-				int maxRowCount = 0;
-				for (int pc = subColLeft; pc < subColRight; pc++)
-					maxRowCount = Math.max(maxRowCount, pxColWordCounts[pc - tableCols[c].bounds.left]);
-				subColMaxRowCounts.add(new Integer(maxRowCount));
-			}
-			
-			if (DEBUG_CREATE_TABLE_COLS) {
-				System.out.println("Got " + subColGaps.size() + " gaps in column " + tableCols[c].bounds + ", in total:");
-				for (int sc = 0; sc < subColMaxRowCounts.size(); sc++) {
-					Integer maxRowCount = ((Integer) subColMaxRowCounts.get(sc));
-					System.out.println(" - sub column with at most " + maxRowCount + " rows occupied");
-					if (sc < subColGaps.size()) {
-						Gap gap = ((Gap) subColGaps.get(sc));
-						System.out.println(" - gap from " + (table.bounds.left + gap.start) + " to " + (table.bounds.left + gap.end));
-					}
-				}
-			}
-			
-			/* sort out gaps that look more like splitting up column values,
-			 * e.g. spaces aligned atop one another; that would occur, for
-			 * instance, with a left-aligned column holding 'Fiji' in 9 rows,
-			 * and 'American Samoa' in 1 row, resulting in a sparsely
-			 * constricted split between 'American' and 'Samoa' */
-			for (int sc = 0; sc < subColMaxRowCounts.size(); sc++) {
-				Integer maxRowCount = ((Integer) subColMaxRowCounts.get(sc));
-				
-				//	this one looks fine, well occupied
-				if ((maxRowCount.intValue() * 3) > avgRowCount)
-					continue;
-				
-				//	get adjacent gaps, and remove smaller one
-				Gap leftGap = ((sc == 0) ? null : ((Gap) subColGaps.get(sc-1)));
-				Gap rightGap = ((sc == subColGaps.size()) ? null : ((Gap) subColGaps.get(sc)));
-				
-				//	we've eliminated everything ...
-				if ((leftGap == null) && (rightGap == null))
-					break;
-				
-				//	we're in leftmost column, can only merge to right
-				if (leftGap == null) {
-					subColGaps.remove(sc);
-					Integer nextMaxRowCount = ((Integer) subColMaxRowCounts.get(sc+1));
-					if (nextMaxRowCount.intValue() < maxRowCount.intValue())
-						subColMaxRowCounts.remove(sc+1);
-					else subColMaxRowCounts.remove(sc);
-					if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - gap from " + (table.bounds.left + rightGap.start) + " to " + (table.bounds.left + rightGap.end) + " eliminated for sparse left column on very left");
-				}
-				
-				//	we're in rightmost column, can only merge to left
-				else if (rightGap == null) {
-					subColGaps.remove(sc-1);
-					Integer prevMaxRowCount = ((Integer) subColMaxRowCounts.get(sc-1));
-					if (prevMaxRowCount.intValue() < maxRowCount.intValue())
-						subColMaxRowCounts.remove(sc-1);
-					else subColMaxRowCounts.remove(sc);
-					if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - gap from " + (table.bounds.left + leftGap.start) + " to " + (table.bounds.left + leftGap.end) + " eliminated for sparse right column on very right");
-				}
-				
-				//	right gap smaller than left one, remove former
-				else if (rightGap.getWidth() < leftGap.getWidth()) {
-					subColGaps.remove(sc);
-					Integer nextMaxRowCount = ((Integer) subColMaxRowCounts.get(sc+1));
-					if (nextMaxRowCount.intValue() < maxRowCount.intValue())
-						subColMaxRowCounts.remove(sc+1);
-					else subColMaxRowCounts.remove(sc);
-					if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - gap from " + (table.bounds.left + rightGap.start) + " to " + (table.bounds.left + rightGap.end) + " eliminated for sparse left column");
-				}
-				
-				//	right gap larger than or equal to left one, remove latter (left aligned columns are way more frequent that right aligned ones, especially with textual content)
-				else {
-					subColGaps.remove(sc-1);
-					Integer prevMaxRowCount = ((Integer) subColMaxRowCounts.get(sc-1));
-					if (prevMaxRowCount.intValue() < maxRowCount.intValue())
-						subColMaxRowCounts.remove(sc-1);
-					else subColMaxRowCounts.remove(sc);
-					if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - gap from " + (table.bounds.left + leftGap.start) + " to " + (table.bounds.left + leftGap.end) + " eliminated for sparse right column");
-				}
-				
-				//	counter loop increment, as we need to come back whichever way we have merged
-				sc--;
-			}
-			
-			//	add whatever gaps we've retained to general ones
-			colGaps.addAll(subColGaps);
-		}
-		
-		//	re-split columns if any new gaps found
-		if (colGaps.size() >= tableCols.length) {
-			Collections.sort(colGaps);
-//			tableCols = new ImRegion[colGaps.size() + 1];
-			tableColList.clear();
-			for (int g = 0; g <= colGaps.size(); g++) {
-				int tableColLeft = table.bounds.left + ((g == 0) ? 0 : ((Gap) colGaps.get(g-1)).end);
-				int tableColRight = ((g == colGaps.size()) ? table.bounds.right : (table.bounds.left + ((Gap) colGaps.get(g)).start));
-//				tableCols[g] = new ImRegion(page.getDocument(), page.pageId, new BoundingBox(tableColLeft, tableColRight, table.bounds.top, table.bounds.bottom), ImRegion.TABLE_COL_TYPE);
-				if (tableColLeft < tableColRight)
-					tableColList.add(new ImRegion(page.getDocument(), page.pageId, new BoundingBox(tableColLeft, tableColRight, table.bounds.top, table.bounds.bottom), ImRegion.TABLE_COL_TYPE));
-			}
-			tableCols = ((ImRegion[]) tableColList.toArray(new ImRegion[tableColList.size()]));
-		}
+//		
+//		//	compute word density and average space widths in columns
+//		int[] colRowCount = new int[tableCols.length];
+//		int[] colWordCount = new int[tableCols.length];
+//		int[] colWordHeightSum = new int[tableCols.length];
+//		int[] colWordSpaceCount = new int[tableCols.length];
+//		int[] colWordSpaceWidthSum = new int[tableCols.length];
+//		int[] maxColWordSpace = new int[tableCols.length];
+//		for (int c = 0; c < tableCols.length; c++) {
+//			if (DEBUG_CREATE_TABLE_COLS) System.out.println("Investigating column " + tableCols[c].bounds + " for spaces");
+//			int rowBreakCount = 0;
+//			int wordHeightSum = 0;
+//			int wordSpaceCount = 0;
+//			int wordSpaceWidthSum = 0;
+//			int minWordSpace = Integer.MAX_VALUE;
+//			int maxWordSpace = 0;
+//			ImWord[] colWords = page.getWordsInside(tableCols[c].bounds);
+//			if (ignoreWords != null)
+//				colWords = filterWords(colWords, ignoreWords);
+//			if (colWords.length == 0) {
+//				colWordCount[c] = 0;
+//				colWordHeightSum[c] = 0;
+//				colWordSpaceCount[c] = 0;
+//				colWordSpaceWidthSum[c] = 0;
+//				maxColWordSpace[c] = 0;
+//				if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - no words to compute spacing from");
+//			}
+//			sortLeftRightTopDown(colWords);
+//			for (int w = 0; w < colWords.length; w++) {
+//				wordHeightSum += (colWords[w].bounds.bottom - colWords[w].bounds.top);
+//				if ((w+1) == colWords.length)
+//					continue;
+//				if (colWords[w].bounds.bottom < colWords[w+1].bounds.top) {
+//					rowBreakCount++;
+//					continue;
+//				}
+//				if ((colWords[w].centerY < colWords[w+1].bounds.top) || (colWords[w].centerY >= colWords[w+1].bounds.bottom))
+//					continue;
+//				int wordSpace = (colWords[w+1].bounds.left - colWords[w].bounds.right);
+//				if (wordSpace <= 0)
+//					continue;
+//				wordSpaceCount++;
+//				wordSpaceWidthSum += wordSpace;
+//				minWordSpace = Math.min(minWordSpace, wordSpace);
+//				maxWordSpace = Math.max(maxWordSpace, wordSpace);
+//			}
+//			colRowCount[c] = (rowBreakCount + 1);
+//			colWordCount[c] = colWords.length;
+//			colWordHeightSum[c] = wordHeightSum;
+//			colWordSpaceCount[c] = wordSpaceCount;
+//			colWordSpaceWidthSum[c] = wordSpaceWidthSum;
+//			if (wordSpaceCount == 0) {
+//				maxColWordSpace[c] = 0;
+//				if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - could not compute word spacing");
+//			}
+//			else {
+//				maxColWordSpace[c] = maxWordSpace;
+//				if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - avg word space is " + (((float) wordSpaceWidthSum) / wordSpaceCount) + " (min " + minWordSpace + ", max " + maxColWordSpace[c] + ") from " + wordSpaceCount + " spaces, norm is " + (((float) wordHeightSum) / (colWords.length * 2)));
+//			}
+//		}
+//		
+//		//	compute average space width across _all_ columns
+//		int rowCountSum = 0;
+//		int wordCount = 0;
+//		int wordHeightSum = 0;
+//		int wordSpaceCount = 0;
+//		int wordSpaceWidthSum = 0;
+//		for (int c = 0; c < tableCols.length; c++) {
+//			rowCountSum += colRowCount[c];
+//			wordCount += colWordCount[c];
+//			wordHeightSum += colWordHeightSum[c];
+//			wordSpaceCount += colWordSpaceCount[c];
+//			wordSpaceWidthSum += colWordSpaceWidthSum[c];
+//		}
+//		float avgRowCount = (((float) rowCountSum) / tableCols.length);
+//		if (DEBUG_CREATE_TABLE_COLS) System.out.println("Average row count is " + avgRowCount);
+//		float normWordSpace = (((float) wordHeightSum) / (wordCount * 2)); // assume regular space as 0.5, i.e., half the word height of 1.0 (it's actually between 0.25 and 0.33 in most fonts)
+//		float maxNormWordSpace = (((float) wordHeightSum) / wordCount); // cap average off at 1.0 (it's rarely wider in any font, if at all, and the cap helps with cases of a shunned column gap being the only space in the table at all)
+//		float avgWordSpace = ((wordSpaceCount == 0) ? normWordSpace : (((float) wordSpaceWidthSum) / wordSpaceCount));
+//		if (DEBUG_CREATE_TABLE_COLS) System.out.println("Average word space is " + avgWordSpace + " from " + wordSpaceCount + " spaces, norm is " + normWordSpace + ", capped at " + maxNormWordSpace);
+//		if (avgWordSpace > maxNormWordSpace) {
+//			avgWordSpace = maxNormWordSpace;
+//			if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - capped to norm maximum");
+//		}
+//		else if (avgWordSpace < normWordSpace) {
+//			avgWordSpace = normWordSpace;
+//			if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - increase to norm");
+//		}
+//		
+//		//	re-assess columns that contain potential further splits
+//		for (int c = 0; c < tableCols.length; c++) {
+//			if (DEBUG_CREATE_TABLE_COLS) System.out.println("Investigating column " + tableCols[c].bounds + " for splits");
+//			if (colWordSpaceCount[c] == 0) {
+//				if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - no spaces at all");
+//				continue;
+//			}
+//			if (maxColWordSpace[c] <= avgWordSpace) {
+//				if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - all spaces below average");
+//				continue;
+//			}
+//			
+//			//	flag each pixel column in each column as non-gap that (a) is covered by a word or (b) by a space below that average
+//			boolean[] isWideGap = new boolean[tableCols[c].bounds.right - tableCols[c].bounds.left];
+//			Arrays.fill(isWideGap, true);
+//			int[] pxColWordCounts = new int[tableCols[c].bounds.right - tableCols[c].bounds.left];
+//			Arrays.fill(pxColWordCounts, 0);
+//			ImWord[] colWords = page.getWordsInside(tableCols[c].bounds);
+//			if (ignoreWords != null)
+//				colWords = filterWords(colWords, ignoreWords);
+//			sortLeftRightTopDown(colWords);
+//			for (int w = 0; w < colWords.length; w++) {
+//				for (int pc = colWords[w].bounds.left; pc < colWords[w].bounds.right; pc++) {
+//					isWideGap[pc - tableCols[c].bounds.left] = false;
+//					pxColWordCounts[pc - tableCols[c].bounds.left]++;
+//				}
+//				if ((w+1) == colWords.length)
+//					continue;
+//				if ((colWords[w].centerY < colWords[w+1].bounds.top) || (colWords[w].centerY >= colWords[w+1].bounds.bottom))
+//					continue;
+//				int wordSpace = (colWords[w+1].bounds.left - colWords[w].bounds.right);
+//				if (wordSpace <= avgWordSpace)
+//					for (int pc = colWords[w].bounds.right; pc < colWords[w+1].bounds.left; pc++) {
+//						isWideGap[pc - tableCols[c].bounds.left] = false;
+//						pxColWordCounts[pc - tableCols[c].bounds.left]++;
+//					}
+//			}
+//			
+//			//	also assess width of sparse areas next to non-wide gaps
+//			boolean[] isSparselyConstrictedGap = new boolean[tableCols[c].bounds.right - tableCols[c].bounds.left];
+//			Arrays.fill(isSparselyConstrictedGap, false);
+//			for (int pc = 0; pc < pxColWordCounts.length; pc++) {
+//				if (colWordRows[pc + (tableCols[c].bounds.left - table.bounds.left)] != 0)
+//					continue; // this one _is_ obstructed
+//				if (isWideGap[pc])
+//					continue; // we've already found this one
+//				int gapStart = pc;
+//				int gapEnd = (pc+1);
+//				while (gapEnd < pxColWordCounts.length) {
+//					if (colWordRows[gapEnd + (tableCols[c].bounds.left - table.bounds.left)] != 0)
+//						break;
+//					else gapEnd++;
+//				}
+//				int gapWidth = (gapEnd - gapStart);
+//				for (int sl = (gapStart - 1); sl >= 0; sl--) {
+//					if ((pxColWordCounts[sl] * 3) < avgRowCount)
+//						gapWidth++;
+//					else break;
+//				}
+//				for (int sr = gapStart; sr < pxColWordCounts.length; sr++) {
+//					if ((pxColWordCounts[sr] * 3) < avgRowCount)
+//						gapWidth++;
+//					else break;
+//				}
+//				if (gapWidth > avgWordSpace) {
+//					for (int gc = gapStart; gc < gapEnd; gc++)
+//						isSparselyConstrictedGap[gc] = true;
+//				}
+//			}
+//			
+//			/* split up column if any space pixel columns remain; it's OK to
+//			 * check both wide gaps and sparsely constricted ones in a single
+//			 * loop, as they cannot be adjacent to one another: each instance
+//			 * of the latter would be absorbed in an instance of the former
+//			 * if they were adjacent */
+//			ArrayList subColGaps = new ArrayList();
+//			int gapStart = -1;
+//			for (int pc = 0; pc < isWideGap.length; pc++) {
+//				if (isWideGap[pc]) {
+//					if (gapStart == -1)
+//						gapStart = (pc + (tableCols[c].bounds.left - table.bounds.left));
+//				}
+//				else if (isSparselyConstrictedGap[pc]) {
+//					if (gapStart == -1)
+//						gapStart = (pc + (tableCols[c].bounds.left - table.bounds.left));
+//				}
+//				else {
+//					if (gapStart != -1) {
+//						int gapEnd = (pc + (tableCols[c].bounds.left - table.bounds.left));
+//						subColGaps.add(new Gap(gapStart, gapEnd));
+//						if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - found gap from " + (table.bounds.left + gapStart) + " to " + (table.bounds.left + gapEnd));
+//					}
+//					gapStart = -1;
+//				}
+//			}
+//			
+//			//	any new gaps found?
+//			if (subColGaps.isEmpty())
+//				continue;
+//			
+//			//	assess maximum row count on both sides of gaps, just to make sure we're not merely splitting some protruding word off a column
+//			ArrayList subColMaxRowCounts = new ArrayList(subColGaps.size() + 1);
+//			for (int g = 0; g <= subColGaps.size(); g++) {
+//				int subColLeft = ((g == 0) ? tableCols[c].bounds.left : (table.bounds.left + ((Gap) subColGaps.get(g-1)).end));
+//				int subColRight = ((g == subColGaps.size()) ? tableCols[c].bounds.right : (table.bounds.left + ((Gap) subColGaps.get(g)).start));
+//				int maxRowCount = 0;
+//				for (int pc = subColLeft; pc < subColRight; pc++)
+//					maxRowCount = Math.max(maxRowCount, pxColWordCounts[pc - tableCols[c].bounds.left]);
+//				subColMaxRowCounts.add(new Integer(maxRowCount));
+//			}
+//			
+//			if (DEBUG_CREATE_TABLE_COLS) {
+//				System.out.println("Got " + subColGaps.size() + " gaps in column " + tableCols[c].bounds + ", in total:");
+//				for (int sc = 0; sc < subColMaxRowCounts.size(); sc++) {
+//					Integer maxRowCount = ((Integer) subColMaxRowCounts.get(sc));
+//					System.out.println(" - sub column with at most " + maxRowCount + " rows occupied");
+//					if (sc < subColGaps.size()) {
+//						Gap gap = ((Gap) subColGaps.get(sc));
+//						System.out.println(" - gap from " + (table.bounds.left + gap.start) + " to " + (table.bounds.left + gap.end));
+//					}
+//				}
+//			}
+//			
+//			/* sort out gaps that look more like splitting up column values,
+//			 * e.g. spaces aligned atop one another; that would occur, for
+//			 * instance, with a left-aligned column holding 'Fiji' in 9 rows,
+//			 * and 'American Samoa' in 1 row, resulting in a sparsely
+//			 * constricted split between 'American' and 'Samoa' */
+//			for (int sc = 0; sc < subColMaxRowCounts.size(); sc++) {
+//				Integer maxRowCount = ((Integer) subColMaxRowCounts.get(sc));
+//				
+//				//	this one looks fine, well occupied
+//				if ((maxRowCount.intValue() * 3) > avgRowCount)
+//					continue;
+//				
+//				//	get adjacent gaps, and remove smaller one
+//				Gap leftGap = ((sc == 0) ? null : ((Gap) subColGaps.get(sc-1)));
+//				Gap rightGap = ((sc == subColGaps.size()) ? null : ((Gap) subColGaps.get(sc)));
+//				
+//				//	we've eliminated everything ...
+//				if ((leftGap == null) && (rightGap == null))
+//					break;
+//				
+//				//	we're in leftmost column, can only merge to right
+//				if (leftGap == null) {
+//					subColGaps.remove(sc);
+//					Integer nextMaxRowCount = ((Integer) subColMaxRowCounts.get(sc+1));
+//					if (nextMaxRowCount.intValue() < maxRowCount.intValue())
+//						subColMaxRowCounts.remove(sc+1);
+//					else subColMaxRowCounts.remove(sc);
+//					if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - gap from " + (table.bounds.left + rightGap.start) + " to " + (table.bounds.left + rightGap.end) + " eliminated for sparse left column on very left");
+//				}
+//				
+//				//	we're in rightmost column, can only merge to left
+//				else if (rightGap == null) {
+//					subColGaps.remove(sc-1);
+//					Integer prevMaxRowCount = ((Integer) subColMaxRowCounts.get(sc-1));
+//					if (prevMaxRowCount.intValue() < maxRowCount.intValue())
+//						subColMaxRowCounts.remove(sc-1);
+//					else subColMaxRowCounts.remove(sc);
+//					if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - gap from " + (table.bounds.left + leftGap.start) + " to " + (table.bounds.left + leftGap.end) + " eliminated for sparse right column on very right");
+//				}
+//				
+//				//	right gap smaller than left one, remove former
+//				else if (rightGap.getWidth() < leftGap.getWidth()) {
+//					subColGaps.remove(sc);
+//					Integer nextMaxRowCount = ((Integer) subColMaxRowCounts.get(sc+1));
+//					if (nextMaxRowCount.intValue() < maxRowCount.intValue())
+//						subColMaxRowCounts.remove(sc+1);
+//					else subColMaxRowCounts.remove(sc);
+//					if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - gap from " + (table.bounds.left + rightGap.start) + " to " + (table.bounds.left + rightGap.end) + " eliminated for sparse left column");
+//				}
+//				
+//				//	right gap larger than or equal to left one, remove latter (left aligned columns are way more frequent that right aligned ones, especially with textual content)
+//				else {
+//					subColGaps.remove(sc-1);
+//					Integer prevMaxRowCount = ((Integer) subColMaxRowCounts.get(sc-1));
+//					if (prevMaxRowCount.intValue() < maxRowCount.intValue())
+//						subColMaxRowCounts.remove(sc-1);
+//					else subColMaxRowCounts.remove(sc);
+//					if (DEBUG_CREATE_TABLE_COLS) System.out.println(" - gap from " + (table.bounds.left + leftGap.start) + " to " + (table.bounds.left + leftGap.end) + " eliminated for sparse right column");
+//				}
+//				
+//				//	counter loop increment, as we need to come back whichever way we have merged
+//				sc--;
+//			}
+//			
+//			//	add whatever gaps we've retained to general ones
+//			colGaps.addAll(subColGaps);
+//		}
+//		
+//		//	re-split columns if any new gaps found
+//		if (colGaps.size() >= tableCols.length) {
+//			Collections.sort(colGaps);
+////			tableCols = new ImRegion[colGaps.size() + 1];
+//			tableColList.clear();
+//			for (int g = 0; g <= colGaps.size(); g++) {
+//				int tableColLeft = table.bounds.left + ((g == 0) ? 0 : ((Gap) colGaps.get(g-1)).end);
+//				int tableColRight = ((g == colGaps.size()) ? table.bounds.right : (table.bounds.left + ((Gap) colGaps.get(g)).start));
+////				tableCols[g] = new ImRegion(page.getDocument(), page.pageId, new BoundingBox(tableColLeft, tableColRight, table.bounds.top, table.bounds.bottom), ImRegion.TABLE_COL_TYPE);
+//				if (tableColLeft < tableColRight)
+//					tableColList.add(new ImRegion(page.getDocument(), page.pageId, new BoundingBox(tableColLeft, tableColRight, table.bounds.top, table.bounds.bottom), ImRegion.TABLE_COL_TYPE));
+//			}
+//			tableCols = ((ImRegion[]) tableColList.toArray(new ImRegion[tableColList.size()]));
+//		}
 		
 		//	finally ...
 		return tableCols;
 	}
-	private static final boolean DEBUG_CREATE_TABLE_COLS = false;
+//	private static final boolean DEBUG_CREATE_TABLE_COLS = false;
 	
 	private static ImWord[] filterWords(ImWord[] words, Set ignoreWords) {
 		if (words.length == 0)
@@ -1763,6 +1961,25 @@ public class ImUtils implements ImagingConstants {
 	 * @return an array holding the table cells
 	 */
 	public static ImRegion[][] getTableCells(ImRegion table, Set ignoreWords, ImRegion[] rows, ImRegion[] cols) {
+		return getTableCells(table, ignoreWords, rows, cols, true);
+	}
+	
+	/**
+	 * Retrieve the cells of a table. If table cells are already marked, this
+	 * method simply returns them. If no cells are marked, this method tries to
+	 * generate them. If generation fails, e.g. if the argument region does not
+	 * contain any words, or if no column or row gaps exist, this method
+	 * returns null. Newly generated table cells are not attached to the page.
+	 * @param table the table whose cells to retrieve
+	 * @param ignoreWords a set containing word to ignore if table columns or
+	 *            rows have to be newly created
+	 * @param rows an array holding existing table rows (may be null)
+	 * @param cols an array holding existing table columns (may be null)
+	 * @param cleanUpSpurious remove cells not matching any column/row
+	 *            intersection?
+	 * @return an array holding the table cells
+	 */
+	public static ImRegion[][] getTableCells(ImRegion table, Set ignoreWords, ImRegion[] rows, ImRegion[] cols, boolean cleanUpSpurious) {
 		
 		//	get rows and columns if not given
 		if (rows == null) {
@@ -1786,45 +2003,69 @@ public class ImUtils implements ImagingConstants {
 			page = table.getDocument().getPage(table.pageId);
 		
 		//	get and index existing cells
-		//	TODO observe multi-column cells, maybe better use RTree
 		ImRegion[] existingCells = table.getRegions(ImRegion.TABLE_CELL_TYPE);
-		HashMap cellsByBounds = new HashMap();
+		HashMap existingCellsByBounds = new HashMap();
 		for (int c = 0; c < existingCells.length; c++)
-			cellsByBounds.put(existingCells[c].bounds.toString(), existingCells[c]);
+			existingCellsByBounds.put(existingCells[c].bounds.toString(), existingCells[c]);
 		
 		//	get current cells
-		//	TODO observe multi-column cells
 		ImRegion[][] cells = new ImRegion[rows.length][cols.length];
 		for (int r = 0; r < rows.length; r++)
 			for (int c = 0; c < cols.length; c++) {
+				
+				//	create cell bounds
 				BoundingBox cellBounds = new BoundingBox(cols[c].bounds.left, cols[c].bounds.right, rows[r].bounds.top, rows[r].bounds.bottom);
+				
+				//	get cell words
 				ImWord[] cellWords = page.getWordsInside(cellBounds);
 				if (ignoreWords != null)
 					cellWords = filterWords(cellWords, ignoreWords);
-				if (cellWords.length != 0) {
-					int cbLeft = cellBounds.right;
-					int cbRight = cellBounds.left;
-					int cbTop = cellBounds.bottom;
-					int cbBottom = cellBounds.top;
-					for (int w = 0; w < cellWords.length; w++) {
-						cbLeft = Math.min(cbLeft, cellWords[w].bounds.left);
-						cbRight = Math.max(cbRight, cellWords[w].bounds.right);
-						cbTop = Math.min(cbTop, cellWords[w].bounds.top);
-						cbBottom = Math.max(cbBottom, cellWords[w].bounds.bottom);
+//				
+//				//	shrink cell bounds to words
+//				if (cellWords.length != 0) {
+//					int cbLeft = cellBounds.right;
+//					int cbRight = cellBounds.left;
+//					int cbTop = cellBounds.bottom;
+//					int cbBottom = cellBounds.top;
+//					for (int w = 0; w < cellWords.length; w++) {
+//						cbLeft = Math.min(cbLeft, cellWords[w].bounds.left);
+//						cbRight = Math.max(cbRight, cellWords[w].bounds.right);
+//						cbTop = Math.min(cbTop, cellWords[w].bounds.top);
+//						cbBottom = Math.max(cbBottom, cellWords[w].bounds.bottom);
+//					}
+//					cellBounds = new BoundingBox(cbLeft, cbRight, cbTop, cbBottom);
+//				}
+				
+				//	get existing single-column single-row cell
+				cells[r][c] = ((ImRegion) existingCellsByBounds.remove(cellBounds.toString()));
+				if (cells[r][c] != null)
+					continue;
+				
+				//	find existing multi-column and/or multi-row cell
+				/* (This nested loop join should be pretty fast in practice, as
+				 * either we have many existing cells and the above map lookup
+				 * catches the very most, or we have no or few existing cells
+				 * and thus the nested loop has very few rounds.) */
+				for (int e = 0; e < existingCells.length; e++)
+					if (existingCells[e].bounds.includes(cellBounds, false)) {
+						cells[r][c] = existingCells[e];
+						existingCellsByBounds.remove(existingCells[e].bounds.toString());
+						break;
 					}
-					cellBounds = new BoundingBox(cbLeft, cbRight, cbTop, cbBottom);
-				}
-				cells[r][c] = ((ImRegion) cellsByBounds.remove(cellBounds.toString()));
-				if (cells[r][c] == null)
-					cells[r][c] = new ImRegion(page.getDocument(), page.pageId, cellBounds, ImRegion.TABLE_CELL_TYPE);
+				if (cells[r][c] != null)
+					continue;
+				
+				//	create new cell
+				cells[r][c] = new ImRegion(page.getDocument(), page.pageId, cellBounds, ImRegion.TABLE_CELL_TYPE);
 			}
 		
 		//	remove spurious cells
-		for (Iterator cit = cellsByBounds.values().iterator(); cit.hasNext();) {
-			ImRegion cell = ((ImRegion) cit.next());
-			if (cell.getPage() != null)
-				page.removeRegion(cell);
-		}
+		if (cleanUpSpurious)
+			for (Iterator cit = existingCellsByBounds.values().iterator(); cit.hasNext();) {
+				ImRegion cell = ((ImRegion) cit.next());
+				if (cell.getPage() != null)
+					page.removeRegion(cell);
+			}
 		
 		//	finally ...
 		return cells;
@@ -1847,11 +2088,40 @@ public class ImUtils implements ImagingConstants {
 		ImWord lastCellEnd = null;
 		for (int r = 0; r < cells.length; r++)
 			for (int c = 0; c < cells[r].length; c++) {
+				if ((c != 0) && (cells[r][c] == cells[r][c-1]))
+					continue; // seen this multi-column cell before
+				if ((r != 0) && (cells[r][c] == cells[r-1][c]))
+					continue; // seen this multi-row cell before
+				
+				//	get words
 				ImWord[] cellWords = cells[r][c].getWords();
 				if (cellWords.length == 0)
-					continue;
+					continue; // nothing to order here
+				
+				//	assess word orientation
+				int lrWords = 0;
+				int buWords = 0;
+				int tdWords = 0;
+				for (int w = 0; w < cellWords.length; w++) {
+					String wordDirection = ((String) (cellWords[w].getAttribute(ImWord.TEXT_DIRECTION_ATTRIBUTE, ImWord.TEXT_DIRECTION_LEFT_RIGHT)));
+					if (ImWord.TEXT_DIRECTION_BOTTOM_UP.equals(wordDirection))
+						buWords++;
+					else if (ImWord.TEXT_DIRECTION_TOP_DOWN.equals(wordDirection))
+						tdWords++;
+					else lrWords++;
+				}
+				
+				//	cut out cell words to avoid order mix-up errors
 				makeStream(cellWords, null, null);
-				orderStream(cellWords, leftRightTopDownOrder);
+				
+				//	order cell words dependent on direction
+				if ((lrWords < buWords) && (tdWords < buWords))
+					orderStream(cellWords, bottomUpLeftRightOrder);
+				else if ((lrWords < tdWords) && (buWords < tdWords))
+					orderStream(cellWords, topDownRightLeftOrder);
+				else orderStream(cellWords, leftRightTopDownOrder);
+				
+				//	attach cell word stream
 				Arrays.sort(cellWords, textStreamOrder);
 				if (lastCellEnd != null)
 					cellWords[0].setPreviousWord(lastCellEnd);
@@ -1993,9 +2263,14 @@ public class ImUtils implements ImagingConstants {
 		//	return row labels
 		return getTableRowLabels(cells);
 	}
+	
 	private static String[] getTableRowLabels(ImRegion[][] cells) {
 		String[] rowLabels = new String[cells.length];
 		for (int r = 0; r < cells.length; r++) {
+			if ((r != 0) && (cells[r][0] == cells[r-1][0])) {
+				rowLabels[r] = rowLabels[r-1];
+				continue;
+			}
 			ImWord[] words = cells[r][0].getWords();
 			if (words.length == 0)
 				rowLabels[r] = "";
@@ -2168,10 +2443,14 @@ public class ImUtils implements ImagingConstants {
 		//	return column headers
 		return getTableColumnHeaders(cells);
 	}
-	//	TODO observe multi-column cells
+	
 	private static String[] getTableColumnHeaders(ImRegion[][] cells) {
 		String[] colHeaders = new String[cells[0].length];
 		for (int c = 0; c < cells[0].length; c++) {
+			if ((c != 0) && (cells[0][c] == cells[0][c-1])) {
+				colHeaders[c] = colHeaders[c-1];
+				continue;
+			}
 			ImWord[] words = cells[0][c].getWords();
 			if (words.length == 0)
 				colHeaders[c] = "";
@@ -2319,6 +2598,19 @@ public class ImUtils implements ImagingConstants {
 	 * @return the data from the argument table
 	 */
 	public static String getTableData(ImRegion table, char separator) {
+		return getTableDataString(table, separator);
+	}
+	
+	/**
+	 * Copy the data from a table in XML, specifically in XHTML.
+	 * @param table the table whose data to copy
+	 * @return the data from the argument table
+	 */
+	public static String getTableDataXml(ImRegion table) {
+		return getTableDataString(table, 'X');
+	}
+	
+	private static String getTableDataString(ImRegion table, char separator) {
 		
 		//	get rows and columns
 		ImRegion[] rows = getRegionsInside(table.getPage(), table.bounds, ImRegion.TABLE_ROW_TYPE, false);
@@ -2326,15 +2618,49 @@ public class ImUtils implements ImagingConstants {
 		ImRegion[] cols = getRegionsInside(table.getPage(), table.bounds, ImRegion.TABLE_COL_TYPE, false);
 		Arrays.sort(cols, leftRightOrder);
 		
+		//	get cells and backing page
+		ImRegion[][] cells = getTableCells(table, null, rows, cols, false);
+		ImPage page = table.getPage();
+		
 		//	write table data
 		StringBuffer tableData = new StringBuffer();
-		for (int r = 0; r < rows.length; r++)
+		if (separator == 'X')
+			tableData.append("<table>\r\n");
+		for (int r = 0; r < rows.length; r++) {
+			if (separator == 'X')
+				tableData.append("<tr>\r\n");
 			for (int c = 0; c < cols.length; c++) {
-				appendCellData(table, rows[r], cols[c], separator, tableData);
-				if ((c+1) == cols.length)
-					tableData.append("\r\n");
-				else tableData.append(separator);
+				int colSpan = 1;
+				int rowSpan = 1;
+				if (separator == 'X') {
+					if ((c != 0) && (cells[r][c] == cells[r][c-1]))
+						continue;
+					if ((r != 0) && (cells[r][c] == cells[r-1][c]))
+						continue;
+					for (int lc = (c+1); lc < cols.length; lc++) {
+						if (cells[r][lc] == cells[r][c])
+							colSpan++;
+						else break;
+					}
+					for (int lr = (r+1); lr < rows.length; lr++) {
+						if (cells[lr][c] == cells[r][c])
+							rowSpan++;
+						else break;
+					}
+					appendCellData(page, cells[r][c], separator, colSpan, rowSpan, tableData);
+				}
+				else {
+					appendCellData(page, cells[r][c], separator, colSpan, rowSpan, tableData);
+					if ((c+1) == cols.length)
+						tableData.append("\r\n");
+					else tableData.append(separator);
+				}
 			}
+			if (separator == 'X')
+				tableData.append("</tr>\r\n");
+		}
+		if (separator == 'X')
+			tableData.append("</table>\r\n");
 		
 		//	finally ...
 		return tableData.toString();
@@ -2349,6 +2675,20 @@ public class ImUtils implements ImagingConstants {
 	 * @return the data from the argument table
 	 */
 	public static String getTableGridData(ImRegion table, char separator) {
+		return getTableGridDataString(table, separator);
+	}
+	
+	/**
+	 * Copy the data from a whole grid of connected tables in XML, specifically
+	 * in XHTML.
+	 * @param table the table whose data to copy
+	 * @return the data from the argument table
+	 */
+	public static String getTableGridDataXml(ImRegion table) {
+		return getTableGridDataString(table, 'X');
+	}
+	
+	private static String getTableGridDataString(ImRegion table, char separator) {
 		
 		//	collect data row-wise
 		LinkedList rowDataList = new LinkedList();
@@ -2359,10 +2699,13 @@ public class ImUtils implements ImagingConstants {
 			StringBuffer[] rowData = null;
 			for (int tx = 0; tx < tables[ty].length; tx++) {
 				
+				//	get backing page
+				ImPage page = tables[ty][tx].getPage();
+				
 				//	get columns and rows of current table
-				ImRegion[] rows = getRegionsInside(tables[ty][tx].getPage(), tables[ty][tx].bounds, ImRegion.TABLE_ROW_TYPE, false);
+				ImRegion[] rows = getRegionsInside(page, tables[ty][tx].bounds, ImRegion.TABLE_ROW_TYPE, false);
 				Arrays.sort(rows, topDownOrder);
-				ImRegion[] cols = getRegionsInside(tables[ty][tx].getPage(), tables[ty][tx].bounds, ImRegion.TABLE_COL_TYPE, false);
+				ImRegion[] cols = getRegionsInside(page, tables[ty][tx].bounds, ImRegion.TABLE_COL_TYPE, false);
 				Arrays.sort(cols, leftRightOrder);
 				
 				//	initialize data on first table in grid row 
@@ -2372,12 +2715,36 @@ public class ImUtils implements ImagingConstants {
 						rowData[r] = new StringBuffer();
 				}
 				
+				//	get cells
+				ImRegion[][] cells = getTableCells(tables[ty][tx], null, rows, cols, false);
+				
 				//	append data to rows (column header row only for top row of grid, row label column only for first column of grid)
 				for (int r = ((ty == 0) ? 0 : 1); r < Math.min(rows.length, rowData.length); r++)
 					for (int c = ((tx == 0) ? 0 : 1); c < cols.length; c++) {
-						appendCellData(tables[ty][tx], rows[r], cols[c], separator, rowData[r]);
-						if (((c+1) < cols.length) || ((tx+1) < tables[ty].length))
-							rowData[r].append(separator);
+						int colSpan = 1;
+						int rowSpan = 1;
+						if (separator == 'X') {
+							if ((c != 0) && (cells[r][c] == cells[r][c-1]))
+								continue;
+							if ((r != 0) && (cells[r][c] == cells[r-1][c]))
+								continue;
+							for (int lc = (c+1); lc < cols.length; lc++) {
+								if (cells[r][lc] == cells[r][c])
+									colSpan++;
+								else break;
+							}
+							for (int lr = (r+1); lr < rows.length; lr++) {
+								if (cells[lr][c] == cells[r][c])
+									rowSpan++;
+								else break;
+							}
+							appendCellData(page, cells[r][c], separator, colSpan, rowSpan, rowData[r]);
+						}
+						else {
+							appendCellData(page, cells[r][c], separator, colSpan, rowSpan, rowData[r]);
+							if (((c+1) < cols.length) || ((tx+1) < tables[ty].length))
+								rowData[r].append(separator);
+						}
 					}
 			}
 			
@@ -2388,22 +2755,32 @@ public class ImUtils implements ImagingConstants {
 		
 		//	write table data
 		StringBuffer tableData = new StringBuffer();
+		if (separator == 'X')
+			tableData.append("<table>\r\n");
 		for (Iterator rdit = rowDataList.iterator(); rdit.hasNext();) {
 			StringBuffer rowData = ((StringBuffer) rdit.next());
+			if (separator == 'X')
+				tableData.append("<tr>\r\n");
 			tableData.append(rowData);
+			if (separator == 'X')
+				tableData.append("</tr>");
 			tableData.append("\r\n");
 		}
+		if (separator == 'X')
+			tableData.append("</table>\r\n");
 		
 		//	finally ...
 		return tableData.toString();
 	}
 	
-	//	TODO observe multi-column cells
-	private static void appendCellData(ImRegion table, ImRegion row, ImRegion col, char separator, StringBuffer data) {
+	/* This will simply repeat content of multi-column or multi-row cells, but
+	 * there is little else we can do for plain text formats */
+	private static void appendCellData(ImPage page, ImRegion cell, char separator, int colSpan, int rowSpan, StringBuffer data) {
 		if ((separator == ',') || (separator == ';'))
 			data.append('"');
-		BoundingBox cellBounds = new BoundingBox(col.bounds.left, col.bounds.right, row.bounds.top, row.bounds.bottom);
-		ImWord[] cellWords = table.getPage().getWordsInside(cellBounds);
+		else if (separator == 'X')
+			data.append("<td" + ((colSpan == 1) ? "" : (" colspan=\"" + colSpan + "\"")) + ((rowSpan == 1) ? "" : (" rowspan=\"" + rowSpan + "\"")) + ">");
+		ImWord[] cellWords = page.getWordsInside(cell.bounds);
 		if (cellWords.length != 0) {
 			Arrays.sort(cellWords, textStreamOrder);
 			String cellStr = getString(cellWords[0], cellWords[cellWords.length-1], true);
@@ -2419,10 +2796,14 @@ public class ImUtils implements ImagingConstants {
 				}
 				cellStr = eCellStr.toString();
 			}
+			else if (separator == 'X')
+				cellStr = AnnotationUtils.escapeForXml(cellStr);
 			data.append(cellStr);
 		}
 		if ((separator == ',') || (separator == ';'))
 			data.append('"');
+		else if (separator == 'X')
+			data.append("</td>\r\n");
 	}
 	
 	private static ImRegion[] getRegionsInside(ImPage page, BoundingBox box, String type, boolean fuzzy) {
@@ -2462,7 +2843,7 @@ public class ImUtils implements ImagingConstants {
 					gapStart = d;
 			}
 			else if (gapStart != -1) {
-				if ((d - gapStart) > minGapWidth) {
+				if (minGapWidth <= (d - gapStart)) {
 					Gap gap = new Gap(gapStart, d);
 					gaps.add(gap);
 					gapWidths.add(new Integer(gap.getWidth()));
