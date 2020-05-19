@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -45,16 +45,15 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Hashtable;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
-import java.util.Vector;
 
 import javax.swing.JOptionPane;
 
@@ -605,7 +604,7 @@ public class PdfFontDecoder {
 	
 	private static final boolean DEBUG_TYPE1_LOADING = false;
 	
-	static void readFontType1(byte[] data, Hashtable dataParams, Hashtable fd, PdfFont pFont, FontDecoderCharset charSet, ProgressMonitor pm) {
+	static void readFontType1(byte[] data, Map dataParams, Map fd, PdfFont pFont, FontDecoderCharset charSet, ProgressMonitor pm) {
 		pm.setInfo("   - reading meta data");
 		System.out.println("     - got " + data.length + " bytes of data");
 		System.out.println("     - data parameters are " + dataParams);
@@ -646,9 +645,11 @@ public class PdfFontDecoder {
 		
 		//	execute font program to get data
 		String fontName = null;
-		Hashtable fontData = new Hashtable();
+//		Hashtable fontData = new Hashtable();
+		Map fontData = new HashMap();
 		try {
-			Hashtable psState = new Hashtable();
+//			Hashtable psState = new Hashtable();
+			Map psState = new HashMap();
 			LinkedList psStack = new LinkedList();
 			PsParser.executePs(headData, psState, psStack);
 			System.out.println("     - PostScript state after head is " + psState);
@@ -659,7 +660,8 @@ public class PdfFontDecoder {
 			for (Iterator sit = psState.keySet().iterator(); sit.hasNext();) {
 				Object fontKey = sit.next();
 				fontName = fontKey.toString();
-				fontData = ((Hashtable) psState.get(fontKey));
+//				fontData = ((Hashtable) psState.get(fontKey));
+				fontData = ((Map) psState.get(fontKey));
 			}
 		}
 		catch (IOException ioe) {
@@ -673,16 +675,19 @@ public class PdfFontDecoder {
 		System.out.println("     - font data is " + fontData);
 		
 		//	get private dictionary and obfuscation byte count
-		Hashtable privateDict = ((Hashtable) fontData.get("Private"));
+//		Hashtable privateDict = ((Hashtable) fontData.get("Private"));
+		Map privateDict = ((Map) fontData.get("Private"));
 		System.out.println("     - private dictionaty is " + privateDict);
 		int n = 4;
 		if (privateDict.containsKey("lenIV"))
 			n = ((Number) privateDict.get("lenIV")).intValue();
 		
 		//	extract char string subroutines
-		Vector charStringSubrs = ((Vector) privateDict.get("Subrs"));
+//		Vector charStringSubrs = ((Vector) privateDict.get("Subrs"));
+		List charStringSubrs = ((List) privateDict.get("Subrs"));
 		if (charStringSubrs == null)
-			charStringSubrs = new Vector();
+//			charStringSubrs = new Vector();
+			charStringSubrs = new ArrayList();
 		System.out.println("     - char string subroutines are " + charStringSubrs);
 		
 		//	decrypt char string subroutines
@@ -704,15 +709,18 @@ public class PdfFontDecoder {
 //		System.out.println("     - decrypted char string subroutines are " + charStringSubrs);
 		
 		//	extract other subroutines
-		Vector otherSubrs = ((Vector) privateDict.get("OtherSubrs"));
+//		Vector otherSubrs = ((Vector) privateDict.get("OtherSubrs"));
+		List otherSubrs = ((List) privateDict.get("OtherSubrs"));
 		System.out.println("     - other subroutines are " + otherSubrs);
 		
 		//	extract char strings
-		Hashtable charStrings = ((Hashtable) fontData.get("CharStrings"));
+//		Hashtable charStrings = ((Hashtable) fontData.get("CharStrings"));
+		Map charStrings = ((Map) fontData.get("CharStrings"));
 //		System.out.println("     - char strings are " + charStrings);
 		
 		//	read encoding, and decrypt and parse char strings
-		Vector encoding = ((Vector) fontData.get("Encoding"));
+//		Vector encoding = ((Vector) fontData.get("Encoding"));
+		List encoding = ((List) fontData.get("Encoding"));
 		char[] chars = new char[encoding.size()];
 		Arrays.fill(chars, ((char) 0));
 		OpType1[][] charStringOps = new OpType1[encoding.size()][];
@@ -799,7 +807,8 @@ public class PdfFontDecoder {
 				if ("Ops:".equals(renderingSequence)) { /* no synonymizing spaces, tend to differ in width */ }
 				else if (renderingSequencesToCharIndices.containsKey(renderingSequence))
 					charIndicesToSynonyms.put(new Integer(c), renderingSequencesToCharIndices.get(renderingSequence));
-				else renderingSequencesToCharIndices.put(renderingSequence, new Integer(c));
+				else if (pFont.usesCharCode(charCodes[c]))
+					renderingSequencesToCharIndices.put(renderingSequence, new Integer(c));
 			}
 			catch (RuntimeException re) {
 				pm.setInfo("     ==> removed for invalid PostScript");
@@ -923,11 +932,13 @@ public class PdfFontDecoder {
 		return plain;
 	}
 	
-	private static int readFontType1CharString(byte[] data, String name, Vector subrs, Vector otherSubrs, ArrayList content, String indent) {
+//	private static int readFontType1CharString(byte[] data, String name, Vector subrs, Vector otherSubrs, ArrayList content, String indent) {
+	private static int readFontType1CharString(byte[] data, String name, List subrs, List otherSubrs, ArrayList content, String indent) {
 		return readFontType1CharString(data, name, false, subrs, otherSubrs, new LinkedList(), content, indent);
 	}
 	
-	private static int readFontType1CharString(byte[] data, String name, boolean inSubr, Vector subrs, Vector otherSubrs, LinkedList stack, ArrayList content, String indent) {
+//	private static int readFontType1CharString(byte[] data, String name, boolean inSubr, Vector subrs, Vector otherSubrs, LinkedList stack, ArrayList content, String indent) {
+	private static int readFontType1CharString(byte[] data, String name, boolean inSubr, List subrs, List otherSubrs, LinkedList stack, ArrayList content, String indent) {
 		int i = 0;
 		LinkedList psStack = new LinkedList();
 		LinkedList flexArgs = null;
@@ -1082,7 +1093,8 @@ public class PdfFontDecoder {
 //					System.out.println(indent + "    call stack is " + psStack);
 					LinkedList preCallPsStack = new LinkedList(psStack);
 					try {
-						PsParser.executePs(subr.bytes, new Hashtable(), psStack, (DEBUG_TYPE1_LOADING ? (indent + "  ") : null));
+//						PsParser.executePs(subr.bytes, new Hashtable(), psStack, (DEBUG_TYPE1_LOADING ? (indent + "  ") : null));
+						PsParser.executePs(subr.bytes, new HashMap(), psStack, (DEBUG_TYPE1_LOADING ? (indent + "  ") : null));
 //						System.out.println(indent + "    return stack is " + psStack);
 					}
 					catch (IOException ioe) {
@@ -1208,7 +1220,7 @@ public class PdfFontDecoder {
 	 * @param unresolvedCodes mapping of unresolved char codes (SID mode only, null in CID mode)
 	 * @param pm a progress monitor to observe font decoding
 	 */
-	static void readFontType1C(byte[] data, Hashtable fd, PdfFont pFont, HashMap resolvedCodesOrCidMap, HashMap unresolvedCodes, FontDecoderCharset charSet, ProgressMonitor pm) {
+	static void readFontType1C(byte[] data, Map fd, PdfFont pFont, HashMap resolvedCodesOrCidMap, HashMap unresolvedCodes, FontDecoderCharset charSet, ProgressMonitor pm) {
 		pm.setInfo("   - reading meta data");
 		int i = 0;
 		
@@ -1478,15 +1490,28 @@ public class PdfFontDecoder {
 			System.out.println(" - BaseFont is " + pFont.data.get("BaseFont"));
 		}
 		for (int c = 0; c < Math.min(csContent.size(), csIndexContent.size()); c++) {
+			if (DEBUG_TYPE1C_LOADING) System.out.println(" - resolving char " + c);
 			
 			//	CID font mode
 			if (unresolvedCodes == null) {
-				Integer chi = ((Integer) resolvedCodesOrCidMap.get(new Integer(c)));
-				if (chi == null)
+//				Integer chc = ((Integer) resolvedCodesOrCidMap.get(new Integer(c)));
+				Integer chc = ((resolvedCodesOrCidMap == null) ? ((Integer) csContent.get(c)) : ((Integer) resolvedCodesOrCidMap.get(new Integer(c))));
+				if (chc == null)
 					continue;
-				chars[c] = ((char) chi.intValue());
+				if (DEBUG_TYPE1C_LOADING) System.out.println("   - found CID char code " + chc);
+//				chars[c] = ((char) chc.intValue());
+				String ucStr = null; // TODO put UC mapping in CID Map instead !!!
+				if (pFont.ucMappings.containsKey(chc)) /* use unicode mapping if available */ {
+					ucStr = pFont.getUnicode(chc.intValue());
+					if ((ucStr != null) && (ucStr.length() != 1))
+						ucStr = null;
+				}
+				chars[c] = ((ucStr == null) ? ((char) chc.intValue()) : ucStr.charAt(0));
+				if (DEBUG_TYPE1C_LOADING) System.out.println("   - found char " + chars[c]);
 				charNames[c] = StringUtils.getCharName(chars[c]);
-				charCodes[c] = new Integer((int) chars[c]);
+				if (DEBUG_TYPE1C_LOADING) System.out.println("   - char name is " + charNames[c]);
+//				charCodes[c] = new Integer((int) chars[c]);
+				charCodes[c] = chc;
 			}
 			
 			//	Type 1c font mode
@@ -1541,8 +1566,9 @@ public class PdfFontDecoder {
 			
 			//	CID font mode
 			if (unresolvedCodes == null) {
-				Integer chi = ((Integer) resolvedCodesOrCidMap.get(new Integer(c)));
-				if (chi == null)
+//				Integer chi = ((Integer) resolvedCodesOrCidMap.get(new Integer(c)));
+				Integer chc = ((resolvedCodesOrCidMap == null) ? ((Integer) csContent.get(c)) : ((Integer) resolvedCodesOrCidMap.get(new Integer(c))));
+				if (chc == null)
 					continue;
 //				char ch = ((char) chi.intValue());
 				char ch = chars[c];
@@ -1586,7 +1612,8 @@ public class PdfFontDecoder {
 			if ("Ops:".equals(renderingSequence)) { /* no synonymizing spaces, tend to differ in width */ }
 			else if (renderingSequencesToCharIndices.containsKey(renderingSequence))
 				charIndicesToSynonyms.put(new Integer(c), renderingSequencesToCharIndices.get(renderingSequence));
-			else renderingSequencesToCharIndices.put(renderingSequence, new Integer(c));
+			else if ((charCodes[c] != null) && pFont.usesCharCode(charCodes[c]))
+				renderingSequencesToCharIndices.put(renderingSequence, new Integer(c));
 		}
 		if (DEBUG_TYPE1C_LOADING) System.out.println("Max descent is " + maxDescent + ", max cap height is " + maxCapHeight);
 		
@@ -1664,7 +1691,8 @@ public class PdfFontDecoder {
 			
 			//	CID font mode
 			if (unresolvedCodes == null)
-				pFont.setCharImage(((int) chars[c]), charNames[c], ogr.img);
+//				pFont.setCharImage(((int) chars[c]), charNames[c], ogr.img);
+				pFont.setCharImage(charCodes[c].intValue(), charNames[c], ogr.img);
 			
 			//	Type 1 font mode
 			else {
@@ -3732,7 +3760,7 @@ FontName12 38//SID–, FD FontName
 	
 	private static final boolean DEBUG_TRUE_TYPE_LOADING = false;
 	
-	static void readFontTrueType(byte[] data, PdfFont pFont, boolean dataFromBaseFont, FontDecoderCharset charSet, ProgressMonitor pm) {
+	static void readFontTrueType(byte[] data, PdfFont pFont, boolean dataFromBaseFont, final HashMap glyphIdsToCids, FontDecoderCharset charSet, ProgressMonitor pm) {
 		if (DEBUG_TRUE_TYPE_LOADING) {
 			System.out.println("Decoding TrueType font " + pFont.name);
 			System.out.println(" - font data is " + pFont.data);
@@ -3877,12 +3905,37 @@ FontName12 38//SID–, FD FontName
 		headByteOffset += 2;
 		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("   - glyph data format is " + hGlyphDataFormat);
 		
+		//	map glyph IDs to CIDs
+		HashMap cidsByGlyphIndex;
+		
+		//	default CID mappings in base font mode
+		if (dataFromBaseFont) {
+			cidsByGlyphIndex = new HashMap() {
+				public Object get(Object key) {
+					Object value = ((glyphIdsToCids == null) ? null : glyphIdsToCids.get(key));
+					return ((value == null) ? key : value);
+				}
+			};
+		}
+		
 		//	read CID mappings from 'cmap' table (http://developer.apple.com/fonts/TrueType-Reference-Manual/RM06/Chap6cmap.html)
-		HashMap cidsByGlyphIndex = new HashMap();
-		int cmapPlatformId = -1;
-		int cmapPlatformSpecId = -1;
-		//	TODO find map with highest precedence using platform ID and platform specific ID (table 'Platform Identifiers' in http://developer.apple.com/fonts/TrueType-Reference-Manual/RM06/Chap6cmap.html)
-		if (!dataFromBaseFont) {
+		else {
+			cidsByGlyphIndex = new HashMap() {
+				private HashSet values = new HashSet(); // need this for fast reverse lookup, to prevent same CID mapped to twice
+				public Object put(Object key, Object value) {
+					this.values.add(value);
+					return super.put(key, value);
+				}
+				public void clear() {
+					super.clear();
+					this.values.clear();
+				}
+				public boolean containsValue(Object value) {
+					return this.values.contains(value);
+				}
+			};
+			int cmapPlatformId = -1;
+			int cmapPlatformSpecId = -1;
 			int cmapByteOffset = 0;
 			if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" - reading 'cmap' table of " + cmapBytes.length + " bytes");
 			int mVersion = readUnsigned(cmapBytes, cmapByteOffset, (cmapByteOffset+2));
@@ -3982,6 +4035,11 @@ FontName12 38//SID–, FD FontName
 						Integer cid = new Integer(c);
 						if (!pFont.usesCharCode(cid)) {
 							if (DEBUG_TRUE_TYPE_LOADING) System.out.println("       - unused CID " + c + " not mapped to " + stGlyphIndex);
+							continue;
+						}
+						if (cidsByGlyphIndex.containsValue(cid)) {
+							if (DEBUG_TRUE_TYPE_LOADING) System.out.println("       --> duplicate value, not mapped to " + stGlyphIndex);
+							continue;
 						}
 						
 						if (DEBUG_TRUE_TYPE_LOADING) System.out.println("       --> mapped to " + stGlyphIndex);
@@ -4066,6 +4124,10 @@ FontName12 38//SID–, FD FontName
 									if (DEBUG_TRUE_TYPE_LOADING) System.out.println("           ==> already mapped");
 									continue;
 								}
+								if (cidsByGlyphIndex.containsValue(cid)) {
+									if (DEBUG_TRUE_TYPE_LOADING) System.out.println("       ==> value already mapped");
+									continue;
+								}
 								if (DEBUG_TRUE_TYPE_LOADING) System.out.println("           ==> CID " + c + " mapped (1) to GI " + stGlyphIndex);
 								cidsByGlyphIndex.put(gi, cid);
 							}
@@ -4085,7 +4147,10 @@ FontName12 38//SID–, FD FontName
 									if (DEBUG_TRUE_TYPE_LOADING) System.out.println("           ==> already mapped");
 									continue;
 								}
-								if (DEBUG_TRUE_TYPE_LOADING) System.out.println("           ==> CID " + c + " mapped (2) to GI " + stGlyphIndex + " at " + stGlyphIndexAddress);
+								if (cidsByGlyphIndex.containsValue(cid)) {
+									if (DEBUG_TRUE_TYPE_LOADING) System.out.println("       ==> value already mapped");
+									continue;
+								}
 								cidsByGlyphIndex.put(gi, cid);
 							}
 						}
@@ -4125,7 +4190,8 @@ FontName12 38//SID–, FD FontName
 				int glyphEnd = readUnsigned(locaBytes, o, (o+4));
 				if (glyphStart < glyphEnd) {
 					Integer gi = new Integer(glyphIndex);
-					Integer cid = (dataFromBaseFont ? gi : ((Integer) cidsByGlyphIndex.get(gi)));
+//					Integer cid = (dataFromBaseFont ? gi : ((Integer) cidsByGlyphIndex.get(gi)));
+					Integer cid = ((Integer) cidsByGlyphIndex.get(gi));
 					if (DEBUG_TRUE_TYPE_LOADING) System.out.println("   - got glyph " + glyphIndex + " from " + glyphStart + " to " + glyphEnd + ", CID is " + cid);
 					//	read glyph from 'glyf' table (http://developer.apple.com/fonts/TrueType-Reference-Manual/RM06/Chap6glyf.html)
 					GlyphDataTrueType glyph = readGlyphTrueType(glyphStart, glyphEnd, glyfBytes, ((cid == null) ? -1 : cid.intValue()), glyphIndex);
@@ -4147,7 +4213,8 @@ FontName12 38//SID–, FD FontName
 				glyphEnd *= 2;
 				if (glyphStart < glyphEnd) {
 					Integer gi = new Integer(glyphIndex);
-					Integer cid = (dataFromBaseFont ? gi : ((Integer) cidsByGlyphIndex.get(gi)));
+//					Integer cid = (dataFromBaseFont ? gi : ((Integer) cidsByGlyphIndex.get(gi)));
+					Integer cid = ((Integer) cidsByGlyphIndex.get(gi));
 					if (DEBUG_TRUE_TYPE_LOADING) System.out.println("   - got glyph " + glyphIndex + " from " + glyphStart + " to " + glyphEnd + ", CID is " + cid);
 					//	read glyph from 'glyf' table (http://developer.apple.com/fonts/TrueType-Reference-Manual/RM06/Chap6glyf.html)
 					GlyphDataTrueType glyph = readGlyphTrueType(glyphStart, glyphEnd, glyfBytes, ((cid == null) ? -1 : cid.intValue()), glyphIndex);
@@ -4194,7 +4261,8 @@ FontName12 38//SID–, FD FontName
 			if ("Ops:".equals(renderingSequence)) { /* no synonymizing spaces, tend to differ in width */ }
 			else if (renderingSequencesToCharIndices.containsKey(renderingSequence))
 				charIndicesToSynonyms.put(new Integer(c), renderingSequencesToCharIndices.get(renderingSequence));
-			else renderingSequencesToCharIndices.put(renderingSequence, new Integer(c));
+			else if (pFont.usesCharCode(new Integer(c)))
+				renderingSequencesToCharIndices.put(renderingSequence, new Integer(c));
 		}
 		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("Max descent is " + maxDescent + ", max cap height is " + maxCapHeight);
 		
@@ -4362,15 +4430,17 @@ FontName12 38//SID–, FD FontName
 		int instructionLength = readUnsigned(glyfBytes, glyfByteOffset, (glyfByteOffset+2));
 		glyfByteOffset += 2;
 		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("     - instruction length is " + instructionLength);
-//		StringBuffer instructions = new StringBuffer();
-//		for (int i = 0; i < instructionLength; i++) {
-//			int iByte = convertUnsigned(glyfBytes[glyfByteOffset++]);
-//			System.out.print(" " + Integer.toString(iByte, 16));
-//			instructions.append((char) iByte);
-//		}
-//		System.out.println();
-//		System.out.println(instructions);
-		glyfByteOffset += instructionLength;
+		if (DEBUG_TRUE_TYPE_LOADING) {
+			StringBuffer instructions = new StringBuffer();
+			for (int i = 0; i < instructionLength; i++) {
+				int iByte = convertUnsigned(glyfBytes[glyfByteOffset++]);
+				System.out.print(" " + Integer.toString(iByte, 16));
+				instructions.append((char) iByte);
+			}
+			System.out.println();
+			System.out.println(instructions);
+		}
+		else glyfByteOffset += instructionLength;
 		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("     - instructions skipped");
 		
 		int[] pointFlags = new int[numPoints];
@@ -4537,6 +4607,8 @@ FontName12 38//SID–, FD FontName
 		//	render components
 		for (int c = 0; c < cGlyph.components.length; c++) {
 			GlyphDataTrueType glyph = ((GlyphDataTrueType) glyphsByCid.get(new Integer(cGlyph.components[c].glyphIndex)));
+			if (glyph == null)
+				continue; // can happen with space ...
 			
 			//	TODO adjust transform if options are present (once we have an example)
 			
@@ -4546,6 +4618,20 @@ FontName12 38//SID–, FD FontName
 			     * - 1st arg contains the index of matching point in compound being constructed
 			     * - 2nd arg contains index of matching point in component
 			     * ==> might have to collect points in this case */
+				GlyphDataTrueType pGlyph = ((c == 0) ? null : ((GlyphDataTrueType) glyphsByCid.get(new Integer(cGlyph.components[c-1].glyphIndex))));
+				//	TODO what if compound glyph has more than two components !?!
+				int dx = 0;
+				int dy = 0;
+				if (pGlyph != null)
+					for (int p = 0; p <= cGlyph.components[c].arg1; p++) {
+						dx += ((SimpleGlyphDataTrueType) pGlyph).pointXs[p];
+						dy += ((SimpleGlyphDataTrueType) pGlyph).pointYs[p];
+					}
+				for (int p = 0; p <= cGlyph.components[c].arg2; p++) {
+					dx -= ((SimpleGlyphDataTrueType) glyph).pointXs[p];
+					dy -= ((SimpleGlyphDataTrueType) glyph).pointYs[p];
+				}
+				opr.moveToAbs(dx, dy);
 			}
 			
 			//	If [flag 1] set, the arguments are xy values;
@@ -4586,44 +4672,106 @@ FontName12 38//SID–, FD FontName
 	}
 	
 	private static void runFontTrueTypeOps(SimpleGlyphDataTrueType sGlyph, boolean isComponent, OpReceiverTrueType opr, boolean show) {
+		ImageDisplayDialog idd = null;
 		
 		//	run points
 		int pointIndex = 0;
+		String op;
 		for (int c = 0; c < sGlyph.contourEnds.length; c++) {
+			boolean lastWasInterpolated = false;
+			boolean lastWasContourStart = true;
+			int firstPointAbsX = Integer.MAX_VALUE;
+			int firstPointAbsY = Integer.MAX_VALUE;
 			opr.moveTo(sGlyph.pointXs[pointIndex], sGlyph.pointYs[pointIndex]);
+			if ((sGlyph.pointFlags[pointIndex] & 1) == 0) {
+				firstPointAbsX = opr.x;
+				firstPointAbsY = opr.y;
+			}
 			pointIndex += 1;
 			if (sGlyph.contourEnds[c] == (pointIndex-1))
 				continue; // single-point contour, move on to next one without painting anything
-			boolean lastWasInterpolated = false;
 			while (pointIndex < sGlyph.pointFlags.length) {
 				if ((sGlyph.pointFlags[pointIndex] & 1) == 0) {
-					int dx1 = (sGlyph.pointXs[pointIndex] / (lastWasInterpolated ? 2 : 1));
-					int dy1 = (sGlyph.pointYs[pointIndex] / (lastWasInterpolated ? 2 : 1));
+					int dx1;
+					int dy1;
+					if (((sGlyph.pointFlags[pointIndex-1] & 1) == 0) && lastWasContourStart) {
+						opr.moveTo((sGlyph.pointXs[pointIndex] / 2), (sGlyph.pointYs[pointIndex] / 2));
+						dx1 = (sGlyph.pointXs[pointIndex] / 2);
+						dy1 = (sGlyph.pointYs[pointIndex] / 2);
+					}
+					else {
+						dx1 = (sGlyph.pointXs[pointIndex] / (lastWasInterpolated ? 2 : 1));
+						dy1 = (sGlyph.pointYs[pointIndex] / (lastWasInterpolated ? 2 : 1));
+					}
 					pointIndex += 1;
 					if (sGlyph.contourEnds[c] == (pointIndex-1)) {
-						opr.closePath(dx1, dy1);
-						break;
+						opr.closePath(dx1, dy1, true);
+						op = "closePath0";
+						if (!show)
+							break;
 					}
 					else if ((sGlyph.pointFlags[pointIndex] & 1) == 0) {
 						opr.curveTo(dx1, dy1, (sGlyph.pointXs[pointIndex] / 2), (sGlyph.pointYs[pointIndex] / 2));
+						op = "curveTo0";
 						lastWasInterpolated = true;
 					}
 					else {
 						opr.curveTo(dx1, dy1, sGlyph.pointXs[pointIndex], sGlyph.pointYs[pointIndex]);
+						op = "curveTo1";
 						pointIndex += 1;
 						lastWasInterpolated = false;
 					}
 				}
 				else {
-					opr.lineTo((sGlyph.pointXs[pointIndex] / (lastWasInterpolated ? 2 : 1)), (sGlyph.pointYs[pointIndex] / (lastWasInterpolated ? 2 : 1)));
-					pointIndex += 1;
-					lastWasInterpolated = false;
-				}
+					if (((sGlyph.pointFlags[pointIndex-1] & 1) == 0) && lastWasContourStart) {
+						opr.moveTo(sGlyph.pointXs[pointIndex], sGlyph.pointYs[pointIndex]);
+						op = "moveTo";
+						pointIndex += 1;
+						lastWasInterpolated = false;
+					}
+					else {
+						opr.lineTo((sGlyph.pointXs[pointIndex] / (lastWasInterpolated ? 2 : 1)), (sGlyph.pointYs[pointIndex] / (lastWasInterpolated ? 2 : 1)));
+						op = "lineTo";
+						pointIndex += 1;
+						lastWasInterpolated = false;
+					}				}
 				if (sGlyph.contourEnds[c] == (pointIndex-1)) {
-					opr.closePath();
-					break;
+					if ((firstPointAbsX < Integer.MAX_VALUE) && (firstPointAbsY < Integer.MAX_VALUE)) {
+						int dx1 = (firstPointAbsX - opr.x);
+						int dy1 = (firstPointAbsY - opr.y);
+						opr.closePath(dx1, dy1, false);
+					}
+					else opr.closePath();
+					op = "closePath1";
+					if (!show)
+						break;
 				}
+				
+				//	TODO show step by step
+				if (show) {
+					BufferedImage img = ((OpGraphicsTrueType) opr).img;
+					BufferedImage dImg = new BufferedImage(img.getWidth(), img.getHeight(), BufferedImage.TYPE_INT_RGB);
+					Graphics g = dImg.getGraphics();
+					g.drawImage(img, 0, 0, dImg.getWidth(), dImg.getHeight(), null);
+					g.setColor(Color.RED);
+					if (idd == null) {
+						idd = new ImageDisplayDialog("Rendering Progress");
+						idd.setSize((dImg.getWidth() + 200), (dImg.getHeight() + 100));
+					}
+					idd.addImage(dImg, ("Drawing (" + op + ")"));
+					idd.setLocationRelativeTo(null);
+					idd.setVisible(true);
+				}
+				
+				lastWasContourStart = false;
+				if ("closePath0".equals(op) || "closePath1".equals(op))
+					break;
 			}
+		}
+		
+		if (idd != null) {
+			idd.setLocationRelativeTo(null);
+			idd.setVisible(true);
 		}
 		
 		//	only tracking, we're done here
@@ -4639,8 +4787,8 @@ FontName12 38//SID–, FD FontName
 	}
 	
 	private static class GlyphDataTrueType {
-		int cid;
-		int gid;
+		final int cid;
+		final int gid;
 		char ch;
 		GlyphDataTrueType(int cid, int gid) {
 			this.cid = cid;
@@ -4693,7 +4841,7 @@ FontName12 38//SID–, FD FontName
 		abstract void lineTo(int dx, int dy);
 		abstract void curveTo(int dx1, int dy1, int dx2, int dy2);
 		abstract void closePath();
-		abstract void closePath(int dx, int dy);
+		abstract void closePath(int dx, int dy, boolean explicit);
 	}
 	
 	private static class OpTrackerTrueType extends OpReceiverTrueType {
@@ -4792,8 +4940,9 @@ FontName12 38//SID–, FD FontName
 			this.ops.append(" C" + dx1 + "/" + dy1 + "," + dx2 + "/" + dy2);
 		}
 		void closePath() {}
-		void closePath(int dx, int dy) {
-			this.lineTo(dx, dy);
+		void closePath(int dx, int dy, boolean explicit) {
+			if (explicit)
+				this.lineTo(dx, dy);
 		}
 	}
 	
@@ -4905,7 +5054,7 @@ dy1 = vy;
 					Math.round((this.scale * (this.height - (this.sy - this.minY))) + glyphOutlineFillSafetyEdge)
 				);
 		}
-		void closePath(int dx, int dy) {
+		void closePath(int dx, int dy, boolean explicit) {
 			QuadCurve2D.Float qc = new QuadCurve2D.Float();
 			qc.setCurve(
 					Math.round((this.scale * (this.x - this.minX)) + glyphOutlineFillSafetyEdge),
@@ -4916,8 +5065,10 @@ dy1 = vy;
 					Math.round((this.scale * (this.height - (this.sy - this.minY))) + glyphOutlineFillSafetyEdge)
 				);
 			this.gr.draw(qc);
-			this.x += dx;
-			this.y += dy;
+			if (explicit) {
+				this.x += dx;
+				this.y += dy;
+			}
 		}
 	}
 	
@@ -5820,7 +5971,6 @@ dy1 = vy;
 				continue;
 			
 			//	get basic data
-//			Integer sid;
 			String chn = charNames[c];
 			Integer chc = charCodes[c];
 			
@@ -6919,8 +7069,11 @@ dy1 = vy;
 		//	count out classes of decoded characters
 		CountingSet charClassCounts = new CountingSet(new HashMap());
 		for (int c = 0; c < chars.length; c++) {
-			if (bestCims[c] != null)
-				charClassCounts.add(PdfCharDecoder.getCharClass(bestCims[c].match.ch));
+			if (bestCims[c] == null)
+				continue;
+			if (bestCims[c] == UNICODE_MAPPING_UNRENDERABLE)
+				continue;
+			charClassCounts.add(PdfCharDecoder.getCharClass(bestCims[c].match.ch));
 		}
 		
 		//	resort to matches with highest similarity

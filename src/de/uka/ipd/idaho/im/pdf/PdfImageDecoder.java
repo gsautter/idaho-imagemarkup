@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -28,16 +28,17 @@
 package de.uka.ipd.idaho.im.pdf;
 
 import java.awt.image.BufferedImage;
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.HashMap;
 
 import javax.imageio.ImageIO;
+
+import de.uka.ipd.idaho.im.util.BinaryToolInstaller;
 
 /**
  * Wrapper for the Image Magick <b>convert</b> tool. The Image Magick suite
@@ -46,21 +47,24 @@ import javax.imageio.ImageIO;
  * @author sautter
  */
 public class PdfImageDecoder {
-
+	private static final boolean DEBUG = false;
+	
 	private static String getConvertCommand() {
 		String osName = System.getProperty("os.name");
 		if (osName.matches("Win.*"))
 			return "convert-windows.exe";
 		else if (osName.matches(".*Linux.*"))
 			return "convert-linux";
+//		else if (osName.matches("Mac.*"))
+//			return "convert-linux";
 		else if (osName.matches("Mac.*"))
-			return "convert-linux";
+			return "macosBin/convert";
 		else {
 			System.out.println("PdfImageDecoder: unknown OS name: " + osName);
 			return null;
 		}
 	}
-
+	
 	private static String getConvertSystemCommand() {
 		String osName = System.getProperty("os.name");
 		if (osName.matches(".*Linux.*"))
@@ -92,48 +96,18 @@ public class PdfImageDecoder {
 	}
 	
 	private boolean install(String fileName) {
-		System.out.println("PDF Image Decoder: installing file '" + fileName + "'");
-		if (fileName == null) {
-			System.out.println(" ==> source name not found");
-			return false;
+		System.out.print("PDF Image Decoder: ");
+		if (fileName.startsWith("macosBin/")) {
+			BinaryToolInstaller.install("macosLib/libMagickCore-7.Q16HDRI.6.dylib", this.imPath, this.getClass().getClassLoader(), "bin/ImageMagick/");
+			BinaryToolInstaller.install("macosLib/libMagickCore-7.Q16HDRI.a", this.imPath, this.getClass().getClassLoader(), "bin/ImageMagick/");
+			BinaryToolInstaller.install("macosLib/libMagickCore-7.Q16HDRI.dylib", this.imPath, this.getClass().getClassLoader(), "bin/ImageMagick/");
+			BinaryToolInstaller.install("macosLib/libMagickCore-7.Q16HDRI.la", this.imPath, this.getClass().getClassLoader(), "bin/ImageMagick/");
+			BinaryToolInstaller.install("macosLib/libMagickWand-7.Q16HDRI.6.dylib", this.imPath, this.getClass().getClassLoader(), "bin/ImageMagick/");
+			BinaryToolInstaller.install("macosLib/libMagickWand-7.Q16HDRI.a", this.imPath, this.getClass().getClassLoader(), "bin/ImageMagick/");
+			BinaryToolInstaller.install("macosLib/libMagickWand-7.Q16HDRI.dylib", this.imPath, this.getClass().getClassLoader(), "bin/ImageMagick/");
+			BinaryToolInstaller.install("macosLib/libMagickWand-7.Q16HDRI.la", this.imPath, this.getClass().getClassLoader(), "bin/ImageMagick/");
 		}
-		
-		File file = new File(this.imPath, fileName);
-		if (file.exists()) {
-			System.out.println(" ==> already installed");
-			return true;
-		}
-		
-		InputStream fileIn = this.getClass().getClassLoader().getResourceAsStream("bin/ImageMagick/" + fileName);
-		if (fileIn == null) {
-			System.out.println(" ==> source not found");
-			return false;
-		}
-		fileIn = new BufferedInputStream(fileIn);
-		
-		try {
-			file.getParentFile().mkdirs();
-			OutputStream fileOut = new BufferedOutputStream(new FileOutputStream(file));
-			byte[] fileBuffer = new byte[2048];
-			for (int r; (r = fileIn.read(fileBuffer, 0, fileBuffer.length)) != -1;)
-				fileOut.write(fileBuffer, 0, r);
-			fileOut.flush();
-			fileOut.close();
-			fileIn.close();
-			System.out.println(" ==> installed successfully");
-			
-			if (fileName.endsWith("-linux") || fileName.endsWith("-mac")) {
-				Runtime.getRuntime().exec(("chmod -R 777 " + this.imPath.getAbsolutePath()), new String[0], this.imPath);
-				System.out.println(" ==> execution permissions obtained successfully");
-			}
-			
-			return true;
-		}
-		catch (IOException ioe) {
-			System.out.println(" ==> could not install file '" + fileName + "'");
-			ioe.printStackTrace(System.out);
-			return false;
-		}
+		return BinaryToolInstaller.install(fileName, this.imPath, this.getClass().getClassLoader(), "bin/ImageMagick/");
 	}
 	
 	/**
@@ -216,21 +190,31 @@ public class PdfImageDecoder {
 	public BufferedImage decodeImage(byte[] imageBytes, String imageFormat, String colorSpace, String altColorSpace, boolean decodeInverted) throws IOException {
 		try {
 			ArrayList command = new ArrayList();
+			HashMap environment = new HashMap();
 			if (this.useSystemCommand)
 				command.add(getConvertSystemCommand());
-			else command.add(this.imPath.getAbsolutePath() + "/" + getConvertCommand());
+			else {
+				String cc = getConvertCommand();
+				command.add(this.imPath.getAbsolutePath() + "/" + cc);
+				if (cc.endsWith("-linux"))
+					command.add("convert");
+				else if (cc.startsWith("macosBin/"))
+					environment.put("DYLD_LIBRARY_PATH", "./macosLib/");
+			}
 			command.add(imageFormat + ":-");
 			if ((colorSpace != null) && colorSpace.toUpperCase().endsWith("CMYK")) {
 				if (!decodeInverted)
 					command.add("-negate");
 				command.add("-profile");
 				command.add(this.imPath.getAbsolutePath() + "/ISOcoated_v2_300_eci.icc");
+//				command.add(this.imPath.getAbsolutePath() + "/USWebCoatedSWOP.icc");
 			}
 			else if ((colorSpace != null) && colorSpace.toUpperCase().startsWith("ICCB") && (altColorSpace != null) && altColorSpace.toUpperCase().endsWith("CMYK")) {
 				if (!decodeInverted)
 					command.add("-negate");
 				command.add("-profile");
 				command.add(this.imPath.getAbsolutePath() + "/ISOcoated_v2_300_eci.icc");
+//				command.add(this.imPath.getAbsolutePath() + "/USWebCoatedSWOP.icc");
 			}
 			else if (!decodeInverted && "SeparationBlack".equals(colorSpace) && ("DeviceRGB".equals(altColorSpace) || "DeviceGray".equals(altColorSpace)))
 				command.add("-negate");
@@ -245,30 +229,67 @@ public class PdfImageDecoder {
 			//	TODO figure out if we have to negate if only decodeInverted is set ...
 			command.add("png:-");
 			System.out.println("PdfImageDecoder: command is " + command);
-			Process im = Runtime.getRuntime().exec(((String[]) command.toArray(new String[command.size()])), null, imPath.getAbsoluteFile());
-//			System.out.println(" - process created");
-			OutputStream imIn = im.getOutputStream();
-//			System.out.println(" - got output stream");
-			imIn.write(imageBytes);
-			imIn.flush();
-			imIn.close();
-//			System.out.println(" - image data sent");
-			BufferedImage image = ImageIO.read(im.getInputStream());
+//			Process imProcess = Runtime.getRuntime().exec(((String[]) command.toArray(new String[command.size()])), environment, imPath.getAbsoluteFile());
+			ProcessBuilder imBuilder = new ProcessBuilder(command);
+			imBuilder.environment().putAll(environment);
+			imBuilder.directory(this.imPath.getAbsoluteFile());
+			
+			Process imProcess = imBuilder.start();
+			if (DEBUG) System.out.println(" - process created");
+			try {
+				OutputStream toIm = imProcess.getOutputStream();
+				System.out.println(" - got output stream");
+				toIm.write(imageBytes);
+				toIm.flush();
+				toIm.close();
+			}
+			catch (IOException ioe) {
+				InputStream imIn = imProcess.getInputStream();
+				for (int r; (r = imIn.read()) != -1;)
+					System.out.print((char) r);
+				InputStream imErr = imProcess.getErrorStream();
+				for (int r; (r = imErr.read()) != -1;)
+					System.err.print((char) r);
+				throw ioe;
+			}
+			if (DEBUG) System.out.println(" - image data sent");
+			InputStream fromIm = imProcess.getInputStream();
+			BufferedImage image = ImageIO.read(fromIm);
+			fromIm.close();
 			if (image == null) {
 				File imageData = new File(this.imPath, ("ImageData" + System.currentTimeMillis() + "." + imageFormat));
 				FileOutputStream imageDataOut = new FileOutputStream(imageData);
 				imageDataOut.write(imageBytes);
 				imageDataOut.flush();
 				imageDataOut.close();
-//				System.out.println(" - could not read back image, data in " + imageData.getAbsolutePath());
+				if (DEBUG) System.out.println(" - could not read back image, data in " + imageData.getAbsolutePath());
 			}
-//			else System.out.println(" - image read back");
-			im.waitFor();
-//			System.out.println(" - process terminated");
+			else if (DEBUG) System.out.println(" - image read back");
+			
+			imProcess.waitFor();
+			if (DEBUG) System.out.println(" - process terminated");
+			if (command.contains("-negate")) {
+				for (int x = 0; x < image.getWidth(); x++)
+					for (int y = 0; y < image.getHeight(); y++) {
+						int rgb = image.getRGB(x, y);
+						int alpha = ((rgb >>> 24) & 0xFF);
+						if (alpha == 255)
+							continue;
+						int red = ((rgb >>> 16) & 0xFF);
+						int green = ((rgb >>> 8) & 0xFF);
+						int blue = ((rgb >>> 0) & 0xFF);
+						red = (((red * alpha) / 255) + ((0 * (255 - alpha)) / 255));
+						green = (((green * alpha) / 255) + ((0 * (255 - alpha)) / 255));
+						blue = (((blue * alpha) / 255) + ((0 * (255 - alpha)) / 255));
+						rgb = ((0xFF << 24) | (red << 16) | (green << 8) | (blue << 0));
+						image.setRGB(x, y, rgb);
+					}
+				if (DEBUG) System.out.println(" - transparent background blended onto black");
+			}
 			return image;
 		}
 		catch (InterruptedException ie) {
-//			System.out.println("Image Magic got interrupted");
+			System.out.println("Image Magic got interrupted");
 			return null;
 		}
 	}

@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -39,7 +39,6 @@ import java.util.TreeSet;
 
 import de.uka.ipd.idaho.gamta.Gamta;
 import de.uka.ipd.idaho.gamta.util.CountingSet;
-import de.uka.ipd.idaho.gamta.util.constants.TableConstants;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.DocumentStyle;
 import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
@@ -48,6 +47,7 @@ import de.uka.ipd.idaho.im.ImPage;
 import de.uka.ipd.idaho.im.ImRegion;
 import de.uka.ipd.idaho.im.ImWord;
 import de.uka.ipd.idaho.im.util.ImUtils;
+import de.uka.ipd.idaho.im.util.LinePattern;
 
 /**
  * Function library for analyzing the structure of text blocks in pages,
@@ -55,166 +55,7 @@ import de.uka.ipd.idaho.im.util.ImUtils;
  * 
  * @author sautter
  */
-public class PageAnalysis implements ImagingConstants, TableConstants {
-	
-//	/**
-//	 * Group the lines inside the blocks of a page into paragraphs. This method
-//	 * is for convenience, it loops through to the splitIntoPargaraphs() method
-//	 * that takes a single region as an argument.
-//	 * @param blocks the blocks to split
-//	 * @param dpi the resolution of the page image the bounding boxes of the
-//	 *            argument annotations refer to
-//	 * @param psm an observer object monitoring progress
-//	 */
-//	public static void splitIntoParagraphs(ImRegion[] blocks, int dpi, ProgressMonitor psm) {
-//		for(int b = 0; b < blocks.length; b++)
-//			splitIntoParagraphs(blocks[b], dpi, psm);
-//	}
-//	
-//	/**
-//	 * Group the lines inside the blocks of a page into paragraphs. This method
-//	 * is for convenience, it loops through to the splitIntoPargaraphs() method
-//	 * that takes a single region as an argument.
-//	 * @param blocks the blocks to split
-//	 * @param dpi the resolution of the page image the bounding boxes of the
-//	 *            argument annotations refer to
-//	 * @param maxLineMarginFactor the factor whose to multiply the average line
-//	 *            height with to obtain the maximum distance in pixels between
-//	 *            two lines inside a paragraph (the advantage is that this
-//	 *            method of threshold computation naturally scales with both
-//	 *            DPI and font size)
-//	 * @param psm an observer object monitoring progress
-//	 */
-//	public static void splitIntoParagraphs(ImRegion[] blocks, int dpi, float maxLineMarginFactor, ProgressMonitor psm) {
-//		for(int b = 0; b < blocks.length; b++)
-//			splitIntoParagraphs(blocks[b], dpi, maxLineMarginFactor, psm);
-//	}
-//	
-//	/**
-//	 * Group the lines inside a block into paragraphs. This convenience method
-//	 * first calls <code>splitIntoPargarphsShortLines()</code>, then
-//	 * <code>splitIntoParagraphsLineStart()</code>, and finally 
-//	 * <code>splitIntoParagraphsLineDistance()</code>.
-//	 * @param block the block to split
-//	 * @param dpi the resolution of the page image the bounding boxes of the
-//	 *            argument annotation and its children refer to
-//	 * @param psm an observer object monitoring progress
-//	 */
-//	public static void splitIntoParagraphs(ImRegion block, int dpi, ProgressMonitor psm) {
-//		splitIntoParagraphs(block, dpi, 0, psm);
-//	}
-//	
-//	/**
-//	 * Group the lines inside a block into paragraphs. This convenience method
-//	 * first calls <code>splitIntoPargarphsShortLines()</code>, then
-//	 * <code>splitIntoParagraphsLineStart()</code>, and finally 
-//	 * <code>splitIntoParagraphsLineDistance()</code>.
-//	 * @param block the block to split
-//	 * @param dpi the resolution of the page image the bounding boxes of the
-//	 *            argument annotation and its children refer to
-//	 * @param maxLineMarginFactor the factor to multiply the average line
-//	 *            height with to obtain the maximum distance in pixels between
-//	 *            two lines inside a paragraph (the advantage is that this
-//	 *            method of threshold computation naturally scales with both
-//	 *            DPI and font size)
-//	 * @param psm an observer object monitoring progress
-//	 */
-//	public static void splitIntoParagraphs(ImRegion block, int dpi, float maxLineMarginFactor, ProgressMonitor psm) {
-//		if (psm == null)
-//			psm = ProgressMonitor.dummy;
-//		
-//		//	test if we are dealing with a table
-//		if (TABLE_ANNOTATION_TYPE.equals(block.getType())) {
-//			psm.setInfo(" ==> the block is a table");
-//			return;
-//		}
-//		
-//		//	get lines
-//		ImRegion[] lines = getParagraphLayoutLines(block);
-//		psm.setInfo(" - found " + lines.length + " relevant lines in block");
-//		if (lines.length < 1)
-//			return;
-//		Arrays.sort(lines, ImUtils.topDownOrder);
-//		
-//		//	compute average line height and maximum margin
-//		int avgLineHeight = computeAverageHeight(lines);
-//		int maxLineMargin = ((int) (avgLineHeight * maxLineMarginFactor));
-//		
-//		//	perform split
-//		splitIntoParagraphsShortLine(block, dpi, psm, lines);
-//		splitIntoParagraphsLineStart(block, dpi, psm, lines, avgLineHeight);
-//		splitIntoParagraphsLineAlignment(block, dpi, psm, lines);
-//		//	TODOne figure out which method is better
-//		//	==> line distance seems to be more reliable
-//		if (maxLineMargin > 0)
-//			splitIntoParagraphsLineMargin(block, dpi, maxLineMargin, psm, lines);
-//		else splitIntoParagraphsLineDistance(block, dpi, psm, lines);
-//		
-//		//	compute paragraph bounding boxes and compute indentation
-//		wrapAroundChildren(block, ImRegion.PARAGRAPH_TYPE, LINE_ANNOTATION_TYPE);
-//		computeBlockLayout(block, dpi);
-//		
-//		//	compute font size of paragraphs
-//		computeParagraphFontSize(block);
-//	}
-//	
-//	private static void splitIntoParagraphsLineAlignment(ImRegion block, int dpi, ProgressMonitor psm, ImRegion[] lines) {
-//		
-//		//	try to further split first generation of paragraphs at indented/exdented lines
-//		ImRegion[] paragraphs = block.getRegions(ImRegion.PARAGRAPH_TYPE);
-//		
-//		//	group lines by paragraphs
-//		ImRegion[][] paragraphLines = getParagraphLines(paragraphs, lines);
-//		
-//		//	split preliminary paragraphs at alignment mismatches
-//		for (int p = 0; p < paragraphs.length; p++) {
-//			int spStartLineIndex = 0;
-//			psm.setInfo(" - investigating preliminary paragraph " + p + " with " + paragraphLines[p].length + " lines, paragraph is " + paragraphs[p].bounds.toString());
-//			
-//			//	assess line orientation
-//			boolean[] isLineLeftAligned = new boolean[paragraphLines[p].length];
-//			boolean[] isLineRightAligned = new boolean[paragraphLines[p].length];
-//			boolean[] isLineCenterAligned = new boolean[paragraphLines[p].length];
-//			for (int l = 0; l < paragraphLines[p].length; l++) {
-//				int leftGap = (paragraphLines[p][l].bounds.left - block.bounds.left);
-//				int rightGap = (block.bounds.right - paragraphLines[p][l].bounds.right);
-//				isLineLeftAligned[l] = ((leftGap * 10) < (block.bounds.right - block.bounds.left)); // at most 10% left gap, for indents
-//				isLineRightAligned[l] = ((rightGap * 20) < (block.bounds.right - block.bounds.left)); // at most 5% right gap
-//				isLineCenterAligned[l] = (((rightGap * 19) < (leftGap * 20)) && ((leftGap * 19) < (rightGap * 20))); // at most 5% width difference between left and right gaps
-//			}
-//			
-//			for (int l = 1; l < paragraphLines[p].length; l++) {
-//				
-//				//	evaluate line start based on whatever we have
-//				boolean split = false;
-//				
-//				//	split if alignment mismatch on both sides
-//				if ((isLineLeftAligned[l-1] != isLineLeftAligned[l]) && (isLineRightAligned[l-1] != isLineRightAligned[l]))
-//					split = true;
-//				
-//				//	split if previous line centered and aligned neither way, and current line is not centered and aligned either way
-//				if (isLineCenterAligned[l-1] && !isLineLeftAligned[l-1] && !isLineRightAligned[l-1] && !isLineCenterAligned[l] && (isLineLeftAligned[l] || isLineRightAligned[l]))
-//					split = true;
-//				
-//				//	this one looks like a paragraph start, perform split
-//				if (split) {
-//					ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, l), ImRegion.PARAGRAPH_TYPE);
-//					spStartLineIndex = l;
-//					psm.setInfo(" - created sub paragraph at " + splitParagraph.bounds.toString());
-//				}
-//			}
-//			
-//			//	we've split something, mark last part, and remove original paragraph
-//			if (spStartLineIndex != 0) {
-//				ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, paragraphLines[p].length), ImRegion.PARAGRAPH_TYPE);
-//				psm.setInfo(" - created final sub paragraph at " + splitParagraph.bounds.toString());
-//				block.getPage().removeRegion(paragraphs[p]);
-//			}
-//		}
-//		
-//		//	compute paragraph bounding boxes and compute indentation
-//		wrapAroundChildren(block, ImRegion.PARAGRAPH_TYPE, LINE_ANNOTATION_TYPE);
-//	}
+public class PageAnalysis implements ImagingConstants {
 	
 	/**
 	 * Compute the layout of entire text columns. This method is a convenience
@@ -656,545 +497,6 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			heightSum += (regions[r].bounds.bottom - regions[r].bounds.top);
 		return (heightSum / regions.length);
 	}
-//	
-//	/**
-//	 * Split a block into paragraphs at short (far-left ending) inner lines.
-//	 * @param block the block to split
-//	 * @param dpi the resolution of the page image the bounding boxes of the
-//	 *            argument annotation and its children refer to
-//	 * @param psm an observer object monitoring progress
-//	 */
-//	public static void splitIntoParagraphsShortLine(ImRegion block, int dpi, ProgressMonitor psm) {
-//		
-//		//	get lines
-//		ImRegion[] lines = getParagraphLayoutLines(block);
-//		psm.setInfo(" - found " + lines.length + " relevant lines in block");
-//		
-//		//	nothing to do at all
-//		if (lines.length == 0) {
-//			psm.setInfo(" ==> no lines in block, nothing to split");
-//			return;
-//		}
-//		
-//		//	catch single-line paragraphs
-//		if (lines.length == 1) {
-//			ImRegion paragraph = new ImRegion(block.getPage(), lines[0].bounds, ImRegion.PARAGRAPH_TYPE);
-//			psm.setInfo(" ==> only one line in block, nothing to split");
-//			psm.setInfo(" ==> created single line paragraph at " + paragraph.bounds.toString());
-//			return;
-//		}
-//		
-//		//	perform split
-//		splitIntoParagraphsShortLine(block, dpi, psm, lines);
-//	}
-//	
-//	//	if we get here, we have sufficient lines, all with bounding boxes, and a non-null status monitor
-//	private static void splitIntoParagraphsShortLine(ImRegion block, int dpi, ProgressMonitor psm, ImRegion[] lines) {
-//		
-//		//	compute average line height
-//		int avgLineHeight = computeAverageHeight(lines);
-//		if (avgLineHeight < 1)
-//			return;
-//		
-//		//	compute minimum, maximum, and average line end
-//		int minLineEnd = block.bounds.right;
-//		int maxLineEnd = 0;
-//		int lineEndSum = 0;
-//		for (int l = 0; l < lines.length; l++) {
-//			minLineEnd = Math.min(minLineEnd, (lines[l].bounds.right - block.bounds.left));
-//			maxLineEnd = Math.max(maxLineEnd, (lines[l].bounds.right - block.bounds.left));
-//			lineEndSum += (lines[l].bounds.right - block.bounds.left);
-//		}
-//		int avgLineEnd = (lineEndSum / lines.length);
-//		psm.setInfo(" - minimum line end is at " + minLineEnd + ", maximum at " + maxLineEnd + ", average at " + avgLineEnd + ", average line height is " + avgLineHeight);
-//		
-//		//	no significant difference
-//		int minSignificantDifference = (dpi / 20); // a little more than one millimeter
-//		if ((maxLineEnd - minLineEnd) < minSignificantDifference) {
-//			ImRegion paragraph = new ImRegion(block.getPage(), block.bounds, ImRegion.PARAGRAPH_TYPE);
-//			psm.setInfo(" ==> line ends vary only by " + (maxLineEnd - minLineEnd) + ", short line split too unreliable");
-//			psm.setInfo(" ==> created single paragraph at " + paragraph.bounds.toString());
-//			return;
-//		}
-//		
-//		//	perform short (far-left ending) line split (highly reliable)
-//		int pStartLineIndex = 0;
-//		for (int l = 1; l < lines.length; l++) {
-//			
-//			//	skip over lines lower than half the block average (some wider ones might be left)
-//			if ((lines[l-1].bounds.bottom - lines[l-1].bounds.top) < (avgLineHeight / 2))
-//				continue;
-//			
-//			//	skip over empty lines
-//			if (lines[l-1].getWords().length == 0)
-//				continue;
-//			
-//			//	if above line ends far to the left, start new paragraph
-//			psm.setInfo(" - previous line end is " + (lines[l-1].bounds.right - block.bounds.left));
-//			if (minSignificantDifference < (avgLineEnd - (lines[l-1].bounds.right - block.bounds.left))) {
-//				ImRegion paragraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(lines, pStartLineIndex, l), ImRegion.PARAGRAPH_TYPE);
-//				pStartLineIndex = l;
-//				psm.setInfo(" - created paragraph at " + paragraph.bounds.toString());
-//			}
-//		}
-//		if (pStartLineIndex < lines.length) {
-//			ImRegion paragraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(lines, pStartLineIndex, lines.length), ImRegion.PARAGRAPH_TYPE);
-//			psm.setInfo(" - created final paragraph at " + paragraph.bounds.toString());
-//		}
-//		
-//		//	compute paragraph bounding boxes and compute indentation
-//		wrapAroundChildren(block, ImRegion.PARAGRAPH_TYPE, LINE_ANNOTATION_TYPE);
-//		computeBlockLayout(block, dpi);
-//		
-//		//	compute font size of paragraphs
-//		computeParagraphFontSize(block);
-//	}
-//	
-//	private static ImRegion[][] getParagraphLines(ImRegion[] paragraphs, ImRegion[] lines) {
-//		ArrayList[] paragraphLineLists = new ArrayList[paragraphs.length];
-//		for (int p = 0; p < paragraphs.length; p++) {
-//			paragraphLineLists[p] = new ArrayList();
-//			for (int l = 0; l < lines.length; l++) {
-//				if (paragraphs[p].bounds.includes(lines[l].bounds, false))
-//					paragraphLineLists[p].add(lines[l]);
-//			}
-//		}
-//		ImRegion[][] paragraphLines = new ImRegion[paragraphs.length][];
-//		for (int p = 0; p < paragraphs.length; p++)
-//			paragraphLines[p] = ((ImRegion[]) paragraphLineLists[p].toArray(new ImRegion[paragraphLineLists[p].size()]));
-//		return paragraphLines;
-//	}
-//	
-//	/**
-//	 * Split the paragraphs in a block into smaller paragraphs at indented or
-//	 * outdented inner lines, whatever is predominant at the start of existing
-//	 * paragraphs.
-//	 * @param block the block to split
-//	 * @param dpi the resolution of the page image the bounding boxes of the
-//	 *            argument annotation and its children refer to
-//	 * @param psm an observer object monitoring progress
-//	 */
-//	public static void splitIntoParagraphsLineStart(ImRegion block, int dpi, ProgressMonitor psm) {
-//		if (psm == null)
-//			psm = ProgressMonitor.dummy;
-//		
-//		//	get lines
-//		ImRegion[] lines = getParagraphLayoutLines(block);
-//		psm.setInfo(" - found " + lines.length + " relevant lines in block");
-//		
-//		//	perform split
-//		splitIntoParagraphsLineStart(block, dpi, psm, lines, computeAverageLineHeight(block));
-//	}
-//	
-//	//	if we get here, we have sufficient lines, all with bounding boxes, and a non-null status monitor
-//	private static void splitIntoParagraphsLineStart(ImRegion block, int dpi, ProgressMonitor psm, ImRegion[] lines, int avgLineHeight) {
-//		
-//		//	try to further split first generation of paragraphs at indented/exdented lines
-//		ImRegion[] paragraphs = block.getRegions(ImRegion.PARAGRAPH_TYPE);
-////		
-////		//	too few paragraphs for start analysis, however
-////		//	even for single paragraphs, we can detect indent or exdent based on frequency
-////		if (paragraphs.length < 3) {
-////			psm.setInfo(" ==> got " + paragraphs.length + " paragraphs, indentation splitting too unreliable");
-////			return;
-////		}
-//		
-//		//	group lines by paragraphs
-//		ImRegion[][] paragraphLines = getParagraphLines(paragraphs, lines);
-//		
-//		//	compute minimum, maximum, and average start of all lines, and lines at paragraph starts so far
-//		int minLineStart = block.bounds.right;
-//		int maxLineStart = 0;
-//		int lineStartCount = 0;
-//		int lineStartSum = 0;
-//		int fLineStartCount = 0;
-//		int fLineStartSum = 0;
-//		for (int p = 0; p < paragraphLines.length; p++) {
-//			for (int l = 0; l < paragraphLines[p].length; l++) {
-//				
-//				//	skip over lines lower than half the block average (some wider ones might be left)
-//				if ((paragraphLines[p][l].bounds.bottom - paragraphLines[p][l].bounds.top) < (avgLineHeight / 2))
-//					continue;
-//				
-//				//	skip over lines that start are indented more than one third of block width (likely artifacts)
-//				if (((paragraphLines[p][l].bounds.left - block.bounds.left) * 3) > (block.bounds.right - block.bounds.left))
-//					continue;
-//				
-//				//	count line
-//				lineStartCount++;
-//				lineStartSum += (paragraphLines[p][l].bounds.left - block.bounds.left);
-//				minLineStart = Math.min(minLineStart, (paragraphLines[p][l].bounds.left - block.bounds.left));
-//				maxLineStart = Math.max(maxLineStart, (paragraphLines[p][l].bounds.left - block.bounds.left));
-//				if (l == 0) {
-//					fLineStartCount++;
-//					fLineStartSum += (paragraphLines[p][l].bounds.left - block.bounds.left);
-//				}
-//			}
-//		}
-//		
-//		//	no significant indent or outdent
-//		int minSignificantDifference = (dpi / 20); // little more than one millimeter
-//		if ((maxLineStart - minLineStart) < minSignificantDifference) {
-//			psm.setInfo(" ==> line starts vary only by " + (maxLineStart - minLineStart) + ", line start split too unreliable");
-//			return;
-//		}
-//		
-//		//	compute averages
-//		int avgLineStart = ((lineStartCount == 0) ? 0 : (lineStartSum / lineStartCount));
-//		int avgFLineStart = ((fLineStartCount == 0) ? 0 : (fLineStartSum / fLineStartCount));
-//		psm.setInfo(" - average line start is at " + avgLineStart + ", average paragraph first line start is " + avgFLineStart);
-//		
-//		//	group line start
-//		int minLineStartCount = 0;
-//		int minLineStartCounts[] = new int[paragraphs.length];
-//		Arrays.fill(minLineStartCounts, 0);
-//		int maxLineStartCount = 0;
-//		int maxLineStartCounts[] = new int[paragraphs.length];
-//		Arrays.fill(maxLineStartCounts, 0);
-//		for (int p = 0; p < paragraphLines.length; p++) {
-//			for (int l = 0; l < paragraphLines[p].length; l++) {
-//				
-//				//	skip over lines lower than half the block average (some wider ones might be left)
-//				if ((paragraphLines[p][l].bounds.bottom - paragraphLines[p][l].bounds.top) < (avgLineHeight / 2))
-//					continue;
-//				
-//				//	sort into group
-//				int minLsd = Math.abs((paragraphLines[p][l].bounds.left - block.bounds.left) - minLineStart);
-//				int maxLsd = Math.abs((paragraphLines[p][l].bounds.left - block.bounds.left) - maxLineStart);
-//				if (maxLsd < minLsd) {
-//					maxLineStartCount++;
-//					maxLineStartCounts[p]++;
-//				}
-//				else {
-//					minLineStartCount++;
-//					minLineStartCounts[p]++;
-//				}
-//			}
-//		}
-//		psm.setInfo(" - got " + minLineStartCount + " lefter line starts, " + maxLineStartCount + " righter line starts");
-//		
-//		//	evaluate frequencies TODO figure out if line count thresholds make sense
-//		boolean[] splitExdent = new boolean[paragraphs.length];
-//		boolean[] splitIndent = new boolean[paragraphs.length];
-//		for (int p = 0; p < paragraphs.length; p++) {
-//			
-//			//	three or fewer lines in paragraph, too insecure
-//			if (paragraphLines[p].length < 4) {
-//				splitExdent[p] = false;
-//				splitIndent[p] = false;
-//			}
-//			
-//			//	nine or fewer lines in paragraph, use conservative estimates
-//			else if (paragraphLines[p].length < 10) {
-//				splitExdent[p] = ((minLineStartCount * 2) <= maxLineStartCount);
-//				splitIndent[p] = ((maxLineStartCount * 2) <= minLineStartCount);
-//			}
-//			
-//			//	ten or more lines paragraph, use more aggressive estimates
-//			else {
-//				splitExdent[p] = ((minLineStartCount * 3) <= (maxLineStartCount * 2));
-//				splitIndent[p] = ((maxLineStartCount * 3) <= (minLineStartCount * 2));
-//			}
-//		}
-//		
-//		//	split preliminary paragraphs at indented or exdented lines
-//		for (int p = 0; p < paragraphs.length; p++) {
-//			int spStartLineIndex = 0;
-//			psm.setInfo(" - investigating preliminary paragraph " + p + " with " + paragraphLines[p].length + " lines, paragraph is " + paragraphs[p].bounds.toString());
-//			for (int l = 1; l < paragraphLines[p].length; l++) {
-//				
-//				//	investigate line start
-//				psm.setInfo(" - paragraph line start is " + (paragraphLines[p][l].bounds.left - block.bounds.left));
-//				
-//				//	evaluate line start based on whatever we have
-//				boolean split = false;
-//				
-//				//	even for single paragraphs, we can detect indent or exdent based on frequency
-//				if (paragraphs.length < 3) {
-//					int minLsd = Math.abs((paragraphLines[p][l].bounds.left - block.bounds.left) - minLineStart);
-//					int maxLsd = Math.abs((paragraphLines[p][l].bounds.left - block.bounds.left) - maxLineStart);
-//					if (maxLsd < minLsd) {
-//						split = splitIndent[p];
-//						if (split)
-//							psm.setInfo(" - splitting for indent with min distance " + minLsd + ", max distance " + maxLsd);
-//					}
-//					else {
-//						split = splitExdent[p];
-//						if (split)
-//							psm.setInfo(" - splitting for exdent with min distance " + minLsd + ", max distance " + maxLsd);
-//					}
-//				}
-//				
-//				//	do paragraph start analysis
-//				else {
-//					int flsd = Math.abs((paragraphLines[p][l].bounds.left - block.bounds.left) - avgFLineStart);
-//					int lsd = Math.abs((paragraphLines[p][l].bounds.left - block.bounds.left) - avgLineStart);
-//					split = (lsd > flsd);
-//					if (split)
-//						psm.setInfo(" - splitting for first line start local distance " + lsd + ", global distance " + flsd);
-//				}
-//				
-//				//	this one looks like a paragraph start, perform split
-//				if (split) {
-//					ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, l), ImRegion.PARAGRAPH_TYPE);
-//					spStartLineIndex = l;
-//					psm.setInfo(" - created sub paragraph at " + splitParagraph.bounds.toString());
-//				}
-//			}
-//			
-//			//	we've split something, mark last part, and remove original paragraph
-//			if (spStartLineIndex != 0) {
-//				ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, paragraphLines[p].length), ImRegion.PARAGRAPH_TYPE);
-//				psm.setInfo(" - created final sub paragraph at " + splitParagraph.bounds.toString());
-//				block.getPage().removeRegion(paragraphs[p]);
-//			}
-//		}
-//		
-//		//	compute paragraph bounding boxes and compute indentation
-//		wrapAroundChildren(block, ImRegion.PARAGRAPH_TYPE, LINE_ANNOTATION_TYPE);
-//		computeBlockLayout(block, dpi);
-//		
-//		//	compute font size of paragraphs
-//		computeParagraphFontSize(block);
-//	}
-//	
-//	/**
-//	 * Split the paragraphs in a block into smaller paragraphs at wide inner
-//	 * horizontal margins.
-//	 * @param block the block to split
-//	 * @param dpi the resolution of the page image the bounding boxes of the
-//	 *            argument annotation and its children refer to
-//	 * @param psm an observer object monitoring progress
-//	 */
-//	public static void splitIntoParagraphsLineMargin(ImRegion block, int dpi, ProgressMonitor psm) {
-//		splitIntoParagraphsLineMargin(block, dpi, 0, psm);
-//	}
-//	
-//	/**
-//	 * Split the paragraphs in a block into smaller paragraphs at wide inner
-//	 * horizontal margins.
-//	 * @param block the block to split
-//	 * @param dpi the resolution of the page image the bounding boxes of the
-//	 *            argument annotation and its children refer to
-//	 * @param maxLineMarginFactor the factor whose to multiply the average line
-//	 *            height with to obtain the maximum distance in pixels between
-//	 *            two lines inside a paragraph (the advantage is that this
-//	 *            method of threshold computation naturally scales with both
-//	 *            DPI and font size)
-//	 * @param psm an observer object monitoring progress
-//	 */
-//	public static void splitIntoParagraphsLineMargin(ImRegion block, int dpi, float maxLineMarginFactor, ProgressMonitor psm) {
-//		if (psm == null)
-//			psm = ProgressMonitor.dummy;
-//		
-//		//	get lines
-//		ImRegion[] lines = getParagraphLayoutLines(block);
-//		psm.setInfo(" - found " + lines.length + " relevant lines in block");
-//		
-//		//	compute average line height and margin threshold
-//		int avgLineHeight = computeAverageHeight(lines);
-//		int maxLineMargin = ((int) (avgLineHeight * maxLineMarginFactor));
-//		
-//		//	perform split
-//		splitIntoParagraphsLineMargin(block, dpi, maxLineMargin, psm, lines);
-//	}
-//	
-//	//	if we get here, we have sufficient lines, all with bounding boxes, and a non-null status monitor
-//	private static void splitIntoParagraphsLineMargin(ImRegion block, int dpi, int maxLineMargin, ProgressMonitor psm, ImRegion[] lines) {
-//		
-//		//	get paragraphs
-//		ImRegion[] paragraphs = block.getRegions(ImRegion.PARAGRAPH_TYPE);
-//		if ((paragraphs.length < 3) && (maxLineMargin < 1)) {
-//			psm.setInfo(" ==> got " + paragraphs.length + " paragraphs, margin splitting too unreliable");
-//			return;
-//		}
-//		
-//		//	compute average paragraph margin and line margin (only if we don't have a fixed threshold, though)
-//		int avgLineMargin = 0;
-//		int avgParagraphMargin = 0;
-//		int minLineBlockMargin = (dpi / 20); // twice the regular line margin, but less than regular block margin
-//		if (maxLineMargin < 1) {
-//			int paragraphMarginSum = 0;
-//			for (int p = 1; p < paragraphs.length; p++)
-//				paragraphMarginSum += (paragraphs[p].bounds.top - paragraphs[p-1].bounds.bottom);
-//			avgParagraphMargin = (paragraphMarginSum / (paragraphs.length - 1));
-//			int lineMarginSum = 0;
-//			for (int l = 1; l < lines.length; l++)
-//				lineMarginSum += (lines[l].bounds.top - lines[l-1].bounds.bottom);
-//			avgLineMargin = (lineMarginSum / (lines.length - 1));
-//			
-//			psm.setInfo(" - average line margin is " + avgLineMargin + ", min line block margin at " + minLineBlockMargin + ", average paragraph margin is " + avgParagraphMargin);
-//			
-//			//	make sure not to split at average lines (margins can be wide in some documents)
-//			if (minLineBlockMargin < ((avgLineMargin * 3) / 2)) {
-//				minLineBlockMargin = ((avgLineMargin * 3) / 2);
-//				psm.setInfo(" - average line margin is " + avgLineMargin + ", increased min line block margin to " + minLineBlockMargin);
-//			}
-//		}
-//		
-//		//	group lines
-//		ImRegion[][] paragraphLines = getParagraphLines(paragraphs, lines);
-//		
-//		//	split paragraphs at wide spaces
-//		for (int p = 0; p < paragraphs.length; p++) {
-//			int spStartLineIndex = 0;
-//			psm.setInfo(" - investigating preliminary paragraph " + p + " with " + paragraphLines[p].length + " lines, paragraph is " + paragraphs[p].bounds.toString());
-//			for (int l = 1; l < paragraphLines[p].length; l++) {
-//				int lineMargin = (paragraphLines[p][l].bounds.top - paragraphLines[p][l-1].bounds.bottom);
-//				psm.setInfo(" - paragraph line margin is " + lineMargin);
-//				boolean splitForLineMargin = false;
-//				
-//				//	we have a threshold, use it
-//				if (0 < maxLineMargin)
-//					splitForLineMargin = (maxLineMargin < lineMargin);
-//				
-//				//	no threshold set, check if margin is larger than usual
-//				else {
-//					int apsd = Math.abs(lineMargin - avgParagraphMargin);
-//					int alsd = Math.abs(lineMargin - avgLineMargin);
-//					splitForLineMargin = ((alsd > apsd) && (minLineBlockMargin < lineMargin));
-//				}
-//				
-//				//	perform split
-//				if (splitForLineMargin) {
-//					ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, l), ImRegion.PARAGRAPH_TYPE);
-//					spStartLineIndex = l;
-//					psm.setInfo(" - created sub paragraph at " + splitParagraph.bounds.toString());
-//				}
-//			}
-//			
-//			//	we've split something, mark last part, and remove original paragraph
-//			if (spStartLineIndex != 0) {
-//				ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, paragraphLines[p].length), ImRegion.PARAGRAPH_TYPE);
-//				psm.setInfo(" - created final sub paragraph at " + splitParagraph.bounds.toString());
-//				block.getPage().removeRegion(paragraphs[p]);
-//			}
-//		}
-//		
-//		//	compute paragraph bounding boxes and compute indentation
-//		wrapAroundChildren(block, ImRegion.PARAGRAPH_TYPE, LINE_ANNOTATION_TYPE);
-//		computeBlockLayout(block, dpi);
-//		
-//		//	compute font size of paragraphs
-//		computeParagraphFontSize(block);
-//	}
-//	
-//	/**
-//	 * Split the paragraphs in a block into smaller paragraphs at wide inner
-//	 * line distances, as measured by the text base lines of the individual
-//	 * lines.
-//	 * @param block the block to split
-//	 * @param dpi the resolution of the page image the bounding boxes of the
-//	 *            argument annotation and its children refer to
-//	 * @param psm an observer object monitoring progress
-//	 */
-//	public static void splitIntoParagraphsLineDistance(ImRegion block, int dpi, ProgressMonitor psm) {
-//		if (psm == null)
-//			psm = ProgressMonitor.dummy;
-//		
-//		//	get lines
-//		ImRegion[] lines = getParagraphLayoutLines(block);
-//		psm.setInfo(" - found " + lines.length + " relevant lines in block");
-//		
-//		//	perform split
-//		splitIntoParagraphsLineDistance(block, dpi, psm, lines);
-//	}
-//	
-//	//	if we get here, we have sufficient lines, all with bounding boxes, and a non-null status monitor
-//	private static void splitIntoParagraphsLineDistance(ImRegion block, int dpi, ProgressMonitor psm, ImRegion[] lines) {
-//		
-//		//	get paragraphs
-//		ImRegion[] paragraphs = block.getRegions(ImRegion.PARAGRAPH_TYPE);
-//		
-//		//	group lines
-//		ImRegion[][] paragraphLines = getParagraphLines(paragraphs, lines);
-//		
-//		//	split paragraphs at above-average line distances
-//		for (int p = 0; p < paragraphs.length; p++) {
-//			int spStartLineIndex = 0;
-//			psm.setInfo(" - investigating preliminary paragraph " + p + " with " + paragraphLines[p].length + " lines, paragraph is " + paragraphs[p].bounds.toString());
-//			
-//			//	too few lines, too unreliable
-//			if (paragraphLines[p].length < 5) {
-//				psm.setInfo(" --> too few lines");
-//				continue;
-//			}
-//			
-//			//	collect line baselines and average baseline distance
-//			boolean baselinesValid = true;
-//			int[] lineBaselines = new int[paragraphLines[p].length];
-//			int lineBaselineDistanceSum = 0;
-//			for (int l = 0; l < paragraphLines[p].length; l++) try {
-//				lineBaselines[l] = Integer.parseInt((String) paragraphLines[p][l].getAttribute(BASELINE_ATTRIBUTE, "-1"));
-//				if (lineBaselines[l] < 1) {
-//					baselinesValid = false;
-//					break;
-//				}
-//				else if (l != 0) lineBaselineDistanceSum += (lineBaselines[l] - lineBaselines[l-1]);
-//			} catch (Exception e) {}
-//			
-//			//	got no baselines to work with
-//			if (!baselinesValid) {
-//				psm.setInfo(" --> some lines lack their baseline attribute");
-//				continue;
-//			}
-//			
-//			//	compute average
-//			int avgLineBaselineDistance = (lineBaselineDistanceSum / (paragraphLines[p].length - 1));
-//			psm.setInfo("   - average line distance is " + avgLineBaselineDistance);
-//			
-//			for (int l = 1; l < paragraphLines[p].length; l++) {
-//				
-//				//	at least 25% above average, perform split
-//				if ((avgLineBaselineDistance * 5) <= ((lineBaselines[l] - lineBaselines[l-1]) * 4)) {
-//					ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, l), ImRegion.PARAGRAPH_TYPE);
-//					spStartLineIndex = l;
-//					psm.setInfo(" - created sub paragraph at " + splitParagraph.bounds.toString());
-//				}
-//				else psm.setInfo("   - line distance " + (lineBaselines[l] - lineBaselines[l-1]) + " too small for split");
-//			}
-//			
-//			//	we've split something, mark last part, and remove original one
-//			if (spStartLineIndex != 0) {
-//				ImRegion splitParagraph = new ImRegion(block.getPage(), ImLayoutObject.getAggregateBox(paragraphLines[p], spStartLineIndex, paragraphLines[p].length), ImRegion.PARAGRAPH_TYPE);
-//				psm.setInfo(" - created final sub paragraph at " + splitParagraph.bounds.toString());
-//				block.getPage().removeRegion(paragraphs[p]);
-//			}
-//		}
-//		
-//		//	compute paragraph bounding boxes and compute indentation
-//		wrapAroundChildren(block, ImRegion.PARAGRAPH_TYPE, LINE_ANNOTATION_TYPE);
-//		computeBlockLayout(block, dpi);
-//		
-//		//	compute font size of paragraphs
-//		computeParagraphFontSize(block);
-//	}
-//	
-//	private static void wrapAroundChildren(ImRegion region, String pType, String cType) {
-//		ImRegion[] pRegions = region.getRegions(pType);
-//		for (int p = 0; p < pRegions.length; p++) {
-//			int pLeft = pRegions[p].bounds.right;
-//			int pRight = pRegions[p].bounds.left;
-//			int pTop = pRegions[p].bounds.bottom;
-//			int pBottom = pRegions[p].bounds.top;
-//			ImRegion[] cRegions = (WORD_ANNOTATION_TYPE.equals(cType) ? region.getPage().getWordsInside(pRegions[p].bounds) : region.getPage().getRegionsInside(pRegions[p].bounds, true));
-//			for (int c = 0; c < cRegions.length; c++) {
-//				if (!cType.equals(cRegions[c].getType()))
-//					continue;
-//				pLeft = Math.min(pLeft, cRegions[c].bounds.left);
-//				pRight = Math.max(pRight, cRegions[c].bounds.right);
-//				pTop = Math.min(pTop, cRegions[c].bounds.top);
-//				pBottom = Math.max(pBottom, cRegions[c].bounds.bottom);
-//			}
-//			if ((pLeft < pRight) && (pTop < pBottom) && ((pRegions[p].bounds.left != pLeft) || (pRight != pRegions[p].bounds.right) || (pRegions[p].bounds.top != pTop) || (pBottom != pRegions[p].bounds.bottom))) {
-//				BoundingBox pBox = new BoundingBox(pLeft, pRight, pTop, pBottom);
-//				ImRegion pRegion = new ImRegion(region.getPage(), pBox, pType);
-//				pRegion.copyAttributes(pRegions[p]);
-//				region.getPage().removeRegion(pRegions[p]);
-//				pRegions[p] = pRegion;
-//			}
-//		}
-//	}
 	
 	/**
 	 * Test whether or not two text blocks could form a continuous piece of text
@@ -1419,6 +721,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 	 * @return the block layout metrics
 	 */
 	public static BlockMetrics computeBlockMetrics(ImPage page, int pageImageDpi, ImRegion block, ImRegion column) {
+		if (DEBUG_LINE_METRICS) System.out.println("Computing block metrics on " + block.bounds + ((column == null) ? "" : (" in column " + column.bounds)));
 		
 		//	get lines
 		ImRegion[] lines = block.getRegions(ImRegion.LINE_ANNOTATION_TYPE);
@@ -1428,10 +731,14 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 		Arrays.sort(lines, ImUtils.topDownOrder);
 		
 		//	get context column (emulate as aggregate bounds of page blocks in assumed single-column layout if not found)
-		if (column == null)
+		if (column == null) {
 			column = getParentColumn(page, block);
-		if (column == null)
+			if (DEBUG_LINE_METRICS && (column != null)) System.out.println(" - found parent column: " + column.bounds);
+		}
+		if (column == null) {
 			column = createParentColumn(page, block);
+			if (DEBUG_LINE_METRICS && (column != null)) System.out.println(" - computed parent column: " + column.bounds);
+		}
 		
 		//	sort out lines without words
 		ArrayList lineList = new ArrayList();
@@ -1439,20 +746,22 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			if (lines[l].getWords().length != 0)
 				lineList.add(lines[l]);
 		}
-		if (lineList.isEmpty())
+		if (lineList.size() == 0)
 			return null; // nothing to work with
 		
 		//	measure left and right margins of lines both in column and in block
-		System.out.println("Left and right line margins:");
-//		LineMetrics[] lineMetrics = new LineMetrics[lines.length];
-//		for (int l = 0; l < lines.length; l++)
-//			lineMetrics[l] = new LineMetrics(lines[l], block, column);
-		LineMetrics[] lineMetrics = new LineMetrics[lineList.size()];
-		for (int l = 0; l < lineList.size(); l++)
-			lineMetrics[l] = new LineMetrics(((ImRegion) lineList.get(l)), block, column);
+//		LineMetrics[] lineMetrics = new LineMetrics[lineList.size()];
+//		for (int l = 0; l < lineList.size(); l++)
+//			lineMetrics[l] = new LineMetrics(((ImRegion) lineList.get(l)), block, column);
+		ArrayList lineMetrics = new ArrayList(lineList.size());
+		for (int l = 0; l < lineList.size(); l++) try {
+			lineMetrics.add(new LineMetrics(((ImRegion) lineList.get(l)), block, column));
+		} catch (RuntimeException re) { /* ignore weird lines (almost exclusively occur in OCR of drawings) */ }
+		if (lineMetrics.size() == 0)
+			return null; // nothing to work with
 		
 		//	finally ...
-		return new BlockMetrics(page, pageImageDpi, column, block, lineMetrics);
+		return new BlockMetrics(page, pageImageDpi, column, block, ((LineMetrics[]) lineMetrics.toArray(new LineMetrics[lineMetrics.size()])));
 	}
 	
 	private static ImRegion getParentColumn(ImPage page, ImRegion block) {
@@ -1496,6 +805,13 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 		//	get all blocks in page
 		ArrayList pageBlocks = new ArrayList(Arrays.asList(page.getRegions(ImRegion.BLOCK_ANNOTATION_TYPE)));
 		
+		//	exclude any blocks less than two lines high (should get us rid of any page header blocks in single-column layouts)
+		for (int b = 0; b < pageBlocks.size(); b++) {
+			ImRegion pageBlock = ((ImRegion) pageBlocks.get(b));
+			if (pageBlock.bounds.getHeight() < (avgPageLineHeight* 2))
+				pageBlocks.remove(b--);
+		}
+		
 		//	exclude any blocks horizontally overlapping with any remaining column
 		for (int c = 0; c < pageCols.size(); c++) {
 			ImRegion pageCol = ((ImRegion) pageCols.get(c));
@@ -1509,13 +825,41 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			}
 		}
 		
-		//	exclude any blocks _not_ horizontally overlapping with argument block
+		//	exclude and collect any blocks fully to left or right of argument block
+		ArrayList leftBlocks = new ArrayList();
+		ArrayList rightBlocks = new ArrayList();
 		for (int b = 0; b < pageBlocks.size(); b++) {
 			ImRegion pageBlock = ((ImRegion) pageBlocks.get(b));
 			if (block.bounds.right <= pageBlock.bounds.left)
-				pageBlocks.remove(b--);
+				rightBlocks.add(pageBlocks.remove(b--));
 			else if (pageBlock.bounds.right <= block.bounds.left)
-				pageBlocks.remove(b--);
+				leftBlocks.add(pageBlocks.remove(b--));
+		}
+		
+		//	exclude any blocks overlapping with any block to left or right (gets us rid of column-spanning headings, captions, etc.)
+		if (leftBlocks.size() != 0) {
+			int leftBlockRight = 0;
+			for (int b = 0; b < leftBlocks.size(); b++) {
+				ImRegion leftBlock = ((ImRegion) leftBlocks.get(b));
+				leftBlockRight = Math.max(leftBlockRight, leftBlock.bounds.right);
+			}
+			for (int b = 0; b < pageBlocks.size(); b++) {
+				ImRegion pageBlock = ((ImRegion) pageBlocks.get(b));
+				if (pageBlock.bounds.left < leftBlockRight)
+					pageBlocks.remove(b--);
+			}
+		}
+		if (rightBlocks.size() != 0) {
+			int rightBlockLeft = page.bounds.right;
+			for (int b = 0; b < rightBlocks.size(); b++) {
+				ImRegion rightBlock = ((ImRegion) rightBlocks.get(b));
+				rightBlockLeft = Math.min(rightBlockLeft, rightBlock.bounds.left);
+			}
+			for (int b = 0; b < pageBlocks.size(); b++) {
+				ImRegion pageBlock = ((ImRegion) pageBlocks.get(b));
+				if (rightBlockLeft < pageBlock.bounds.right)
+					pageBlocks.remove(b--);
+			}
 		}
 		
 		//	resort to all page blocks if no blocks remaining
@@ -1601,8 +945,25 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 		int minLineDistGapForDistSplitDenom = 50; // makes the tolerance about half a millimeter
 		int minSignificantVerticalDist = layout.getIntProperty("minSignificantVerticalDist", ((pageImageDpi + (minLineDistGapForDistSplitDenom / 2)) / minLineDistGapForDistSplitDenom), pageImageDpi);
 		float normSpaceWidth = layout.getFloatProperty("normSpaceWidth", 0.33f); // pretty conservative figure assuming wide spacing on short line check
-		BlockLayout blockLayout = blockMetrics.analyze(minSignificantHorizontalDist, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth);
+		LinePattern[] splitLinePatterns = getSplitLinePatters(layout);
+		BlockLayout blockLayout = blockMetrics.analyze(minSignificantHorizontalDist, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, splitLinePatterns);
 		return blockLayout.writeParagraphStructure();
+	}
+	
+	private static LinePattern[] getSplitLinePatters(DocumentStyle layout) {
+		String[] splitLinePatterStrs = layout.getListProperty("splitLinePatterns", null, " ");
+		if ((splitLinePatterStrs == null) || (splitLinePatterStrs.length == 0))
+			return new LinePattern[0];
+		ArrayList splitLinePatters = new ArrayList(splitLinePatterStrs.length);
+		for (int p = 0; p < splitLinePatterStrs.length; p++) try {
+			splitLinePatters.add(LinePattern.parsePattern(splitLinePatterStrs[p]));
+		}
+		catch (IllegalArgumentException iae) {
+			System.out.println("Error parsing split line pattern " + splitLinePatterStrs[p]);
+			System.out.println(iae.getMessage());
+			iae.printStackTrace(System.out);
+		}
+		return ((LinePattern[]) splitLinePatters.toArray(new LinePattern[splitLinePatters.size()]));
 	}
 	
 	private static final boolean DEBUG_LINE_METRICS = true;
@@ -1703,15 +1064,21 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			int extStartWordBlockEnd = this.words.length;
 			int wordSpaceSum = 0;
 			int wordSpaceCount = 0;
+//			if (DEBUG_LINE_METRICS) System.out.println(" - start word: " + this.words[0].getString() + " at " + this.words[0].bounds);
 			for (int w = 1; w < this.words.length; w++) {
 				int wordMargin = (this.words[w].bounds.left - this.words[w-1].bounds.right);
+//				if (DEBUG_LINE_METRICS) System.out.println(" - at " + wordMargin + ": " + this.words[w].getString() + " at " + this.words[w].bounds);
 				if (2 < wordMargin) {
-					if (startWordBlockEnd == this.words.length)
+					if (startWordBlockEnd == this.words.length) {
+//						if (DEBUG_LINE_METRICS) System.out.println(" ==> start word block ends before " + w);
 						startWordBlockEnd = w;
+					}
 					if (extStartWordBlockEnd == this.words.length) {
 						//	too large a space to span (over half line height) for an in-line enumeration
-						if ((this.line.bounds.getHeight() / 2) < wordMargin)
+						if ((this.line.bounds.getHeight() / 2) < wordMargin) {
+//							if (DEBUG_LINE_METRICS) System.out.println(" ==> extended start word block ends before " + w);
 							extStartWordBlockEnd = w;
+						}
 						//	only continue with a word
 						else if (!Gamta.isWord(this.words[w].getString()))
 							extStartWordBlockEnd = w;
@@ -1733,8 +1100,11 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 					extStartWordBlockStr.append(this.words[w].getString());
 			}
 			this.avgSpaceWidth = ((wordSpaceCount == 0) ? -1 : ((wordSpaceSum + (wordSpaceCount / 2)) / wordSpaceCount));
+//			if (DEBUG_LINE_METRICS) System.out.println(" ==> average space: " + this.avgSpaceWidth);
 			this.startWordBlockBounds = ImLayoutObject.getAggregateBox(this.words, 0, startWordBlockEnd);
+//			if (DEBUG_LINE_METRICS) System.out.println(" ==> start word block: " + this.startWordBlockBounds);
 			this.extStartWordBlockBounds = ImLayoutObject.getAggregateBox(this.words, 0, extStartWordBlockEnd);
+//			if (DEBUG_LINE_METRICS) System.out.println(" ==> extended start word block: " + this.extStartWordBlockBounds);
 			
 			//	compute positioning in block
 			this.block = block;
@@ -2124,8 +1494,8 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 		 *        the line height
 		 * @return the resulting block layout
 		 */
-		public BlockLayout analyze(int minSignificantHorizontalDist, float minLeftAccPointSupport, float minCenterRightAccPointSupport, int minSignificantVerticalDist, float normSpaceWidth) {
-			return this.doAnalyze(null, -1, minSignificantHorizontalDist, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth);
+		public BlockLayout analyze(int minSignificantHorizontalDist, float minLeftAccPointSupport, float minCenterRightAccPointSupport, int minSignificantVerticalDist, float normSpaceWidth, LinePattern[] splitLinePatterns) {
+			return this.doAnalyze(null, -1, minSignificantHorizontalDist, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, splitLinePatterns);
 		}
 		
 		/**
@@ -2152,8 +1522,8 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 		 *        the line height
 		 * @return the analysis result
 		 */
-		public BlockLayout analyzeContinuingFrom(BlockMetrics predecessorBlockMetrics, int blockMargin, int minSignificantHorizontalDist, float minLeftAccPointSupport, float minCenterRightAccPointSupport, int minSignificantVerticalDist, float normSpaceWidth) {
-			return this.doAnalyze(predecessorBlockMetrics, blockMargin, minSignificantHorizontalDist, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth);
+		public BlockLayout analyzeContinuingFrom(BlockMetrics predecessorBlockMetrics, int blockMargin, int minSignificantHorizontalDist, float minLeftAccPointSupport, float minCenterRightAccPointSupport, int minSignificantVerticalDist, float normSpaceWidth, LinePattern[] splitLinePatterns) {
+			return this.doAnalyze(predecessorBlockMetrics, blockMargin, minSignificantHorizontalDist, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, splitLinePatterns);
 			
 			//	TODO fix cross-page and cross-column paragraph continuation detection
 			//	TODO TEST Zootaxa/zootaxa.4319.3.7.pdf.imf (page broken reference on Pages 9/10)
@@ -2168,13 +1538,14 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			if (layout == null)
 				return this.doAnalyze(predecessorBlockMetrics, blockMargin);
 			int maxAccPointSquashDistDenom = 25; // makes the tolerance about a millimeter
-			int minSignificantHorizontalDist = layout.getIntProperty("minSignificantHorizontalDist", ((pageImageDpi + (maxAccPointSquashDistDenom / 2)) / maxAccPointSquashDistDenom), pageImageDpi);
+			int minSignificantHorizontalDist = layout.getIntProperty("minSignificantHorizontalDist", ((this.pageImageDpi + (maxAccPointSquashDistDenom / 2)) / maxAccPointSquashDistDenom), this.pageImageDpi);
 			float minLeftAccPointSupport = layout.getFloatProperty("minLeftAccumulationPointSupport", 0.25f);
 			float minCenterRightAccPointSupport = layout.getFloatProperty("minCenterRightAccumulationPointSupport", 0.25f);
 			int minLineDistGapForDistSplitDenom = 50; // makes the tolerance about half a millimeter
-			int minSignificantVerticalDist = layout.getIntProperty("minSignificantVerticalDist", ((pageImageDpi + (minLineDistGapForDistSplitDenom / 2)) / minLineDistGapForDistSplitDenom), pageImageDpi);
+			int minSignificantVerticalDist = layout.getIntProperty("minSignificantVerticalDist", ((this.pageImageDpi + (minLineDistGapForDistSplitDenom / 2)) / minLineDistGapForDistSplitDenom), this.pageImageDpi);
 			float normSpaceWidth = layout.getFloatProperty("normSpaceWidth", 0.33f); // pretty conservative figure assuming wide spacing on short line check
-			return this.doAnalyze(predecessorBlockMetrics, blockMargin, minSignificantHorizontalDist, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth);
+			LinePattern[] splitLinePatterns = getSplitLinePatters(layout);
+			return this.doAnalyze(predecessorBlockMetrics, blockMargin, minSignificantHorizontalDist, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, splitLinePatterns);
 		}
 		
 		//	the defaulting version
@@ -2186,10 +1557,10 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			int minLineDistGapForDistSplitDenom = 50; // makes the tolerance about half a millimeter
 			int minSignificantVerticalDist = ((this.pageImageDpi + (minLineDistGapForDistSplitDenom / 2)) / minLineDistGapForDistSplitDenom);
 			float normSpaceWidth = 0.33f; // pretty conservative figure assuming wide spacing on short line check
-			return this.doAnalyze(predecessorBlockMetrics, blockMargin, minSignificantHorizontalDist, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth);
+			return this.doAnalyze(predecessorBlockMetrics, blockMargin, minSignificantHorizontalDist, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, new LinePattern[0]);
 		}
 		
-		private BlockLayout doAnalyze(BlockMetrics predecessorBlockMetrics, int blockMargin, int minSignificantHorizontalDist, float minLeftAccPointSupport, float minCenterRightAccPointSupport, int minSignificantVerticalDist, float normSpaceWidth) {
+		private BlockLayout doAnalyze(BlockMetrics predecessorBlockMetrics, int blockMargin, int minSignificantHorizontalDist, float minLeftAccPointSupport, float minCenterRightAccPointSupport, int minSignificantVerticalDist, float normSpaceWidth, LinePattern[] splitLinePatterns) {
 			
 			//	compute parameters
 			LineMetrics[] lines;
@@ -2221,7 +1592,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			}
 			
 			//	perform actual analysis
-			BlockLayout blockLayout = doAnalyze(lines, aboveLineGaps, this.pageImageDpi, colWidth, blockWidth, minSignificantHorizontalDist, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth);
+			BlockLayout blockLayout = doAnalyze(lines, aboveLineGaps, this.pageImageDpi, colWidth, blockWidth, minSignificantHorizontalDist, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, splitLinePatterns);
 			
 			//	create final result
 			if (predecessorBlockMetrics == null)
@@ -2244,13 +1615,13 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 		
 		//	TODO use progress monitor instead of System.out
 		
-		private static BlockLayout doAnalyze(LineMetrics[] lines, int[] aboveLineGaps, int pageImageDpi, int colWidth, int blockWidth, int minSignificantHorizontalDist, float minLeftAccPointSupport, float minCenterRightAccPointSupport, int minSignificantVerticalDist, float normSpaceWidth) {
+		private static BlockLayout doAnalyze(LineMetrics[] lines, int[] aboveLineGaps, int pageImageDpi, int colWidth, int blockWidth, int minSignificantHorizontalDist, float minLeftAccPointSupport, float minCenterRightAccPointSupport, int minSignificantVerticalDist, float normSpaceWidth, LinePattern[] splitLinePatterns) {
 			
 			//	analyze lines against column and block, as well as line distance
 			CountingSet colLeftLineDists = new CountingSet(new TreeMap());
 			int colLeftLineDistSum = 0;
-//			CountingSet colRightLineDists = new CountingSet(new TreeMap());
-//			int colRightLineDistSum = 0;
+			CountingSet colRightLineDists = new CountingSet(new TreeMap());
+			int colRightLineDistSum = 0;
 //			CountingSet colEdgeDistDiscrepancies = new CountingSet(new TreeMap());
 //			int colEdgeDistDiscrepancySum = 0;
 			CountingSet blockLeftLineDists = new CountingSet(new TreeMap());
@@ -2259,6 +1630,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 //			int blockRightLineDistSum = 0;
 			CountingSet blockEdgeDistDiscrepancies = new CountingSet(new TreeMap());
 //			int blockEdgeDistDiscrepancySum = 0;
+			int lineHeightSum = 0;
 			CountingSet lineGaps = new CountingSet(new TreeMap());
 			int lineGapSum = 0;
 			boolean[] isColShortLine = new boolean[lines.length];
@@ -2267,11 +1639,19 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			boolean[] isBlockShortLine = new boolean[lines.length];
 			Arrays.fill(isBlockShortLine, false);
 			int blockShortLineCount = 0;
+			int blockLeftWordWeight = 0;
+			int blockRightWordWeight = 0;
+			int colLeftWordWeight = 0;
+			int colRightWordWeight = 0;
+			int wBlockLeftWordWeight = 0;
+			int wBlockRightWordWeight = 0;
+			int wColLeftWordWeight = 0;
+			int wColRightWordWeight = 0;
 			for (int l = 0; l < lines.length; l++) {
 				colLeftLineDists.add(new Integer(lines[l].colLeftMargin));
 				colLeftLineDistSum += lines[l].colLeftMargin;
-//				colRightLineDists.add(new Integer(lines[l].colRightMargin));
-//				colRightLineDistSum += lines[l].colRightMargin;
+				colRightLineDists.add(new Integer(lines[l].colRightMargin));
+				colRightLineDistSum += lines[l].colRightMargin;
 //				colEdgeDistDiscrepancies.add(new Integer(Math.abs(lines[l].colLeftMargin - lines[l].colRightMargin)));
 //				colEdgeDistDiscrepancySum += Math.abs(lines[l].colLeftMargin - lines[l].colRightMargin);
 				blockLeftLineDists.add(new Integer(lines[l].blockLeftMargin));
@@ -2284,6 +1664,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 					System.out.println(" - '" + lines[l].words[0] + "': " + lines[l].colLeftMargin + "/" + lines[l].colRightMargin + " in column, " + lines[l].blockLeftMargin + "/" + lines[l].blockRightMargin + " in block");
 					System.out.println("   start word(s) are " + lines[l].startWordBlockBounds.getWidth() + " long");
 				}
+				lineHeightSum += lines[l].line.bounds.getHeight();
 				if (l != 0) {
 					lineGapSum += aboveLineGaps[l];
 					lineGaps.add(new Integer(aboveLineGaps[l]));
@@ -2298,12 +1679,57 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 						if (DEBUG_BLOCK_LAYOUT) System.out.println("   ==> previous line is short in block by " + (lines[l-1].blockRightMargin - (lines[l].line.bounds.getHeight() / 3) - lines[l].startWordBlockBounds.getWidth()));
 					}
 				}
+				int blockCenterX = ((lines[l].block.bounds.left + lines[l].block.bounds.right) / 2);
+				int colCenterX = ((lines[l].column.bounds.left + lines[l].column.bounds.right) / 2);
+				for (int w = 0; w < lines[l].words.length; w++) {
+					if (lines[l].words[w].bounds.left < blockCenterX) {
+						blockLeftWordWeight += ((Math.min(blockCenterX, lines[l].words[w].bounds.right) - lines[l].words[w].bounds.left) * lines[l].line.bounds.getHeight());
+						for (int x = lines[l].words[w].bounds.left; x < Math.min(blockCenterX, lines[l].words[w].bounds.right); x++)
+							wBlockLeftWordWeight += Math.round(Math.sqrt(blockCenterX - x));
+					}
+					if (blockCenterX < lines[l].words[w].bounds.right) {
+						blockRightWordWeight += ((lines[l].words[w].bounds.right - Math.max(blockCenterX, lines[l].words[w].bounds.left)) * lines[l].line.bounds.getHeight());
+						for (int x = Math.max((blockCenterX + 1), lines[l].words[w].bounds.left); x < lines[l].words[w].bounds.right; x++)
+							wBlockRightWordWeight += Math.round(Math.sqrt(x - blockCenterX));
+					}
+					if (lines[l].words[w].bounds.left < colCenterX) {
+						colLeftWordWeight += ((Math.min(colCenterX, lines[l].words[w].bounds.right) - lines[l].words[w].bounds.left) * lines[l].line.bounds.getHeight());
+						for (int x = lines[l].words[w].bounds.left; x < Math.min(colCenterX, lines[l].words[w].bounds.right); x++)
+							wColLeftWordWeight += Math.round(Math.sqrt(colCenterX - x));
+					}
+					if (colCenterX < lines[l].words[w].bounds.right) {
+						colRightWordWeight += ((lines[l].words[w].bounds.right - Math.max(colCenterX, lines[l].words[w].bounds.left)) * lines[l].line.bounds.getHeight());
+						for (int x = Math.max((colCenterX + 1), lines[l].words[w].bounds.left); x < lines[l].words[w].bounds.right; x++)
+							wColRightWordWeight += Math.round(Math.sqrt(x - colCenterX));
+					}
+				}
 			}
 			int avgColLeftLineMargin = ((colLeftLineDistSum + (lines.length / 2)) / lines.length);
-//			int avgColRightLineMargin = ((colRightLineDistSum + (lines.length / 2)) / lines.length);
+			int avgColRightLineMargin = ((colRightLineDistSum + (lines.length / 2)) / lines.length);
 //			int avgBlockLeftLineMargin = ((blockLeftLineDistSum + (lines.length / 2)) / lines.length);
 //			int avgBlockRightLineMargin = ((blockRightLineDistSum + (lines.length / 2)) / lines.length);
+			int avgLineHeight = ((lineHeightSum + (lines.length / 2)) / lines.length);
 			int avgLineGap = ((lines.length < 2) ? 0 : ((lineGapSum + (lines.length / 2)) / (lines.length - 1)));
+			
+			float blockWordWeightRatio = (((float) blockRightWordWeight) / (blockLeftWordWeight + blockRightWordWeight));
+			float colWordWeightRatio = (((float) colRightWordWeight) / (colLeftWordWeight + colRightWordWeight));
+			float wBlockWordWeightRatio = (((float) wBlockRightWordWeight) / (wBlockLeftWordWeight + wBlockRightWordWeight));
+			float wColWordWeightRatio = (((float) wColRightWordWeight) / (wColLeftWordWeight + wColRightWordWeight));
+			if (DEBUG_BLOCK_LAYOUT) {
+				System.out.println("Left word weight in block is " + blockLeftWordWeight);
+				System.out.println("Right word weight in block is " + blockRightWordWeight);
+				System.out.println(" ==> word weight ratio in block is " + blockWordWeightRatio);
+				System.out.println("Left word weight in column is " + colLeftWordWeight);
+				System.out.println("Right word weight in column is " + colRightWordWeight);
+				System.out.println(" ==> word weight ratio in column is " + colWordWeightRatio);
+				
+				System.out.println("Weighted left word weight in block is " + wBlockLeftWordWeight);
+				System.out.println("Weighted right word weight in block is " + wBlockRightWordWeight);
+				System.out.println(" ==> weighted word weight ratio in block is " + wBlockWordWeightRatio);
+				System.out.println("Weighted left word weight in column is " + wColLeftWordWeight);
+				System.out.println("Weighted right word weight in column is " + wColRightWordWeight);
+				System.out.println(" ==> weighted word weight ratio in column is " + wColWordWeightRatio);
+			}
 			
 			//	TODOne find good fraction of DPI to use as maximum gap in accumulation points
 			int minAccPointMemberCount = ((lines.length < 3) ? 1 : 2);
@@ -2418,8 +1844,6 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 				if (DEBUG_BLOCK_LAYOUT) System.out.println(" - right is " + rightAligned + " for column anchored right margin " + lines[0].colRightMargin);
 				centerAligned = (Math.abs(lines[0].colRightMargin - lines[0].colLeftMargin) < ((pageImageDpi + (13 / 2)) / 13)); // this has to be within 1/13 of an inch (2 mm)
 				if (DEBUG_BLOCK_LAYOUT) System.out.println(" - center is " + centerAligned + " for column anchored line margin deviation " + (lines[0].colRightMargin - lines[0].colLeftMargin));
-				justified = (leftAligned && rightAligned);
-				if (DEBUG_BLOCK_LAYOUT) System.out.println(" - justified is " + justified);
 				
 				//	TODO for accuracy, average out and use proportion of left and right margin in column over multiple centered single-line blocks
 				
@@ -2428,6 +1852,8 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			
 			//	use block internal measurements for multi-line blocks
 			else {
+				
+				//	try accumulation points first
 				int blockLeftAccPointCountSum = 0;
 				int minBlockLeftAccPointCenter = Integer.MAX_VALUE;
 				int maxBlockLeftAccPointCenter = 0;
@@ -2436,27 +1862,42 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 					minBlockLeftAccPointCenter = Math.min(minBlockLeftAccPointCenter, blockLeftAccPoints[a].center);
 					maxBlockLeftAccPointCenter = Math.max(maxBlockLeftAccPointCenter, blockLeftAccPoints[a].center);
 				}
-				if (lines.length < 10)
+				if (lines.length < 4)
+					leftAligned = (((blockLeftAccPoints.length != 0) && (blockLeftAccPoints.length < 2)) && (Math.abs(maxBlockLeftAccPointCenter - minBlockLeftAccPointCenter) < pageImageDpi) && ((lines.length * 2) <= (blockLeftAccPointCountSum * 3)));
+				else if (lines.length < 10)
 					leftAligned = (((blockLeftAccPoints.length != 0) && (blockLeftAccPoints.length <= 2)) && (Math.abs(maxBlockLeftAccPointCenter - minBlockLeftAccPointCenter) < pageImageDpi) && ((lines.length * 2) < (blockLeftAccPointCountSum * 3)));
+//					leftAligned = (((blockLeftAccPoints.length != 0) && (blockLeftAccPoints.length <= 2)) && (Math.abs(maxBlockLeftAccPointCenter - minBlockLeftAccPointCenter) < Math.max(pageImageDpi, (blockWidth / 4))) && ((lines.length * 2) < (blockLeftAccPointCountSum * 3)));
 				else leftAligned = (((blockLeftAccPoints.length != 0) && (blockLeftAccPoints.length <= 3)) && (Math.abs(maxBlockLeftAccPointCenter - minBlockLeftAccPointCenter) < pageImageDpi) && (lines.length < (blockLeftAccPointCountSum * 2)));
+//				else leftAligned = (((blockLeftAccPoints.length != 0) && (blockLeftAccPoints.length <= 3)) && (Math.abs(maxBlockLeftAccPointCenter - minBlockLeftAccPointCenter) < Math.max(pageImageDpi, (blockWidth / 4))) && (lines.length < (blockLeftAccPointCountSum * 2)));
 				if (DEBUG_BLOCK_LAYOUT) System.out.println(" - left is " + leftAligned + " for " + Arrays.toString(blockLeftAccPoints));
 				if (blockRightAccPoints.length != 1)
 					rightAligned = false; // no clear accumulation point of line ends
 				else if (((lines.length * 8) < (blockRightAccPoints[0].count * 10)) && (blockRightAccPoints[0].getDiameter() < ((pageImageDpi + 13) / 25)))
 					rightAligned = true; // single accumulation point with >80% support and diameter below (DPI/50) 
-				else if (((lines.length + blockShortLineCount + 1) <= (blockRightAccPoints[0].count)) && (blockRightAccPoints[0].getDiameter() < ((pageImageDpi + 13) / 25)))
+				else if (((lines.length - (blockShortLineCount + 1)) <= blockRightAccPoints[0].count) && (blockRightAccPoints[0].getDiameter() < ((pageImageDpi + 13) / 25)))
 					rightAligned = true; // single accumulation point with support of all non-short lines and diameter below (DPI/50) 
-				else rightAligned = (blockRightAccPoints[0].center < ((pageImageDpi + 13) / 25)); // single accumulation point below (DPI/25)
+				else rightAligned = (blockRightAccPoints[0].center < ((pageImageDpi + 13) / 25)); // single accumulation point below (DPI/25) off block edge
 				if (DEBUG_BLOCK_LAYOUT) System.out.println(" - right is " + rightAligned + " for " + Arrays.toString(blockRightAccPoints));
 				centerAligned = ((blockCenterAccPoints.length == 1) && ((lines.length * 2) < (blockCenterAccPoints[0].count * 3)));
 				if (DEBUG_BLOCK_LAYOUT) System.out.println(" - center is " + centerAligned + " for " + Arrays.toString(blockCenterAccPoints));
-				justified = (leftAligned && rightAligned);
-				if (DEBUG_BLOCK_LAYOUT) System.out.println(" - justified is " + justified);
 				
-				//	TODO maybe factor out lines short in block when determining support of right accumulation point
-				
-				//	TODO use minimum significant distance parameters here
+				//	no clear result for accumulation points, fall back to left and right distances (as for single line)
+				//	(CENTER ALIGNMENT IS OUT, as there is always an accumulation point with two or more lines)
+				if (!leftAligned && !centerAligned && !rightAligned) {
+					if (DEBUG_BLOCK_LAYOUT) System.out.println(" ==> re-evaluating due to inconclusive result from accumulation points");
+					int minColLeftMargin = ((Integer) colLeftLineDists.first()).intValue();
+					int minColRightMargin = ((Integer) colRightLineDists.first()).intValue();
+					leftAligned = (minColLeftMargin < minSignificantHorizontalDist); // this has to be tight now (within 1/25 of an inch (1 mm) by default), as with all lines indented we'd have an accumulation point
+					if (DEBUG_BLOCK_LAYOUT) System.out.println(" - left is " + leftAligned + " for minimum column anchored left margin " + minColLeftMargin);
+					rightAligned = (minColRightMargin < minSignificantHorizontalDist); // this has to be tight (within 1/25 of an inch (1 mm) by default)
+					if (DEBUG_BLOCK_LAYOUT) System.out.println(" - right is " + rightAligned + " for minimum column anchored right margin " + minColRightMargin);
+					if (DEBUG_BLOCK_LAYOUT) System.out.println(" - center remains " + centerAligned + ", we'd have an accumulation point in that case");
+				}
 			}
+			
+			//	compute justification only now
+			justified = (leftAligned && rightAligned);
+			if (DEBUG_BLOCK_LAYOUT) System.out.println(" ==> justified is " + justified);
 			
 			//	figure out alignment (left, right, centered, or justified)
 			char alignment;
@@ -2471,9 +1912,9 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			else alignment = 'C';
 			if (DEBUG_BLOCK_LAYOUT) System.out.println(" ==> alignment is " + alignment);
 			
-			//	assess line distance distribution
-			int maxBelowAvgLineGap = -1;
-			int minAboveAvgLineGap = -1;
+			//	assess line distance distribution (loop goes in increasing order)
+			int maxBelowAvgLineGap = avgLineGap;
+			int minAboveAvgLineGap = avgLineGap;
 			for (Iterator lgit = lineGaps.iterator(); lgit.hasNext();) {
 				int lineGap = ((Integer) (lgit.next())).intValue();
 				if (lineGap <= avgLineGap)
@@ -2542,9 +1983,9 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 					nonShortLineSpaceCount += lineSpaceCount;
 				}
 			}
-			float avgShortLineSpaceWidth = ((shortLineSpaceCount == 0) ? -1 : (((float) shortLineSpaceWidthSum) / shortLineSpaceCount));
+			float avgShortLineSpaceWidth = ((shortLineSpaceCount == 0) ? (avgLineHeight / 3) /* ballpark figure space */ : (((float) shortLineSpaceWidthSum) / shortLineSpaceCount));
 			if (DEBUG_BLOCK_LAYOUT) System.out.println(" - average space in short line is " + avgShortLineSpaceWidth + " (" + shortLineSpaceWidthSum + "/" + shortLineSpaceCount + ")");
-			float avgNonShortLineSpaceWidth = ((nonShortLineSpaceCount == 0) ? -1 : (((float) nonShortLineSpaceWidthSum) / nonShortLineSpaceCount));
+			float avgNonShortLineSpaceWidth = ((nonShortLineSpaceCount == 0) ? (avgLineHeight / 3) /* ballpark figure space */ : (((float) nonShortLineSpaceWidthSum) / nonShortLineSpaceCount));
 			if (DEBUG_BLOCK_LAYOUT) System.out.println(" - average space in non-short line is " + avgNonShortLineSpaceWidth + " (" + nonShortLineSpaceWidthSum + "/" + nonShortLineSpaceCount + ")");
 			
 			//	verify short line split against sentence continuations if latter present and conclusive
@@ -2992,6 +2433,20 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			ImWord previousLineEndWord = lines[0].words[0].getPreviousWord();
 			isParagraphStartLine[0] = ((previousLineEndWord == null) || (previousLineEndWord.getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END));
 			
+			//	apply split line patterns
+			if (splitLinePatterns != null) {
+				System.out.println("Applying line pattern split");
+				String[] isPatternParagraphStart = getPatternParagraphStarts(lines, alignment, splitLinePatterns);
+				for (int l = 0; l < isParagraphStartLine.length; l++) {
+					if (isPatternParagraphStart[l] == null)
+						continue;
+					if (!isParagraphStartLine[l]) // add to count only if not confirmed before
+						paragraphStartLineCount++;
+					isParagraphStartLine[l] = true;
+					paragraphStartLineEvidence[l] = ((paragraphStartLineEvidence[l] == null) ? ("P-" + isPatternParagraphStart[l]) : (paragraphStartLineEvidence[l] + "P-" + isPatternParagraphStart[l]));
+				}
+			}
+			
 			//	finally ...
 			return new BlockLayout(null, alignment, paragraphStartLinePos, shortLineEndsParagraph, uriLineSplitMode, inLineHeadingStyle, inLineHeadingTerminator, minParagraphDist, isParagraphStartLine, paragraphStartLineEvidence);
 		}
@@ -3180,6 +2635,8 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 		//	TODO use progress monitor instead of System.out
 		
 		private static BlockLayout doAnalyze(LineMetrics[] lines, int[] aboveLineGaps, int pageImageDpi, int colWidth, int blockWidth, char alignment, char paragraphStartLinePos, boolean shortLineEndsParagraph, float normSpaceWidth, int minSignificantHorizontalDist, String inLineHeadingStyle, char inLineHeadingTerminator, int minParagraphDist, char uriLineSplitMode) {
+			//	TODO facilitate specifying custom split line patterns
+			//	TODO specify (per pattern): maximum number of lines in target block, text orientation in target block, and split position (A, B, or R)
 			
 			//	assess column anchored left line margins and line distance
 			int colLeftLineMarginSum = 0;
@@ -3471,9 +2928,82 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			return isParagraphStartLine;
 		}
 		
+		//	TODO use progress monitor instead of System.out
+		
+		private static String[] getPatternParagraphStarts(LineMetrics[] lines, char alignment, LinePattern[] splitLinePatterns) {
+			String[] isParagraphStartLine = new String[lines.length];
+			Arrays.fill(isParagraphStartLine, null);
+			for (int p = 0; p < splitLinePatterns.length; p++) {
+				
+				//	check alignment
+				if (!splitLinePatterns[p].matchesParagraphOrientation(BlockLayout.getTextOrientation(alignment)))
+					continue;
+				
+				//	check block size
+				String maxBlockLines = splitLinePatterns[p].getParameter("MBL");
+				if (maxBlockLines != null) try {
+					if (Integer.parseInt(maxBlockLines) < lines.length)
+						continue;
+				} catch (NumberFormatException nfe) {}
+				
+				//	check page ID
+				String minPageId = splitLinePatterns[p].getParameter("MINPID");
+				if (minPageId != null) try {
+					if (lines[0].line.pageId < Integer.parseInt(minPageId))
+						continue;
+				} catch (NumberFormatException nfe) {}
+				String maxPageId = splitLinePatterns[p].getParameter("MAXPID");
+				if (maxPageId != null) try {
+					if (Integer.parseInt(maxPageId) < lines[0].line.pageId)
+						continue;
+				} catch (NumberFormatException nfe) {}
+				
+				//	get split direction and pattern reason
+				String splitDirection = splitLinePatterns[p].getParameter("SD");
+				if ((splitDirection == null) || (splitDirection.length() == 0))
+					continue;
+				boolean splitAbove = (splitDirection.indexOf('A') != -1);
+				boolean splitBelow = (splitDirection.indexOf('B') != -1);
+				String reason = splitLinePatterns[p].getParameter("R");
+				if (reason == null)
+					reason = ("Pattern" + (p+1));
+				
+				//	assess lines
+				for (int l = 0; l < lines.length; l++) {
+					
+					//	check font size
+					if (!splitLinePatterns[p].matchesFontSize(lines[l].words))
+						continue;
+					
+					//	check font properties
+					if (!splitLinePatterns[p].matchesStartFontProperties(lines[l].words))
+						continue;
+					if (!splitLinePatterns[p].matchesFontProperties(lines[l].words))
+						continue;
+					
+					//	check pattern proper
+					if (!splitLinePatterns[p].matchesString(lines[l].words))
+						continue;
+					
+					//	we have a match ==> paragraph starts
+					if (splitAbove) {
+						isParagraphStartLine[l] = ((isParagraphStartLine[l] == null) ? reason : (isParagraphStartLine[l] + "-" + reason));
+						if (DEBUG_BLOCK_LAYOUT) System.out.println(" - identified paragraph start line matching pattern '" + reason + "' to split above: " + ImUtils.getString(lines[l].words, true));
+					}
+					if (splitBelow && ((l+1) < lines.length)) {
+						isParagraphStartLine[l+1] = ((isParagraphStartLine[l+1] == null) ? reason : (isParagraphStartLine[l+1] + "-" + reason));
+						if (DEBUG_BLOCK_LAYOUT) System.out.println(" - identified paragraph start line matching pattern '" + reason + "' to split below: " + ImUtils.getString(lines[l+1].words, true));
+					}
+				}
+			}
+			
+			//	return result
+			return isParagraphStartLine;
+		}
+		
 		private static int addParagraphStartLineArrays(boolean[] isParagraphStartLine, boolean[] setParagraphStartLine, String[] paragraphStartLineEvidence, String evidence) {
 			int newParagraphStartLines = 0;
-			for ( int l = 0; l < isParagraphStartLine.length; l++)
+			for (int l = 0; l < isParagraphStartLine.length; l++)
 				if (setParagraphStartLine[l]) {
 					if (!isParagraphStartLine[l]) // add to count only if not confirmed before
 						newParagraphStartLines++;
@@ -3596,6 +3126,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 		//	collect accumulation points
 		ArrayList accumulationPoints = new ArrayList();
 		ArrayList indices = new ArrayList(indexCounts);
+		Collections.sort(indices); // make damn sure of increasing order (should be OK with TreeMap base CountingSet, but let's be safe)
 		for (int i = 0; i < indices.size(); i++) {
 			Integer index = ((Integer) indices.get(i));
 			int lastCompIndex = index.intValue();
@@ -3691,6 +3222,7 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 				for (int c = 0; c < cAccPoint.counts.length; c++)
 					sAccPointCounts[c + (cAccPoint.min - accPoint.min)] += cAccPoint.counts[c];
 				AccumulationPoint sAccPoint = new AccumulationPoint(accPoint.min, sAccPointCounts);
+				//	TODO make sure of min and max order
 				accumulationPoints.remove(a+1); // remove second squashed accumulation point
 				accumulationPoints.set(a--, sAccPoint); // replace first squashed accumulation point with squash result, compensating for loop increment
 			}
@@ -3844,15 +3376,6 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 		 * @return true if any paragraph regions were added or removed
 		 */
 		public boolean writeParagraphStructure() {
-//			
-//			//	keep track of changes
-//			boolean changed = false;
-//			
-//			//	index existing paragraphs
-//			ImRegion[] exParagraphs = getBlockParagraphs(this.blockMetrics.page, this.blockMetrics.block);
-//			HashMap exParagraphsByBounds = new HashMap();
-//			for (int p = 0; p < exParagraphs.length; p++)
-//				exParagraphsByBounds.put(exParagraphs[p].bounds, exParagraphs[p]);
 			
 			//	collect lines
 			ImRegion[] lines = new ImRegion[this.blockMetrics.lines.length];
@@ -3873,59 +3396,12 @@ public class PageAnalysis implements ImagingConstants, TableConstants {
 			
 			//	write changes
 			return PageAnalysis.writeParagraphStructure(this.blockMetrics.page, this.blockMetrics.block, lines, isParagraphStartLine, this.paragraphStartLineEvidence, textOrientation, indentation);
-//			
-//			//	wrap paragraphs around lines, reusing existing ones where possible
-//			int paragraphStartLineIndex = 0;
-//			for (int l = 0; l < lines.length; l++) {
-//				
-//				//	mark paragraph, and adjust word relationship across boundary to reflect paragraph break
-//				if (this.isParagraphStartLine[l]) {
-//					BoundingBox paragraphBounds = ImLayoutObject.getAggregateBox(lines, paragraphStartLineIndex, l);
-//					ImRegion paragraph = ((ImRegion) exParagraphsByBounds.remove(paragraphBounds));
-//					if (paragraph == null) {
-//						paragraph = new ImRegion(this.blockMetrics.page, paragraphBounds, ImRegion.PARAGRAPH_TYPE);
-//						changed = true;
-//					}
-//					paragraph.setAttribute(ImRegion.TEXT_ORIENTATION_ATTRIBUTE, textOrientation);
-//					paragraph.setAttribute(ImRegion.INDENTATION_ATTRIBUTE, indentation);
-//					ImWord paragraphEndWord = this.blockMetrics.lines[l].words[0].getPreviousWord();
-//					if (paragraphEndWord != null)
-//						paragraphEndWord.setNextRelation(ImWord.NEXT_RELATION_PARAGRAPH_END);
-//					paragraphStartLineIndex = l;
-//				}
-//				
-//				//	connect paragraph broken line break (for first line only with block continuation measurement)
-//				else if ((l != 0) || (this.predecessorBlockMetrics != null)) {
-//					ImWord previousLineEndWord = this.blockMetrics.lines[l].words[0].getPreviousWord();
-//					if ((previousLineEndWord != null) && (previousLineEndWord.getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END))
-//						previousLineEndWord.setNextRelation(ImWord.NEXT_RELATION_SEPARATE);
-//				}
-//			}
-//			
-//			//	mark last paragraph
-//			BoundingBox paragraphBounds = ImLayoutObject.getAggregateBox(lines, paragraphStartLineIndex, lines.length);
-//			ImRegion paragraph = ((ImRegion) exParagraphsByBounds.remove(paragraphBounds));
-//			if (paragraph == null)
-//				paragraph = new ImRegion(this.blockMetrics.page, paragraphBounds, ImRegion.PARAGRAPH_TYPE);
-//			paragraph.setAttribute(ImRegion.TEXT_ORIENTATION_ATTRIBUTE, textOrientation);
-//			paragraph.setAttribute(ImRegion.INDENTATION_ATTRIBUTE, indentation);
-//			
-//			//	remove any now-obsolete paragraphs
-//			for (Iterator pbit = exParagraphsByBounds.keySet().iterator(); pbit.hasNext();) {
-//				paragraphBounds = ((BoundingBox) pbit.next());
-//				paragraph = ((ImRegion) exParagraphsByBounds.get(paragraphBounds));
-//				this.blockMetrics.page.removeRegion(paragraph);
-//				changed = true;
-//			}
-//			
-//			//	report any changes
-//			return changed;
 		}
 		
 		/**
 		 * Resolve a single-character text orientation code to the respective
 		 * attribute value string.
-		 * @param i the text orientation code to resolve
+		 * @param to the text orientation code to resolve
 		 * @return the attribute value string
 		 */
 		public static String getTextOrientation(char to) {

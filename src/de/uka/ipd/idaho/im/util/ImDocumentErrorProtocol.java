@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -39,7 +39,6 @@ import java.io.Writer;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.TreeMap;
 
@@ -77,7 +76,7 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 	public final ImDocument subject;
 	
 	private ArrayList errors = new ArrayList();
-	private HashSet errorIDs = new HashSet();
+	private HashMap errorsByIDs = new HashMap();
 	private HashMap falsePositivesByIDs = new HashMap();
 	private HashMap errorsByCategory = new HashMap();
 	private HashMap errorsByCategoryAndType = new HashMap();
@@ -109,13 +108,17 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 		return getErrorSubject(this.subject, subjectClass, subjectType, typeInternalSubjectId, subjectPageId, subjectFirstWord);
 	}
 	
-	public void addError(String source, Attributed subject, Attributed parent, String category, String type, String description, String severity) {
+	public void addError(String source, Attributed subject, Attributed parent, String category, String type, String description, String severity, boolean falsePositive) {
 		
 		//	find underlying IM object
 		ImObject imSubject = getErrorSubject(subject, parent, type);
 		
 		//	create and index error
-		this.addError(new ImDocumentError(source, ((imSubject == null) ? subject : imSubject), this.subject, category, type, description, severity));
+//		this.addError(new ImDocumentError(source, ((imSubject == null) ? subject : imSubject), this.subject, category, type, description, severity));
+		ImDocumentError imDe = new ImDocumentError(source, ((imSubject == null) ? subject : imSubject), this.subject, category, type, description, severity);
+		if (falsePositive)
+			this.markFalsePositive(imDe);
+		else this.addError(imDe);
 	}
 	
 	/**
@@ -126,12 +129,12 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 	 * @return true if the error was actually added
 	 */
 	public boolean addError(ImDocumentError error) {
-		if (this.errorIDs.contains(error.id))
+		if (this.errorsByIDs.containsKey(error.id))
 			return false;
 		if (this.falsePositivesByIDs.containsKey(error.id))
 			return false;
 		this.errors.add(error);
-		this.errorIDs.add(error.id);
+		this.errorsByIDs.put(error.id, error);
 		getIndexList(this.errorsByCategory, error.category, true).add(error);
 		getIndexList(this.errorsByCategoryAndType, (error.category + "." + error.type), true).add(error);
 		getIndexList(this.errorsBySubjectType, error.subjectType, true).add(error);
@@ -179,7 +182,7 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 		if (category == null) {
 			boolean removed = (this.errors.size() != 0);
 			this.errors.clear();
-			this.errorIDs.clear();
+			this.errorsByIDs.clear();
 			this.errorsByCategory.clear();
 			this.errorsByCategoryAndType.clear();
 			this.errorsBySubjectType.clear();
@@ -289,10 +292,10 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 	 * @return true if the error was actually removed
 	 */
 	public boolean removeError(ImDocumentError error) {
-		if (!this.errorIDs.contains(error.id))
+		if (!this.errorsByIDs.containsKey(error.id))
 			return false;
 		this.errors.remove(error);
-		this.errorIDs.remove(error.id);
+		this.errorsByIDs.remove(error.id);
 		removeFromIndexList(this.errorsByCategory, error.category, error);
 		removeFromIndexList(this.errorsByCategoryAndType, (error.category + "." + error.type), error);
 		removeFromIndexList(this.errorsBySubjectType, error.subjectType, error);
@@ -328,6 +331,10 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 		else return false;
 	}
 	
+	public boolean isFalsePositive(DocumentError error) {
+		return this.isFalsePositive((ImDocumentError) error);
+	}
+	
 	/**
 	 * Check whether or not error is marked as a false positive.
 	 * @param error the error to check for false positive
@@ -336,16 +343,46 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 		return this.falsePositivesByIDs.containsKey(error.id);
 	}
 	
+	public boolean markFalsePositive(DocumentError error) {
+		return this.markFalsePositive((ImDocumentError) error);
+	}
+	
 	/**
 	 * Mark an error as a false positive. Any downstream attempt at adding the
 	 * same error to the protocol will be ignored.
 	 * @param error the error to mark as a false positive
 	 */
-	public void markFalsePositive(ImDocumentError error) {
-		this.falsePositivesByIDs.put(error.id, error);
+	public boolean markFalsePositive(ImDocumentError error) {
+		return (this.falsePositivesByIDs.put(error.id, error) == null);
 	}
 	
-	ArrayList getFalsePositives() {
+	public boolean unmarkFalsePositive(DocumentError error) {
+		return this.unmarkFalsePositive((ImDocumentError) error);
+	}
+	
+	/**
+	 * Un-mark an error as a false positive to facilitate re-adding it to the
+	 * protocol.
+	 * @param error the error to un-mark as a false positive
+	 */
+	public boolean unmarkFalsePositive(ImDocumentError error) {
+		return (this.falsePositivesByIDs.remove(error.id) != null);
+	}
+	
+	/**
+	 * Retrieve the false positive with a given ID.
+	 * @param errorId the ID of the false positive
+	 * @return the false positive with the argument ID
+	 */
+	public ImDocumentError getFalsePositiveById(String falPosId) {
+		return ((ImDocumentError) this.falsePositivesByIDs.get(falPosId));
+	}
+	
+	public DocumentError[] getFalsePositives() {
+		ArrayList fps = this.getFalsePositiveList();
+		return ((DocumentError[]) fps.toArray(new DocumentError[fps.size()]));
+	}
+	ArrayList getFalsePositiveList() {
 		return new ArrayList(this.falsePositivesByIDs.values());
 	}
 	
@@ -439,6 +476,15 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 		if (srcErrors == null)
 			return new ImDocumentError[0];
 		return ((ImDocumentError[]) srcErrors.toArray(new ImDocumentError[srcErrors.size()]));
+	}
+	
+	/**
+	 * Retrieve the error with a given ID.
+	 * @param errorId the ID of the error
+	 * @return the error with the argument ID
+	 */
+	public ImDocumentError getErrorById(String errorId) {
+		return ((ImDocumentError) this.errorsByIDs.get(errorId));
 	}
 	
 	public Comparator getErrorComparator() {
@@ -583,7 +629,6 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 				continue; // not the data we expected ...
 			
 			//	read error (handle absence of severity for now, we do have a few existing protocols without it out there)
-			//	TODO remove severity absence hack
 			int i = 1;
 			String severity = (isSeverity(data[i]) ? data[i++] : DocumentError.SEVERITY_CRITICAL);
 			String description = data[i++];
@@ -593,9 +638,6 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 			String typeInternalSubjectId = data[i++];
 			int subjectPageId = Integer.parseInt(data[i++]);
 			int subjectLastPageId = Integer.parseInt(data[i++]);
-//			ImWord subjectFirstWord = ((data.length < 10) ? null : doc.getWord(data[9]));
-//			ImWord subjectLastWord = ((data.length < 11) ? null : doc.getWord(data[10]));
-//			ImObject subject = getErrorSubject(doc, subjectClass, subjectType, typeInternalSubjectId, subjectPageId, subjectFirstWord);
 			ImWord subjectFirstWord;
 			ImWord subjectLastWord;
 			ImObject subject;
@@ -664,7 +706,6 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 		//	TODOnot consider zipping ==> IMF is zipped anyway, and IMD is huge, so ease of access more important
 		
 		//	persist error protocol
-//		BufferedWriter epBw = new BufferedWriter(new OutputStreamWriter(out, "UTF-8"));
 		BufferedWriter epBw = ((out instanceof BufferedWriter) ? ((BufferedWriter) out) : new BufferedWriter(out));
 		ArrayList falsePositives = null;
 		String[] categories = idep.getErrorCategories();
@@ -695,7 +736,8 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 				
 				//	store false positives
 				if (falsePositives == null)
-					falsePositives = idep.getFalsePositives();
+//					falsePositives = idep.getFalsePositives();
+					falsePositives = idep.getFalsePositiveList();
 				for (int fp = 0; fp < falsePositives.size(); fp++) {
 					ImDocumentError ide = ((ImDocumentError) falsePositives.get(fp));
 					if (!categories[c].equals(ide.category))
@@ -756,7 +798,8 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 		/** the last word of the error subject (may be null) */
 		public final ImWord subjectLastWord;
 		
-		final String id;
+		/** the (document internally) unique identifier for the error, used for duplicate tracking */
+		public final String id;
 		
 		/** Constructor
 		 * @param source the name of the error source
@@ -837,6 +880,7 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 				imDoc = ((ImDocumentRoot) annot.getDocument());
 			else return null;
 			
+			
 			//	try direct access first
 			ImObject imo = imDoc.basisOf(annot);
 			if (imo != null)
@@ -845,6 +889,11 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 			//	try going by words
 			ImWord startImw = imDoc.firstWordOf(annot);
 			ImWord endImw = imDoc.lastWordOf(annot);
+			if ((startImw == null) && (endImw == null)) {
+				if (Token.TOKEN_ANNOTATION_TYPE.equals(annot.getType()) && (annot instanceof QueriableAnnotation))
+					return getErrorSubject(imDoc.tokenAt(((QueriableAnnotation) annot).getAbsoluteStartIndex()), parent, errorType);
+				return null;
+			}
 			
 			//	try annotations first, we have better filters for them (more accurate indexes)
 			ImAnnotation[] imAnnots = startImw.getDocument().getAnnotations(startImw, null);
@@ -928,7 +977,7 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 	 * Obtain the class of the error subject, i.e., the type of Image Markup
 	 * object (one of 'document', 'font', 'word', 'page', 'region',
 	 * 'annotation', and 'supplement').
-	 * @param subject the error subject whose object type to determine
+	 * @param subject the error subject whose object class to determine
 	 * @return the object type
 	 */
 	public static String getErrorSubjectClass(Attributed subject) {
@@ -997,6 +1046,11 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 			else return null;
 			ImWord startImw = imDoc.firstWordOf(annot);
 			ImWord endImw = imDoc.lastWordOf(annot);
+			if ((startImw == null) && (endImw == null)) {
+				if (Token.TOKEN_ANNOTATION_TYPE.equals(annot.getType()) && (annot instanceof QueriableAnnotation))
+					return getTypeInternalErrorSubjectId(imDoc.tokenAt(((QueriableAnnotation) annot).getAbsoluteStartIndex()), parent);
+				return null;
+			}
 			return (startImw.getLocalID() + "-" + endImw.getLocalID());
 		}
 		if ((subject instanceof Token) && (parent instanceof ImDocumentRoot)) {
@@ -1023,11 +1077,25 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 		}
 		if (subject instanceof Annotation) {
 			Annotation annot = ((Annotation) subject);
-			if (parent instanceof ImDocumentRoot)
-				return ((ImDocumentRoot) parent).firstWordOf(annot).pageId;
+			if (parent instanceof ImDocumentRoot) {
+				ImWord startImw = ((ImDocumentRoot) parent).firstWordOf(annot);
+				if (startImw == null) {
+					if (Token.TOKEN_ANNOTATION_TYPE.equals(annot.getType()) && (annot instanceof QueriableAnnotation))
+						return getErrorSubjectPageId(((ImDocumentRoot) parent).tokenAt(((QueriableAnnotation) annot).getAbsoluteStartIndex()), parent);
+					return -1;
+				}
+				return startImw.pageId;
+			}
 			QueriableAnnotation doc = annot.getDocument();
-			if (doc instanceof ImDocumentRoot)
-				return ((ImDocumentRoot) doc).firstWordOf(annot).pageId;
+			if (doc instanceof ImDocumentRoot) {
+				ImWord startImw = ((ImDocumentRoot) doc).firstWordOf(annot);
+				if (startImw == null) {
+					if (Token.TOKEN_ANNOTATION_TYPE.equals(annot.getType()) && (annot instanceof QueriableAnnotation))
+						return getErrorSubjectPageId(((ImDocumentRoot) doc).tokenAt(((QueriableAnnotation) annot).getAbsoluteStartIndex()), parent);
+					return -1;
+				}
+				return startImw.pageId;
+			}
 		}
 		if ((subject instanceof Token) && (parent instanceof ImDocumentRoot))
 			return ((ImDocumentRoot) parent).firstWordOf((Token) subject).pageId;
@@ -1058,11 +1126,19 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 			return ((ImDocumentRoot) subject).firstWordOf((ImDocumentRoot) subject);
 		if (subject instanceof Annotation) {
 			Annotation annot = ((Annotation) subject);
-			if (parent instanceof ImDocumentRoot)
-				return ((ImDocumentRoot) parent).firstWordOf(annot);
+			if (parent instanceof ImDocumentRoot) {
+				ImWord startImw = ((ImDocumentRoot) parent).firstWordOf(annot);
+				if ((startImw == null) && Token.TOKEN_ANNOTATION_TYPE.equals(annot.getType()) && (annot instanceof QueriableAnnotation))
+					return getErrorSubjectFirstWord(((ImDocumentRoot) parent).tokenAt(((QueriableAnnotation) annot).getAbsoluteStartIndex()), parent);
+				return startImw;
+			}
 			QueriableAnnotation doc = annot.getDocument();
-			if (doc instanceof ImDocumentRoot)
-				return ((ImDocumentRoot) doc).firstWordOf(annot);
+			if (doc instanceof ImDocumentRoot) {
+				ImWord startImw = ((ImDocumentRoot) doc).firstWordOf(annot);
+				if ((startImw == null) && Token.TOKEN_ANNOTATION_TYPE.equals(annot.getType()) && (annot instanceof QueriableAnnotation))
+					return getErrorSubjectFirstWord(((ImDocumentRoot) doc).tokenAt(((QueriableAnnotation) annot).getAbsoluteStartIndex()), parent);
+				return startImw;
+			}
 		}
 		if ((subject instanceof Token) && (parent instanceof ImDocumentRoot))
 			return ((ImDocumentRoot) parent).firstWordOf((Token) subject);
@@ -1084,11 +1160,25 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 		}
 		if (subject instanceof Annotation) {
 			Annotation annot = ((Annotation) subject);
-			if (parent instanceof ImDocumentRoot)
-				return ((ImDocumentRoot) parent).lastWordOf(annot).pageId;
+			if (parent instanceof ImDocumentRoot) {
+				ImWord endImw = ((ImDocumentRoot) parent).lastWordOf(annot);
+				if (endImw == null) {
+					if (Token.TOKEN_ANNOTATION_TYPE.equals(annot.getType()) && (annot instanceof QueriableAnnotation))
+						return getErrorSubjectLastPageId(((ImDocumentRoot) parent).tokenAt(((QueriableAnnotation) annot).getAbsoluteStartIndex()), parent);
+					return -1;
+				}
+				return endImw.pageId;
+			}
 			QueriableAnnotation doc = annot.getDocument();
-			if (doc instanceof ImDocumentRoot)
-				return ((ImDocumentRoot) doc).lastWordOf(annot).pageId;
+			if (doc instanceof ImDocumentRoot) {
+				ImWord endImw = ((ImDocumentRoot) doc).lastWordOf(annot);
+				if (endImw == null) {
+					if (Token.TOKEN_ANNOTATION_TYPE.equals(annot.getType()) && (annot instanceof QueriableAnnotation))
+						return getErrorSubjectLastPageId(((ImDocumentRoot) doc).tokenAt(((QueriableAnnotation) annot).getAbsoluteStartIndex()), parent);
+					return -1;
+				}
+				return endImw.pageId;
+			}
 		}
 		if ((subject instanceof Token) && (parent instanceof ImDocumentRoot))
 			return ((ImDocumentRoot) parent).lastWordOf((Token) subject).pageId;
@@ -1119,14 +1209,33 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 			return ((ImDocumentRoot) subject).lastWordOf((ImDocumentRoot) subject);
 		if (subject instanceof Annotation) {
 			Annotation annot = ((Annotation) subject);
-			if (parent instanceof ImDocumentRoot)
-				return ((ImDocumentRoot) parent).lastWordOf(annot);
+			if (parent instanceof ImDocumentRoot) {
+				ImWord endImw = ((ImDocumentRoot) parent).lastWordOf(annot);
+				if ((endImw == null) && Token.TOKEN_ANNOTATION_TYPE.equals(annot.getType()) && (annot instanceof QueriableAnnotation))
+					return getErrorSubjectLastWord(((ImDocumentRoot) parent).tokenAt(((QueriableAnnotation) annot).getAbsoluteStartIndex()), parent);
+				return endImw;
+			}
 			QueriableAnnotation doc = annot.getDocument();
-			if (doc instanceof ImDocumentRoot)
-				return ((ImDocumentRoot) doc).lastWordOf(annot);
+			if (doc instanceof ImDocumentRoot) {
+				ImWord endImw = ((ImDocumentRoot) doc).lastWordOf(annot);
+				if ((endImw == null) && Token.TOKEN_ANNOTATION_TYPE.equals(annot.getType()) && (annot instanceof QueriableAnnotation))
+					return getErrorSubjectLastWord(((ImDocumentRoot) doc).tokenAt(((QueriableAnnotation) annot).getAbsoluteStartIndex()), parent);
+				return endImw;
+			}
 		}
 		if ((subject instanceof Token) && (parent instanceof ImDocumentRoot))
 			return ((ImDocumentRoot) parent).lastWordOf((Token) subject);
 		return null;
 	}
+//	
+//	private static Token getAnnotatedToken(Annotation annot, Attributed parent) {
+//		if (Token.TOKEN_ANNOTATION_TYPE.equals(annot.getType()) && (annot instanceof QueriableAnnotation)) {
+//			if (parent instanceof ImDocumentRoot)
+//				return ((ImDocumentRoot) parent).tokenAt(((QueriableAnnotation) annot).getAbsoluteStartIndex());
+//			QueriableAnnotation doc = annot.getDocument();
+//			if (doc instanceof ImDocumentRoot)
+//				return ((ImDocumentRoot) doc).tokenAt(((QueriableAnnotation) annot).getAbsoluteStartIndex());
+//		}
+//		return null;
+//	}
 }

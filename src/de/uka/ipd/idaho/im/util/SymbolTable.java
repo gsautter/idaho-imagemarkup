@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -48,6 +48,7 @@ import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 
 import de.uka.ipd.idaho.gamta.util.swing.DialogFactory;
+import de.uka.ipd.idaho.stringUtils.StringUtils;
 
 /**
  * A singleton shared dialog for selecting printable symbols from the entire
@@ -87,7 +88,7 @@ public class SymbolTable extends JPanel {
 		 * table appears relative to its owner.
 		 * @return the on-screen location of the owner
 		 */
-		public Point getLocation();
+		public abstract Point getLocation();
 		
 		
 		/**
@@ -96,13 +97,13 @@ public class SymbolTable extends JPanel {
 		 * appears relative to its owner.
 		 * @return the size of the owner
 		 */
-		public Dimension getSize();
+		public abstract Dimension getSize();
 		
 		/**
 		 * Receive notification that the symbol table was closed using its own
 		 * 'Close' button.
 		 */
-		public void symbolTableClosed();
+		public abstract void symbolTableClosed();
 	}
 	
 	private static final int mostRecentlyUsedSymbolCount = 12;
@@ -140,15 +141,23 @@ public class SymbolTable extends JPanel {
 		}
 		this.updateMruLabels();
 		
-		JPanel sPanel = new JPanel(new GridLayout(0, 1), true);
+		JPanel sHeaderPanel = new JPanel(new BorderLayout(), true);
+		JPanel sHeaderSpacer = new JPanel(true);
 		JPanel sLinePanel = new JPanel(new GridLayout(1, 0), true);
 		JLabel sHexLabel = new JLabel("HEX", JLabel.CENTER);
 		sHexLabel.setToolTipText("First 3 hex digits of symbols at line start, last one at column top");
+		sHexLabel.setBorder(BorderFactory.createMatteBorder(2, 0, 2, 0, sHexLabel.getBackground()));
 		sLinePanel.add(sHexLabel);
-		for (int s = 0; s < 16; s++)
-			sLinePanel.add(new JLabel("_" + Integer.toString(s, 16).toUpperCase(), JLabel.CENTER));
-		sPanel.add(sLinePanel);
+		for (int s = 0; s < 16; s++) {
+			JLabel sColLabel = new JLabel("_" + Integer.toString(s, 16).toUpperCase(), JLabel.CENTER);
+			sColLabel.setBorder(BorderFactory.createMatteBorder(2, 0, 2, 0, sColLabel.getBackground()));
+			sLinePanel.add(sColLabel);
+		}
+		sHeaderPanel.add(sLinePanel, BorderLayout.CENTER);
+		sHeaderPanel.add(sHeaderSpacer, BorderLayout.EAST);
 		sLinePanel = null;
+		JLabel sLineLabel = null;
+		JPanel sPanel = new JPanel(new GridLayout(0, 1), true);
 		for (int b = 0; b < unicodeBlocks.length; b++) {
 			String[] blockData = unicodeBlocks[b].split("\\;");
 			int lowChar = Integer.parseInt(blockData[0], 16);
@@ -164,7 +173,7 @@ public class SymbolTable extends JPanel {
 				char ch = ((char) c);
 				if (sLinePanel == null) {
 					sLinePanel = new JPanel(new GridLayout(1, 0), true);
-					JLabel sLineLabel = new JLabel(((ch < 4096) ? "0" : "") + ((ch < 256) ? "0" : "") + Integer.toString((c / 16), 16).toUpperCase() + "_");
+					sLineLabel = new JLabel(((ch < 4096) ? "0" : "") + ((ch < 256) ? "0" : "") + Integer.toString((c / 16), 16).toUpperCase() + "_");
 					sLineLabel.setToolTipText(blockData[2]);
 					sLinePanel.add(sLineLabel);
 					sLineCharCount = 0;
@@ -179,12 +188,12 @@ public class SymbolTable extends JPanel {
 				}
 			}
 		}
+		sPanel.setBorder(BorderFactory.createMatteBorder(0, 2, 0, 2, sLineLabel.getBackground()));
 		
 		JScrollPane sPanelBox = new JScrollPane(sPanel);
 		sPanelBox.getVerticalScrollBar().setUnitIncrement(symbolLabelWidth * 4);
 		sPanelBox.getVerticalScrollBar().setBlockIncrement(symbolLabelWidth * 4);
-		sPanelBox.setBorder(BorderFactory.createLineBorder(Color.WHITE, 5));
-		sPanelBox.setViewportBorder(BorderFactory.createLoweredBevelBorder());
+		sPanelBox.setViewportBorder(BorderFactory.createEmptyBorder());
 		
 		this.close = new JButton("Close");
 		this.close.setBackground(Color.WHITE);
@@ -198,10 +207,19 @@ public class SymbolTable extends JPanel {
 		bPanel.setBackground(Color.WHITE);
 		bPanel.add(this.close);
 		
+		sPanel.getLayout().layoutContainer(sPanel);
+		sHexLabel.setPreferredSize(sLineLabel.getPreferredSize());
+		sHeaderSpacer.setPreferredSize(new Dimension(sPanelBox.getVerticalScrollBar().getPreferredSize().width, sHexLabel.getPreferredSize().height));
+		
+		JPanel sPanelTray = new JPanel(new BorderLayout(), true);
+		sPanelTray.add(sHeaderPanel, BorderLayout.NORTH);
+		sPanelTray.add(sPanelBox, BorderLayout.CENTER);
+		sPanelTray.setBorder(BorderFactory.createLineBorder(Color.WHITE, 5));
+		
 		this.setBackground(Color.WHITE);
 		this.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(Color.WHITE, 1), BorderFactory.createLineBorder(defaultWordColor, 1)));
 		this.add(mruPanel, BorderLayout.WEST);
-		this.add(sPanelBox, BorderLayout.CENTER);
+		this.add(sPanelTray, BorderLayout.CENTER);
 		this.add(bPanel, BorderLayout.SOUTH);
 	}
 	
@@ -233,44 +251,91 @@ public class SymbolTable extends JPanel {
 	 * @param owner the owner
 	 */
 	public void setOwner(Owner owner) {
+		if (this.dialog != null)
+			throw new IllegalStateException("Cannot set owner when displaying");
 		
 		//	link up to parent word dialog
 		this.owner = owner;
-		this.close.setBorder(BorderFactory.createLineBorder(this.owner.getColor()));
-		this.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(Color.WHITE, 1), BorderFactory.createLineBorder(this.owner.getColor(), 1)));
 		
 		//	create dialog, non-modal, with word dialog as parent
 		this.dialog = DialogFactory.produceDialog("SymbolTable", false);
 		this.dialog.getContentPane().setLayout(new BorderLayout());
 		this.dialog.getContentPane().add(this, BorderLayout.CENTER);
 		this.dialog.setUndecorated(true);
-		this.dialog.setSize(new Dimension(510, 286));
+		this.dialog.setSize(new Dimension(514, 286)); // TODO how did we get this ???
 		
 		//	compute position here
-		Point ewdPos = this.owner.getLocation();
-		Dimension ewdSize = this.owner.getSize();
+		this.updateOwner();
+	}
+	
+	/**
+	 * Update the position of the dialog the symbol table appears in relative
+	 * to the owner, e.g. after the position of the latter has changed.
+	 * Positioning prefers right of over below over left of over atop the
+	 * owner. Decision is based on which position pushes the least of the
+	 * symbol table off screen.
+	 */
+	public void updateOwner() {
+		if (this.owner == null)
+			throw new IllegalStateException("Cannot update position without owner");
+		
+		//	update colors
+		this.close.setBorder(BorderFactory.createLineBorder(this.owner.getColor()));
+		this.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(Color.WHITE, 1), BorderFactory.createLineBorder(this.owner.getColor(), 1)));
+		
+		//	compute position here
+		Point oPos = this.owner.getLocation();
+		Dimension oSize = this.owner.getSize();
 		Dimension dSize = this.dialog.getSize();
-		int leftLoss = (screenSize.width - ewdPos.x - dSize.width);
-		int rightLoss = (ewdPos.x + ewdSize.width + dSize.width - screenSize.width);
-		int topLoss = (screenSize.height - ewdPos.y - dSize.height);
-		int bottomLoss = (ewdPos.y + ewdSize.height + dSize.height - screenSize.height);
+		int leftLoss = (dSize.width - oPos.x);
+		int rightLoss = (oPos.x + oSize.width + dSize.width - screenSize.width);
+		int topLoss = (dSize.height - oPos.y);
+		int bottomLoss = (oPos.y + oSize.height + dSize.height - screenSize.height);
 		int minLoss = Math.min(Math.min(leftLoss, rightLoss), Math.min(topLoss, bottomLoss));
-		if (rightLoss < 0)
-			this.dialog.setLocation((ewdPos.x + ewdSize.width), (ewdPos.y + ewdSize.height - dSize.height));
-		else if (bottomLoss < 0)
-			this.dialog.setLocation(ewdPos.x, (ewdPos.y + ewdSize.height));
-		else if (topLoss < 0)
-			this.dialog.setLocation(ewdPos.x, (ewdPos.y - dSize.height));
-		else if (leftLoss < 0)
-			this.dialog.setLocation((ewdPos.x - dSize.width), (ewdPos.y + ewdSize.height - dSize.height));
+		if (rightLoss < 0) {
+			int upLoss = (dSize.height - (oPos.y + oSize.height));
+			int downLoss = (oPos.y + dSize.height - screenSize.height);
+			if (upLoss < 0)
+				this.dialog.setLocation((oPos.x + oSize.width), (oPos.y + oSize.height - dSize.height));
+			else if (downLoss < 0)
+				this.dialog.setLocation((oPos.x + oSize.width), oPos.y);
+			else this.dialog.setLocation((oPos.x + oSize.width), 0);
+		}
+		else if (bottomLoss < 0) {
+			int lwLoss = (dSize.width - (oPos.x + oSize.width));
+			int rwLoss = (oPos.x + dSize.width - screenSize.width);
+			if (rwLoss < 0)
+				this.dialog.setLocation(oPos.x, (oPos.y + oSize.height));
+			else if (lwLoss < 0)
+				this.dialog.setLocation((oPos.x + oSize.width - dSize.width), (oPos.y + oSize.height));
+			else this.dialog.setLocation(0, (oPos.y + oSize.height));
+		}
+		else if (topLoss < 0) {
+			int lwLoss = (dSize.width - (oPos.x + oSize.width));
+			int rwLoss = (oPos.x + dSize.width - screenSize.width);
+			if (rwLoss < 0)
+				this.dialog.setLocation(oPos.x, (oPos.y - dSize.height));
+			else if (lwLoss < 0)
+				this.dialog.setLocation((oPos.x + oSize.width - dSize.width), (oPos.y - dSize.height));
+			else this.dialog.setLocation(0, (oPos.y - dSize.height));
+		}
+		else if (leftLoss < 0) {
+			int upLoss = (dSize.height - (oPos.y + oSize.height));
+			int downLoss = (oPos.y + dSize.height - screenSize.height);
+			if (upLoss < 0)
+				this.dialog.setLocation((oPos.x - dSize.width), (oPos.y + oSize.height - dSize.height));
+			else if (downLoss < 0)
+				this.dialog.setLocation((oPos.x - dSize.width), oPos.y);
+			else this.dialog.setLocation((oPos.x - dSize.width), 0);
+		}
 		else if (rightLoss == minLoss)
-			this.dialog.setLocation((ewdPos.x + ewdSize.width), (ewdPos.y + ewdSize.height - dSize.height));
+			this.dialog.setLocation((oPos.x + oSize.width), (oPos.y + oSize.height - dSize.height));
 		else if (bottomLoss == minLoss)
-			this.dialog.setLocation(ewdPos.x, (ewdPos.y + ewdSize.height));
+			this.dialog.setLocation(oPos.x, (oPos.y + oSize.height));
 		else if (topLoss == minLoss)
-			this.dialog.setLocation(ewdPos.x, (ewdPos.y - dSize.height));
+			this.dialog.setLocation(oPos.x, (oPos.y - dSize.height));
 		else /* if (leftLoss == minLoss) */
-			this.dialog.setLocation((ewdPos.x - dSize.width), (ewdPos.y + ewdSize.height - dSize.height));
+			this.dialog.setLocation((oPos.x - dSize.width), (oPos.y + oSize.height - dSize.height));
 	}
 	
 	/**
@@ -312,6 +377,14 @@ public class SymbolTable extends JPanel {
 			this.setBorder(BorderFactory.createLineBorder(this.getBackground()));
 			this.setBackground(Color.WHITE);
 			this.setOpaque(true);
+			StringBuffer tooltip = new StringBuffer("Use char " + ((symbol < 4096) ? "0" : "") + ((symbol < 256) ? "0" : "") + ((symbol < 16) ? "0" : "") + Integer.toString(symbol, 16).toUpperCase());
+			String symbolNames[] = StringUtils.getCharNames(symbol);
+			if (symbolNames != null)
+				for (int n = 0; n < symbolNames.length; n++) {
+					tooltip.append(" / ");
+					tooltip.append(symbolNames[n]);
+				}
+			this.setToolTipText(tooltip.toString());
 			this.addMouseListener(new MouseAdapter() {
 				public void mouseClicked(MouseEvent me) {
 					if ((' ' < SymbolLabel.this.symbol) && symbolLabelFont.canDisplay(SymbolLabel.this.symbol))

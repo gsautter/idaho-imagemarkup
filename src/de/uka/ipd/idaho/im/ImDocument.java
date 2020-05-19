@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -100,20 +100,29 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * is <code>de.uka.ipd.idaho.gamte.Gamta.INNER_PUNCTUATION_TOKENIZER</code> */
 	public static final String TOKENIZER_ATTRIBUTE = "tokenizer";
 	
+	private long nextCreateOrderNumber = 0;
+	private synchronized long getCreateOrderNumber() {
+		return nextCreateOrderNumber++;
+	}
+	
 	private static class ImDocumentAnnotation extends AbstractAttributed implements ImAnnotation {
+		
 		ImDocument doc;
 		ImWord firstWord;
 		ImWord lastWord;
 		String type;
 		
-		final long createTime;
+//		final long createTime;
+		final long createOrderNumber;
 		private String id = null;
+		private String lid = null;
 		
-		ImDocumentAnnotation(ImWord firstWord, ImWord lastWord, String type) {
+		ImDocumentAnnotation(ImWord firstWord, ImWord lastWord, String type, long createOrderNumber) {
 			this.firstWord = firstWord;
 			this.lastWord = lastWord;
 			this.type = ((type == null) ? "annotation" : type);
-			this.createTime = System.currentTimeMillis();
+//			this.createTime = System.currentTimeMillis();
+			this.createOrderNumber = createOrderNumber;
 		}
 		String getId() {
 			if (this.id == null)
@@ -128,15 +137,18 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			this.type = type;
 			String oldId = this.id;
 			this.id = null;
-//			annotationTypeChanged(this, oldType, oldId);
-//			notifyTypeChanged(this, oldType);
+			this.lid = null;
 			if (this.doc != null) {
 				this.doc.annotationTypeChanged(this, oldType, oldId);
 				this.doc.notifyTypeChanged(this, oldType);
 			}
 		}
+		public String getLocalID() {
+			if (this.lid == null)
+				this.lid = (this.type + "@" + this.firstWord.getLocalID() + "-" + this.lastWord.getLocalID());
+			return this.lid;
+		}
 		public ImDocument getDocument() {
-//			return ImDocument.this;
 			return this.doc;
 		}
 		public ImWord getFirstWord() {
@@ -147,8 +159,6 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			this.firstWord = firstWord;
 			String oldId = this.id;
 			this.id = null;
-//			annotationFirstWordChanged(this, oldFirstWord, oldId);
-//			notifyAttributeChanged(this, FIRST_WORD_ATTRIBUTE, oldFirstWord);
 			if (this.doc != null) {
 				this.doc.annotationFirstWordChanged(this, oldFirstWord, oldId);
 				this.doc.notifyAttributeChanged(this, FIRST_WORD_ATTRIBUTE, oldFirstWord);
@@ -162,8 +172,6 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			this.lastWord = lastWord;
 			String oldId = this.id;
 			this.id = null;
-//			annotationLastWordChanged(this, oldLastWord, oldId);
-//			notifyAttributeChanged(this, LAST_WORD_ATTRIBUTE, oldLastWord);
 			if (this.doc != null) {
 				this.doc.annotationLastWordChanged(this, oldLastWord, oldId);
 				this.doc.notifyAttributeChanged(this, LAST_WORD_ATTRIBUTE, oldLastWord);
@@ -202,7 +210,6 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 				return oldLastWord;
 			}
 			Object oldValue = super.setAttribute(name, value);
-//			notifyAttributeChanged(this, name, oldValue);
 			if (this.doc != null)
 				this.doc.notifyAttributeChanged(this, name, oldValue);
 			return oldValue;
@@ -290,7 +297,8 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			c = ImUtils.textStreamOrder.compare(annot2.lastWord, annot1.lastWord);
 			if (c != 0)
 				return c;
-			return ((int) (annot1.createTime - annot2.createTime));
+//			return ((int) (annot1.createTime - annot2.createTime));
+			return ((int) (annot1.createOrderNumber - annot2.createOrderNumber));
 			
 			//	TODO compare page IDs first, and text stream IDs only then, so annotations from same page stay together
 			
@@ -395,6 +403,9 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	private TreeMap supplementsById = new TreeMap();
 	
 	private TreeMap pagesById = new TreeMap();
+	
+	private ImWord[] textStreamHeads = null;
+	private ImWord[] textStreamTails = null;
 	
 	private ImDocumentAnnotationList annotations = new ImDocumentAnnotationList();
 	private AnnotationIdIndex annotationsById = new AnnotationIdIndex();
@@ -514,10 +525,24 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	}
 	
 	/* (non-Javadoc)
+	 * @see java.lang.Object#finalize()
+	 */
+	protected void finalize() throws Throwable {
+		this.dispose();
+	}
+	
+	/* (non-Javadoc)
 	 * @see de.uka.ipd.idaho.im.ImObject#getType()
 	 */
 	public String getType() {
 		return DOCUMENT_TYPE;
+	}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.im.ImObject#getLocalID()
+	 */
+	public String getLocalID() {
+		return this.docId;
 	}
 	
 	/* (non-Javadoc)
@@ -805,7 +830,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 //		if (docAnnot != null)
 //			docAnnot.copyAttributes(annot);
 //		return docAnnot;
-		ImDocumentAnnotation docAnnot = new ImDocumentAnnotation(annot.getFirstWord(), annot.getLastWord(), annot.getType());
+		ImDocumentAnnotation docAnnot = new ImDocumentAnnotation(annot.getFirstWord(), annot.getLastWord(), annot.getType(), this.getCreateOrderNumber());
 		docAnnot.copyAttributes(annot);
 		return this.addImDocumentAnnotation(docAnnot);
 	}
@@ -834,7 +859,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	public ImAnnotation addAnnotation(ImWord firstWord, ImWord lastWord, String type) {
 		if (!firstWord.getTextStreamId().equals(lastWord.getTextStreamId()))
 			return null;
-		ImDocumentAnnotation annot = new ImDocumentAnnotation(firstWord, lastWord, type);
+		ImDocumentAnnotation annot = new ImDocumentAnnotation(firstWord, lastWord, type, this.getCreateOrderNumber());
 //		if (this.annotationsById.containsKey(annot.getId()))
 //			return ((ImAnnotation) this.annotationsById.get(annot.getId()));
 //		synchronized (this.annotationsById) {
@@ -1151,7 +1176,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	}
 	
 	/**
-	 * Retrieve the annotations overlapping a specific page from the document.
+	 * Retrieve the annotations overlapping a specific page of the document.
 	 * @param pageId the ID of the page annotations are sought for
 	 * @return an array holding the annotations
 	 * @see de.uka.ipd.idaho.im.ImDocument#cleanupAnnotations()
@@ -1161,7 +1186,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	}
 	
 	/**
-	 * Retrieve the annotations overlapping a specific range of pages from the
+	 * Retrieve the annotations overlapping a specific range of pages of the
 	 * document.
 	 * @param firstPageId the ID of the first page annotations are sought for
 	 * @param lastPageId the ID of the last page annotations are sought for
@@ -1174,7 +1199,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	
 	/**
 	 * Retrieve the annotations of a specific type overlapping a specific page
-	 * from the document.
+	 * of the document.
 	 * @param the type of the sought annotations
 	 * @param pageId the ID of the page annotations are sought for
 	 * @return an array holding the annotations
@@ -1186,7 +1211,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	
 	/**
 	 * Retrieve the annotations of a specific type overlapping a specific range
-	 * of pages from the document.
+	 * of pages of the document.
 	 * @param the type of the sought annotations
 	 * @param firstPageId the ID of the first page annotations are sought for
 	 * @param lastPageId the ID of the last page annotations are sought for
@@ -1275,11 +1300,15 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 				ImDocumentAnnotation annot = ((ImDocumentAnnotation) firstWordPageAnnots.get(a));
 				if (!firstWord.getTextStreamId().equals(annot.firstWord.getTextStreamId()))
 					continue;
-				if ((firstWord.pageId == annot.firstWord.pageId) && (firstWord.getTextStreamPos() < annot.firstWord.getTextStreamPos()))
+//				if ((firstWord.pageId == annot.firstWord.pageId) && (firstWord.getTextStreamPos() < annot.firstWord.getTextStreamPos()))
+//					continue;
+				if (firstWord.getTextStreamPos() < annot.firstWord.getTextStreamPos())
 					continue;
 				if (annot.lastWord.pageId < lastWord.pageId)
 					continue;
-				if ((annot.lastWord.pageId == lastWord.pageId) && (annot.lastWord.getTextStreamPos() < lastWord.getTextStreamPos()))
+//				if ((annot.lastWord.pageId == lastWord.pageId) && (annot.lastWord.getTextStreamPos() < lastWord.getTextStreamPos()))
+//					continue;
+				if (annot.lastWord.getTextStreamPos() < lastWord.getTextStreamPos())
 					continue;
 				spanningAnnots.add(annot);
 			}
@@ -1315,9 +1344,13 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 				ImDocumentAnnotation annot = ((ImDocumentAnnotation) pageAnnots.get(a));
 				if (!firstWord.getTextStreamId().equals(annot.firstWord.getTextStreamId()))
 					continue;
-				if ((firstWord.pageId == annot.lastWord.pageId) && (annot.lastWord.getTextStreamPos() < firstWord.getTextStreamPos()))
+//				if ((firstWord.pageId == annot.lastWord.pageId) && (annot.lastWord.getTextStreamPos() < firstWord.getTextStreamPos()))
+//					continue;
+				if (annot.lastWord.getTextStreamPos() < firstWord.getTextStreamPos())
 					continue;
-				if ((annot.firstWord.pageId == lastWord.pageId) && (lastWord.getTextStreamPos() < annot.firstWord.getTextStreamPos()))
+//				if ((annot.firstWord.pageId == lastWord.pageId) && (lastWord.getTextStreamPos() < annot.firstWord.getTextStreamPos()))
+//					continue;
+				if (lastWord.getTextStreamPos() < annot.firstWord.getTextStreamPos())
 					continue;
 				overlappingAnnots.addAnnot(annot);
 			}
@@ -1345,7 +1378,8 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 				c = ImUtils.textStreamOrder.compare(ida2.lastWord, ida1.lastWord);
 				if (c != 0)
 					return c;
-				c = ((int) (ida1.createTime - ida2.createTime));
+//				c = ((int) (ida1.createTime - ida2.createTime));
+				c = ((int) (ida1.createOrderNumber - ida2.createOrderNumber));
 				if (c != 0)
 					return c;
 				return ida1.type.compareTo(ida2.type);
@@ -1403,22 +1437,67 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	
 	/**
 	 * Retrieve all layout words that are the first of a logical text stream in
-	 * the whole document.
+	 * the document as a whole, i.e., words that have no predecessor.
 	 * @return an array holding the text stream heads
 	 */
 	public ImWord[] getTextStreamHeads() {
-		LinkedList tshs = new LinkedList();
-		HashSet tsIDs = new HashSet();
+		this.ensureTextStreamEnds();
+		ImWord[] tshs = new ImWord[this.textStreamHeads.length];
+		System.arraycopy(this.textStreamHeads, 0, tshs, 0, tshs.length);
+		return tshs;
+//		LinkedList tshs = new LinkedList();
+//		HashSet tsIDs = new HashSet();
+//		for (Iterator pit = this.pagesById.keySet().iterator(); pit.hasNext();) {
+//			Object pid = pit.next();
+//			ImPage page = ((ImPage) this.pagesById.get(pid));
+//			ImWord[] pTshs = page.getTextStreamHeads();
+//			for (int h = 0; h < pTshs.length; h++) {
+////				if (tsIDs.add(pTshs[h].getTextStreamId()))
+//				if ((pTshs[h].getPreviousWord() == null) && tsIDs.add(pTshs[h].getTextStreamId()))
+//					tshs.addLast(pTshs[h]);
+//			}
+//		}
+//		return ((ImWord[]) tshs.toArray(new ImWord[tshs.size()]));
+	}
+	
+	/**
+	 * Retrieve all layout words that are the last of a logical text stream in
+	 * the document as a whole, i.e., words that have no successor.
+	 * @return an array holding the text stream heads
+	 */
+	public ImWord[] getTextStreamTails() {
+		this.ensureTextStreamEnds();
+		ImWord[] tsts = new ImWord[this.textStreamTails.length];
+		System.arraycopy(this.textStreamTails, 0, tsts, 0, tsts.length);
+		return tsts;
+	}
+	
+	void invalidateTextStreamEnds() {
+		this.textStreamHeads = null;
+		this.textStreamTails = null;
+	}
+	
+	private void ensureTextStreamEnds() {
+		if ((this.textStreamHeads != null) && (this.textStreamTails != null))
+			return;
+		ArrayList tshs = new ArrayList();
+		ArrayList tsts = new ArrayList();
 		for (Iterator pit = this.pagesById.keySet().iterator(); pit.hasNext();) {
 			Object pid = pit.next();
 			ImPage page = ((ImPage) this.pagesById.get(pid));
 			ImWord[] pTshs = page.getTextStreamHeads();
 			for (int h = 0; h < pTshs.length; h++) {
-				if (tsIDs.add(pTshs[h].getTextStreamId()))
-					tshs.addLast(pTshs[h]);
+				if (pTshs[h].getPreviousWord() == null)
+					tshs.add(pTshs[h]);
+			}
+			ImWord[] pTsts = page.getTextStreamTails();
+			for (int t = 0; t < pTsts.length; t++) {
+				if (pTsts[t].getNextWord() == null)
+					tsts.add(pTsts[t]);
 			}
 		}
-		return ((ImWord[]) tshs.toArray(new ImWord[tshs.size()]));
+		this.textStreamHeads = ((ImWord[]) tshs.toArray(new ImWord[tshs.size()]));
+		this.textStreamTails = ((ImWord[]) tsts.toArray(new ImWord[tsts.size()]));
 	}
 	
 	/**

@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -505,7 +505,7 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 		
 		//	line up and sort text stream heads
 		ArrayList tshList = new ArrayList(Arrays.asList(textStreamHeads));
-		sort(tshList); // we need to use out own little sort routine, as the JRE ones require a total order as of Java 1.7
+		sort(tshList); // we need to use our own little sort routine, as the JRE ones require a total order as of Java 1.7
 		
 		//	add text
 		while (tshList.size() != 0) {
@@ -513,7 +513,7 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 			//	get next stream head to process
 			ImWord tsh = ((ImWord) tshList.get(0));
 			
-			//	add words
+			//	add next chunk of words from current text stream
 			ImWord imw = tsh;
 			while (imw != null) {
 				
@@ -702,20 +702,22 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 	 * @param normalizeChars normalize diacritics to their base characters?
 	 */
 	public ImTokenSequence(ImWord firstWord, ImWord lastWord, boolean normalizeChars) {
-		this(((Tokenizer) firstWord.getDocument().getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER)), firstWord, lastWord, normalizeChars);
+		this(((Tokenizer) firstWord.getDocument().getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER)), firstWord, lastWord, NORMALIZE_CHARACTERS);
 	}
 	
-	ImTokenSequence(Tokenizer tokenizer, ImWord firstWord, ImWord lastWord, boolean normalizeChars) {
+	ImTokenSequence(Tokenizer tokenizer, ImWord firstWord, ImWord lastWord, int configFlags) {
 		this.tokenizer = tokenizer;
+		boolean normalizeChars = ((configFlags & NORMALIZE_CHARACTERS) != 0);
+		boolean rawWords = ((configFlags & NORMALIZATION_LEVEL_STREAMS) == NORMALIZATION_LEVEL_RAW); 
 		for (ImWord imw = firstWord; imw != null; imw = imw.getNextWord()) {
-			this.addImWord(imw, false, normalizeChars);
+			this.addImWord(imw, rawWords, normalizeChars);
 			if (imw == lastWord)
 				break;
 		}
 	}
 	
-	void addImWord(ImWord imw, boolean forceNewToken, boolean normalizeChars) {
-//		System.out.println("ADDING WORD " + imw.getString() + " " + imw.bounds);
+	private void addImWord(ImWord imw, boolean forceNewToken, boolean normalizeChars) {
+//		System.out.println("ADDING WORD " + imw.getString() + " " + imw.getLocalID());
 		if ((imw.getString() == null) || (imw.getString().length() == 0))
 			return;
 		
@@ -779,6 +781,39 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 //			System.out.println(" ==> continued word");
 		}
 	}
+//	
+//	void hyphenateTokens(ImToken token) {
+//		WILL NEVER BE NEEDED, CANNOT SPLIT PARAGRAPH IN MIDDLE OF TOKEN
+//	}
+	
+	void dehyphenateTokens(ImToken firstToken, ImToken secondToken) {
+		
+		//	truncate value of first token to get rid of hyphen and space
+		int offsetShift = firstToken.whitespace.length();
+		while (firstToken.value.endsWith("-")) {
+			firstToken.value = firstToken.value.substring(0, (firstToken.value.length() - "-".length()));
+			firstToken.imWordAt.remove(firstToken.value.length());
+			offsetShift++;
+		}
+		
+		//	append second token, taking whitespace from latter
+		firstToken.value = (firstToken.value + secondToken.value);
+		firstToken.imWords.addAll(secondToken.imWords);
+		firstToken.imWordAt.addAll(secondToken.imWordAt);
+		firstToken.whitespace = secondToken.whitespace;
+		
+		//	remove second token and map words to first token
+		this.tokens.remove(secondToken.index);
+		for (int w = 0; w < secondToken.imWords.size(); w++)
+			this.imWordTokens.put(((ImWord) secondToken.imWords.get(w)).getLocalID(), firstToken);
+		
+		//	adjust index and offset of subsequent tokens
+		for (int t = (firstToken.index + 1); t < this.tokens.size(); t++) {
+			ImToken token = ((ImToken) this.tokens.get(t));
+			token.index -= 1;
+			token.startOffset -= offsetShift;
+		}
+	}
 	
 	ImToken getTokenFor(ImWord imw) {
 		return ((ImToken) this.imWordTokens.get(imw.getLocalID()));
@@ -786,8 +821,10 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 	
 	int getTokenIndexOf(ImWord imw) {
 		ImToken imt = this.getTokenFor(imw);
-//		if (imt == null)
+//		if (imt == null) {
 //			System.out.println("Strange word " + imw + " at " + imw.getLocalID() + ", could not find token");
+//			throw new RuntimeException("GOTCHA !!!");
+//		}
 		return ((imt == null) ? -1 : imt.index);
 	}
 	

@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -168,6 +168,8 @@ public class ImPage extends ImRegion {
 	private TreeSet words;
 	private HashMap wordsByBounds = new HashMap();
 	private WordIndex wordsByPoints;
+	private ImWord[] textStreamHeads = null;
+	private ImWord[] textStreamTails = null;
 	
 	private ArrayList regions = new ArrayList();
 	private TreeMap regionsByType = new TreeMap();
@@ -240,6 +242,13 @@ public class ImPage extends ImRegion {
 	 * @see de.uka.ipd.idaho.im.ImObject#setType(java.lang.String)
 	 */
 	public void setType(String type) {}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.im.ImObject#getLocalID()
+	 */
+	public String getLocalID() {
+		return ("" + this.pageId);
+	}
 	
 	/* (non-Javadoc)
 	 * @see de.uka.ipd.idaho.im.ImLayoutObject#getPage()
@@ -446,13 +455,53 @@ public class ImPage extends ImRegion {
 	 * @return an array holding the text stream heads
 	 */
 	public ImWord[] getTextStreamHeads() {
+		this.ensureTextStreamEnds();
+		ImWord[] tshs = new ImWord[this.textStreamHeads.length];
+		System.arraycopy(this.textStreamHeads, 0, tshs, 0, tshs.length);
+		return tshs;
+//		ArrayList tshs = new ArrayList();
+//		for (Iterator wit = this.words.iterator(); wit.hasNext();) {
+//			ImWord imw = ((ImWord) wit.next());
+//			if ((imw.getPreviousWord() == null) || (imw.getPreviousWord().pageId != imw.pageId))
+//				tshs.add(imw);
+//		}
+//		return ((ImWord[]) tshs.toArray(new ImWord[tshs.size()]));
+	}
+	
+	/**
+	 * Retrieve all layout words that are the last of a logical text stream in
+	 * the page. This includes both words that do not have a successor and ones
+	 * whose successor lies on a different page.
+	 * @return an array holding the text stream tails
+	 */
+	public ImWord[] getTextStreamTails() {
+		this.ensureTextStreamEnds();
+		ImWord[] tsts = new ImWord[this.textStreamTails.length];
+		System.arraycopy(this.textStreamTails, 0, tsts, 0, tsts.length);
+		return tsts;
+	}
+	
+	void invalidateTextStreamEnds() {
+		this.textStreamHeads = null;
+		this.textStreamTails = null;
+		if (this.getDocument() != null)
+			this.getDocument().invalidateTextStreamEnds();
+	}
+	
+	private void ensureTextStreamEnds() {
+		if ((this.textStreamHeads != null) && (this.textStreamTails != null))
+			return;
 		ArrayList tshs = new ArrayList();
+		ArrayList tsts = new ArrayList();
 		for (Iterator wit = this.words.iterator(); wit.hasNext();) {
 			ImWord imw = ((ImWord) wit.next());
 			if ((imw.getPreviousWord() == null) || (imw.getPreviousWord().pageId != imw.pageId))
 				tshs.add(imw);
+			if ((imw.getNextWord() == null) || (imw.getNextWord().pageId != imw.pageId))
+				tsts.add(imw);
 		}
-		return ((ImWord[]) tshs.toArray(new ImWord[tshs.size()]));
+		this.textStreamHeads = ((ImWord[]) tshs.toArray(new ImWord[tshs.size()]));
+		this.textStreamTails = ((ImWord[]) tsts.toArray(new ImWord[tsts.size()]));
 	}
 	
 	void layoutObjectTypeChanged(ImLayoutObject imlo, String oldType) {

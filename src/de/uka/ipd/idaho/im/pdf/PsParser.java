@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -30,12 +30,12 @@ package de.uka.ipd.idaho.im.pdf;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Hashtable;
+import java.util.HashMap;
 import java.util.LinkedList;
-import java.util.Vector;
-
-import org.icepdf.core.pobjects.Name;
+import java.util.List;
+import java.util.Map;
 
 import de.uka.ipd.idaho.im.pdf.PdfUtils.PdfByteInputStream;
 
@@ -49,11 +49,11 @@ public class PsParser {
 	
 	private static final boolean REPORT_UNKNOWN_COMMANDS = false; // TODO always set this to false for builds
 	
-	static void executePs(byte[] data, Hashtable state, LinkedList stack) throws IOException {
+	static void executePs(byte[] data, Map state, LinkedList stack) throws IOException {
 		executePs(data, state, stack, null);
 	}
 	
-	static void executePs(byte[] data, Hashtable state, LinkedList stack, String indent) throws IOException {
+	static void executePs(byte[] data, Map state, LinkedList stack, String indent) throws IOException {
 		try {
 			doExecutePs(data, state, stack, indent);
 		}
@@ -68,25 +68,26 @@ public class PsParser {
 		}
 	}
 	
-	private static void doExecutePs(byte[] data, Hashtable state, LinkedList stack, String indent) throws IOException {
+	private static void doExecutePs(byte[] data, Map state, LinkedList stack, String indent) throws IOException {
 		PdfByteInputStream pbis = new PdfByteInputStream(new ByteArrayInputStream(data));
 		
-		Hashtable errorDict = new Hashtable();
-		Hashtable errorStatusDict = new Hashtable();
-		Hashtable userDict = new Hashtable();
-		Hashtable globalDict = new Hashtable();
-		Hashtable statusDict = new Hashtable();
-		Hashtable internalDict = new Hashtable();
-		Hashtable fontDict = new Hashtable();
-		Hashtable systemDict = new Hashtable();
+		Map errorDict = new HashMap();
+		Map errorStatusDict = new HashMap();
+		Map userDict = new HashMap();
+		Map globalDict = new HashMap();
+		Map statusDict = new HashMap();
+		Map internalDict = new HashMap();
+		Map fontDict = new HashMap();
+		Map systemDict = new HashMap();
 		
 //		systemDict.put(new Name("errordict"), errorDict);
 //		systemDict.put(new Name("$error"), errorStatusDict);
 //		systemDict.put(new Name("userdict"), userDict);
 //		systemDict.put(new Name("globaldict"), globalDict);
 //		systemDict.put(new Name("statusdict"), statusDict);
-		systemDict.put(new Name("internaldict"), internalDict);
+//		systemDict.put(new Name("internaldict"), internalDict);
 //		systemDict.put(new Name("FontDictionary"), fontDict);
+		systemDict.put("internaldict", internalDict);
 		
 		LinkedList dictStack = new LinkedList();
 		dictStack.addLast(systemDict);
@@ -196,11 +197,11 @@ public class PsParser {
 							rStack.addFirst(stack.removeLast());
 						if (j < 0) {
 							for (; j < 0; j++)
-								rStack.addFirst(rStack.removeLast()); // move top of stack down
+								rStack.addLast(rStack.removeFirst()); // move middle of stack up (downward motion of all other elements)
 						}
 						else if (j > 0) {
 							for (; j > 0; j--)
-								rStack.addLast(rStack.removeFirst()); // move down in stack up
+								rStack.addFirst(rStack.removeLast()); // move top of stack down (upward motion of all other elements)
 						}
 						while (rStack.size() != 0)
 							stack.addLast(rStack.removeFirst());
@@ -228,13 +229,13 @@ public class PsParser {
 				//	create an array
 				else if ("array".equals(psc.command)) {
 					int length = ((Number) stack.removeLast()).intValue();
-					stack.addLast(new Vector(length));
+					stack.addLast(new ArrayList(length));
 				}
 				
 				//	create a dictionary
 				else if ("dict".equals(psc.command)) {
 					int size = ((Number) stack.removeLast()).intValue();
-					stack.addLast(new Hashtable(size));
+					stack.addLast(new HashMap(size));
 				}
 				
 				//	duplicate a dictionary onto the stack
@@ -292,18 +293,18 @@ public class PsParser {
 					Object dictOrArray = stack.removeLast();
 //					System.out.println("Put target is: " + dictOrArray);
 					try {
-						if (dictOrArray instanceof Vector) {
+						if (dictOrArray instanceof List) {
 							int index = ((Number) nameOrIndex).intValue();
-							Vector array = ((Vector) dictOrArray);
+							List array = ((List) dictOrArray);
 							if (index < array.size())
 								array.set(index, element);
 							else array.add(index, element);
 //							System.out.println("Set " + index + " to " + element);
 //							System.out.println("Stack is: " + stack);
 						}
-						else if (dictOrArray instanceof Hashtable) {
-							Name key = ((Name) nameOrIndex);
-							Hashtable dict = ((Hashtable) dictOrArray);
+						else if (dictOrArray instanceof Map) {
+							String key = ((String) nameOrIndex);
+							Map dict = ((Map) dictOrArray);
 							dict.put(key, element);
 //							System.out.println("Set " + key + " to " + element);
 //							System.out.println("Stack is: " + stack);
@@ -341,16 +342,16 @@ public class PsParser {
 					Object dictOrArray = stack.removeLast();
 //					System.out.println("Get target is: " + dictOrArray);
 					try {
-						if (dictOrArray instanceof Vector) {
+						if (dictOrArray instanceof List) {
 							int index = ((Number) nameOrIndex).intValue();
-							Vector array = ((Vector) dictOrArray);
+							List array = ((List) dictOrArray);
 							if (index < array.size()) // TODO track how that can happen ...
 								stack.addLast(array.get(index));
 							else System.out.println("Invalid request for element " + index + " of " + array);
 						}
-						else if (dictOrArray instanceof Hashtable) {
-							Name key = ((Name) nameOrIndex);
-							Hashtable dict = ((Hashtable) dictOrArray);
+						else if (dictOrArray instanceof Map) {
+							String key = ((String) nameOrIndex);
+							Map dict = ((Map) dictOrArray);
 							Object value = dict.get(key);
 							if (value != null) // TODO track how that can happen ...
 								stack.addLast(value);
@@ -381,8 +382,8 @@ public class PsParser {
 				//	define a variable in state
 				else if ("def".equals(psc.command)) {
 					Object value = stack.removeLast();
-					Name key = ((Name) stack.removeLast());
-					Hashtable dict = (dictStack.isEmpty() ? state : ((Hashtable) dictStack.getLast()));
+					String key = ((String) stack.removeLast());
+					Map dict = (dictStack.isEmpty() ? state : ((Map) dictStack.getLast()));
 					dict.put(key, value);
 //					System.out.println("Set " + key + " to " + value);
 //					System.out.println("Stack is: " + stack);
@@ -390,9 +391,8 @@ public class PsParser {
 				
 				//	undefine a variable in state
 				else if ("undef".equals(psc.command)) {
-					Name key = ((Name) stack.removeLast());
-//					Hashtable dict = (dictStack.isEmpty() ? state : ((Hashtable) dictStack.getLast()));
-					Hashtable dict = ((Hashtable) stack.removeLast());
+					String key = ((String) stack.removeLast());
+					Map dict = ((Map) stack.removeLast());
 					dict.remove(key);
 //					System.out.println("Set " + key + " to " + value);
 //					System.out.println("Stack is: " + stack);
@@ -400,21 +400,21 @@ public class PsParser {
 				
 				//	known command
 				else if ("known".equals(psc.command)) {
-					Name key = ((Name) stack.removeLast());
+					String key = ((String) stack.removeLast());
 //					Hashtable dict = (dictStack.isEmpty() ? state : ((Hashtable) dictStack.getLast()));
-					Hashtable dict = ((Hashtable) stack.removeLast());
+					Map dict = ((Map) stack.removeLast());
 					stack.addLast(new Boolean(dict.containsKey(key)));
 				}
 				
 				//	push dictionary on dedicated stack
 				else if ("begin".equals(psc.command)) {
-					Hashtable dict = ((Hashtable) stack.removeLast());
+					Map dict = ((Map) stack.removeLast());
 					dictStack.addLast(dict);
 				}
 				
 				//	pop dictionary off dedicated stack
 				else if ("end".equals(psc.command)) {
-					Hashtable dict = ((Hashtable) dictStack.removeLast());
+					Map dict = ((Map) dictStack.removeLast());
 //					System.out.println("Got dictionary: " + dict);
 				}
 				
@@ -535,15 +535,15 @@ public class PsParser {
 				}
 				else if ("ND".equals(psc.command)) {
 					Object value = stack.removeLast();
-					Name key = ((Name) stack.removeLast());
-					Hashtable dict = (dictStack.isEmpty() ? state : ((Hashtable) dictStack.getLast()));
+					String key = ((String) stack.removeLast());
+					Map dict = (dictStack.isEmpty() ? state : ((Map) dictStack.getLast()));
 					dict.put(key, value);
 //					System.out.println("Set " + key + " to " + value);
 				}
 				else if ("NP".equals(psc.command)) {
 					Object element = stack.removeLast();
 					int index = ((Number) stack.removeLast()).intValue();
-					Vector array = ((Vector) stack.removeLast());
+					List array = ((List) stack.removeLast());
 					while (array.size() < index)
 						array.add(null); // fill up any '.notdef' incurred gaps
 					array.add(index, element);
@@ -729,7 +729,8 @@ public class PsParser {
 					Object obj1 = stack.removeLast();
 					if ((obj1 instanceof Number) && (obj2 instanceof Number))
 						stack.addLast(new Boolean(((Number) obj1).floatValue() == ((Number) obj2).floatValue()));
-					else if (((obj1 instanceof PsString) || (obj1 instanceof Name)) && ((obj2 instanceof PsString) || (obj2 instanceof Name)))
+//					else if (((obj1 instanceof PsString) || (obj1 instanceof Name)) && ((obj2 instanceof PsString) || (obj2 instanceof Name)))
+					else if (((obj1 instanceof PsString) || (obj1 instanceof String)) && ((obj2 instanceof PsString) || (obj2 instanceof String)))
 						stack.addLast(new Boolean(obj1.toString().compareTo(obj2.toString()) == 0));
 					else stack.addLast(new Boolean(obj1.equals(obj2)));
 				}
@@ -740,7 +741,8 @@ public class PsParser {
 					Object obj1 = stack.removeLast();
 					if ((obj1 instanceof Number) && (obj2 instanceof Number))
 						stack.addLast(new Boolean(((Number) obj1).floatValue() != ((Number) obj2).floatValue()));
-					else if (((obj1 instanceof PsString) || (obj1 instanceof Name)) && ((obj2 instanceof PsString) || (obj2 instanceof Name)))
+//					else if (((obj1 instanceof PsString) || (obj1 instanceof Name)) && ((obj2 instanceof PsString) || (obj2 instanceof Name)))
+					else if (((obj1 instanceof PsString) || (obj1 instanceof String)) && ((obj2 instanceof PsString) || (obj2 instanceof String)))
 						stack.addLast(new Boolean(obj1.toString().compareTo(obj2.toString()) != 0));
 					else stack.addLast(new Boolean(!obj1.equals(obj2)));
 				}
@@ -801,8 +803,8 @@ public class PsParser {
 				
 				
 				//	user defined command
-				else if ((dictStack.isEmpty() ? state : ((Hashtable) dictStack.getLast())).containsKey(psc.command)) {
-					Object obj = (dictStack.isEmpty() ? state : ((Hashtable) dictStack.getLast())).get(psc.command);
+				else if ((dictStack.isEmpty() ? state : ((Map) dictStack.getLast())).containsKey(psc.command)) {
+					Object obj = (dictStack.isEmpty() ? state : ((Map) dictStack.getLast())).get(psc.command);
 //					System.out.println("Got " + psc.command + ": " + obj.toString());
 					PsProcedure proc = ((PsProcedure) obj);
 //					System.out.println("Executing " + proc.toString());
@@ -967,7 +969,7 @@ public class PsParser {
 		if (DEBUG_PARSE_PS) System.out.println(" --> " + comment.toString());
 	}
 	
-	private static Name cropName(PdfByteInputStream bytes) throws IOException {
+	private static String cropName(PdfByteInputStream bytes) throws IOException {
 		if (DEBUG_PARSE_PS) System.out.println("Cropping name");
 		if (bytes.peek() == '/')
 			bytes.read();
@@ -986,7 +988,7 @@ public class PsParser {
 			else name.append((char) bytes.read());
 		}
 		if (DEBUG_PARSE_PS) System.out.println(" --> " + name.toString());
-		return new Name(name.toString());
+		return name.toString();
 	}
 	
 	private static boolean checkHexByte(int b) {
@@ -1264,9 +1266,9 @@ public class PsParser {
 		return new PsProcedure(baos.toByteArray());
 	}
 	
-	private static Vector cropArray(PdfByteInputStream bytes) throws IOException {
+	private static List cropArray(PdfByteInputStream bytes) throws IOException {
 		if (DEBUG_PARSE_PS) System.out.println("Cropping array");
-		Vector array = new Vector(2);
+		List array = new ArrayList(2);
 		while (bytes.peek() != -1) {
 			if (!bytes.skipSpaceCheckEnd())
 				break;
@@ -1290,9 +1292,9 @@ public class PsParser {
 		return array;
 	}
 	
-	private static Hashtable cropHashtable(PdfByteInputStream bytes) throws IOException {
+	private static Map cropHashtable(PdfByteInputStream bytes) throws IOException {
 		if (DEBUG_PARSE_PS) System.out.println("Cropping dictionary");
-		Hashtable ht = new Hashtable(2);
+		Map ht = new HashMap(2);
 		while (true) {
 			if (!bytes.skipSpaceCheckEnd())
 				throw new IOException("Broken dictionary");
@@ -1316,7 +1318,7 @@ public class PsParser {
 				if (!bytes.skipSpaceCheckEnd())
 					throw new IOException("Broken dictionary");
 			}
-			Name name = cropName(bytes);
+			String name = cropName(bytes);
 			if (!bytes.skipSpaceCheckEnd())
 				throw new IOException("Broken dictionary");
 			while (bytes.peek() == '%') {
@@ -1332,8 +1334,8 @@ public class PsParser {
 	}
 	
 	//	properly populate this sucker
-	private static Vector getStandardEncoding() {
-		Vector v = new Vector();
+	private static List getStandardEncoding() {
+		List v = new ArrayList();
 		for (int i = 0; i < 256; i++)
 			v.add(".notdef");
 		v.set(32, "space");
@@ -1489,8 +1491,8 @@ public class PsParser {
 	}
 	
 	//	properly populate this sucker
-	private static Vector getISOLatin1Encoding() {
-		Vector v = new Vector();
+	private static List getISOLatin1Encoding() {
+		List v = new ArrayList();
 		for (int i = 0; i < 256; i++)
 			v.add(".notdef");
 		v.set(32, "space");
@@ -1817,7 +1819,7 @@ public class PsParser {
 //			return ("Proc<" + this.bytes.length + ">: " + Arrays.toString(this.bytes) + " {" + new String(this.bytes) + "}");
 			return ("Proc<" + this.bytes.length + ">");
 		}
-		public void execute(Hashtable state, LinkedList stack, String indent) throws IOException {
+		public void execute(Map state, LinkedList stack, String indent) throws IOException {
 			executePs(this.bytes, state, stack, indent);
 		}
 	}
@@ -1826,7 +1828,7 @@ public class PsParser {
 	 * @param args
 	 */
 	public static void main(String[] args) throws Exception {
-		Hashtable state = new Hashtable();
+		Map state = new HashMap();
 		LinkedList stack = new LinkedList();
 		executePs(testData.getBytes(), state, stack);
 		executePs(testData2.getBytes(), state, stack);

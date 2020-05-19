@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -28,7 +28,6 @@
 package de.uka.ipd.idaho.im.ocr;
 
 import java.awt.image.BufferedImage;
-import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.File;
@@ -51,6 +50,7 @@ import de.uka.ipd.idaho.htmlXmlUtil.TokenReceiver;
 import de.uka.ipd.idaho.htmlXmlUtil.TreeNodeAttributeSet;
 import de.uka.ipd.idaho.htmlXmlUtil.accessories.IoTools;
 import de.uka.ipd.idaho.htmlXmlUtil.grammars.Html;
+import de.uka.ipd.idaho.im.util.BinaryToolInstaller;
 
 /**
  * Wrapper for a single Stream Tesseract process. The Stream Tesseract engine
@@ -259,47 +259,8 @@ public class OcrInstance {
 	}
 	
 	private boolean install(String fileName) {
-		System.out.println("OCR Instance: installing file '" + fileName + "'");
-		if (fileName == null) {
-			System.out.println(" ==> source name not found");
-			return false;
-		}
-		File file = new File(this.tessPath, fileName);
-		if (file.exists()) {
-			System.out.println(" ==> already installed");
-			return true;
-		}
-		
-		InputStream fileIn = this.getClass().getClassLoader().getResourceAsStream("bin/StreamTess/" + fileName);
-		if (fileIn == null) {
-			System.out.println(" ==> source not found");
-			return false;
-		}
-		fileIn = new BufferedInputStream(fileIn);
-		
-		try {
-			file.getParentFile().mkdirs();
-			OutputStream fileOut = new BufferedOutputStream(new FileOutputStream(file));
-			byte[] fileBuffer = new byte[2048];
-			for (int r; (r = fileIn.read(fileBuffer, 0, fileBuffer.length)) != -1;)
-				fileOut.write(fileBuffer, 0, r);
-			fileOut.flush();
-			fileOut.close();
-			fileIn.close();
-			System.out.println(" ==> installed successfully");
-			
-			if (fileName.endsWith("-linux") || fileName.endsWith("-mac")) {
-				Runtime.getRuntime().exec(("chmod -R 777 " + this.tessPath.getAbsolutePath()), new String[0], this.tessPath);
-				System.out.println(" ==> execution permissions obtained successfully");
-			}
-			
-			return true;
-		}
-		catch (IOException ioe) {
-			System.out.println(" ==> could not install file '" + fileName + "'");
-			ioe.printStackTrace(System.out);
-			return false;
-		}
+		System.out.print("OCR Instance: ");
+		return BinaryToolInstaller.install(fileName, this.tessPath, this.getClass().getClassLoader(), "bin/StreamTess/");
 	}
 	
 	private void startTessInstance() throws IOException {

@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -31,7 +31,8 @@ import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
-import java.awt.Point;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.Point2D;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
@@ -52,6 +53,7 @@ import java.util.Map.Entry;
 import javax.imageio.ImageIO;
 
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
+import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.im.utilities.ImageDisplayDialog;
 import de.uka.ipd.idaho.stringUtils.csvHandler.StringTupel;
 
@@ -150,15 +152,11 @@ public class Imaging {
 		public byte[][] getBrightness() {
 			if (this.brightness == null) {
 				this.brightness = new byte[this.image.getWidth()][this.image.getHeight()];
-				float[] hsb = null;
 				int rgb;
-				int b;
 				for (int c = 0; c < this.image.getWidth(); c++) {
 					for (int r = 0; r < this.image.getHeight(); r++) {
 						rgb = this.image.getRGB(c, r);
-						hsb = new Color(rgb).getColorComponents(hsb);
-						b = ((int) (hsb[2] * 128));
-						this.brightness[c][r] = ((b == 128) ? 127 : ((byte) b));
+						this.brightness[c][r] = getByteBrightness(rgb);
 					}
 				}
 			}
@@ -308,6 +306,19 @@ public class Imaging {
 		public String getId() {
 			return ("[" + this.leftCol + "," + this.rightCol + "," + this.topRow + "," + this.bottomRow + "]");
 		}
+		public String toString() {
+			return this.getId();
+		}
+	}
+	
+	//	no need for fully blown RGB -> HSL conversion (described in https://www.rapidtables.com/convert/color/rgb-to-hsl.html), only need luminosity, and that as 0-127
+	private static byte getByteBrightness(int rgb) {
+		int r = (((rgb >> 16) & 0xFF) / 2); // directly to 0-127 range
+		int g = (((rgb >> 8) & 0xFF) / 2); // directly to 0-127 range
+		int b = (((rgb >> 0) & 0xFF) / 2); // directly to 0-127 range
+		int lMax = Math.max(r, Math.max(g, b)); // compute maximum
+		int lMin = Math.min(r, Math.min(g, b)); // compute minimum
+		return ((byte) ((lMax + lMin) / 2)); // return average
 	}
 	
 	/**
@@ -316,12 +327,32 @@ public class Imaging {
 	 * rotation correction, and cutting off white margins.
 	 * @param ai the image to correct
 	 * @param dpi the resolution of the image
-	 * @param psm a monitor object observing progress
+	 * @param pm a monitor object observing progress
 	 * @return the corrected image
 	 */
-	public static AnalysisImage correctImage(AnalysisImage ai, int dpi, ProgressMonitor psm) {
-		if (psm == null)
-			psm = ProgressMonitor.dummy;
+	public static AnalysisImage correctImage(AnalysisImage ai, int dpi, ProgressMonitor pm) {
+		return correctImage(ai, dpi, null, pm);
+	}
+	
+	/**
+	 * Correct a page image. This method aggregates several lower level
+	 * corrections for convenience, namely inversion check, white balance,
+	 * rotation correction, and cutting off white margins. If rotation has to
+	 * be corrected and the argument OCR word boundaries are not null, they are
+	 * rotated alongside the page image and placed in the array in the order
+	 * they come in. The bounding boxes have to be in the same coordinate
+	 * system and resolution as the argument page image proper for results to
+	 * be meaningful.
+	 * @param ai the image to correct
+	 * @param dpi the resolution of the image
+	 * @param exOcrWordBounds an array holding the bounding boxes of existing
+	 *            OCR words
+	 * @param pm a monitor object observing progress
+	 * @return the corrected image
+	 */
+	public static AnalysisImage correctImage(AnalysisImage ai, int dpi, BoundingBox[] exOcrWordBounds, ProgressMonitor pm) {
+		if (pm == null)
+			pm = ProgressMonitor.dummy;
 		
 		//	show what's happening
 		ImageDisplayDialog idd = (DEBUG_CLEANUP ? new ImageDisplayDialog("Page Image Cleanup Steps") : null);
@@ -333,9 +364,9 @@ public class Imaging {
 		
 		//	check for white on black
 		changed = false;
-		changed = correctWhiteOnBlack(ai, ((byte) 64));
+		changed = correctWhiteOnBlack(ai, ((byte) 32));
 		if (changed) {
-			psm.setInfo("   - white-on-black inverted");
+			pm.setInfo("   - white-on-black inverted");
 			if (idd != null)
 				idd.addImage(copyImage(ai.getImage()), "White/Black Inverted");
 		}
@@ -359,7 +390,7 @@ public class Imaging {
 				changed = false;
 				changed = gaussBlur(ai, 1);
 				if (changed) {
-					psm.setInfo("   - letters smoothed");
+					pm.setInfo("   - letters smoothed");
 					if (idd != null)
 						idd.addImage(copyImage(ai.getImage()), "Letters Smoothed");
 				}
@@ -372,7 +403,7 @@ public class Imaging {
 //				changed = eliminateBackground(ai, (dpi / 4), 3, 12);
 				changed = eliminateBackground(ai, dpi);
 				if (changed) {
-					psm.setInfo("   - background elimination done");
+					pm.setInfo("   - background elimination done");
 					if (idd != null)
 						idd.addImage(copyImage(ai.getImage()), "Background Eliminated");
 				}
@@ -386,7 +417,7 @@ public class Imaging {
 				changed = false;
 				changed = eliminateBackground(ai, dpi);
 				if (changed) {
-					psm.setInfo("   - background elimination done");
+					pm.setInfo("   - background elimination done");
 					if (idd != null)
 						idd.addImage(copyImage(ai.getImage()), "Background Eliminated");
 				}
@@ -396,7 +427,7 @@ public class Imaging {
 			changed = false;
 			changed = whitenWhite(ai);
 			if (changed) {
-				psm.setInfo("   - white balance done");
+				pm.setInfo("   - white balance done");
 				if (idd != null)
 					idd.addImage(copyImage(ai.getImage()), "White Balanced");
 			}
@@ -406,7 +437,7 @@ public class Imaging {
 		changed = false;
 		changed = featherDust(ai, dpi, !isGrayScale, isSharp);
 		if (changed) {
-			psm.setInfo("   - feather dusting done");
+			pm.setInfo("   - feather dusting done");
 			if (idd != null)
 				idd.addImage(copyImage(ai.getImage()), "Feather Dusted");
 		}
@@ -427,9 +458,9 @@ public class Imaging {
 		
 		//	correct page rotation
 		changed = false;
-		changed = correctPageRotation(ai, dpi, 0.1, ADJUST_MODE_SQUARE_ROOT);
+		changed = correctPageRotation(ai, dpi, 0.1, ADJUST_MODE_SQUARE_ROOT, exOcrWordBounds);
 		if (changed) {
-			psm.setInfo("   - page rotation corrected");
+			pm.setInfo("   - page rotation corrected");
 			if (idd != null)
 				idd.addImage(copyImage(ai.getImage()), "Put Upright");
 		}
@@ -545,8 +576,8 @@ public class Imaging {
 		for (int c = 0; c < analysisImage.image.getWidth(); c++)
 			for (int r = 0; r < analysisImage.image.getHeight(); r++) {
 				rgb = analysisImage.image.getRGB(c, r);
-				hsb = new Color(rgb).getColorComponents(hsb);
 				analysisImage.brightness[c][r] = ((byte) (127 - analysisImage.brightness[c][r]));
+				hsb = Color.RGBtoHSB(((rgb >> 16) & 0xFF), ((rgb >> 8) & 0xFF), ((rgb >> 0) & 0xFF), hsb);
 				analysisImage.image.setRGB(c, r, Color.HSBtoRGB(hsb [0], hsb[1], (1 - hsb[2])));
 			}
 		return true;
@@ -2566,7 +2597,7 @@ public class Imaging {
 		Complex[] row;
 		int ix;
 		int iy;
-		float[] hsb = new float[3];
+//		float[] hsb = new float[3];
 		float bs;
 		int rgb;
 		int wrgb = Color.WHITE.getRGB();
@@ -2581,8 +2612,9 @@ public class Imaging {
 						if (repeatImage)
 							rgb = image.getRGB(((ix + ax) % iw), ((iy + ay) % ih));
 						else rgb = ((y < ih) ? image.getRGB(((ix + ax) % iw), y) : wrgb);
-						hsb = new Color(rgb).getColorComponents(hsb);
-						bs += hsb[2];
+//						hsb = new Color(rgb).getColorComponents(hsb);
+//						bs += hsb[2];
+						bs += (((float) getByteBrightness(rgb)) / 128);
 					}
 				}
 				row[x] = new Complex((bs / (agg * agg)), 0);
@@ -2642,8 +2674,8 @@ public class Imaging {
 	/**
 	 * Correct page images who are scanned out of the vertical. This method
 	 * first uses FFT peaks to compute the rotation against the vertical, then
-	 * rotates the analysisImage back to the vertical if the deviation is more than the
-	 * specified granularity.
+	 * rotates the analysisImage back to the vertical if the deviation is more
+	 * than the specified granularity.
 	 * @param analysisImage the analysisImage to correct
 	 * @param dpi the resolution of the image
 	 * @param granularity the granularity in degrees
@@ -2651,27 +2683,75 @@ public class Imaging {
 	 * @return true if the argument AnalysisImage was modified, false otherwise
 	 */
 	public static boolean correctPageRotation(AnalysisImage analysisImage, int dpi, double granularity, int adjustMode) {
-		return correctPageRotation(analysisImage, dpi, granularity, null, -1, adjustMode);
+		return correctPageRotation(analysisImage, dpi, granularity, null, -1, adjustMode, null);
+	}
+	
+	/**
+	 * Correct page images who are scanned out of the vertical. This method
+	 * first uses FFT peaks to compute the rotation against the vertical, then
+	 * rotates the analysisImage back to the vertical if the deviation is more
+	 * than the specified granularity. If the argument OCR word boundaries are
+	 * not null, they are rotated alongside the page image and placed in the
+	 * array in the order they come in. The bounding boxes have to be in the
+	 * same coordinate system and resolution as the argument page image proper
+	 * for results to be meaningful.
+	 * @param analysisImage the analysisImage to correct
+	 * @param dpi the resolution of the image
+	 * @param granularity the granularity in degrees
+	 * @param adjustMode the FFT peak adjust mode
+	 * @param exOcrWordBounds an array holding the bounding boxes of existing
+	 *            OCR words
+	 * @return true if the argument AnalysisImage was modified, false otherwise
+	 */
+	public static boolean correctPageRotation(AnalysisImage analysisImage, int dpi, double granularity, int adjustMode, BoundingBox[] exOcrWordBounds) {
+		return correctPageRotation(analysisImage, dpi, granularity, null, -1, adjustMode, exOcrWordBounds);
 	}
 	
 	/**
 	 * Correct page images who are scanned out of the vertical. This method
 	 * first uses peaks in the argument FFT to compute the rotation against the
-	 * vertical, then rotates the analysisImage back to the vertical if the deviation is
-	 * more than the specified granularity. The argument FFT must originate from
-	 * the argument analysisImage for the result of this method to be meaningful. If the
-	 * argument FFT is null, this method computes it as a 256 by 256 complex
-	 * array.
+	 * vertical, then rotates the analysisImage back to the vertical if the
+	 * deviation is more than the specified granularity. The argument FFT must
+	 * originate from the argument analysisImage for the result of this method
+	 * to be meaningful. If the argument FFT is null, this method computes it
+	 * as a 256 by 256 complex array.
 	 * @param analysisImage the analysisImage to correct
 	 * @param dpi the resolution of the image
 	 * @param granularity the granularity in degrees
 	 * @param fft the FFT of the analysisImage (set to null to have it computed here)
-	 * @param max the adjusted maximum peak height of the argument FFT (set to a
-	 *            negative number to have it computed here)
+	 * @param max the adjusted maximum peak height of the argument FFT (set to
+	 *            a negative number to have it computed here)
 	 * @param adjustMode the FFT peak adjust mode
 	 * @return true if the argument AnalysisImage was modified, false otherwise
 	 */
 	public static boolean correctPageRotation(AnalysisImage analysisImage, int dpi, double granularity, Complex[][] fft, double max, int adjustMode) {
+		return correctPageRotation(analysisImage, dpi, granularity, fft, max, adjustMode, null);
+	}
+	
+	/**
+	 * Correct page images who are scanned out of the vertical. This method
+	 * first uses peaks in the argument FFT to compute the rotation against the
+	 * vertical, then rotates the analysisImage back to the vertical if the
+	 * deviation is more than the specified granularity. The argument FFT must
+	 * originate from the argument analysisImage for the result of this method
+	 * to be meaningful. If the argument FFT is null, this method computes it
+	 * as a 256 by 256 complex array. If the argument OCR word boundaries are
+	 * not null, they are rotated alongside the page image and placed in the
+	 * array in the order they come in. The bounding boxes have to be in the
+	 * same coordinate system and resolution as the argument page image proper
+	 * for results to be meaningful.
+	 * @param analysisImage the analysisImage to correct
+	 * @param dpi the resolution of the image
+	 * @param granularity the granularity in degrees
+	 * @param fft the FFT of the analysisImage (set to null to have it computed here)
+	 * @param max the adjusted maximum peak height of the argument FFT (set to
+	 *            a negative number to have it computed here)
+	 * @param adjustMode the FFT peak adjust mode
+	 * @param exOcrWordBounds an array holding the bounding boxes of existing
+	 *            OCR words
+	 * @return true if the argument AnalysisImage was modified, false otherwise
+	 */
+	public static boolean correctPageRotation(AnalysisImage analysisImage, int dpi, double granularity, Complex[][] fft, double max, int adjustMode, BoundingBox[] exOcrWordBounds) {
 		if (fft == null) {
 			fft = analysisImage.getFft();
 			max = getMax(fft, adjustMode);
@@ -2700,7 +2780,7 @@ public class Imaging {
 //		}
 //		else return false;
 		if ((pageRotationAngle < maxPageRotationCorrectionAngle) && (Math.abs(pageRotationAngle) > ((Math.PI / 180) * granularity))) {
-			analysisImage.setImage(rotateImage(analysisImage.getImage(), -pageRotationAngle));
+			analysisImage.setImage(rotateImage(analysisImage.getImage(), -pageRotationAngle, exOcrWordBounds));
 			rotationCorrected = true;
 		}
 		
@@ -2776,7 +2856,7 @@ public class Imaging {
 		double blockRotationAngle = (weightedBlockRotationAngleSum / blockWeightSum);
 		System.out.println("Page rotation angle by block line focusing is " + (((float) ((int) (blockRotationAngle * 100))) / 100) + "°");
 		if (Math.abs(blockRotationAngle) > blockRotationAngleStep) {
-			analysisImage.setImage(rotateImage(analysisImage.getImage(), ((Math.PI / 180) * -blockRotationAngle)));
+			analysisImage.setImage(rotateImage(analysisImage.getImage(), ((Math.PI / 180) * -blockRotationAngle), exOcrWordBounds));
 			rotationCorrected = true;
 		}
 		
@@ -2972,6 +3052,22 @@ public class Imaging {
 	 * @return the rotated image
 	 */
 	public static BufferedImage rotateImage(BufferedImage image, double angle) {
+		return rotateImage(image, angle, null);
+	}
+	
+	/**
+	 * Rotate an image by a given angle. If the argument OCR word boundaries
+	 * are not null, they are rotated alongside the image and placed in the
+	 * array in the order they come in. The bounding boxes have to be in the
+	 * same coordinate system and resolution as the argument image proper for
+	 * results to be meaningful.
+	 * @param image the image to rotate
+	 * @param angle the angle to rotate by (in radiants)
+	 * @param exOcrWordBounds an array holding the bounding boxes of existing
+	 *            OCR words
+	 * @return the rotated image
+	 */
+	public static BufferedImage rotateImage(BufferedImage image, double angle, BoundingBox[] exOcrWordBounds) {
 		BufferedImage rImage = new BufferedImage(image.getWidth(), image.getHeight(), ((image.getType() == BufferedImage.TYPE_CUSTOM) ? BufferedImage.TYPE_INT_ARGB : image.getType()));
 		Graphics2D rImageGraphics = rImage.createGraphics();
 		rImageGraphics.setColor(Color.WHITE);
@@ -2979,6 +3075,22 @@ public class Imaging {
 		rImageGraphics.rotate(angle, (image.getWidth() / 2), (image.getHeight() / 2));
 		rImageGraphics.drawRenderedImage(image, null);
 		rImageGraphics.dispose();
+		if (exOcrWordBounds == null)
+			return rImage; // no words to deal with, we're done here
+		AffineTransform wcat = AffineTransform.getRotateInstance(angle, (image.getWidth() / 2), (image.getHeight() / 2));
+		for (int w = 0; w < exOcrWordBounds.length; w++) {
+			if (exOcrWordBounds[w] == null)
+				continue;
+			Point2D wc = new Point2D.Float((((float) (exOcrWordBounds[w].left + exOcrWordBounds[w].right)) / 2), (((float) (exOcrWordBounds[w].top + exOcrWordBounds[w].bottom)) / 2));
+			wcat.transform(wc, wc);
+			int rwl = (((int) Math.round(wc.getX())) - (exOcrWordBounds[w].getWidth() / 2));
+			int rwt = (((int) Math.round(wc.getY())) - (exOcrWordBounds[w].getHeight() / 2));
+			if ((rwl == exOcrWordBounds[w].left) && (rwt == exOcrWordBounds[w].top))
+				continue;
+			BoundingBox rwb = new BoundingBox(rwl, (rwl + exOcrWordBounds[w].getWidth()), rwt, (rwt + exOcrWordBounds[w].getHeight()));
+			System.out.println("Rotated " + exOcrWordBounds[w] + " to " + rwb);
+			exOcrWordBounds[w] = rwb;
+		}
 		return rImage;
 	}
 	

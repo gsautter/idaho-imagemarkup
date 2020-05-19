@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -403,6 +403,7 @@ public class ImDocumentIO implements ImagingConstants {
 			
 			//	we do have a cache folder, use it
 			else {
+				checkEntryName(entryName);
 				final File newEntryDataFile = new File(this.entryDataCacheFolder, (entryName + ".new"));
 				out = new BufferedOutputStream(new FileOutputStream(newEntryDataFile) {
 					public void close() throws IOException {
@@ -424,6 +425,32 @@ public class ImDocumentIO implements ImagingConstants {
 					putEntry(new ImDocumentEntry(entryName, System.currentTimeMillis(), this.getDataHash()));
 				}
 			};
+		}
+		public void dispose() {
+			super.dispose();
+			if (this.entryDataCache != null)
+				this.entryDataCache.clear();
+			if ((this.entryDataCacheFolder != null) && this.entryDataCacheFolder.exists())
+				this.cleanCacheFolder(this.entryDataCacheFolder);
+		}
+		private void cleanCacheFolder(File folder) {
+			File[] folderContent = folder.listFiles();
+			for (int c = 0; c < folderContent.length; c++) try {
+				if (folderContent[c].isDirectory())
+					cleanCacheFolder(folderContent[c]);
+				else folderContent[c].delete();
+			}
+			catch (Throwable t) {
+				System.out.println("Error cleaning up cached file '" + folderContent[c].getAbsolutePath() + "': " + t.getMessage());
+				t.printStackTrace(System.out);
+			}
+			try {
+				folder.delete();
+			}
+			catch (Throwable t) {
+				System.out.println("Error cleaning up cache folder '" + folder.getAbsolutePath() + "': " + t.getMessage());
+				t.printStackTrace(System.out);
+			}
 		}
 	}
 	
@@ -450,6 +477,7 @@ public class ImDocumentIO implements ImagingConstants {
 		public OutputStream getOutputStream(final String entryName, boolean writeDirectly) throws IOException {
 			
 			//	put entry, and make sure not to close the stream proper
+			checkEntryName(entryName);
 			this.zipOut.putNextEntry(new ZipEntry(entryName));
 			OutputStream out = new FilterOutputStream(this.zipOut) {
 				public void close() throws IOException {
@@ -672,27 +700,27 @@ public class ImDocumentIO implements ImagingConstants {
 						}
 					};
 				else if (ImSupplement.SCAN_TYPE.equals(st))
-					supplement = new ImSupplement.Scan(doc, smt) {
+					supplement = new ImSupplement.Scan(doc, sid, smt) {
 						public InputStream getInputStream() throws IOException {
 							return doc.getInputStream(sfn);
 						}
 					};
 				else if (ImSupplement.FIGURE_TYPE.equals(st))
-					supplement = new ImSupplement.Figure(doc, smt) {
+					supplement = new ImSupplement.Figure(doc, sid, smt) {
 						public InputStream getInputStream() throws IOException {
 							return doc.getInputStream(sfn);
 						}
 					};
 				else if (ImSupplement.GRAPHICS_TYPE.equals(st))
-					supplement = new ImSupplement.Graphics(doc) {
+					supplement = new ImSupplement.Graphics(doc, sid) {
 						public InputStream getInputStream() throws IOException {
 							return doc.getInputStream(sfn);
 						}
 					};
-				else supplement = new ImSupplement(doc, st, smt) {
-					public String getId() {
-						return sid;
-					}
+				else supplement = new ImSupplement(doc, sid, st, smt) {
+//					public String getId() {
+//						return sid;
+//					}
 					public InputStream getInputStream() throws IOException {
 						return doc.getInputStream(sfn);
 					}
@@ -749,8 +777,17 @@ public class ImDocumentIO implements ImagingConstants {
 		public ImDocumentData getDocumentData() {
 			return this.docData;
 		}
-		void bindToData(ImDocumentData docData) {
+		ImDocumentData bindToData(ImDocumentData docData) {
+			ImDocumentData oldDocData = this.docData;
 			this.docData = docData;
+			return ((oldDocData == this.docData) ? null : oldDocData);
+		}
+		
+		public void dispose() {
+			super.dispose();
+			this.dirtySupplementNames.clear();
+			if (this.dbidPis != null)
+				this.dbidPis.dispose();
 		}
 		
 		public ImSupplement addSupplement(ImSupplement ims) {
@@ -758,8 +795,9 @@ public class ImDocumentIO implements ImagingConstants {
 		}
 		ImSupplement addSupplement(ImSupplement ims, boolean isExternal) {
 			if (isExternal) {
-				String smt = ims.getMimeType();
-				String sfn = (ims.getId() + "." + smt.substring(smt.lastIndexOf('/') + "/".length()));
+//				String smt = ims.getMimeType();
+//				String sfn = (ims.getId() + "." + smt.substring(smt.lastIndexOf('/') + "/".length()));
+				String sfn = ims.getFileName();
 				this.dirtySupplementNames.add(sfn); // mark supplement as dirty
 			}
 			return super.addSupplement(ims);
@@ -855,6 +893,9 @@ public class ImDocumentIO implements ImagingConstants {
 		}
 		PageImageAttributes getPageImageAttributes(Integer pageId) {
 			return ((PageImageAttributes) this.pageImageAttributesById.get(pageId));
+		}
+		void dispose() {
+			this.pageImageAttributesById.clear();
 		}
 	};
 	
@@ -1331,8 +1372,9 @@ public class ImDocumentIO implements ImagingConstants {
 		pm.setMaxProgress(100);
 		for (int s = 0; s < supplements.length; s++) {
 			pm.setProgress((s * 100) / supplements.length);
-			String smt = supplements[s].getMimeType();
-			String sfn = (supplements[s].getId() + "." + smt.substring(smt.lastIndexOf('/') + "/".length()));
+//			String smt = supplements[s].getMimeType();
+//			String sfn = (supplements[s].getId() + "." + smt.substring(smt.lastIndexOf('/') + "/".length()));
+			String sfn = supplements[s].getFileName();
 			pm.setInfo("Supplement " + sfn);
 			
 			/* we have to write the supplement proper if
@@ -1372,8 +1414,11 @@ public class ImDocumentIO implements ImagingConstants {
 		if (data instanceof FolderImDocumentData) {
 			
 			//	if the document was loaded here, update IMF entries (both ways), and switch document to folder mode
-			if (doc instanceof DataBoundImDocument)
-				((DataBoundImDocument) doc).bindToData(data);
+			if (doc instanceof DataBoundImDocument) {
+				ImDocumentData oldDocData = ((DataBoundImDocument) doc).bindToData(data);
+				if (oldDocData != null)
+					oldDocData.dispose(); // dispose any replaced document data
+			}
 			
 			//	write or overwrite 'enries.txt'
 			((FolderImDocumentData) data).storeEntryList();

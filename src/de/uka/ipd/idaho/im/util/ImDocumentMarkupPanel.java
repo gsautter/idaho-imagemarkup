@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -31,17 +31,18 @@ import java.awt.BasicStroke;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.Container;
 import java.awt.Cursor;
-import java.awt.Dialog;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
-import java.awt.Frame;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.GridLayout;
+import java.awt.Insets;
+import java.awt.LayoutManager;
 import java.awt.Point;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
@@ -92,12 +93,15 @@ import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
+import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSlider;
 import javax.swing.JTabbedPane;
 import javax.swing.JViewport;
 import javax.swing.SwingUtilities;
+import javax.swing.Timer;
 import javax.swing.UIManager;
+import javax.swing.border.Border;
 import javax.swing.event.ChangeEvent;
 import javax.swing.event.ChangeListener;
 import javax.swing.event.PopupMenuEvent;
@@ -105,9 +109,6 @@ import javax.swing.event.PopupMenuListener;
 
 import de.uka.ipd.idaho.gamta.AttributeUtils;
 import de.uka.ipd.idaho.gamta.Attributed;
-import de.uka.ipd.idaho.gamta.Gamta;
-import de.uka.ipd.idaho.gamta.TokenSequence;
-import de.uka.ipd.idaho.gamta.Tokenizer;
 import de.uka.ipd.idaho.gamta.util.CountingSet;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
@@ -225,14 +226,22 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	
 	private ImWord selectionStartWord = null;
 	private ImWord selectionEndWord = null;
-	private boolean selectionWordClicked = true;
 	
 	private Point selectionStartPoint = null;
 	private Point selectionEndPoint = null;
 	private ImPageMarkupPanel pointSelectionPage = null;
 	
-	private EditWordDialog editWordDialog = null;
-	private ImPageMarkupPanel editWordPage = null;
+	private boolean selectionClicked = true;
+//	
+//	/** TODOne get rid of old editing dialog
+//	 * @deprecated */
+//	private EditWordDialog editWordDialog = null;
+//	/** TODOne get rid of old editing dialog
+//	 * @deprecated */
+//	private ImPageMarkupPanel editWordPage = null;
+	
+	private DisplayOverlay displayOverlay = null;
+	private int displayOverlayPage = -1;
 	
 	private TwoClickSelectionAction pendingTwoClickAction = null;
 	private TwoClickActionMessenger twoClickActionMessenger = null;
@@ -291,25 +300,36 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		this.pageThumbnails = new PageThumbnail[this.pages.length];
 		Arrays.fill(this.pageThumbnails, null);
 		
-//		int minPageWidth = Integer.MAX_VALUE;
-		int minPageHeight = Integer.MAX_VALUE;
 		int wordCount = 0;
 		int fnWordCount = 0;
 		for (int p = 0; p < this.pages.length; p++) {
 			if (this.pages[p] == null)
 				continue;
-			System.out.println(" - page " + p + " with ID " + this.pages[p].pageId);
-//			minPageWidth = Math.min(minPageWidth, (pages[p].bounds.right - pages[p].bounds.left));
-			this.maxPageWidth = Math.max(this.maxPageWidth, (this.pages[p].bounds.right - this.pages[p].bounds.left));
-			minPageHeight = Math.min(minPageHeight, (this.pages[p].bounds.bottom - this.pages[p].bounds.top));
-			this.maxPageHeight = Math.max(this.maxPageHeight, (this.pages[p].bounds.bottom - this.pages[p].bounds.top));
+			System.out.println(" - page " + p + " with ID " + this.pages[p].pageId + " at " + this.pages[p].getImageDPI() + " DPI");
 			this.maxPageImageDpi = Math.max(this.maxPageImageDpi, this.pages[p].getImageDPI());
 			ImWord[] pageWords = this.pages[p].getWords();
+			int minWordLeft = this.pages[p].bounds.right;
+			int maxWordRight = this.pages[p].bounds.left;
+			int minWordTop = this.pages[p].bounds.bottom;
+			int maxWordBottom = this.pages[p].bounds.top;
 			for (int w = 0; w < pageWords.length; w++) {
 				wordCount++;
 				if (pageWords[w].hasAttribute(ImWord.FONT_NAME_ATTRIBUTE))
 					fnWordCount++;
+				minWordLeft = Math.min(minWordLeft, pageWords[w].bounds.left);
+				maxWordRight = Math.max(maxWordRight, pageWords[w].bounds.right);
+				minWordTop = Math.min(minWordTop, pageWords[w].bounds.top);
+				maxWordBottom = Math.max(maxWordBottom, pageWords[w].bounds.bottom);
 			}
+			System.out.println("   - bounds are " + this.pages[p].bounds + ", content in [" + minWordLeft + "," + maxWordRight + "," + minWordTop + "," + maxWordBottom + "]");
+			int addLeft = Math.max(0, ((this.pages[p].getImageDPI() / 2) - (minWordLeft - this.pages[p].bounds.left))); // ensure at least half an inch margin on left
+			int addRight = Math.max(0, ((this.pages[p].getImageDPI() / 2) - (this.pages[p].bounds.right - maxWordRight))); // ensure at least half an inch margin on right
+			System.out.println("   - adding " + addLeft + " to left page margin, " + addRight + " to right page margin");
+			this.maxPageWidth = Math.max(this.maxPageWidth, (addLeft + this.pages[p].bounds.getWidth() + addRight));
+			int addTop = Math.max(0, ((this.pages[p].getImageDPI() / 2) - (minWordTop - this.pages[p].bounds.top))); // ensure at least half an inch margin at top
+			int addBottom = Math.max(0, (((this.pages[p].getImageDPI() * 3) / 4) - (this.pages[p].bounds.bottom - maxWordBottom)));  // ensure at least three quarters of an inch margin at bottom
+			System.out.println("   - adding " + addTop + " to top page margin, " + addBottom + " to bottom page margin");
+			this.maxPageHeight = Math.max(this.maxPageHeight, (addTop + this.pages[p].bounds.getHeight() + addBottom));
 		}
 //		this.documentBornDigital = ((minPageWidth == this.maxPageWidth) && (minPageHeight == this.maxPageHeight));
 //		//	we cannot use page width, as latter may be distorted in born-digital PDFs due to vertical block flips
@@ -334,13 +354,16 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	
 	private class MouseTracker extends MouseAdapter {
 		public void mousePressed(MouseEvent me) {
+//			System.out.println("Mouse pressed");
 			ImPageMarkupPanel ipmp = this.getPageFor(me);
 			if (ipmp == null)
 				return;
 			if (ipmp.pageImageDpi == -1)
 				return;
-			if (editWordDialog != null)
-				editWordDialog.dispose();
+//			if (editWordDialog != null)
+//				editWordDialog.dispose();
+			if (displayOverlay != null)
+				displayOverlay.close(displayOverlay.cancelOnOutsideClick());
 			Point ipmpLocation = ipmp.getLocation();
 			float zoom = (((float) ipmp.pageImageDpi) / renderingDpi);
 			int x = (Math.round(zoom * (me.getX() - fixPageMargin - ipmpLocation.x)) - ipmp.pageMarginLeft);
@@ -353,78 +376,148 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				selectionEndWord = null; // clean any externally injected selection
 				selectionStartPoint = new Point(x, y);
 				pointSelectionPage = ipmp;
+				selectionClicked = true;
 			}
 			
 			//	click on word, and no externally injected selection ==> start word selection 
 			else if ((selectionStartWord == null) || (selectionEndWord == null)) {
 				selectionStartWord = imw;
 				selectionEndWord = imw;
-				selectionWordClicked = true;
+				selectionClicked = true;
 			}
 			
 			//	click on word in same logical text stream as externally injected selection
 			else if (selectionStartWord.getTextStreamId().equals(imw.getTextStreamId())) {
 				
 				//	click on word before externally injected selection ==> extend selection if shift pressed, start new one otherwise
-				if ((imw.pageId < selectionStartWord.pageId) || ((imw.pageId == selectionStartWord.pageId) && (imw.getTextStreamPos() < selectionStartWord.getTextStreamPos()))) {
+				if (imw.getTextStreamPos() < selectionStartWord.getTextStreamPos()) {
 					selectionStartWord = imw;
 					if (me.isShiftDown())
-						selectionWordClicked = false;
+						selectionClicked = false;
 					else {
 						selectionEndWord = imw;
-						selectionWordClicked = true;
+						selectionClicked = true;
 					}
 				}
 				
 				//	click on word after externally injected selection ==> extend selection if shift pressed, start new one otherwise
-				else if ((selectionEndWord.pageId < imw.pageId) || ((selectionEndWord.pageId == imw.pageId) && selectionEndWord.getTextStreamPos() < imw.getTextStreamPos())) {
+				else if (selectionEndWord.getTextStreamPos() < imw.getTextStreamPos()) {
 					selectionEndWord = imw;
 					if (me.isShiftDown())
-						selectionWordClicked = false;
+						selectionClicked = false;
 					else {
 						selectionStartWord = imw;
-						selectionWordClicked = true;
+						selectionClicked = true;
 					}
 				}
 				
 				//	click on word inside externally injected selection ==> retain selection, but accept click only if single word selected
 				else if (selectionStartWord != selectionEndWord)
-					selectionWordClicked = false;
+					selectionClicked = false;
 			}
 			repaint();
 		}
 		
 		public void mouseReleased(final MouseEvent me) {
+//			System.out.println("Mouse released");
+			if (selectionClicked)
+				return;
+			ImPageMarkupPanel ipmp = this.getPageFor(me);
+			if (ipmp == null) {
+				this.updateCursor(me, ipmp);
+				return;
+			}
+			this.showContextMenu(me, ipmp);
+		}
+		
+		public void mouseClicked(final MouseEvent me) {
+//			System.out.println("Mouse clicked " + me.getClickCount() + " times at " + me.getX() + "/" + me.getY());
+//			System.out.println("Multi-click interval is " + Toolkit.getDefaultToolkit().getDesktopProperty("awt.multiClickInterval"));
+//			System.out.println("Time since last click is " + (me.getWhen() - this.lastClickWhen));
+//			this.lastClickWhen = me.getWhen();
 			final ImPageMarkupPanel ipmp = this.getPageFor(me);
 			if (ipmp == null) {
 				this.updateCursor(me, ipmp);
 				return;
 			}
-			if (selectionEndWord == null)
-				selectionEndWord = selectionStartWord;
-			if (selectionEndPoint == null)
-				selectionEndPoint = selectionStartPoint;
-			SelectionAction[] actions;
-			if (selectionStartWord != null) {
-				if (selectionWordClicked) {
-					if (pendingTwoClickAction != null) {
-						if (!isAtomicActionRunning()) // might have been started from built-in click listener in selection action
-							beginAtomicAction(pendingTwoClickAction.label);
-						boolean changed = pendingTwoClickAction.performAction(selectionStartWord);
-						if (changed)
-							endAtomicAction();
+			
+			//	handle any pending two-click action first
+			if ((pendingTwoClickAction != null) && (selectionStartWord != null)) {
+				boolean handleAtomicAction = (pendingTwoClickAction.isAtomicAction() && !isAtomicActionRunning());
+				try {
+					if (handleAtomicAction) // might have been started from built-in click listener in selection action
+						beginAtomicAction(pendingTwoClickAction.label);
+					pendingTwoClickAction.performAction(selectionStartWord);
+				}
+				finally {
+					if (handleAtomicAction)
+						endAtomicAction();
+				}
+				cleanupSelection();
+				repaint();
+				this.updateCursor(me, ipmp);
+				return;
+			}
+			
+			//	cancel any context menu coming up for previous click (should be OK without synchronization lock because it all happens on EDT)
+			if (this.clickContextMenu != null)
+				this.clickContextMenu.cancel();
+			
+			//	observe click actions first (both for word and for point selections)
+			ClickSelectionAction[] clickActions;
+			if (selectionStartWord != null)
+				clickActions = getClickActions(selectionStartWord, me.getClickCount());
+			else if (selectionStartPoint != null)
+				clickActions = getClickActions(ipmp.page, selectionStartPoint, me.getClickCount());
+			else clickActions = null;
+			if ((clickActions != null) && (clickActions.length != 0)) {
+				Arrays.sort(clickActions);
+				for (int a = 0; a < clickActions.length; a++)
+					if (clickActions[a].handleClick(ImDocumentMarkupPanel.this)) {
 						cleanupSelection();
 						repaint();
 						this.updateCursor(me, ipmp);
 						return;
 					}
-					else if (areTextStringsPainted()) {
-						this.updateCursor(me, ipmp);
-						editWord(selectionStartWord, ipmp);
-						return;
-					}
-				}
-				if (selectionStartWord.getTextStreamId().equals(selectionEndWord.getTextStreamId()) && ((selectionEndWord.pageId < selectionStartWord.pageId) || ((selectionEndWord.pageId == selectionStartWord.pageId) && (selectionEndWord.getTextStreamPos() < selectionStartWord.getTextStreamPos())))) {
+			}
+			
+			//	normally show context menu as default action (wait for multi-click on very first click)
+			if (me.getClickCount() < 2) // TODO increase this threshold if we have triple-click actions at some point
+				this.clickContextMenu = new DelayedClickContextMenu(me, ipmp);
+			else this.showContextMenu(me, ipmp);
+		}
+		private DelayedClickContextMenu clickContextMenu = null;
+		private class DelayedClickContextMenu extends Timer implements ActionListener {
+			private MouseEvent me;
+			private ImPageMarkupPanel ipmp;
+			DelayedClickContextMenu(MouseEvent me, ImPageMarkupPanel ipmp) {
+				/* waiting 250ms is a good compromise between reliably catching
+				 * double clicks (usual gap is ~200ms) and having user wait
+				 * unnecessarily long on single click */
+				super(250, null);
+				this.me = me;
+				this.ipmp = ipmp;
+				this.setRepeats(false);
+				this.addActionListener(this);
+				this.start();
+			}
+			public void actionPerformed(ActionEvent ae) {
+				clickContextMenu = null;
+				showContextMenu(this.me, this.ipmp);
+			}
+			void cancel() {
+				this.stop();
+			}
+		}
+		
+		private void showContextMenu(final MouseEvent me, final ImPageMarkupPanel ipmp) {
+			if (selectionEndWord == null)
+				selectionEndWord = selectionStartWord;
+			if (selectionEndPoint == null)
+				selectionEndPoint = selectionStartPoint;
+			final SelectionAction[] actions;
+			if (selectionStartWord != null) {
+				if (selectionStartWord.getTextStreamId().equals(selectionEndWord.getTextStreamId()) && (selectionEndWord.getTextStreamPos() < selectionStartWord.getTextStreamPos())) {
 					ImWord imw = selectionStartWord;
 					selectionStartWord = selectionEndWord;
 					selectionEndWord = imw;
@@ -441,33 +534,25 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				return;
 			}
 			final JPopupMenu pm = new JPopupMenu();
-			boolean[] isAdvancedSelectionAction = markAdvancedSelectionActions(actions);
-			final LinkedList advancedMenuItems = new LinkedList();
+			final boolean[] isAdvancedSelectionAction = markAdvancedSelectionActions(actions);
+			final JMenuItem[] mis = new JMenuItem[actions.length];
+			int advancedSelectionActionCount = 0;
 			for (int a = 0; a < actions.length; a++) {
 				if (actions[a] == SelectionAction.SEPARATOR)
-					pm.addSeparator();
-				else {
-					JMenuItem mi = actions[a].getMenuItem(ImDocumentMarkupPanel.this);
-					this.addNotifier(mi, actions[a]);
-					if (isAdvancedSelectionAction[a]) {
-						advancedMenuItems.addLast(mi);
-						mi.setPreferredSize(new Dimension(mi.getPreferredSize().width, 0));
-					}
-					pm.add(mi);
-				}
+					continue;
+				mis[a] = actions[a].getMenuItem(ImDocumentMarkupPanel.this);
+				this.addNotifier(mis[a], actions[a]);
+				if (isAdvancedSelectionAction[a])
+					advancedSelectionActionCount++;
 			}
-			if (advancedMenuItems.size() != 0) {
+			this.fillContextMenu(pm, mis, isAdvancedSelectionAction);
+			if (advancedSelectionActionCount > 0) {
 				final JMenuItem mmi = new JMenuItem("More ...");
 				mmi.setBorder(BorderFactory.createLoweredBevelBorder());
 				mmi.setBackground(new Color(240, 240, 240));
 				mmi.addActionListener(new ActionListener() {
 					public void actionPerformed(ActionEvent ae) {
-						Dimension mmiPs = mmi.getPreferredSize();
-						for (Iterator amiit = advancedMenuItems.iterator(); amiit.hasNext();) {
-							JMenuItem ami = ((JMenuItem) amiit.next());
-							ami.setPreferredSize(new Dimension(ami.getPreferredSize().width, mmiPs.height));
-						}
-						mmi.setPreferredSize(new Dimension(mmiPs.width, 0));
+						fillContextMenu(pm, mis, null);
 						pm.show(ImDocumentMarkupPanel.this, me.getX(), me.getY());
 					}
 				});
@@ -482,6 +567,61 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				}
 			});
 			pm.show(ImDocumentMarkupPanel.this, me.getX(), me.getY());
+		}
+		
+		private void fillContextMenu(JPopupMenu pm, JMenuItem[] mis, boolean[] isAdvancedSelectionAction) {
+			int windowHeight = Integer.MAX_VALUE;
+			Window topWindow = DialogFactory.getTopWindow();
+			if ((topWindow != null) && (topWindow.isVisible()))
+				windowHeight = topWindow.getHeight();
+			pm.removeAll();
+			boolean lastWasSeparator = true;
+			int misHeight = 0;
+			JMenu subMenu = null;
+			for (int i = 0; i < mis.length; i++) {
+				
+				//	separator
+				if (mis[i] == null) {
+					if (!lastWasSeparator) {
+						if (subMenu == null)
+							pm.addSeparator();
+						else subMenu.addSeparator();
+					}
+					lastWasSeparator = true;
+					continue;
+				}
+				
+				//	hide advanced actions in basic mode
+				if ((isAdvancedSelectionAction != null) && isAdvancedSelectionAction[i])
+					continue;
+				
+				//	test if menu items up to next separator fit current menu, and wrap into (new) sub menu if not (unless current (sub) menu empty or only one menu item left to add)
+				if (lastWasSeparator && (isAdvancedSelectionAction == null) && (misHeight != 0) && ((i+1) < mis.length)) {
+					int lMisHeight = 0;
+					for (int li = i; li < mis.length; li++) {
+						if (mis[li] == null)
+							break; // got next separator, group ends
+						lMisHeight += mis[li].getPreferredSize().height;
+					}
+					if (windowHeight < (misHeight + lMisHeight)) {
+						JMenu mm = new JMenu("More ...");
+						mm.setBorder(BorderFactory.createLoweredBevelBorder());
+						mm.setBackground(new Color(240, 240, 240));
+						if (subMenu == null)
+							pm.add(mm);
+						else subMenu.add(mm);
+						subMenu = mm;
+						misHeight = 0;
+					}
+				}
+				
+				//	add menu item to current (sub) menu
+				lastWasSeparator = false;
+				if (subMenu == null)
+					pm.add(mis[i]);
+				else subMenu.add(mis[i]);
+				misHeight += mis[i].getPreferredSize().height;
+			}
 		}
 		
 		private void addNotifier(JMenuItem mi, final SelectionAction sa) {
@@ -553,9 +693,10 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				if (pointSelectionPage != null)
 					pointSelectionPage.repaint();
 				pointSelectionPage = null;
+				selectionClicked = false;
 				return;
 			}
-			selectionWordClicked = false;
+			selectionClicked = false;
 			pendingTwoClickAction = null;
 			if (twoClickActionMessenger != null)
 				twoClickActionMessenger.twoClickActionChanged(null);
@@ -577,6 +718,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				repaint();
 			}
 		}
+		
 		private ImPageMarkupPanel getPageFor(MouseEvent me) {
 			Component pvp = getComponentAt(me.getX(), me.getY());
 			return ((pvp instanceof ImPageMarkupPanel) ? ((ImPageMarkupPanel) pvp) : null);
@@ -586,13 +728,13 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	private void cleanupSelection() {
 		this.selectionStartWord = null;
 		this.selectionEndWord = null;
-		this.selectionWordClicked = false;
-		this.pendingTwoClickAction = null;
-		if (this.twoClickActionMessenger != null)
-			this.twoClickActionMessenger.twoClickActionChanged(null);
 		this.selectionStartPoint = null;
 		this.selectionEndPoint = null;
 		this.pointSelectionPage = null;
+		this.selectionClicked = false;
+		this.pendingTwoClickAction = null;
+		if (this.twoClickActionMessenger != null)
+			this.twoClickActionMessenger.twoClickActionChanged(null);
 	}
 	
 	private static TreeMap customCursorsByName = new TreeMap();
@@ -649,6 +791,12 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				else if (ImWord.PREVIOUS_WORD_ATTRIBUTE.equals(attributeName))
 					pagePanels[((ImWord) object).pageId].docModCount++;
 				else if (ImWord.TEXT_STREAM_TYPE_ATTRIBUTE.equals(attributeName))
+					pagePanels[((ImWord) object).pageId].docModCount++;
+				else if (ImWord.STRING_ATTRIBUTE.equals(attributeName))
+					pagePanels[((ImWord) object).pageId].docModCount++;
+				else if (ImWord.BOLD_ATTRIBUTE.equals(attributeName))
+					pagePanels[((ImWord) object).pageId].docModCount++;
+				else if (ImWord.ITALICS_ATTRIBUTE.equals(attributeName))
 					pagePanels[((ImWord) object).pageId].docModCount++;
 			}
 			else if ((object instanceof ImAnnotation) && ImAnnotation.FIRST_WORD_ATTRIBUTE.equals(attributeName)) {
@@ -780,6 +928,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		private int maxPageTileWidth;
 		private LinkedList pageTiles = new LinkedList();
 		private JPanel pageTilePanel = new JPanel(new GridBagLayout(), true);
+		private JScrollPane pageTilePanelBox;
 		private GridBagConstraints gbc = new GridBagConstraints();
 		private JPanel fillerPanel = new JPanel();
 		
@@ -800,28 +949,52 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			this.pageTilePanel.setBackground(Color.WHITE);
 			this.fillerPanel.setBackground(Color.WHITE);
 			
-			JScrollPane pageTilePanelBox = new JScrollPane(this.pageTilePanel);
-			pageTilePanelBox.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
-			pageTilePanelBox.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
-			this.add(pageTilePanelBox, BorderLayout.CENTER);
+			this.pageTilePanelBox = new JScrollPane(this.pageTilePanel);
+			this.pageTilePanelBox.setHorizontalScrollBarPolicy((sideBySidePages == 1) ? JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED : JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+			this.pageTilePanelBox.setVerticalScrollBarPolicy((sideBySidePages == 1) ? JScrollPane.VERTICAL_SCROLLBAR_NEVER : JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+			
+			//	set scroll distances
+			final JScrollBar vsb = this.pageTilePanelBox.getVerticalScrollBar();
+			vsb.setUnitIncrement(33);
+			vsb.setBlockIncrement(100);
+			final JScrollBar hsb = this.pageTilePanelBox.getHorizontalScrollBar();
+			hsb.setUnitIncrement(33);
+			hsb.setBlockIncrement(100);
+			this.addComponentListener(new ComponentAdapter() {
+				public void componentResized(ComponentEvent ce) {
+					Rectangle ptpvs = pageTilePanelBox.getViewport().getViewRect();
+					vsb.setUnitIncrement(ptpvs.height / 10);
+					vsb.setBlockIncrement(ptpvs.height / 3);
+					hsb.setUnitIncrement(ptpvs.width / 10);
+					hsb.setBlockIncrement(ptpvs.width / 3);
+				}
+			});
+			
+			this.add(this.pageTilePanelBox, BorderLayout.CENTER);
 		}
 		
 		public Dimension getPreferredSize() {
-			if ((this.preferredSize == null) || (this.preferredSizeDpi != renderingDpi)) {
+			if ((this.preferredSize == null) || (this.preferredSizeDpi != renderingDpi) || (this.preferredSizeSbsp != sideBySidePages)) {
 				this.maxPageTileWidth = 0;
 				this.maxPageTileHeight = 0;
 				for (Iterator hptit = this.pageTiles.iterator(); hptit.hasNext();)
 					((HiddenPageTile) hptit.next()).getPreferredSize();
 				if (sideBySidePages < 1)
-					this.preferredSize = new Dimension((this.maxPageTileWidth + 10), (Math.round(((float) (maxPageHeight * renderingDpi)) / maxPageImageDpi) + (fixPageMargin * 2))); // pages side-by-side, use vertical layout
-				else if (sideBySidePages == 1)
-					this.preferredSize = new Dimension((Math.round(((float) (maxPageWidth * renderingDpi)) / maxPageImageDpi) + (fixPageMargin * 2)), (this.maxPageTileHeight + 10)); // pages on top of one another, use horizontal layout
+					this.preferredSize = new Dimension((this.maxPageTileWidth + 10 + this.pageTilePanelBox.getVerticalScrollBar().getSize().width), (Math.round(((float) (maxPageHeight * renderingDpi)) / maxPageImageDpi) + (fixPageMargin * 2))); // pages side-by-side, use vertical layout
+				else this.preferredSize = new Dimension((Math.round(((float) (maxPageWidth * renderingDpi)) / maxPageImageDpi) + (fixPageMargin * 2)), (this.maxPageTileHeight + 10 + this.pageTilePanelBox.getHorizontalScrollBar().getSize().height)); // pages on top of one another, use horizontal layout
 				this.preferredSizeDpi = renderingDpi;
+				this.preferredSizeSbsp = sideBySidePages;
 			}
 			return this.preferredSize;
 		}
 		private Dimension preferredSize = null;
 		private int preferredSizeDpi = 0;
+		private int preferredSizeSbsp = 0;
+		
+		public void invalidate() {
+			this.preferredSize = null;
+			super.invalidate();
+		}
 		
 		void addPage(ImPage page) {
 			this.minPageId = Math.min(this.minPageId, page.pageId);
@@ -887,6 +1060,11 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				this.getPreferredSize();
 			}
 			
+			public void invalidate() {
+				this.preferredSize = null;
+				super.invalidate();
+			}
+			
 			public void paint(Graphics g) {
 				super.paint(g);
 				this.pageThumbnail.paint(g, 1, 1, this);
@@ -908,12 +1086,69 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	}
 	
 	/**
+	 * Set the display overlay to use and the page to display it on (or remove
+	 * the current overlay by setting it to null). If the page with the
+	 * argument ID is out of range or not visible, this method still sets the
+	 * overlay, but does not add it to any page and returns false.
+	 * Sub classes overwriting this implementation, e.g. to move the overlay
+	 * into the visible part of a scroll pane, should first check the result of
+	 * the super call to check if selection was successful.
+	 * @param overlay the overlay to 
+	 * @param pageId
+	 * @return true if the argument overlay is displaying
+	 */
+	public boolean setDisplayOverlay(DisplayOverlay overlay, int pageId) {
+		
+		//	remove any existing overlay (unless current one is re-added, e.g. to move to another page)
+		if ((this.displayOverlay != null) && (this.displayOverlay != overlay)) {
+			this.displayOverlay.setParentPage(null);
+			this.displayOverlay = null;
+			this.displayOverlayPage = -1;
+		}
+		
+		//	remember new overlay
+		this.displayOverlay = overlay;
+		
+		//	anything to show?
+		if (this.displayOverlay == null)
+			return false;
+		
+		//	we can only add the overlay to an existing page
+		else if ((pageId < 0) || (pageId >= this.pageVisible.length)) {
+			this.displayOverlayPage = -1;
+			this.displayOverlay.setParentPage(null);
+			return false;
+		}
+		
+		//	we can only show the overlay in a visible page
+		else if ((pageId < 0) || (pageId >= this.pageVisible.length) || !this.isPageVisible(pageId)) {
+			this.displayOverlayPage = pageId;
+			this.displayOverlay.setParentPage(null);
+			return false;
+		}
+		
+		//	attach overlay to new page
+		else {
+			this.displayOverlayPage = pageId;
+			this.displayOverlay.setParentPage(this.pagePanels[pageId]);
+			return true;
+		}
+	}
+	
+	/**
 	 * Externally set the word selected in the document markup panel. If the
 	 * argument words is null, this method simply returns false without doing
 	 * anything. If the page the word lies upon is not visible, this method 
 	 * also returns false and has no effect. Sub classes overwriting the
 	 * two-argument version of this method need not overwrite this method
 	 * separately, as it loops through to the latter.
+	 * Sub classes overwriting this implementation, e.g. to move the selection
+	 * into the visible part of a scroll pane, should first check the result of
+	 * the super call to check if selection was successful. If this method is
+	 * to be called from a selection action returned from
+	 * <code>getActions()</code>, the call is best made via
+	 * <code>SwingUtilities.invokeLater()</code> to make sure it behaves as
+	 * planned and does not interfere with an existing word selection.
 	 * @param word the word to select
 	 */
 	public boolean setWordSelection(ImWord word) {
@@ -962,7 +1197,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		//	make selection
 		this.selectionStartWord = startWord;
 		this.selectionEndWord = endWord;
-		this.selectionWordClicked = (startWord == endWord);
+		this.selectionClicked = (startWord == endWord);
 		
 		//	make selection visible
 		this.repaint();
@@ -1085,10 +1320,19 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			pageVisibilityChanged = true;
 //			System.out.println(" - setting page " + p + " " + (pv ? "visible" : "hidden"));
 			this.pageVisible[p] = pv;
-			if (this.pageVisible[p] && (this.pagePanels[p] == null)) {
-				this.pagePanels[p] = new ImPageMarkupPanel(this.pages[p], this.maxPageWidth, this.maxPageHeight);
+//			if (this.pageVisible[p] && (this.pagePanels[p] == null)) {
+//				this.pagePanels[p] = new ImPageMarkupPanel(this.pages[p], this.maxPageWidth, this.maxPageHeight);
+////				System.out.println(" --> page panel created");
+//			}
+			if (this.pageVisible[p]) {
+				if (this.pagePanels[p] == null)
+					this.pagePanels[p] = new ImPageMarkupPanel(this.pages[p], this.maxPageWidth, this.maxPageHeight);
+				if ((this.displayOverlay != null) && (this.displayOverlayPage == p))
+					this.displayOverlay.setParentPage(this.pagePanels[p]);
 //				System.out.println(" --> page panel created");
 			}
+			else if ((this.displayOverlay != null) && (this.displayOverlayPage == p))
+				this.displayOverlay.setParentPage(null);
 		}
 		if (pageVisibilityChanged) {
 //			System.out.println(" ==> laying out pages");
@@ -1119,10 +1363,18 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			pageVisibilityChanged = true;
 //			System.out.println(" - setting page " + p + " " + (pv ? "visible" : "hidden"));
 			this.pageVisible[p] = pv;
-			if (this.pageVisible[p] && (this.pagePanels[p] == null)) {
-				this.pagePanels[p] = new ImPageMarkupPanel(this.pages[p], this.maxPageWidth, this.maxPageHeight);
-//				System.out.println(" --> page panel created");
+//			if (this.pageVisible[p] && (this.pagePanels[p] == null)) {
+//				this.pagePanels[p] = new ImPageMarkupPanel(this.pages[p], this.maxPageWidth, this.maxPageHeight);
+////				System.out.println(" --> page panel created");
+//			}
+			if (this.pageVisible[p]) {
+				if (this.pagePanels[p] == null)
+					this.pagePanels[p] = new ImPageMarkupPanel(this.pages[p], this.maxPageWidth, this.maxPageHeight);
+				if ((this.displayOverlay != null) && (this.displayOverlayPage == p))
+					this.displayOverlay.setParentPage(this.pagePanels[p]);
 			}
+			else if ((this.displayOverlay != null) && (this.displayOverlayPage == p))
+				this.displayOverlay.setParentPage(null);
 		}
 		if (pageVisibilityChanged) {
 //			System.out.println(" ==> laying out pages");
@@ -1446,8 +1698,9 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		if (this.renderingDpi == renderingDpi)
 			return;
 		this.renderingDpi = renderingDpi;
+		this.renderingDpiModCount++;
 		if (this.isVisible()) {
-			this.renderingDpiModCount++;
+			this.invalidate();
 			this.getLayout().layoutContainer(this);
 			this.validate();
 			this.repaint();
@@ -1511,11 +1764,15 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			this.validate();
 			this.repaint();
 		}
-		if (this.idvc != null) {
-			RegionControl rc = ((RegionControl) this.idvc.regionControls.get(type));
-			if (rc != null)
-				rc.color = color;
+		if (this.idvc == null)
+			return;
+		if (WORD_ANNOTATION_TYPE.equals(type)) {
+			this.idvc.wordControl.setColor(color);
+			return;
 		}
+		RegionControl rc = ((RegionControl) this.idvc.regionControls.get(type));
+		if (rc != null)
+			rc.setColor(color);
 	}
 	
 	/**
@@ -1599,11 +1856,11 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			this.validate();
 			this.repaint();
 		}
-		if (this.idvc != null) {
-			AnnotControl ac = ((AnnotControl) this.idvc.annotControls.get(type));
-			if (ac != null)
-				ac.color = color;
-		}
+		if (this.idvc == null)
+			return;
+		AnnotControl ac = ((AnnotControl) this.idvc.annotControls.get(type));
+		if (ac != null)
+			ac.setColor(color);
 	}
 	
 	/**
@@ -1827,7 +2084,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	}
 	
 	private static Map fontCache = Collections.synchronizedMap(new HashMap(5));
-	private static Font getTextStringFont(String name, int style, boolean serif, int size) {
+	private static Font getTextStringFont(int style, boolean serif, int size) {
 		String fontKey = (style + " " + (serif ? "serif" : "sans") + " " + size);
 		Font font = ((Font) fontCache.get(fontKey));
 		if (font != null)
@@ -1845,23 +2102,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 * @return an array holding the display extension graphics
 	 */
 	protected DisplayExtensionGraphics[] getDisplayExtensionGraphics(ImPage page) {
-		return new DisplayExtensionGraphics[0]; // TODO reactivate this after tests
-//		
-//		//	TODO return some colorful corner dots for testing
-//		Shape[] testDegAreaShapes = {new Rectangle2D.Float(30, 30, (page.bounds.getWidth() - 60), (page.bounds.getHeight() - 60))};
-//		DisplayExtensionGraphics testDegArea = new DisplayExtensionGraphics(null, this, page, testDegAreaShapes, (((page.pageId % 2) == 0) ? Color.CYAN : Color.MAGENTA)) {
-//			public boolean isActive() {
-//				return true;
-//			}
-//		};
-//		Shape[] testDegLineShapes = {new Rectangle2D.Float(20, 20, (page.bounds.getWidth() - 40), (page.bounds.getHeight() - 40))};
-//		DisplayExtensionGraphics testDegLine = new DisplayExtensionGraphics(null, this, page, testDegLineShapes, (((page.pageId % 2) == 0) ? Color.MAGENTA : Color.CYAN), new BasicStroke(5)) {
-//			public boolean isActive() {
-//				return true;
-//			}
-//		};
-//		DisplayExtensionGraphics[] testDegs = {testDegArea, testDegLine};
-//		return testDegs;
+		return new DisplayExtensionGraphics[0];
 	}
 	
 	/**
@@ -1882,27 +2123,39 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 * Retrieve the available actions for a word selection. This implementation
 	 * returns an empty array. Sub classes thus have to overwrite it to provide
 	 * actual functionality.
-	 * @param start the word where the selection started, one corner of the box
-	 * @param end the point word the selection ended, the opposite corner of
-	 *            the box
-	 * @return true if the document was changed by the method, false otherwise
+	 * @param start the word where the selection started
+	 * @param end the word the selection ended
+	 * @return an array holding the actions
 	 */
-	protected SelectionAction[] getActions(final ImWord start, final ImWord end) {
+	protected SelectionAction[] getActions(ImWord start, ImWord end) {
 		return new SelectionAction[0];
 	}
 	
 	/**
-	 * Retrieve the available actions for a box selection. This implementation
-	 * provides the action for hiding the page the selection lies on if the
-	 * selection does not intersect with any words or regions. Sub classes
-	 * overwriting this method thus have to include the actions returned by
-	 * this implementation.
+	 * Retrieve the available actions for a given number of clicks on a word.
+	 * This implementation returns an empty array. Sub classes thus have to
+	 * overwrite it to provide actual functionality.
+	 * @param word the word that was clicked
+	 * @param clickCount the number of clicks
+	 * @return an array holding the actions
+	 */
+	protected ClickSelectionAction[] getClickActions(final ImWord word, int clickCount) {
+		return new ClickSelectionAction[0];
+	}
+	
+	/**
+	 * Retrieve the available actions for a box selection. The argument points
+	 * are relative to the argument page, and in its original resolution. This
+	 * implementation provides the action for hiding the page the selection
+	 * lies on if the selection does not intersect with any words or regions.
+	 * Sub classes overwriting this method thus have to include the actions
+	 * returned by this implementation.
+	 * @param page the document page the selection lies in
 	 * @param start the point where the selection started, one corner of the
 	 *            box
 	 * @param end the point where the selection ended, the opposite corner of
 	 *            the box
-	 * @param page the document page the selection lies in
-	 * @return true if the document was changed by the method, false otherwise
+	 * @return an array holding the actions
 	 */
 	protected SelectionAction[] getActions(final ImPage page, Point start, Point end) {
 		BoundingBox selectedBox = new BoundingBox(Math.min(start.x, end.x), Math.max(start.x, end.x), Math.min(start.y, end.y), Math.max(start.y, end.y));
@@ -1934,6 +2187,21 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		}
 		
 		return ((SelectionAction[]) actions.toArray(new SelectionAction[actions.size()]));
+	}
+	
+	/**
+	 * Retrieve the available actions for a given number of clicks on a point
+	 * in a given page. The argument point is relative to the argument page,
+	 * and in its original resolution. This implementation returns an empty
+	 * array. Sub classes thus have to overwrite it to provide actual
+	 * functionality.
+	 * @param page the document page the point lies in
+	 * @param point the point that was clicked
+	 * @param clickCount the number of clicks
+	 * @return an array holding the actions
+	 */
+	protected ClickSelectionAction[] getClickActions(ImPage page, Point point, int clickCount) {
+		return new ClickSelectionAction[0];
 	}
 	
 	/**
@@ -2293,7 +2561,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			Color preTpwcColor = graphics.getColor();
 			for (Iterator wcit = this.transPageWordConnections.iterator(); wcit.hasNext();) {
 				TransPageWordConnection tpwc = ((TransPageWordConnection) wcit.next());
-				 
+				
 				//	get connector line sequence (zoomed)
 				Point[] cls = tpwc.getConnectorLineSequence();
 				
@@ -2377,13 +2645,24 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				//	add starting point
 				cls.add(new Point(from.right, ((from.top + from.bottom) / 2)));
 				
-				//	successor to lower left of predecessor (next page below)
-				if ((from.right > to.left) && (from.bottom <= to.top)) {
-					int outswing = Math.min(((to.top - from.bottom) / 2), (renderingDpi / 6));
-					cls.add(new Point((from.right + outswing), ((from.top + from.bottom) / 2)));
-					cls.add(new Point((from.right + outswing), ((from.bottom + to.top) / 2)));
-					cls.add(new Point((to.left - outswing), ((from.bottom + to.top) / 2)));
-					cls.add(new Point((to.left - outswing), ((to.top + to.bottom) / 2)));
+				//	successor below predecessor (next page below)
+				if (from.bottom <= to.top) {
+					
+					//	successor to lower left of predecessor (next page below)
+					if (from.right > to.left) {
+						int outswing = Math.min(((to.top - from.bottom) / 2), (renderingDpi / 6));
+						cls.add(new Point((from.right + outswing), ((from.top + from.bottom) / 2)));
+						cls.add(new Point((from.right + outswing), ((from.bottom + to.top) / 2)));
+						cls.add(new Point((to.left - outswing), ((from.bottom + to.top) / 2)));
+						cls.add(new Point((to.left - outswing), ((to.top + to.bottom) / 2)));
+					}
+					
+					//	successor to lower right of predecessor (next page below)
+					else {
+						int middle = ((from.right + to.left) / 2);
+						cls.add(new Point(middle, ((from.top + from.bottom) / 2)));
+						cls.add(new Point(middle, ((to.top + to.bottom) / 2)));
+					}
 				}
 				
 				//	successor to right of predecessor, but at different height (next page to the right)
@@ -2409,7 +2688,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 * @see java.awt.Container#validate()
 	 */
 	public void validate() {
-		if (this.transPageWordConnections != null)
+		if (this.transPageWordConnections != null) // need to catch this during construction
 			this.transPageWordConnections.clear();
 		if (this.pagePanels != null)
 			for (int p = 0; p < this.pagePanels.length; p++) {
@@ -2445,154 +2724,13 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		public abstract void twoClickActionChanged(TwoClickSelectionAction tcsa);
 	}
 	
-	/**
-	 * Open a properties editor for a given word, to modify its string and font
-	 * properties.
-	 * @param word the word to edit
-	 */
-	public void editWord(ImWord word) {
-		this.editWord(word, false);
-	}
-	
-	/**
-	 * Open a properties editor for a given word, to modify its string and font
-	 * properties. If the <code>waitForResult</code> argument is false, this
-	 * method returns false immediately after opening the word editor. Client
-	 * code that calls this method as part of a larger action whose outcome
-	 * depends upon the result of calling this method thus has to set it to
-	 * true to work properly.
-	 * @param word the word to edit
-	 * @param waitForResult wait for the word editor to be closed, or return
-	 *            false right away?
-	 * @return true if awaitResult is true and the word editor was closed with
-	 *            its OK button
-	 */
-	public boolean editWord(ImWord word, boolean waitForResult) {
-		return this.editWord(word, this.pagePanels[word.pageId], waitForResult);
-	}
-	
-	private void editWord(ImWord word, ImPageMarkupPanel ipmp) {
-		this.editWord(word, ipmp, false);
-	}
-	private boolean editWord(ImWord word, ImPageMarkupPanel ipmp, boolean awaitResult) {
-		this.editWordPage = ipmp;
-		
-		Component comp = ipmp;
-		Window w = DialogFactory.getTopWindow();
-		if (w == null)
-			return false;
-		int xOff = 0;
-		int yOff = 0;
-		while (comp != null) {
-			if (comp == w)
-				break;
-			Point loc = comp.getLocation();
-			xOff += loc.x;
-			yOff += loc.y;
-			comp = comp.getParent();
-			if (comp instanceof Window)
-				break;
-		}
-		
-		float zoom = (((float) renderingDpi) / editWordPage.pageImageDpi);
-		int x = (Math.round(zoom * word.bounds.left) + this.editWordPage.getLeftOffset());
-		int y = (Math.round(zoom * word.bounds.top) + this.editWordPage.getTopOffset());
-		IdmpEditWordDialog ewd;
-		if (w instanceof Frame)
-			ewd = new IdmpEditWordDialog(((Frame) w), word, awaitResult);
-		else if (w instanceof Dialog)
-			ewd = new IdmpEditWordDialog(((Dialog) w), word, awaitResult);
-		else return false;
-		this.editWordDialog = ewd;
-		if (!awaitResult && (word.getPage() != null))
-			this.beginAtomicAction("Edit Word '" + word.getString() + "'");
-		ewd.setLocation((x + xOff + w.getLocation().x), (y + yOff + w.getLocation().y));
-		ewd.setVisible(true);
-		return ewd.isCommitted();
-	}
-	
-	/* TODO
-ImDocumentMarkupPanel:
+	/* TODO ImDocumentMarkupPanel:
 - enable selection action providers to specify likelihood of action to be used:
   - add isLikely() method to selection actions ...
   - ... and show ones that return false from that method only on "More"
   ==> facilitates providing more actions ...
   ==> ... without cluttering context menu
-
-WordEditDialog: make it volatile dialog (just like word occurrence list), saves tons of effort in ImDocumentMarkupPanel
-==> DOES NOT WORK due to symbol table (opening latter also incurs window focus loss)
 	 */
-	
-	private class IdmpEditWordDialog extends EditWordDialog {
-		private ImWord word;
-		IdmpEditWordDialog(Dialog owner, ImWord word, boolean modal) {
-			super(owner, word, getLayoutObjectColor(WORD_ANNOTATION_TYPE, true), modal);
-			this.word = word;
-		}
-		IdmpEditWordDialog(Frame owner, ImWord word, boolean modal) {
-			super(owner, word, getLayoutObjectColor(WORD_ANNOTATION_TYPE, true), modal);
-			this.word = word;
-		}
-		public void dispose() {
-			cleanupSelection();
-			super.dispose();
-			
-			//	clean up internal shortcuts (only if word is attached, though)
-			editWordDialog = null;
-			if ((editWordPage != null) && (this.word.getPage() != null)) {
-				editWordPage.textStringImages = null;
-				ImDocumentMarkupPanel.this.repaint();
-			}
-			editWordPage = null;
-			
-			//	handle commits
-			if (this.isCommitted()) {
-				String str = this.getString();
-				
-				//	handle deletion
-				if (str.length() == 0) {
-					ImWord[] words = {this.word};
-					ImUtils.makeStream(words, ImWord.TEXT_STREAM_TYPE_DELETED, null);
-					if (!this.isModal() && (this.word.getPage() != null))
-						endAtomicAction();
-					return;
-				}
-				
-				//	test tokenization consistency if in main panel
-				if (this.word.getPage() != null) {
-					Tokenizer tokenizer = ((Tokenizer) document.getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER));
-					TokenSequence wordTokens = tokenizer.tokenize(str);
-					if (wordTokens.size() > 1) {
-						StringBuffer msg = new StringBuffer("'" + str + "' is not a valid word string because it tokenizes to more than one part, namely");
-						for (int t = 0; t < wordTokens.size(); t++)
-							msg.append("\r\n- '" + wordTokens.valueAt(t) + "'");
-						msg.append("\r\nUse 'Edit Page Image & Words' to individually mark words OCR has conflated into one.");
-						DialogFactory.alert(msg.toString(), "Invalid Word String", JOptionPane.ERROR_MESSAGE, null);
-						return;
-					}
-				}
-				
-				//	write edits through
-				boolean updated = false;
-				if (!str.equals(this.word.getString())) {
-					this.word.setString(str);
-					updated = true;
-				}
-				if (this.isBold() != this.word.hasAttribute(BOLD_ATTRIBUTE)) {
-					this.word.setAttribute(BOLD_ATTRIBUTE, (this.isBold() ? "true" : null));
-					updated = true;
-				}
-				if (this.isItalics() != this.word.hasAttribute(ITALICS_ATTRIBUTE)) {
-					this.word.setAttribute(ITALICS_ATTRIBUTE, (this.isItalics() ? "true" : null));
-					updated = true;
-				}
-				
-				//	indicate change only if one actually happened (might just have been visual verification)
-				if (updated && !this.isModal() && (this.word.getPage() != null))
-					endAtomicAction();
-			}
-		}
-	}
 	
 	/**
 	 * A tool to apply to an Image Markup document displayed in an instance of
@@ -2681,7 +2819,7 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 		ImWord[] pageWords = ipmp.page.getWords();
 		
 		//	create editor panel
-		ImImageEditorPanel iiep = new ImImageEditorPanel(ipmp.page.getPageImage(), this.getImageEditTools(), ipmp.page, this.getAnnotationColor(WORD_ANNOTATION_TYPE, true));
+		ImImageEditorPanel iiep = new ImImageEditorPanel(ipmp.page.getPageImage(), this.getImageEditTools(), ipmp.page, this.getLayoutObjectColor(WORD_ANNOTATION_TYPE, true));
 		
 		//	create editor dialog
 		final JDialog ped = DialogFactory.produceDialog("Edit Page Image & Words", true);
@@ -2716,12 +2854,17 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 		ped.setLocationRelativeTo(ped.getOwner());
 		ped.setVisible(true);
 		
+		//	cancelled or not, let's preserve that word color
+		this.setLayoutObjectColor(WORD_ANNOTATION_TYPE, iiep.getWordBoxColor());
+		
 		//	cancelled
 		if (cancelled[0])
 			return false;
 		
-		//	start atomic action
-		this.beginAtomicAction("Edit Page Image & Words");
+		//	start atomic action (unless done in calling code)
+		boolean handleAtomicAction = !this.isAtomicActionRunning();
+		if (handleAtomicAction)
+			this.beginAtomicAction("Edit Image & Words in Page " + (ipmp.page.getAttribute(PAGE_NUMBER_ATTRIBUTE, ("" + (ipmp.page.pageId + 1)))));
 		
 		//	write through word edits
 		HashMap pageWordsByID = new HashMap();
@@ -2812,8 +2955,9 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 		if (iiep.isPageImageDirty())
 			ipmp.page.setImage(iiep.getPageImage());
 		
-		//	finish atomic action
-		this.endAtomicAction();
+		//	finish atomic action (if we started it here)
+		if (handleAtomicAction)
+			this.endAtomicAction();
 		
 		//	finally ...
 		return true;
@@ -2829,7 +2973,9 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 	 */
 	public void editAttributes(Attributed attributed, String type, String value) {
 		Attributed[] context;
-		if (attributed instanceof ImWord)
+		if (this.isAtomicActionRunning())
+			context = null; // no lateral navigation if part of some larger atomic action started outside
+		else if (attributed instanceof ImWord)
 			context = this.document.getPage(((ImWord) attributed).pageId).getWords();
 		else if (attributed instanceof ImAnnotation)
 			context = this.document.getAnnotations(((ImAnnotation) attributed).getType());
@@ -2901,22 +3047,24 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 	}
 	
 	private Attributed editAttributes(Attributed attributed, Attributed[] context, final String type, String value) {
-		
 		final AttributeEditor aePanel = new AttributeEditor(attributed, type, value, context);
 		final JDialog aeDialog = DialogFactory.produceDialog("Edit Attributes", true);
 		final Attributed[] nextToOpen = {null};
+		final boolean handleAtomicAction = !this.isAtomicActionRunning();
 		
 		JButton commit = new JButton("OK");
 		commit.setBorder(BorderFactory.createRaisedBevelBorder());
 		commit.setPreferredSize(new Dimension(80, 21));
 		commit.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent ae) {
-				beginAtomicAction("Edit " + type + " Attributes");
+				if (handleAtomicAction)
+					beginAtomicAction("Edit " + type + " Attributes");
 				aePanel.writeChanges();
 				attributeEditorDialogSize = aeDialog.getSize();
 				attributeEditorDialogLocation = aeDialog.getLocation(attributeEditorDialogLocation);
 				aeDialog.dispose();
-				endAtomicAction();
+				if (handleAtomicAction)
+					endAtomicAction();
 			}
 		});
 		JButton cancel = new JButton("Cancel");
@@ -3111,14 +3259,138 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 		}
 	}
 	
+	private class ImPageMarkupPanelLayout implements LayoutManager {
+		private ImPageMarkupPanel parent;
+		ImPageMarkupPanelLayout(ImPageMarkupPanel parent) {
+			this.parent = parent;
+		}
+		public void addLayoutComponent(String name, Component comp) {}
+		public void removeLayoutComponent(Component comp) {}
+		public Dimension preferredLayoutSize(Container parent) {
+			return this.parent.getPreferredSize();
+//			Dimension pSize = this.parent.getPreferredSize();
+//			Rectangle oBounds = this.computeRawOverlayBounds();
+//			if (oBounds == null)
+//				return pSize;
+//			if (oBounds.x < 0)
+//				pSize.width -= oBounds.x;
+//			if (pSize.width < (oBounds.x + oBounds.width))
+//				pSize.width = (oBounds.x + oBounds.width);
+//			if (oBounds.y < 0)
+//				pSize.height -= oBounds.y;
+//			if (pSize.height < (oBounds.y + oBounds.height))
+//				pSize.height = (oBounds.y + oBounds.height);
+//			return pSize;
+		}
+		public Dimension minimumLayoutSize(Container parent) {
+			return this.parent.getPreferredSize();
+//			return this.preferredLayoutSize(parent);
+		}
+		public void layoutContainer(Container target) {
+			if (this.parent.overlay == null)
+				return;
+			synchronized (target.getTreeLock()) {
+				Insets oi = this.parent.overlay.getInsets();
+				System.out.println("Overlay insets are " + oi.toString());
+				int iLeft = oi.left;
+				int iRight = oi.right;
+				int iTop = oi.top;
+				int iBottom = oi.bottom;
+				float ha = this.parent.overlay.getHorizontalAnchor();
+				if ((ha != 0.5f) && ((iLeft + iRight) != 0)) {
+					ha = Math.max(0, Math.min(ha, 1.0f));
+					int lt = Math.round((1 - ha) * iLeft);
+					int rt = Math.round(ha * iRight);
+					iLeft -= lt;
+					iRight -= rt;
+					iLeft += rt;
+					iRight += lt;
+				}
+				float va = this.parent.overlay.getVerticalAnchor();
+				if ((va != 0.5f) && ((iTop + iBottom) != 0)) {
+					va = Math.max(0, Math.min(va, 1.0f));
+					int tt = Math.round((1 - va) * iTop);
+					int bt = Math.round(va * iBottom);
+					iTop -= tt;
+					iBottom -= bt;
+					iTop += bt;
+					iBottom += tt;
+				}
+//				this.parent.overlay.setBounds(
+//						(this.parent.getLeftOffset() - iLeft + ((this.parent.overlay.onPageLocation.x * renderingDpi) / this.parent.page.getImageDPI())),
+//						(this.parent.getTopOffset() - iTop + ((this.parent.overlay.onPageLocation.y * renderingDpi) / this.parent.page.getImageDPI())),
+//						(iLeft + ((this.parent.overlay.onPageSize.width * renderingDpi) / this.parent.page.getImageDPI()) + iRight),
+//						(iTop + ((this.parent.overlay.onPageSize.height * renderingDpi) / this.parent.page.getImageDPI()) + iBottom)
+//					);
+				int oLeft = (this.parent.getLeftOffset() - iLeft + ((this.parent.overlay.onPageLocation.x * renderingDpi) / this.parent.page.getImageDPI()));
+				int oTop = (this.parent.getTopOffset() - iTop + ((this.parent.overlay.onPageLocation.y * renderingDpi) / this.parent.page.getImageDPI()));
+				int oWidth = (iLeft + ((this.parent.overlay.onPageSize.width * renderingDpi) / this.parent.page.getImageDPI()) + iRight);
+				int oHeight = (iTop + ((this.parent.overlay.onPageSize.height * renderingDpi) / this.parent.page.getImageDPI()) + iBottom);
+				Dimension pSize = this.parent.getPreferredSize();
+				if (pSize.width < oWidth)
+					oWidth = pSize.width;
+				if (oLeft < 0)
+					oLeft = 0;
+				if (pSize.width < (oLeft + oWidth))
+					oLeft = (pSize.width - oWidth);
+				if (pSize.height < oHeight)
+					oHeight = pSize.height;
+				if (oTop < 0)
+					oTop = 0;
+				if (pSize.height < (oTop + oHeight))
+					oTop = (pSize.height - oHeight);
+				this.parent.overlay.setBounds(oLeft, oTop, oWidth, oHeight);
+//				Rectangle oBounds = this.computeRawOverlayBounds();
+//				if (oBounds.x < 0)
+//					oBounds.x = 0;
+//				if (oBounds.y < 0)
+//					oBounds.y = 0;
+//				this.parent.overlay.setBounds(oBounds);
+			}
+		}
+//		private Rectangle computeRawOverlayBounds() {
+//			if (this.parent.overlay == null)
+//				return null;
+//			Insets oi = this.parent.overlay.getInsets();
+//			System.out.println("Overlay insets are " + oi.toString());
+//			int iLeft = oi.left;
+//			int iRight = oi.right;
+//			int iTop = oi.top;
+//			int iBottom = oi.bottom;
+//			float ha = this.parent.overlay.getHorizontalAnchor();
+//			if ((ha != 0.5f) && ((iLeft + iRight) != 0)) {
+//				ha = Math.max(0, Math.min(ha, 1.0f));
+//				int lt = Math.round((1 - ha) * iLeft);
+//				int rt = Math.round(ha * iRight);
+//				iLeft -= lt;
+//				iRight -= rt;
+//				iLeft += rt;
+//				iRight += lt;
+//			}
+//			float va = this.parent.overlay.getVerticalAnchor();
+//			if ((va != 0.5f) && ((iTop + iBottom) != 0)) {
+//				va = Math.max(0, Math.min(va, 1.0f));
+//				int tt = Math.round((1 - va) * iTop);
+//				int bt = Math.round(va * iBottom);
+//				iTop -= tt;
+//				iBottom -= bt;
+//				iTop += bt;
+//				iBottom += tt;
+//			}
+//			return new Rectangle(
+//					(this.parent.getLeftOffset() - iLeft + ((this.parent.overlay.onPageLocation.x * renderingDpi) / this.parent.page.getImageDPI())),
+//					(this.parent.getTopOffset() - iTop + ((this.parent.overlay.onPageLocation.y * renderingDpi) / this.parent.page.getImageDPI())),
+//					(iLeft + ((this.parent.overlay.onPageSize.width * renderingDpi) / this.parent.page.getImageDPI()) + iRight),
+//					(iTop + ((this.parent.overlay.onPageSize.height * renderingDpi) / this.parent.page.getImageDPI()) + iBottom)
+//				);
+//		}
+	}
+	
 	private class ImPageMarkupPanel extends JPanel {
 		
 		/** the page displayed in this panel */
 		final ImPage page;
 		
-		long docModCount = 0; // changes to the document proper (all we need is the listener)
-		
-//		private PageImage pageImage;
 		private int pageImageDpi = -1;
 		
 		private int pageWidth;
@@ -3126,25 +3398,30 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 		private int pageMarginLeft;
 		private int pageMarginTop;
 		
+		long docModCount = 0; // changes to the document proper (all we need is the listener)
+		
+		DisplayOverlay overlay = null;
+		
 		ImPageMarkupPanel(ImPage page, int pageWidth, int pageHeight) {
-			super(new BorderLayout(), true);
+			super(new FlowLayout(), true);
 			this.page = page;
 			this.pageWidth = pageWidth;
 			this.pageHeight = pageHeight;
-			this.pageMarginLeft = ((this.pageWidth - (this.page.bounds.right - this.page.bounds.left)) / 2);
-			this.pageMarginTop = ((this.pageHeight - (this.page.bounds.bottom - this.page.bounds.top)) / 2);
-//			Object piDpi = this.page.getAttribute(IMAGE_DPI_ATTRIBUTE);
-//			if (piDpi == null) {
-				this.pageImageDpi = this.page.getImageDPI();
-				System.out.println("Got page image resolution from page image: " + this.pageImageDpi);
-//			}
-//			else try {
-//				this.pageImageDpi = Integer.parseInt(piDpi.toString());
-//				System.out.println("Got page image resolution from page attribute: " + this.pageImageDpi);
-//			}
-//			catch (NumberFormatException nfe) {
-//				nfe.printStackTrace(System.out);
-//			}
+			this.pageMarginLeft = ((this.pageWidth - this.page.bounds.getWidth()) / 2);
+//			this.pageMarginTop = ((this.pageHeight - this.page.bounds.getHeight()) / 2);
+			this.pageMarginTop = (((this.pageHeight - this.page.bounds.getHeight()) * 2) / 5); // use 40/60 split between top & bottom, as bottom margin often wider
+			this.pageImageDpi = this.page.getImageDPI();
+			Border border = BorderFactory.createLineBorder(Color.DARK_GRAY, 1);
+			border = BorderFactory.createCompoundBorder(BorderFactory.createMatteBorder(0, 0, 1, 1, Color.GRAY), border);
+			border = BorderFactory.createCompoundBorder(BorderFactory.createMatteBorder(0, 0, 1, 1, Color.LIGHT_GRAY), border);
+			this.setBorder(border);
+			this.setOpaque(false); // for better refresh behavior (we're painting everything ourselves below)
+			System.out.println("Got page image resolution from page image: " + this.pageImageDpi);
+			this.setLayout(new ImPageMarkupPanelLayout(this));
+		}
+		
+		ImDocumentMarkupPanel getParentPanel() {
+			return ImDocumentMarkupPanel.this;
 		}
 		
 		int getLeftOffset() {
@@ -3154,36 +3431,6 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 		int getTopOffset() {
 			return (fixPageMargin + Math.round(((float) (this.pageMarginTop * renderingDpi)) / this.pageImageDpi));
 		}
-		
-//		private PageImage getPageImage() {
-//			if (this.pageImage == null) {
-//				PageImage pi = this.page.getPageImage();
-//				
-//				BufferedImage bi = new BufferedImage(pi.image.getWidth(), pi.image.getHeight(), BufferedImage.TYPE_BYTE_INDEXED, pageImageColorModel);
-//				WritableRaster wr = bi.getRaster();
-//				int rgb, r, g, b;
-//				int[] c = new int[1];
-//				for (int x = 0; x < pi.image.getWidth(); x++)
-//					for (int y = 0; y < pi.image.getHeight(); y++) {
-//						rgb = pi.image.getRGB(x, y);
-//						r = ((rgb & 0x00ff0000) >> 16);
-//						g = ((rgb & 0x0000ff00) >> 8);
-//						b = ((rgb & 0x000000ff) >> 0);
-////						if ((r > 252) || (g > 252) || (b > 252))
-////							c[0] = 255;
-////						else c[0] = ((r + g + b + 1) / 3);
-//						//	based on "C = 0.2126 R + 0.7152 G + 0.0722 B" from http://en.wikipedia.org/wiki/Grayscale#Converting_color_to_grayscale
-//						c[0] = (((21 * r) + (72 * g) + (7 * b)) / 100);
-//						if (c[0] > 252)
-//							c[0] = 255;
-//						wr.setPixel(x, y, c);
-//					}
-//				
-//				this.pageImage = new PageImage(bi, pi.originalWidth, pi.originalHeight, pi.originalDpi, pi.currentDpi, pi.leftEdge, pi.rightEdge, pi.topEdge, pi.bottomEdge, pi.source);
-//				this.pageImageDpi = this.pageImage.currentDpi;
-//			}
-//			return this.pageImage;
-//		}
 		
 		private BufferedImage getScaledPageImage() {
 			if ((this.scaledPageImage == null) || (this.scaledPageImageDpi != renderingDpi)) {
@@ -3326,19 +3573,19 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 					if (imw.hasAttribute(FONT_SIZE_ATTRIBUTE) && documentBornDigital) {
 						fontSize = imw.getFontSize();
 //						rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
-						rf = getTextStringFont("Serif", fontStyle, true, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+						rf = getTextStringFont(fontStyle, true, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
 						imwHasDescent = true; // doesn't really matter, as it's queried only in disjunction with born-digital property anyway
 					}
 					else if (this.isFlatString(imwString)) {
 						fontSize = estimatedWordFontSize;
 //						rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
-						rf = getTextStringFont("Serif", fontStyle, true, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+						rf = getTextStringFont(fontStyle, true, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
 						imwHasDescent = false;
 					}
 					else {
 						fontSize = estimatedWordFontSize;
 //						rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
-						rf = getTextStringFont("Serif", fontStyle, true, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+						rf = getTextStringFont(fontStyle, true, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
 						String imwFsString = imwString;
 						if (!this.isAscendingString(imwFsString) && (line != null) && ((imw.bounds.getHeight() * 10) > (line.bounds.getHeight() * 9)))
 							imwFsString = ("d" + imwFsString + "b"); // we have a full (> 90%) line height bounding box, make sure we measure with an ascender
@@ -3348,14 +3595,14 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 						while ((wtl.getBounds().getHeight() < (((imwHasDescent || (imwBaseline < 1)) ? imw.bounds.bottom : (imwBaseline + 1)) - imw.bounds.top)) || ((0 < imwBaseline) && (Math.abs(wtl.getBounds().getY()) < ((imwBaseline + 1) - imw.bounds.top)))) {
 							fontSize++;
 //							rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
-							rf = getTextStringFont("Serif", fontStyle, true, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+							rf = getTextStringFont(fontStyle, true, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
 							wtl = new TextLayout(imwFsString, rf, tsig.getFontRenderContext());
 //							System.out.println(" - increased bounds at " + fontSize + " are " + wtl.getBounds());
 						}
 						while (((((imwHasDescent || (imwBaseline < 1)) ? imw.bounds.bottom : (imwBaseline + 1)) - imw.bounds.top) < wtl.getBounds().getHeight()) || ((0 < imwBaseline) && (((imwBaseline + 1) - imw.bounds.top) < Math.abs(wtl.getBounds().getY()))))  {
 							fontSize--;
 //							rf = new Font("Serif", fontStyle, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
-							rf = getTextStringFont("Serif", fontStyle, true, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
+							rf = getTextStringFont(fontStyle, true, Math.round(((float) (fontSize * this.pageImageDpi)) / 72));
 							wtl = new TextLayout(imwFsString, rf, tsig.getFontRenderContext());
 //							System.out.println(" - decreased bounds at " + fontSize + " are " + wtl.getBounds());
 						}
@@ -3555,6 +3802,7 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 			
 			//	get words
 			this.textStreamHeads = this.page.getTextStreamHeads();
+			this.textStreamTails = this.page.getTextStreamTails();
 			
 			//	paint words
 			for (int h = 0; h < this.textStreamHeads.length; h++) {
@@ -3698,6 +3946,7 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 		}
 		private BackgroundObject[] backgroundObjects = null;
 		private ImWord[] textStreamHeads = null;
+		private ImWord[] textStreamTails = null;
 		private long backgroundObjectDocModCount = 0;
 		private long backgroundObjectHighlightModCount = 0;
 		private long backgroundObjectRenderingDpiModCount = 0;
@@ -3881,11 +4130,14 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 			if ((this.backgroundObjectDocModCount != this.docModCount) || (this.backgroundObjectHighlightModCount != highlightModCount)) {
 				this.backgroundObjects = null;
 				this.textStreamHeads = null;
+				this.textStreamTails = null;
 			}
 			if ((this.displayExtensionGraphicsDocModCount != this.docModCount) || (this.displayExtensionGraphicsModCount != displayExtensionModCount) || (this.displayExtensionGraphicsHighlightModCount != highlightModCount))
 				this.displayExtensionGraphics = null;
 			if ((this.textStringImageDocModCount != this.docModCount) || (this.textStringImageTextStringPercentageModCount != textStringPercentageModCount) || (this.textStringImageRenderingDpiModCount != renderingDpiModCount))
 				this.textStringImages = null;
+			if (this.overlay != null)
+				this.overlay.validate(); // need to do this explicitly TODO WHY ???
 			super.validate();
 		}
 		
@@ -3901,6 +4153,9 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 			graphics.fillRect(0, 0, this.getWidth(), this.getHeight());
 			graphics.setColor(preBackgroundColor);
 			
+			//	add border above background
+			this.paintBorder(graphics);
+			
 			//	get page image and compute zoom
 			float zoom = (((float) renderingDpi) / this.pageImageDpi);
 			
@@ -3914,20 +4169,22 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 				ImWord sew = ((selectionEndWord == null) ? selectionStartWord : selectionEndWord);
 				graphics.setColor(selectionHighlightColor);
 				if (selectionStartWord.getTextStreamId().equals(sew.getTextStreamId())) {
-					ImWord fw;
-					ImWord lw;
-					if (selectionStartWord.pageId == sew.pageId) {
-						fw = ((selectionStartWord.getTextStreamPos() <= sew.getTextStreamPos()) ? selectionStartWord : sew);
-						lw = ((selectionStartWord.getTextStreamPos() <= sew.getTextStreamPos()) ? sew : selectionStartWord);
-					}
-					else if (selectionStartWord.pageId < sew.pageId) {
-						fw = selectionStartWord;
-						lw = sew;
-					}
-					else {
-						fw = sew;
-						lw = selectionStartWord;
-					}
+//					ImWord fw;
+//					ImWord lw;
+//					if (selectionStartWord.pageId == sew.pageId) {
+//						fw = ((selectionStartWord.getTextStreamPos() <= sew.getTextStreamPos()) ? selectionStartWord : sew);
+//						lw = ((selectionStartWord.getTextStreamPos() <= sew.getTextStreamPos()) ? sew : selectionStartWord);
+//					}
+//					else if (selectionStartWord.pageId < sew.pageId) {
+//						fw = selectionStartWord;
+//						lw = sew;
+//					}
+//					else {
+//						fw = sew;
+//						lw = selectionStartWord;
+//					}
+					ImWord fw = ((selectionStartWord.getTextStreamPos() <= sew.getTextStreamPos()) ? selectionStartWord : sew);
+					ImWord lw = ((selectionStartWord.getTextStreamPos() <= sew.getTextStreamPos()) ? sew : selectionStartWord);
 					for (ImWord imw = fw; imw != null; imw = ((imw == lw) ? null : imw.getNextWord())) {
 						if (imw.pageId < this.page.pageId)
 							continue;
@@ -3978,17 +4235,22 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 				((Graphics2D) graphics).setTransform(preDegTransform);
 			}
 			
-			//	paint background / highlight image
+			//	paint background / highlight objects
 			BackgroundObject[] bos = this.getBackgroundObjects();
 			for (int o = 0; o < bos.length; o++)
 				bos[o].paint(graphics);
 			
-			//	connect text stream heads to predecessors (text stream heads are present after getting background image)
-			if (areTextStreamsPainted())
+			//	connect text stream heads to predecessors (text stream heads and tails are present after getting background objects)
+			if (areTextStreamsPainted()) {
 				for (int h = 0; h < this.textStreamHeads.length; h++) {
 					if (this.textStreamHeads[h].getPreviousWord() != null)
 						transPageWordConnections.add(new TransPageWordConnection(this.textStreamHeads[h].getPreviousWord(), this.textStreamHeads[h]));
 				}
+				for (int t = 0; t < this.textStreamTails.length; t++) {
+					if (this.textStreamTails[t].getNextWord() != null)
+						transPageWordConnections.add(new TransPageWordConnection(this.textStreamTails[t], this.textStreamTails[t].getNextWord()));
+				}
+			}
 			
 			//	draw text strings on top of markup if activated
 			if (areTextStringsPainted()) {
@@ -4019,6 +4281,7 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 				}
 				((Graphics2D) graphics).setTransform(preDegTransform);
 			}
+			
 			
 			//	draw box selection on top of everything (if any)
 			if ((pointSelectionPage == this) && (selectionStartPoint != null) && (selectionEndPoint != null)) {
@@ -4051,6 +4314,10 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 				}
 				graphics.setColor(preSelectionColor);
 			}
+			
+			//	re-draw any overlay (our only child)
+			if (this.overlay != null)
+				this.paintChildren(this.getComponentGraphics(graphics).create());
 		}
 		private void paintBox(Graphics graphics, BoundingBox box, float zoom, int leftOffset, int topOffset) {
 			graphics.drawRect((leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * box.top)), Math.round(zoom * (box.right - box.left - 1)), Math.round(zoom * (box.bottom - box.top - 1)));
@@ -4090,19 +4357,25 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 				else if (to.bottom <= from.top) {
 					ImRegion[] fromRegions = this.page.getRegionsIncluding(from, false);
 					ImRegion fromRegion = null;
-					for (int r = 0; r < fromRegions.length; r++)
+					for (int r = 0; r < fromRegions.length; r++) {
+						if (ImRegion.REGION_ANNOTATION_TYPE.equals(fromRegions[r].getType()))
+							continue;
 						if (!fromRegions[r].bounds.includes(to, false)) {
 							fromRegion = fromRegions[r];
 							break;
 						}
+					}
 					int fromRight = ((fromRegion == null) ? from.right : fromRegion.bounds.right);
 					ImRegion[] toRegions = this.page.getRegionsIncluding(to, false);
 					ImRegion toRegion = null;
-					for (int r = 0; r < toRegions.length; r++)
+					for (int r = 0; r < toRegions.length; r++) {
+						if (ImRegion.REGION_ANNOTATION_TYPE.equals(toRegions[r].getType()))
+							continue;
 						if (!toRegions[r].bounds.includes(from, false)) {
 							toRegion = toRegions[r];
 							break;
 						}
+					}
 					int toLeft = ((toRegion == null) ? to.left : toRegion.bounds.left);
 					cls.add(new Point(from.right, ((from.top + from.bottom) / 2)));
 					cls.add(new Point(((fromRight + toLeft) / 2), ((from.top + from.bottom) / 2)));
@@ -4186,6 +4459,7 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 	public class ImDocumentViewControl extends JPanel {
 		private ImDocumentMarkupPanel idmp;
 		private JPanel controlPanel = new JPanel(new GridBagLayout(), true);
+		private JScrollPane controlPanelBox;
 		private WordControl wordControl;
 		private JLabel regionLabel = new JLabel("Regions, Blocks, etc.", JLabel.CENTER);
 		private JButton showRegionsButton = new JButton("Show All");
@@ -4202,19 +4476,15 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 			super(new BorderLayout(), true);
 			this.idmp = idmp;
 			this.add(new JLabel("Display Control", JLabel.CENTER), BorderLayout.NORTH);
-			final JScrollPane controlPanelBox = new JScrollPane(this.controlPanel);
-			controlPanelBox.getVerticalScrollBar().setUnitIncrement(50);
-			controlPanelBox.getVerticalScrollBar().setBlockIncrement(50);
-			controlPanelBox.addComponentListener(new ComponentAdapter() {
+			this.controlPanelBox = new JScrollPane(this.controlPanel);
+			this.controlPanelBox.getVerticalScrollBar().setUnitIncrement(33);
+			this.controlPanelBox.getVerticalScrollBar().setBlockIncrement(100);
+			this.controlPanelBox.addComponentListener(new ComponentAdapter() {
 				public void componentResized(ComponentEvent ce) {
-					Dimension cpSize = controlPanelBox.getViewport().getView().getSize();
-					Dimension cpViewSize = controlPanelBox.getViewport().getExtentSize();
-					int verticalScrollBarPolicy = ((cpSize.height <= cpViewSize.height) ? JScrollPane.VERTICAL_SCROLLBAR_NEVER : JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
-					if (controlPanelBox.getVerticalScrollBarPolicy() != verticalScrollBarPolicy)
-						controlPanelBox.setVerticalScrollBarPolicy(verticalScrollBarPolicy);
+					adjustScrollBar();
 				}
 			});
-			this.add(controlPanelBox, BorderLayout.CENTER);
+			this.add(this.controlPanelBox, BorderLayout.CENTER);
 			this.wordControl = new WordControl();
 			
 			this.showRegionsButton.setBorder(BorderFactory.createEtchedBorder());
@@ -4371,9 +4641,6 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 			gbc.gridx = 0;
 			gbc.weightx = 0;
 			this.controlPanel.add(this.wordControl.textStreamsPainted, gbc.clone());
-//			gbc.gridx = 1;
-//			gbc.weightx = 0;
-//			this.controlPanel.add(this.wordControl.showOcr, gbc.clone());
 			gbc.gridx = 1;
 			gbc.weightx = 1;
 			this.controlPanel.add(this.wordControl.label, gbc.clone());
@@ -4435,8 +4702,22 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 			gbc.weighty = 1;
 			this.controlPanel.add(new JPanel(), gbc.clone());
 			
+			this.adjustScrollBar();
+			
 			this.validate();
 			this.repaint();
+		}
+		
+		void adjustScrollBar() {
+			Dimension cpSize = this.controlPanelBox.getViewport().getView().getSize();
+			Dimension cpViewSize = this.controlPanelBox.getViewport().getExtentSize();
+			if (cpSize.height <= cpViewSize.height)
+				this.controlPanelBox.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_NEVER);
+			else {
+				this.controlPanelBox.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
+				this.controlPanelBox.getVerticalScrollBar().setUnitIncrement(cpViewSize.height / 10);
+				this.controlPanelBox.getVerticalScrollBar().setBlockIncrement(cpViewSize.height / 3);
+			}
 		}
 		
 		abstract class TypeControl {
@@ -4450,7 +4731,7 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 				this.label.setText(type);
 				this.label.setOpaque(true);
 				this.label.setBorder(BorderFactory.createLineBorder(this.label.getBackground(), 2));
-				this.label.setBackground(color);
+				this.label.setBackground(this.color);
 				this.label.addActionListener(new ActionListener() {
 					public void actionPerformed(ActionEvent ae) {
 						Color color = JColorChooser.showDialog(TypeControl.this.label, TypeControl.this.type, TypeControl.this.color);
@@ -4468,6 +4749,10 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 						TypeControl.this.paintChanged(TypeControl.this.paint.isSelected());
 					}
 				});
+			}
+			void setColor(Color color) {
+				this.color = color;
+				this.label.setBackground(color);
 			}
 			abstract void paintChanged(boolean paint);
 			abstract void colorChanged(Color color);
@@ -4510,6 +4795,9 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 							idmp.setTextStringPercentage(textStringPercentage.getValue(), false);
 					}
 				});
+			}
+			void setColor(Color color) {
+				this.label.setBackground(color);
 			}
 			void editColors() {
 				final JDialog ecd = DialogFactory.produceDialog("Edit Word and Text Stream Colors", true);
@@ -4775,6 +5063,237 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 	}
 	
 	/**
+	 * Display Overlays are panels that can be added to a page to provide a
+	 * user interface for additional functionality. They are similar to dialogs
+	 * in a sense, but do not block their parent window, and they scroll and
+	 * zoom with the markup panel proper. A display overlay can be attached to
+	 * exactly one page at a time, and there can be at most one active display
+	 * overlay at any time, as adding a new one will remove any overlay that
+	 * was previously added. A click in the markup panel outside a display
+	 * overlay will close the latter.
+	 * 
+	 * @author sautter
+	 */
+	public static abstract class DisplayOverlay extends JPanel {
+		Point onPageLocation = new Point(); // the location on the parent page, relative to the page image in its original DPI resolution
+		Dimension onPageSize = new Dimension(); // the size in the parent page, in its original page image DPI resolution
+		ImDocumentMarkupPanel parentPanel;
+		ImPageMarkupPanel parentPage;
+		
+		/** Constructor
+		 */
+		protected DisplayOverlay() {
+			super(true);
+		}
+		
+		/** Constructor
+		 * @param layout the layout manager to use
+		 */
+		protected DisplayOverlay(LayoutManager layout) {
+			super(layout, true);
+		}
+		
+		/**
+		 * Take action when the overlay is closed. Sub classes are welcome to
+		 * overwrite this method to perform some terminal write-through
+		 * operations to any displaying data, depending on the argument
+		 * cancellation indicator. Actual closing happens in the code calling
+		 * this method.
+		 * @param isCancel is closing the result of a cancellation?
+		 */
+		protected void overlayClosing(boolean isCancel) {}
+		
+		/**
+		 * Indicate whether or not clsing the display overlay in reaction to a
+		 * click somewhere else in the markup panel should be treated as a
+		 * concellation. The return value of this method becomes the argument
+		 * of the subsequent call to <code>close()</code>, and from there loops
+		 * through to <code>overlayClosing()</code>. This default
+		 * implementation returns false, sub classes are welcome to overwrite
+		 * it as needed.
+		 * @return true if a click outside the overlay should be treated as a
+		 *        cancellation
+		 */
+		protected boolean cancelOnOutsideClick() {
+			return false;
+		}
+		
+		/**
+		 * Close the overlay, i.e., remove it from the markup panel.
+		 * @param isCancel is the closing operation a cancellation?
+		 */
+		public final void close(boolean isCancel) {
+			this.overlayClosing(isCancel);
+			if (this.parentPanel != null)
+				this.parentPanel.setDisplayOverlay(null, -1);
+			else this.setParentPage(null);
+		}
+		
+		void setParentPage(ImPageMarkupPanel pp) {
+			
+			//	no actual changes
+			if ((this.parentPage != null) && (this.parentPage == pp) && (this.parentPage.overlay == this)) {
+				this.parentPage.revalidate();
+				this.parentPage.repaint();
+				return;
+			}
+			
+			//	clean old parent page
+			if (this.parentPage != null) {
+				if (this.parentPage.overlay != null)
+					this.parentPage.remove(this.parentPage.overlay);
+				this.parentPage.overlay = null;
+				this.parentPage.revalidate();
+				this.parentPage.repaint();
+			}
+			
+			//	remember parent page
+			this.parentPage = pp;
+			this.parentPanel = ((this.parentPage == null) ? null : this.parentPage.getParentPanel());
+			
+			//	make ourselves show in new parent page
+			if (this.parentPage != null) {
+				this.parentPage.overlay = this;
+				this.parentPage.add(this);
+				this.update(this.parentPanel.renderingDpi);
+				this.parentPage.revalidate();
+				this.parentPage.repaint();
+			}
+		}
+		
+		/**
+		 * Retrieve the ID of the page the overlay is displayed in. If the
+		 * overlay is not attached to a page, this method returns -1.
+		 * @return the ID of the page the overlay is displayed in
+		 */
+		public int getPageId() {
+			return ((this.parentPage == null) ? -1 : this.parentPage.page.pageId);
+		}
+		
+		/**
+		 * Retrieve the location on the parent page, relative to the page image
+		 * in its original DPI resolution. The returned point instance should
+		 * not be modified; use the <code>adjustSizeAndPosition()</code> method
+		 * for this purpose, which also makes sure the changes show.
+		 * @return the location on the parent page
+		 */
+		public Point getOnPageLocation() {
+			return this.onPageLocation;
+		}
+		
+		/**
+		 * Retrieve the size in the parent page, in its original page image DPI
+		 * resolution. The returned dimension instance should not be modified;
+		 * use the <code>adjustSizeAndPosition()</code> method for this
+		 * purpose, which also makes sure the changes show.
+		 * @return the size in the parent page
+		 */
+		public Dimension getOnPageSize() {
+			return this.onPageSize;
+		}
+		
+		/**
+		 * Adjust the size and position of the display overlay. The arguments
+		 * to this method are interpreted in the original resolution page image
+		 * coordinates; zooming and positioning in the actual display happens
+		 * automatically. The attached parent page will automatically repaint
+		 * to make the adjustments show.
+		 * @param x the left edge
+		 * @param y the top edge
+		 * @param w the width
+		 * @param h the height
+		 */
+		protected void adjustSizeAndPosition(int x, int y, int w, int h) {
+			this.onPageLocation.setLocation(x, y);
+			this.onPageSize.setSize(w, h);
+			if (this.parentPage != null) {
+				this.parentPage.revalidate();
+				this.parentPage.repaint();
+			}
+		}
+		
+		/**
+		 * Update the display overlay to the current rendering resolution of a
+		 * newly set parent page. This default implementation does nothing, sub
+		 * classes are welcome to overwrite it as needed.
+		 * @param renderingDpi the current rendering resolution
+		 */
+		protected void update(int renderingDpi) {}
+		
+		/**
+		 * Retrieve the current rendering resolution of the panel the display
+		 * overlay is attached to, e.g. for adjusting child components. If the
+		 * display overlay is currently not attached to a parent panel, this
+		 * method returns -1.
+		 * @return the current rendering DPI
+		 */
+		protected int getCurrentRenderingDpi() {
+			return ((this.parentPanel == null) ? -1 : this.parentPanel.renderingDpi);
+		}
+		
+		/**
+		 * Indicates the horizontal anchor in the parent page, i.e., how to
+		 * distribute additional width beyond the indicated in-page size, like
+		 * width added by borders. A return value of 1 indicates to expand only
+		 * to the left, 0 indicates only rightward expansion, and any value in
+		 * between indicates relative distribution of the expansion to left and
+		 * right. This default implementation returns 0.5, indicating equal
+		 * expansion to both sides; sub classes are welcome to overwrite it as
+		 * needed.
+		 * @return the horizontal anchor
+		 */
+		protected float getHorizontalAnchor() {
+			return 0.5f;
+		}
+		
+		/**
+		 * Indicates the vertical anchor in the parent page, i.e., how to
+		 * distribute additional height beyond the indicated in-page size, like
+		 * height added by borders. A return value of 1 indicates to expand
+		 * only upward, 0 indicates only downward expansion, and any value in
+		 * between indicates relative distribution of the expansion to both top
+		 * and bottim. This default implementation returns 0.5, indicating
+		 * equal expansion upwards and downwards; sub classes are welcome to
+		 * overwrite it as needed.
+		 * @return the vertical anchor
+		 */
+		protected float getVerticalAnchor() {
+			return 0.5f;
+		}
+		
+		/* TODO Centralize addition of non-zooming (border) content to overlay size:
+- overwrite getInsets() method of overlay class proper ...
+- ... to fetch content based additional "insets" from getNonZoomingContentInsets() mounting point ...
+- ... and centrally combine those with insets for borders, etc.
+- also add getNonZoomingContentSize() mounting point to centrally enforce minimum width and height (e.g. width of OCR editing toolbar) ...
+- ... and use aggregate insets to also compensate for any deficiencies in that department
+==> simplifies accommodating toolbar in upcoming OCR image editor, etc.
+		 */
+		
+		/**
+		 * Convert a bounding box in the original DPI resolution of the backing
+		 * page image into representing on-screen size at the current rendering
+		 * resolution.
+		 * @param bb the bounding box to convert
+		 * @return the onverted bounding box
+		 */
+		protected BoundingBox zoom(BoundingBox bb) {
+			if ((this.parentPage == null) || (this.parentPanel == null))
+				return bb;
+			int rDpi = this.parentPanel.renderingDpi;
+			int piDpi = this.parentPage.page.getImageDPI();
+			if (rDpi == piDpi)
+				return bb;
+			return new BoundingBox(
+					Math.round(((float) (bb.left * rDpi)) / piDpi),
+					Math.round(((float) (bb.right * rDpi)) / piDpi),
+					Math.round(((float) (bb.top * rDpi)) / piDpi),
+					Math.round(((float) (bb.bottom * rDpi)) / piDpi)
+				);
+		}
+	}
+	
+	/**
 	 * Implementation of an action to perform for a box or word selection. Sub
 	 * classes have to implement the <code>performAction()</code> method. They
 	 * can further overwrite the <code>getMenuItem()</code> method, e.g. to
@@ -4827,6 +5346,19 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 		}
 		
 		/**
+		 * Indicate whether or not this selection action is an atomic action in
+		 * itself. If this method returns true (and this default implementation
+		 * does), the default menu item will encapsulate any call to the
+		 * <code>performAction()</code> method in an atomic action, using the
+		 * action label as the label for the atomic action. Sub classes can
+		 * overwrite this method to change this behavior.
+		 * @return true if <code>performAction()</code> is to be atomic
+		 */
+		protected boolean isAtomicAction() {
+			return true;
+		}
+		
+		/**
 		 * Perform the action.
 		 * @param invoker the component the parent menu shows on
 		 * @return true if the document was changed by the method, false otherwise
@@ -4852,8 +5384,10 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 				mi.setToolTipText(this.tooltip);
 			mi.addActionListener(new ActionListener() {
 				public void actionPerformed(ActionEvent ae) {
+					boolean isAtomicAction = isAtomicAction();
 					try {
-						invoker.beginAtomicAction(label);
+						if (isAtomicAction)
+							invoker.beginAtomicAction(label);
 						boolean changed = performAction(invoker);
 						if (changed) {
 							invoker.validate();
@@ -4861,11 +5395,75 @@ WordEditDialog: make it volatile dialog (just like word occurrence list), saves 
 						}
 					}
 					finally {
-						invoker.endAtomicAction();
+						if (isAtomicAction)
+							invoker.endAtomicAction();
 					}
 				}
 			});
 			return mi;
+		}
+	}
+	
+	/**
+	 * Selection action to execute straight away for a plain click on an Image
+	 * Markup layout object, i.e., without intermediate display of a context
+	 * menu. Click actions provide a means of injecting default behavior on
+	 * plain clicks, i.e., selections that do not involve maouse movement in
+	 * between pressing and releasing the mouse button. If multiple click
+	 * actions are available for a single click, they are consulted in order of
+	 * descending priority, stopping soon as the first returns true from it
+	 * <code>handleClick()</code> method. No further aelection action come to
+	 * bear after that. If no click action handles a click, normal selection
+	 * actions will a context menu as usual.
+	 * 
+	 * @author sautter
+	 */
+	public static abstract class ClickSelectionAction extends SelectionAction implements Comparable {
+		
+		/** Constructor
+		 * @param name the name of the selection action
+		 * @param label the label string to show in the context menu
+		 */
+		public ClickSelectionAction(String name, String label) {
+			super(name, label);
+		}
+		
+		/** Constructor
+		 * @param name the name of the selection action
+		 * @param label the label string to show in the context menu
+		 * @param tooltip the tooltip text for the context menu
+		 */
+		public ClickSelectionAction(String name, String label, String tooltip) {
+			super(name, label, tooltip);
+		}
+		
+		public boolean performAction(ImDocumentMarkupPanel invoker) {
+			return false;
+		}
+		
+		/**
+		 * Indicate the priority of the click action, on a 0-10 scale. In the
+		 * presence of multiple actions for a single click, their
+		 * <code>handleClick()</code> methods are consulted in descending
+		 * priority order until the first one returns true.
+		 * @return the priority of the click action
+		 */
+		public abstract int getPriority();
+		
+		/**
+		 * Actually handle the click. Since the return value of this method is
+		 * used for controlling behavior, implementations have to handle any
+		 * atomic actions internally
+		 * @param invoker the component the click happened in
+		 * @return true if the click was handled
+		 */
+		public abstract boolean handleClick(ImDocumentMarkupPanel invoker);
+		
+		/* (non-Javadoc)
+		 * @see java.lang.Comparable#compareTo(java.lang.Object)
+		 */
+		public int compareTo(Object obj) {
+			return (((ClickSelectionAction) obj).getPriority() - this.getPriority());
 		}
 	}
 	

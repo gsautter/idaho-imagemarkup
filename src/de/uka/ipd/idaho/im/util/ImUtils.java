@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -64,6 +64,7 @@ import de.uka.ipd.idaho.im.ImLayoutObject;
 import de.uka.ipd.idaho.im.ImPage;
 import de.uka.ipd.idaho.im.ImRegion;
 import de.uka.ipd.idaho.im.ImWord;
+import de.uka.ipd.idaho.stringUtils.StringUtils;
 
 /**
  * Utility library for modifying Image Markup documents.
@@ -148,7 +149,8 @@ public class ImUtils implements ImagingConstants {
 			
 			//	same text stream, compare page ID and position
 			if (imw1.getTextStreamId().equals(imw2.getTextStreamId()))
-				return ((imw1.pageId == imw2.pageId) ? (imw1.getTextStreamPos() - imw2.getTextStreamPos()) : (imw1.pageId - imw2.pageId));
+//				return ((imw1.pageId == imw2.pageId) ? (imw1.getTextStreamPos() - imw2.getTextStreamPos()) : (imw1.pageId - imw2.pageId));
+				return (imw1.getTextStreamPos() - imw2.getTextStreamPos());
 			
 			//	parse page IDs off text stream IDs and compare them
 			String tsId1 = imw1.getTextStreamId();
@@ -648,6 +650,16 @@ public class ImUtils implements ImagingConstants {
 			}
 		}
 		
+		/* TODO prevent word ordering exceptions:
+		 * - sort argument words in text stream order
+		 * - cut (connected sequences of) argument words out of surrounding text streams ...
+		 * - ... and collect external predecessors and successors in the process
+		 * - sort argument words in argument order
+		 * - cut up (connected sequences of) argument words ...
+		 * - chain argument words in resulting order
+		 * - connect first and last argument word to (last) external predecessor and (first) external successor
+		 */
+		
 		//	chain words together
 		for (int w = 1; w < words.length; w++) {
 			
@@ -698,13 +710,35 @@ public class ImUtils implements ImagingConstants {
 	 * <code>sType</code> argument is non-null, the type of the newly created
 	 * logical text stream is set to this type. If the <code>aType</code>
 	 * argument is non-null, an annotation with that type is added to mark the
-	 * newly created logical text stream. 
+	 * newly created logical text stream. Any annotation crossing into or out
+	 * of (but not over) the argument words will be truncated at at their last
+	 * word before the argument ones, or the first word after them.
 	 * @param words the words to make a text stream
 	 * @param sType the text stream type
 	 * @param aType the type annotation to annotate the text stream with
 	 * @return the annotation marking the newly created text stream, if any
 	 */
 	public static ImAnnotation makeStream(ImWord[] words, String sType, String aType) {
+		return makeStream(words, sType, aType, true);
+	}
+	
+	/**
+	 * Make a series of words a separate logical text stream. The words in the
+	 * argument array need not belong to an individual logical text stream, nor
+	 * need they be single chunks of the logical text streams involved. If the
+	 * <code>sType</code> argument is non-null, the type of the newly created
+	 * logical text stream is set to this type. If the <code>aType</code>
+	 * argument is non-null, an annotation with that type is added to mark the
+	 * newly created logical text stream. If the <code>cutAnnots</code> argument
+	 * is set to true, any annotation crossing into or out of (but not over)
+	 * the argument words will be truncated at at their last word before the
+	 * argument ones, or the first word after them.
+	 * @param words the words to make a text stream
+	 * @param sType the text stream type
+	 * @param aType the type annotation to annotate the text stream with
+	 * @return the annotation marking the newly created text stream, if any
+	 */
+	public static ImAnnotation makeStream(ImWord[] words, String sType, String aType, boolean cutAnnots) {
 		
 		//	anything to work with?
 		if (words.length == 0)
@@ -726,7 +760,7 @@ public class ImUtils implements ImagingConstants {
 			}
 			
 			//	cut out and store current text stream chunk
-			textStreamParts.addLast(cutOutTextStream(tspStart, tspEnd));
+			textStreamParts.addLast(cutOutTextStream(tspStart, tspEnd, cutAnnots));
 			
 			//	start new text stream chunk
 			tspStart = words[w];
@@ -734,7 +768,7 @@ public class ImUtils implements ImagingConstants {
 		}
 		
 		//	cut out and store last chunk
-		textStreamParts.addLast(cutOutTextStream(tspStart, tspEnd));
+		textStreamParts.addLast(cutOutTextStream(tspStart, tspEnd, cutAnnots));
 		
 		//	concatenate chunks
 		ImWord tsStart = ((ImWord) textStreamParts.removeFirst());
@@ -761,12 +795,31 @@ public class ImUtils implements ImagingConstants {
 	 * Cut a chunk out of a logical text stream. If the two argument words
 	 * belong to different logical text streams, this method does nothing.
 	 * Otherwise, it connects the predecessor of <code>first</code> to the
-	 * successor of <code>last</code>.
+	 * successor of <code>last</code>. Any annotation crossing into or out of
+	 * (but not over) the span between the argument words will be truncated at
+	 * at their last word before the argument ones, or the first word after
+	 * them.
 	 * @param first the first word of the chunk
 	 * @param last the last word of the chunk
 	 * @return the head of the newly created text stream
 	 */
 	public static ImWord cutOutTextStream(ImWord first, ImWord last) {
+		return cutOutTextStream(first, last, true);
+	}
+	
+	/**
+	 * Cut a chunk out of a logical text stream. If the two argument words
+	 * belong to different logical text streams, this method does nothing.
+	 * Otherwise, it connects the predecessor of <code>first</code> to the
+	 * successor of <code>last</code>. If the <code>cutAnnots</code> argument
+	 * is set to true, any annotation crossing into or out of (but not over)
+	 * the span between the argument words will be truncated at at their last
+	 * word before the argument ones, or the first word after them.
+	 * @param first the first word of the chunk
+	 * @param last the last word of the chunk
+	 * @return the head of the newly created text stream
+	 */
+	public static ImWord cutOutTextStream(ImWord first, ImWord last, boolean cutAnnots) {
 		
 		//	check arguments
 		if (!first.getTextStreamId().equals(last.getTextStreamId()))
@@ -779,9 +832,34 @@ public class ImUtils implements ImagingConstants {
 			last = temp;
 		}
 		
-		//	cut out text stream
+		//	get predecessor and successor of new text stream
 		ImWord oldFirstPrev = first.getPreviousWord();
 		ImWord oldLastNext = last.getNextWord();
+		
+		//	truncate annotations
+		ImDocument doc = first.getDocument();
+		if (doc != null) {
+			
+			//	incoming if not outgoing
+			if (oldFirstPrev != null) {
+				ImAnnotation[] inAnnots = doc.getAnnotationsSpanning(oldFirstPrev, first);
+				for (int a = 0; a < inAnnots.length; a++) {
+					if ((oldLastNext == null) || (textStreamOrder.compare(inAnnots[a].getLastWord(), oldLastNext) < 0))
+						inAnnots[a].setLastWord(oldFirstPrev);
+				}
+			}
+			
+			//	outgoing if not incoming
+			if (oldLastNext != null) {
+				ImAnnotation[] outAnnots = doc.getAnnotationsSpanning(last, oldLastNext);
+				for (int a = 0; a < outAnnots.length; a++) {
+					if ((oldFirstPrev == null) || (textStreamOrder.compare(oldFirstPrev, outAnnots[a].getFirstWord()) < 0))
+						outAnnots[a].setFirstWord(oldLastNext);
+				}
+			}
+		}
+		
+		//	cut out text stream
 		if ((oldFirstPrev != null) && (oldLastNext != null))
 			oldFirstPrev.setNextWord(oldLastNext);
 		else {
@@ -803,17 +881,26 @@ public class ImUtils implements ImagingConstants {
 	 * @return the concatenated text;
 	 */
 	public static String getString(ImWord firstWord, ImWord lastWord, boolean ignoreLineBreaks) {
+		return getString(firstWord, lastWord, ignoreLineBreaks, -1);
+	}
+	
+	/**
+	 * Concatenate the text of a part of a logical text stream, from one word
+	 * up to another one. The two argument words have to belong to the same
+	 * logical text stream for this method to behave in any meaningful way.
+	 * @param firstWord the word to start from
+	 * @param lastWord the word to stop at
+	 * @param ignoreLineBreaks represent line breaks as simple spaces?
+	 * @param minSpaceWidth minimum distance between words to consider a space
+	 * @return the concatenated text;
+	 */
+	public static String getString(ImWord firstWord, ImWord lastWord, boolean ignoreLineBreaks, int minSpaceWidth) {
 		StringBuffer sb = new StringBuffer();
 		for (ImWord imw = firstWord; imw != null; imw = imw.getNextWord()) {
 			sb.append(imw.getString());
 			if (imw == lastWord)
 				break;
-			if ((imw.getNextRelation() == ImWord.NEXT_RELATION_SEPARATE) && (imw.getNextWord() != null) && isSpace(imw, imw.getNextWord()) && Gamta.insertSpace(imw.getString(), imw.getNextWord().getString()))
-				sb.append(" ");
-			else if (imw.getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END)
-				sb.append(ignoreLineBreaks ? " " : "\r\n");
-			else if ((imw.getNextRelation() == ImWord.NEXT_RELATION_HYPHENATED) && (sb.length() != 0))
-				sb.deleteCharAt(sb.length()-1);
+			handleNextWordRelation(imw, sb, ignoreLineBreaks, minSpaceWidth);
 		}
 		return sb.toString();
 	}
@@ -830,7 +917,22 @@ public class ImUtils implements ImagingConstants {
 	 * @return the concatenated text;
 	 */
 	public static String getString(ImWord[] words, boolean ignoreLineBreaks) {
-		return getString(words, null, ignoreLineBreaks);
+		return getString(words, null, ignoreLineBreaks, -1);
+	}
+	/**
+	 * Concatenate the text of a sequence of words, regardless of what logical
+	 * text stream they belong to, and regardless of whether or not they form
+	 * a coherent sequence in their respective logical text stream. Adjacent
+	 * words are treated as separate unless they are directly adjacent in the
+	 * same logical text stream, in which case their defined relationship comes
+	 * to bear.
+	 * @param words the words to concatenate
+	 * @param ignoreLineBreaks represent line breaks as simple spaces?
+	 * @param minSpaceWidth minimum distance between words to consider a space
+	 * @return the concatenated text;
+	 */
+	public static String getString(ImWord[] words, boolean ignoreLineBreaks, int minSpaceWidth) {
+		return getString(words, null, ignoreLineBreaks, minSpaceWidth);
 	}
 	
 	/**
@@ -847,6 +949,24 @@ public class ImUtils implements ImagingConstants {
 	 * @return the concatenated text;
 	 */
 	public static String getString(ImWord[] words, Comparator wordOrder, boolean ignoreLineBreaks) {
+		return getString(words, wordOrder, ignoreLineBreaks, -1);
+	}
+	
+	/**
+	 * Concatenate the text of a sequence of words, regardless of what logical
+	 * text stream they belong to, and regardless of whether or not they form
+	 * a coherent sequence in their respective logical text stream. Adjacent
+	 * words are treated as separate unless they are directly adjacent in the
+	 * same logical text stream, in which case their defined relationship comes
+	 * to bear. If the argument comparator is not null it will be used to sort
+	 * the argument array before concatenation.
+	 * @param words the words to concatenate
+	 * @param wordOrder the comparator to sort the argument words with
+	 * @param ignoreLineBreaks represent line breaks as simple spaces?
+	 * @param minSpaceWidth minimum distance between words to consider a space
+	 * @return the concatenated text;
+	 */
+	public static String getString(ImWord[] words, Comparator wordOrder, boolean ignoreLineBreaks, int minSpaceWidth) {
 		if (wordOrder == leftRightTopDownOrder)
 			sortLeftRightTopDown(words);
 		else if (wordOrder == bottomUpLeftRightOrder)
@@ -858,35 +978,195 @@ public class ImUtils implements ImagingConstants {
 		StringBuffer sb = new StringBuffer();
 		for (int w = 0; w < words.length; w++) {
 			sb.append(words[w].getString());
-			if ((w+1) < words.length) {
-				if (words[w].getNextWord() != words[w+1])
-					sb.append(" ");
-				else if ((words[w].getNextRelation() == ImWord.NEXT_RELATION_SEPARATE) && (words[w].getNextWord() != null) && isSpace(words[w], words[w].getNextWord()) && Gamta.insertSpace(words[w].getString(), words[w].getNextWord().getString()))
-					sb.append(" ");
-				else if (words[w].getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END)
-					sb.append(ignoreLineBreaks ? " " : "\r\n");
-				else if ((words[w].getNextRelation() == ImWord.NEXT_RELATION_HYPHENATED) && (sb.length() != 0))
-					sb.deleteCharAt(sb.length()-1);
-			}
+			if ((w+1) == words.length)
+				break;
+			if (words[w].getNextWord() != words[w+1])
+				sb.append(" ");
+			else handleNextWordRelation(words[w], sb, ignoreLineBreaks, minSpaceWidth);
 		}
 		return sb.toString();
 	}
 	
-	private static boolean isSpace(ImWord word1, ImWord word2) {
-		if (word1.bounds.bottom < word2.centerY)
-			return true; // line offset
-		if (word2.bounds.bottom < word1.centerY)
-			return true; // line offset
-		if (word2.centerY < word1.bounds.top)
-			return true; // line offset
-		if (word1.centerY < word2.bounds.top)
-			return true; // line offset
+	private static void handleNextWordRelation(ImWord imw, StringBuffer sb, boolean ignoreLineBreaks, int minSpaceWidth) {
+		if (imw.getNextRelation() == ImWord.NEXT_RELATION_SEPARATE) {
+			ImWord nextImw = imw.getNextWord();
+			if ((nextImw != null) && isSpace(imw, nextImw, minSpaceWidth) && Gamta.insertSpace(imw.getString(), nextImw.getString()))
+				sb.append(" ");
+		}
+		else if (imw.getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END)
+			sb.append(ignoreLineBreaks ? " " : "\r\n");
+		else if ((imw.getNextRelation() == ImWord.NEXT_RELATION_HYPHENATED) && (sb.length() != 0))
+			sb.deleteCharAt(sb.length()-1);
+	}
+	
+	private static boolean isSpace(ImWord word1, ImWord word2, int minSpaceWidth) {
+//		if (word1.bounds.bottom < word2.centerY)
+//			return true; // line offset
+//		if (word2.bounds.bottom < word1.centerY)
+//			return true; // line offset
+//		if (word2.centerY < word1.bounds.top)
+//			return true; // line offset
+//		if (word1.centerY < word2.bounds.top)
+//			return true; // line offset
+		if (areTextFlowBreak(word1, word2))
+			return true;
 		if (word2.bounds.left < word1.centerX)
 			return true; // second word to the left ... WTF
 		int wordDist = (word2.bounds.left - word1.bounds.right);
+		if (minSpaceWidth != -1) // we have an external threshold, no need for estimating
+			return (minSpaceWidth <= wordDist);
 		int wordHeight = ((word1.bounds.getHeight() + word2.bounds.getHeight()) / 2);
 //		return (wordHeight <= (wordDist * 5)); // should be OK as an estimate, and with some safety margin, at least for born-digital text (0.25 is smallest defaulting space width)
 		return ((wordHeight * 3) <= (wordDist * 20)); // 15% should be OK as an estimate lower bound, and with some safety margin, at least for born-digital text (0.25 is smallest defaulting space width)
+	}
+	
+	/**
+	 * Construct the string up to a given word, including all preceding words
+	 * connected with relationship 'continue' or 'hyphenated'.
+	 * @param word the word to work up to
+	 * @return the overall string the argument word lies in
+	 */
+	public static String getStringUpTo(ImWord word) {
+		return getStringAround(word, true, false);
+	}
+	
+	/**
+	 * Construct the string from a given word, including all following words
+	 * connected with relationship 'continue' or 'hyphenated'.
+	 * @param word the word to work from
+	 * @return the overall string the argument word lies in
+	 */
+	public static String getStringFrom(ImWord word) {
+		return getStringAround(word, false, true);
+	}
+	
+	/**
+	 * Construct the string around a given word, including all preceding and
+	 * following words connected with relationship 'continue' or 'hyphenated'.
+	 * @param word the word to work around
+	 * @return the overall string the argument word lies in
+	 */
+	public static String getStringAround(ImWord word) {
+		return getStringAround(word, true, true);
+	}
+	
+	private static String getStringAround(ImWord word, boolean includePredecessors, boolean includeSuccessors) {
+		ImWord start = word;
+		while (includePredecessors && (start.getPreviousRelation() == ImWord.NEXT_RELATION_CONTINUE) || (start.getPreviousRelation() == ImWord.NEXT_RELATION_HYPHENATED))
+			start = start.getPreviousWord();
+		ImWord end = word;
+		while (includeSuccessors && (end.getNextRelation() == ImWord.NEXT_RELATION_CONTINUE) || (end.getNextRelation() == ImWord.NEXT_RELATION_HYPHENATED))
+			end = end.getNextWord();
+		return ImUtils.getString(start, end, true);
+	}
+	
+	/**
+	 * Check if there is a text flow break right before a given word. This
+	 * method returns true if (a) the argument word is the first in a logical
+	 * text stream or (b) there is a text flow break between the predecessor of
+	 * the argument word and the argument word proper.
+	 * @param word the word to check
+	 * @return true if there is a text flow break before the argument word
+	 * @see de.uka.ipd.idaho.im.util.ImUtils#areTextFlowBreak();
+	 */
+	public static boolean hasTextFlowBreakBefore(ImWord word) {
+		ImWord prevWord = word.getPreviousWord();
+		return ((prevWord == null) || areTextFlowBreak(prevWord, word));
+	}
+	
+	/**
+	 * Check if there is a text flow break right after a given word. This
+	 * method returns true if (a) the argument word is the last in a logical
+	 * text stream or (b) there is a text flow break between the argument word
+	 * and its successor.
+	 * @param word the word to check
+	 * @return true if there is a text flow break after the argument word
+	 * @see de.uka.ipd.idaho.im.util.ImUtils#areTextFlowBreak();
+	 */
+	public static boolean hasTextFlowBreakAfter(ImWord word) {
+		ImWord nextWord = word.getNextWord();
+		return ((nextWord == null) || areTextFlowBreak(word, nextWord));
+	}
+	
+	/**
+	 * Check if there is a text flow break between two given words. This method
+	 * returns true if (a) the words are on different pages or (b) neither word
+	 * has a vertical overlap of at least half its height with the other. The
+	 * latter checks both ways to cover cases of differing font sizes, as e.g.
+	 * between super- or subscripts and regular words in a line.
+	 * @param word1 the first word to check
+	 * @param word2 the second word to check
+	 * @return true if there is a text flow break between the argument words
+	 */
+	public static boolean areTextFlowBreak(ImWord word1, ImWord word2) {
+		if (word1.pageId != word2.pageId)
+			return true; // different pages
+		if (word1.bounds.bottom <= word2.bounds.top)
+			return true; // complete vertical offset, second word below first (e.g. line break)
+		if (word2.bounds.bottom <= word1.bounds.top)
+			return true; // complete vertical offset, first word below second (e.g. column break)
+		if ((word1.centerY <= word2.bounds.top) && (word1.bounds.bottom <= word2.centerY))
+			return true; // vertical offset with no center inside other word, second word below first (too much offset for tailing subscript)
+		if ((word2.centerY <= word1.bounds.top) && (word2.bounds.bottom <= word1.centerY))
+			return true; // vertical offset with no center inside other word, first word below second (too much offset for tailing superscript)
+		return false;
+	}
+	
+	/**
+	 * Check if there is a hyphenation after a given word, judging from
+	 * morphological evidence. This method return true if (a) the argument
+	 * word is not the last one in tits text stream and (b) the
+	 * <code>areHyphenated()</code> method finds a hyphenation between the
+	 * argument word and its successor.
+	 * @param word the word to check
+	 * @return true if there is a hyphenation after the argument word
+	 * @see de.uka.ipd.idaho.im.util.ImUtils#areHyphenated();
+	 */
+	public static boolean isHyphenatedAfter(ImWord word) {
+		ImWord nextWord = word.getNextWord();
+		return ((nextWord != null) && areHyphenated(word, nextWord));
+	}
+	
+	/**
+	 * Check if there is a hyphenation before a given word, judging from
+	 * morphological evidence. This method return true if (a) the argument
+	 * word is not the first one in tits text stream and (b) the
+	 * <code>areHyphenated()</code> method finds a hyphenation between the
+	 * predecessor of the argument word and the argument word proper.
+	 * @param word the word to check
+	 * @return true if there is a hyphenation before the argument word
+	 * @see de.uka.ipd.idaho.im.util.ImUtils#areHyphenated();
+	 */
+	public static boolean isHyphenatedBefore(ImWord word) {
+		ImWord prevWord = word.getPreviousWord();
+		return ((prevWord != null) && areHyphenated(prevWord, word));
+	}
+	
+	/**
+	 * Check if there is a hyphenation between two given words, judging from
+	 * morphological evidence. This method return true if (a) both words are
+	 * actual words, (b) the first one ends with a hyphen, and (c) the second
+	 * one is in lower case and is not a preposition usually found in an
+	 * enumeration. This method also considers any connected predecessors of
+	 * the first word and any connected successors of the second word.
+	 * @param firstWord the first word to check
+	 * @param secondWord the second word to check
+	 * @return true if there is a hyphenation between the two argument words
+	 */
+	public static boolean areHyphenated(ImWord firstWord, ImWord secondWord) {
+		
+		//	get and check first word string, including connected predecessors
+		String fWordStr = getStringUpTo(firstWord);
+		if ((fWordStr == null) || (fWordStr.length() == 0))
+			return false;
+		
+		//	get and check second word string, including connected successors
+		String sWordStr = getStringFrom(secondWord);
+		if ((sWordStr == null) || (sWordStr.length() == 0))
+			return false;
+		
+		//	check word strings
+		return StringUtils.areHyphenated(fWordStr, sWordStr);
 	}
 	
 	/**
@@ -932,7 +1212,7 @@ public class ImUtils implements ImagingConstants {
 	
 	/**
 	 * Find potential captions for a given target area (the region marking what
-	 * a caption can refer to, e.g. a table of figure) in a page of an Image
+	 * a caption can refer to, e.g. a table or figure) in a page of an Image
 	 * Markup document. In particular, this method seeks caption annotations
 	 * above and/or below (depending on the respective arguments) the target
 	 * region within on inch distance. If target type matching is active, this
@@ -993,7 +1273,7 @@ public class ImUtils implements ImagingConstants {
 			if (captionStartWord != null) {
 				ImAnnotation[] captionAnnots = page.getDocument().getAnnotations(captionStartWord, null);
 				for (int a = 0; a < captionAnnots.length; a++) {
-					if (ImAnnotation.CAPTION_TYPE.equals(captionAnnots[a].getType()))
+					if (ImAnnotation.CAPTION_TYPE.equals(captionAnnots[a].getType()) && !captionAnnots[a].hasAttribute(IN_LINE_OBJECT_MARKER_ATTRIBUTE))
 						captionList.add(captionAnnots[a]);
 				}
 			}
@@ -1023,7 +1303,7 @@ public class ImUtils implements ImagingConstants {
 				//	get annotations directly here
 				ImAnnotation[] captionAnnots = page.getDocument().getAnnotations(paragraphWords[0], null);
 				for (int a = 0; a < captionAnnots.length; a++) {
-					if (ImAnnotation.CAPTION_TYPE.equals(captionAnnots[a].getType()))
+					if (ImAnnotation.CAPTION_TYPE.equals(captionAnnots[a].getType()) && !captionAnnots[a].hasAttribute(IN_LINE_OBJECT_MARKER_ATTRIBUTE))
 						captionList.add(captionAnnots[a]);
 				}
 				
@@ -1070,7 +1350,7 @@ public class ImUtils implements ImagingConstants {
 			if (captionStartWord != null) {
 				ImAnnotation[] captionAnnots = page.getDocument().getAnnotations(captionStartWord, null);
 				for (int a = 0; a < captionAnnots.length; a++) {
-					if (ImAnnotation.CAPTION_TYPE.equals(captionAnnots[a].getType()))
+					if (ImAnnotation.CAPTION_TYPE.equals(captionAnnots[a].getType()) && !captionAnnots[a].hasAttribute(IN_LINE_OBJECT_MARKER_ATTRIBUTE))
 						captionList.add(captionAnnots[a]);
 				}
 			}
@@ -1098,7 +1378,7 @@ public class ImUtils implements ImagingConstants {
 			if (captionStartWord != null) {
 				ImAnnotation[] captionAnnots = page.getDocument().getAnnotations(captionStartWord, null);
 				for (int a = 0; a < captionAnnots.length; a++) {
-					if (ImAnnotation.CAPTION_TYPE.equals(captionAnnots[a].getType()))
+					if (ImAnnotation.CAPTION_TYPE.equals(captionAnnots[a].getType()) && !captionAnnots[a].hasAttribute(IN_LINE_OBJECT_MARKER_ATTRIBUTE))
 						captionList.add(captionAnnots[a]);
 				}
 			}
@@ -2111,8 +2391,8 @@ public class ImUtils implements ImagingConstants {
 					else lrWords++;
 				}
 				
-				//	cut out cell words to avoid order mix-up errors
-				makeStream(cellWords, null, null);
+				//	cut out cell words to avoid order mix-up errors (cut annotations as well, must not cross cell boundaries anyway)
+				makeStream(cellWords, null, null, true);
 				
 				//	order cell words dependent on direction
 				if ((lrWords < buWords) && (tdWords < buWords))

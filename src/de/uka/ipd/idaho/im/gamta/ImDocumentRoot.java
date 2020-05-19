@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -69,6 +69,7 @@ import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
 import de.uka.ipd.idaho.im.ImAnnotation;
 import de.uka.ipd.idaho.im.ImDocument;
+import de.uka.ipd.idaho.im.ImLayoutObject;
 import de.uka.ipd.idaho.im.ImObject;
 import de.uka.ipd.idaho.im.ImPage;
 import de.uka.ipd.idaho.im.ImRegion;
@@ -104,7 +105,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			int gridCols = 0;
 			int gridRows = 0;
 			
-			int leftCellsToSpan = 0;
+			final int leftCellsToSpan = 0; // we cannot span leftwards, as we might span multiple rows
 			int rightCellsToSpan = 0;
 			final int aboveCellsToSpan = 0; // we cannot span upwards, as tables are filled row by row
 			int belowCellsToSpan = 0;
@@ -401,7 +402,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		int getStartIndex() {
 			int startIndex = getTokenIndexOf(this.firstWord());
 //			if (startIndex < 0)
-//				System.out.println("Strange start index for " + this.firstWord() + " in " + this.getType());
+//				System.out.println("Strange start index for " + this.firstWord() + " in " + this.getType() + ": " + startIndex);
 			return startIndex;
 //			return getTokenIndexOf(this.firstWord());
 		}
@@ -763,7 +764,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			return this.base.size();
 		}
 		public TokenSequence getSubsequence(int start, int size) {
-			return this.getSubsequence(start, size);
+			return this.getMutableSubsequence(start, size);
 		}
 		public Tokenizer getTokenizer() {
 			return ImDocumentRoot.this.getTokenizer();
@@ -875,6 +876,15 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	/** constant for specifying whether or not to include tables */
 	public static final int USE_RANDOM_ANNOTATION_IDS = 64;
 	
+	/** constant for specifying whether or not to include page titles in paragraph or stream normalized mode */
+	public static final int INCLUDE_PAGE_TITLES = 128;
+	
+	/** constant for specifying whether or not to include image or graphics labels in paragraph or stream normalized mode */
+	public static final int INCLUDE_LABELS = 256;
+	
+	/** constant for specifying whether or not to include artifacts in paragraph or stream normalized mode */
+	public static final int INCLUDE_ARTIFACTS = 512;
+	
 	private ImDocument doc;
 	private ImAnnotation annotation;
 	private ImRegion region;
@@ -912,6 +922,9 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		int normalizationLevel = (configFlags & NORMALIZATION_LEVEL_STREAMS);
 		boolean excludeTables = ((configFlags & EXCLUDE_TABLES) != 0);
 		boolean excludeCaptionsFootnotes = ((configFlags & EXCLUDE_CAPTIONS_AND_FOOTNOTES) != 0);
+		boolean excludePageTitles = (((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS)) && ((configFlags & INCLUDE_PAGE_TITLES) == 0));
+		boolean excludeLabels = (((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS)) && ((configFlags & INCLUDE_LABELS) == 0));
+		boolean excludeArtifacts = (((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS)) && ((configFlags & INCLUDE_ARTIFACTS) == 0));
 		ImWord[] textStreamHeads = doc.getTextStreamHeads();
 		LinkedList nonDeletedTextStreamHeads = new LinkedList();
 		for (int h = 0; h < textStreamHeads.length; h++) {
@@ -921,7 +934,13 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 				continue;
 			if (excludeCaptionsFootnotes && (ImWord.TEXT_STREAM_TYPE_CAPTION.equals(textStreamHeads[h].getTextStreamType()) || ImWord.TEXT_STREAM_TYPE_FOOTNOTE.equals(textStreamHeads[h].getTextStreamType()) || ImWord.TEXT_STREAM_TYPE_TABLE_NOTE.equals(textStreamHeads[h].getTextStreamType())))
 				continue;
-			if (((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS)) && (ImWord.TEXT_STREAM_TYPE_PAGE_TITLE.equals(textStreamHeads[h].getTextStreamType()) || ImWord.TEXT_STREAM_TYPE_LABEL.equals(textStreamHeads[h].getTextStreamType()) || ImWord.TEXT_STREAM_TYPE_ARTIFACT.equals(textStreamHeads[h].getTextStreamType())))
+//			if (((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS)) && (ImWord.TEXT_STREAM_TYPE_PAGE_TITLE.equals(textStreamHeads[h].getTextStreamType()) || ImWord.TEXT_STREAM_TYPE_LABEL.equals(textStreamHeads[h].getTextStreamType()) || ImWord.TEXT_STREAM_TYPE_ARTIFACT.equals(textStreamHeads[h].getTextStreamType())))
+//				continue;
+			if (excludePageTitles && ImWord.TEXT_STREAM_TYPE_PAGE_TITLE.equals(textStreamHeads[h].getTextStreamType()))
+				continue;
+			if (excludeLabels && ImWord.TEXT_STREAM_TYPE_LABEL.equals(textStreamHeads[h].getTextStreamType()))
+				continue;
+			if (excludeArtifacts && ImWord.TEXT_STREAM_TYPE_ARTIFACT.equals(textStreamHeads[h].getTextStreamType()))
 				continue;
 			nonDeletedTextStreamHeads.addLast(textStreamHeads[h]);
 		}
@@ -998,6 +1017,10 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 					if (ImRegion.TABLE_TYPE.equals(regions[r].getType()) || ImRegion.TABLE_ROW_TYPE.equals(regions[r].getType()) || ImRegion.TABLE_COL_TYPE.equals(regions[r].getType()) || ImRegion.TABLE_CELL_TYPE.equals(regions[r].getType()))
 						continue;
 					
+					//	exclude lines in word normalization (they only make sense in raw physical layout)
+					if (LINE_ANNOTATION_TYPE.equals(regions[r].getType()) && (normalizationLevel == NORMALIZATION_LEVEL_WORDS))
+						continue;
+					
 					//	get region words
 					ArrayList filteredRegionWords = new ArrayList();
 					for (int w = 0; w < filteredPageWords.size(); w++) {
@@ -1015,6 +1038,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		//	emulate paragraphs based on word relations for high normalization levels
 		else if ((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS)) {
 			ImRegion[][] pageBlocks = new ImRegion[pages.length][];
+			int firstPageId = pages[0].pageId;
 			for (int h = 0; h < textStreamHeads.length; h++) {
 				ImWord pFirstWord = null;
 				for (ImWord imw = textStreamHeads[h]; imw != null; imw = imw.getNextWord()) {
@@ -1022,12 +1046,12 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 						pFirstWord = imw;
 					if ((imw.getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END) || (imw.getNextWord() == null)) {
 						ImAnnotationBase imab = this.addAnnotation(pFirstWord, imw);
-						if (pageBlocks[pFirstWord.pageId] == null)
-							pageBlocks[pFirstWord.pageId] = pages[pFirstWord.pageId].getRegions(BLOCK_ANNOTATION_TYPE);
-						imab.pFirstBlockId = getParentBlockId(pageBlocks[pFirstWord.pageId], pFirstWord);
-						if (pageBlocks[imw.pageId] == null)
-							pageBlocks[imw.pageId] = pages[imw.pageId].getRegions(BLOCK_ANNOTATION_TYPE);
-						imab.pLastBlockId = getParentBlockId(pageBlocks[imw.pageId], imw);
+						if (pageBlocks[pFirstWord.pageId - firstPageId] == null)
+							pageBlocks[pFirstWord.pageId - firstPageId] = pages[pFirstWord.pageId - firstPageId].getRegions(BLOCK_ANNOTATION_TYPE);
+						imab.pFirstBlockId = getParentBlockId(pageBlocks[pFirstWord.pageId - firstPageId], pFirstWord);
+						if (pageBlocks[imw.pageId - firstPageId] == null)
+							pageBlocks[imw.pageId - firstPageId] = pages[imw.pageId - firstPageId].getRegions(BLOCK_ANNOTATION_TYPE);
+						imab.pLastBlockId = getParentBlockId(pageBlocks[imw.pageId - firstPageId], imw);
 						pFirstWord = null;
 					}
 				}
@@ -1071,7 +1095,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	 *            text streams
 	 */
 	public ImDocumentRoot(ImWord firstWord, ImWord lastWord, int configFlags) {
-		super(((Tokenizer) firstWord.getDocument().getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER)), firstWord, lastWord, ((configFlags & NORMALIZE_CHARACTERS) != 0));
+		super(((Tokenizer) firstWord.getDocument().getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER)), firstWord, lastWord, configFlags);
 		this.doc = firstWord.getDocument();
 		this.firstWord = firstWord;
 		this.lastWord = lastWord;
@@ -1154,6 +1178,10 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 					if (ImRegion.TABLE_TYPE.equals(regions[r].getType()) || ImRegion.TABLE_ROW_TYPE.equals(regions[r].getType()) || ImRegion.TABLE_COL_TYPE.equals(regions[r].getType()) || ImRegion.TABLE_CELL_TYPE.equals(regions[r].getType()))
 						continue;
 					
+					//	exclude lines in word normalization (they only make sense in raw physical layout)
+					if (LINE_ANNOTATION_TYPE.equals(regions[r].getType()) && (normalizationLevel == NORMALIZATION_LEVEL_WORDS))
+						continue;
+					
 					//	get region words
 					ArrayList filteredRegionWords = new ArrayList();
 					for (int w = 0; w < filteredPageWords.size(); w++) {
@@ -1171,18 +1199,19 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		//	emulate paragraphs based on word relations for high normalization levels
 		else if ((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS)) {
 			ImRegion[][] pageBlocks = new ImRegion[pages.length][];
+			int firstPageId = pages[0].pageId;
 			ImWord pFirstWord = null;
 			for (ImWord imw = firstWord; imw != null; imw = imw.getNextWord()) {
 				if (pFirstWord == null)
 					pFirstWord = imw;
 				if ((imw.getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END) || (imw.getNextWord() == null) || (imw == lastWord)) {
 					ImAnnotationBase imab = this.addAnnotation(pFirstWord, imw);
-					if (pageBlocks[pFirstWord.pageId] == null)
-						pageBlocks[pFirstWord.pageId] = pages[pFirstWord.pageId].getRegions(BLOCK_ANNOTATION_TYPE);
-					imab.pFirstBlockId = getParentBlockId(pageBlocks[pFirstWord.pageId], pFirstWord);
-					if (pageBlocks[imw.pageId] == null)
-						pageBlocks[imw.pageId] = pages[imw.pageId].getRegions(BLOCK_ANNOTATION_TYPE);
-					imab.pLastBlockId = getParentBlockId(pageBlocks[imw.pageId], imw);
+					if (pageBlocks[pFirstWord.pageId - firstPageId] == null)
+						pageBlocks[pFirstWord.pageId - firstPageId] = pages[pFirstWord.pageId - firstPageId].getRegions(BLOCK_ANNOTATION_TYPE);
+					imab.pFirstBlockId = getParentBlockId(pageBlocks[pFirstWord.pageId - firstPageId], pFirstWord);
+					if (pageBlocks[imw.pageId - firstPageId] == null)
+						pageBlocks[imw.pageId - firstPageId] = pages[imw.pageId - firstPageId].getRegions(BLOCK_ANNOTATION_TYPE);
+					imab.pLastBlockId = getParentBlockId(pageBlocks[imw.pageId - firstPageId], imw);
 					pFirstWord = null;
 				}
 				if (imw == lastWord)
@@ -1267,6 +1296,9 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		this.paragraphsAreLogical = ((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS));
 		boolean excludeTables = ((configFlags & EXCLUDE_TABLES) != 0);
 		boolean excludeCaptionsFootnotes = ((configFlags & EXCLUDE_CAPTIONS_AND_FOOTNOTES) != 0);
+		boolean excludePageTitles = (((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS)) && ((configFlags & INCLUDE_PAGE_TITLES) == 0));
+		boolean excludeLabels = (((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS)) && ((configFlags & INCLUDE_LABELS) == 0));
+		boolean excludeArtifacts = (((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS)) && ((configFlags & INCLUDE_ARTIFACTS) == 0));
 		
 		//	add words
 		ImWord[] regionWords = region.getWords();
@@ -1278,7 +1310,13 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 				continue;
 			if (excludeCaptionsFootnotes && (ImWord.TEXT_STREAM_TYPE_CAPTION.equals(regionWords[w].getTextStreamType()) || ImWord.TEXT_STREAM_TYPE_FOOTNOTE.equals(regionWords[w].getTextStreamType()) || ImWord.TEXT_STREAM_TYPE_TABLE_NOTE.equals(regionWords[w].getTextStreamType())))
 				continue;
-			if ((ImWord.TEXT_STREAM_TYPE_ARTIFACT.equals(regionWords[w].getTextStreamType()) || ImWord.TEXT_STREAM_TYPE_PAGE_TITLE.equals(regionWords[w].getTextStreamType()) || ImWord.TEXT_STREAM_TYPE_ARTIFACT.equals(regionWords[w].getTextStreamType())) && ((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS)))
+//			if ((ImWord.TEXT_STREAM_TYPE_PAGE_TITLE.equals(regionWords[w].getTextStreamType()) || ImWord.TEXT_STREAM_TYPE_LABEL.equals(regionWords[w].getTextStreamType()) || ImWord.TEXT_STREAM_TYPE_ARTIFACT.equals(regionWords[w].getTextStreamType())) && ((normalizationLevel == NORMALIZATION_LEVEL_PARAGRAPHS) || (normalizationLevel == NORMALIZATION_LEVEL_STREAMS)))
+//				continue;
+			if (excludePageTitles && ImWord.TEXT_STREAM_TYPE_PAGE_TITLE.equals(regionWords[w].getTextStreamType()))
+				continue;
+			if (excludeLabels && ImWord.TEXT_STREAM_TYPE_LABEL.equals(regionWords[w].getTextStreamType()))
+				continue;
+			if (excludeArtifacts && ImWord.TEXT_STREAM_TYPE_ARTIFACT.equals(regionWords[w].getTextStreamType()))
 				continue;
 			textStreamIdSet.add(regionWords[w].getTextStreamId());
 		}
@@ -1298,7 +1336,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		}
 		
 		//	add annotation overlay for annotations
-		ImAnnotation[] annotations = this.doc.getAnnotations();
+		ImAnnotation[] annotations = this.doc.getAnnotations(region.pageId);
 		for (int a = 0; a < annotations.length; a++) {
 			
 			//	check if words are on page
@@ -1389,6 +1427,10 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	private void annotateTableStructure(ImRegion table) {
 		if (DEBUG_ANNOTATE_TABLE) System.out.println("Annotating table at " + table.bounds + " in page " + table.pageId + ")");
 		ImAnnotationBase tableImab = this.addAnnotation(table, table.getWords(), true);
+		if (tableImab == null) {
+			if (DEBUG_ANNOTATE_TABLE) System.out.println(" ==> no content words found");
+			return;
+		}
 		
 		//	get table details
 		ImRegion[] rows = table.getRegions(ImRegion.TABLE_ROW_TYPE);
@@ -1406,7 +1448,6 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		ImAnnotationBase[][] cellImabs = new ImAnnotationBase[rows.length][cols.length];
 		
 		//	go row by row
-		int[][] emptyCellSpannersPerCol = new int[cols.length][]; // for each column points to latest empty cell counter array to extend
 		for (int r = 0; r < rows.length; r++) {
 			if (DEBUG_ANNOTATE_TABLE) System.out.println(" - doing row " + r);
 			ImWord rowStart = null;
@@ -1422,9 +1463,9 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 					if (DEBUG_ANNOTATE_TABLE) System.out.println("     - downwards extending cell in row " + r + ", col " + c + " (page " + rows[r].pageId + ")");
 					if (cellImabs[r-1][c] != null) {
 						cellImabs[r][c] = cellImabs[r-1][c];
-						cellImabs[r][c].rTableAttributes.belowCellsToSpan++;
+						if ((c == 0) || (cells[r][c] != cells[r][c-1])) // only count up rowspan in first column
+							cellImabs[r][c].rTableAttributes.belowCellsToSpan++;
 					}
-					else emptyCellSpannersPerCol[c][c]++;
 					continue; // we already have these words spanned
 				}
 				if ((c != 0) && (cells[r][c] == cells[r][c-1])) {
@@ -1473,13 +1514,8 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			rowImab.rTableAttributes.gridTop = r;
 			
 			//	take care of cells to span
-			if (gotEmptyCellsToSpan) {
+			if (gotEmptyCellsToSpan)
 				rowImab.rTableAttributes.emptyCellsToSpan = emptyCellsToSpan;
-				for (int c = 0; c < rowImab.rTableAttributes.emptyCellsToSpan.length; c++) {
-					if (rowImab.rTableAttributes.emptyCellsToSpan[c] != 0)
-						emptyCellSpannersPerCol[c] = rowImab.rTableAttributes.emptyCellsToSpan;
-				}
-			}
 		}
 	}
 	
@@ -1653,6 +1689,10 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			ImToken base = ((ImTokenView) token).base;
 			return ((ImWord) base.imWords.get(0));
 		}
+		if (token instanceof ImToken) {
+			ImToken base = ((ImToken) token);
+			return ((ImWord) base.imWords.get(0));
+		}
 		return null;
 	}
 	
@@ -1670,6 +1710,10 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			ImToken base = ((ImTokenView) token).base;
 			return ((ImWord) base.imWords.get(0));
 		}
+		if (token instanceof ImToken) {
+			ImToken base = ((ImToken) token);
+			return ((ImWord) base.imWords.get(0));
+		}
 		return null;
 	}
 	
@@ -1685,6 +1729,10 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	public ImWord lastWordOf(Token token) {
 		if (token instanceof ImTokenView) {
 			ImToken base = ((ImTokenView) token).base;
+			return ((ImWord) base.imWords.get(base.imWords.size()-1));
+		}
+		if (token instanceof ImToken) {
+			ImToken base = ((ImToken) token);
 			return ((ImWord) base.imWords.get(base.imWords.size()-1));
 		}
 		return null;
@@ -1724,14 +1772,14 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	//	TODO TEST https://github.com/plazi/EJT-testbed/issues/360
 	//	TODO TEST https://github.com/plazi/EJT-testbed/issues/366
 	//	TODO TEST https://github.com/plazi/EJT-testbed/issues/367
-	private void indexAnnotationBase(ImAnnotationBase base) {
-		indexAnnotationBase(this.annotations, base, this.typedAnnotationBaseOrder);
-		ArrayList typeAnnots = ((ArrayList) this.annotationsByType.get(base.getType()));
+	private void indexAnnotationBase(ImAnnotationBase imab) {
+		indexAnnotationBase(this.annotations, imab, this.typedAnnotationBaseOrder);
+		ArrayList typeAnnots = ((ArrayList) this.annotationsByType.get(imab.getType()));
 		if (typeAnnots == null) {
 			typeAnnots = new ArrayList();
-			this.annotationsByType.put(base.getType(), typeAnnots);
+			this.annotationsByType.put(imab.getType(), typeAnnots);
 		}
-		indexAnnotationBase(typeAnnots, base, annotationBaseOrder);
+		indexAnnotationBase(typeAnnots, imab, annotationBaseOrder);
 	}
 	private void annotationTypeChanged(ImAnnotationBase imab, String oldType) {
 		this.unIndexAnnotationBase(imab, oldType);
@@ -1788,7 +1836,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			ImAnnotationBase iab1 = ((ImAnnotationBase) obj1);
 			ImAnnotationBase iab2 = ((ImAnnotationBase) obj2);
 			
-			//	compare start and end index
+			//	compare start and end index (also reflects stream folding mode)
 			int c = (iab1.getStartIndex() - iab2.getStartIndex());
 			if (c != 0)
 				return c;
@@ -1937,66 +1985,294 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		ImWord firstWord = ((ImWord) firstToken.imWords.get(0));
 		ImWord lastWord = ((ImWord) lastToken.imWords.get(lastToken.imWords.size()-1));
 		
-		//	adding paragraph, and normalization level is paragraphs or streams
+		//	adding paragraph with normalization level paragraphs or streams, mark on text stream
 		if (this.paragraphsAreLogical && ImagingConstants.PARAGRAPH_TYPE.equals(type) && firstWord.getTextStreamId().equals(lastWord.getTextStreamId())) {
-			
-			//	adjust underlying text stream ...
-			for (ImWord imw = firstWord; imw != null; imw = imw.getNextWord()) {
-				
-				//	set next relation of last word to paragraph break
-				if (imw == lastWord) {
-					imw.setNextRelation(ImWord.NEXT_RELATION_PARAGRAPH_END);
-					break;
-				}
-				
-				//	we only need to handle internal paragraph breaks
-				if ((imw.getNextRelation() != ImWord.NEXT_RELATION_PARAGRAPH_END) || (imw.getNextWord() == null))
-					continue;
-				
-				//	check for hyphenation
-				boolean imwHyphenated = ((imw.getString() != null) && imw.getString().matches(".+[\\-\\u00AD\\u2010-\\u2015\\u2212]"));
-				boolean nImwContinues = false;
-				if (imwHyphenated) {
-					String nextWordString = imw.getNextWord().getString();
-					if (nextWordString == null) {} // little we can do here ...
-					else if (nextWordString.length() == 0) {} // ... or here
-					else if (nextWordString.charAt(0) == Character.toUpperCase(nextWordString.charAt(0))) {} // starting with capital letter, not a word continued
-					else if ("and;or;und;oder;et;ou;y;e;o;u;ed".indexOf(nextWordString.toLowerCase()) != -1) {} // rather looks like an enumeration continued than a word (western European languages for now)
-					else nImwContinues = true;
-				}
-				
-				//	we do have a hyphenated word
-				if (imwHyphenated && nImwContinues)
-					imw.setNextRelation(ImWord.NEXT_RELATION_HYPHENATED);
-				
-				//	we have two separate words
-				else imw.setNextRelation(ImWord.NEXT_RELATION_SEPARATE);
-			}
-			
-			//	... and return emulated paragraph
-			ImAnnotationBase imab = this.addAnnotation(firstWord, lastWord);
-			ImRegion[] firstWordPageBlocks = firstWord.getPage().getRegions(BLOCK_ANNOTATION_TYPE);
-			imab.pFirstBlockId = getParentBlockId(firstWordPageBlocks, firstWord);
-			ImRegion[] lastWordPageBlocks = firstWord.getPage().getRegions(BLOCK_ANNOTATION_TYPE);
-			imab.pFirstBlockId = getParentBlockId(lastWordPageBlocks, lastWord);
-			return this.getAnnotationView(imab, sourceBase);
+			ImAnnotationView imav = this.addParagraphAnnotation(firstWord, lastWord, sourceBase);
+			if (imav != null)
+				return imav;
 		}
 		
-		//	non-paragraph annotation, or raw or word normalization
-		else {
-			
-			//	add annotation to backing document (might go wrong if words belong to different logical text streams)
-			ImAnnotation ima = this.doc.addAnnotation(firstWord, lastWord, type);
-			if (ima == null)
-				return null;
-			
-			//	add annotation to wrapper registers
-			ImAnnotationBase imab = this.getAnnotationBase(ima);
-			this.indexAnnotationBase(imab);
-			
-			//	finally
-			return this.getAnnotationView(imab, sourceBase);
+		//	adding paragraph or block with normalization level raw or words, mark as region
+		if (!this.paragraphsAreLogical && (ImagingConstants.LINE_ANNOTATION_TYPE.equals(type) || ImagingConstants.PARAGRAPH_TYPE.equals(type) || ImagingConstants.BLOCK_ANNOTATION_TYPE.equals(type)) && (firstWord.pageId == lastWord.pageId)) {
+			ImAnnotationView imav = this.addRegionAnnotation(startIndex, size, type, sourceBase);
+			if (imav != null)
+				return imav;
 		}
+		
+		//	add annotation to backing document (might go wrong if words belong to different logical text streams)
+		ImAnnotation ima = this.doc.addAnnotation(firstWord, lastWord, type);
+		if (ima == null)
+			return null;
+		
+		//	add annotation to wrapper registers
+		ImAnnotationBase imab = this.getAnnotationBase(ima);
+		this.indexAnnotationBase(imab);
+		
+		//	finally
+		return this.getAnnotationView(imab, sourceBase);
+	}
+	private ImAnnotationView addParagraphAnnotation(ImWord firstWord, ImWord lastWord, ImAnnotationBase sourceBase) {
+		
+		//	collect blocks and paragraphs
+		ArrayList blocks = new ArrayList();
+		ImRegion block = null;
+		ArrayList blockWords = new ArrayList();
+		ArrayList paragraphs = new ArrayList();
+		ImRegion paragraph = null;
+		
+		//	adjust underlying text stream ...
+		for (ImWord imw = firstWord; imw != null; imw = imw.getNextWord()) {
+			
+			//	check block and paragraph
+			if (block == null) {}
+			else if (block.pageId != imw.pageId)
+				block = null;
+			else if (!block.bounds.includes(imw.bounds, true))
+				block = null;
+			if (paragraph == null) {}
+			else if (paragraph.pageId != imw.pageId)
+				paragraph = null;
+			else if (!paragraph.bounds.includes(imw.bounds, true))
+				paragraph = null;
+			
+			//	get and collect new block and paragraph if required
+			if (block == null) {
+				ImRegion[] imwBlocks = imw.getPage().getRegionsIncluding(BLOCK_ANNOTATION_TYPE, imw.bounds, true);
+				if (imwBlocks.length != 0) {
+					block = imwBlocks[0]; // simply use first one (there is something very hinky if there are more ...)
+					blocks.add(block);
+					blockWords.add(new ArrayList());
+				}
+			}
+			if (paragraph == null) {
+				ImRegion[] imwParagraphs = imw.getPage().getRegionsIncluding(ImagingConstants.PARAGRAPH_TYPE, imw.bounds, true);
+				if (imwParagraphs.length != 0) {
+					paragraph = imwParagraphs[0]; // simply use first one (there is something very hinky if there are more ...)
+					paragraphs.add(paragraph);
+				}
+			}
+			
+			//	remember word belongs to block
+			if (block != null)
+				((ArrayList) blockWords.get(blockWords.size()-1)).add(imw);
+			
+			//	set next relation of last word to paragraph break
+			if (imw == lastWord) {
+				imw.setNextRelation(ImWord.NEXT_RELATION_PARAGRAPH_END);
+				break;
+			}
+			
+			//	we only need to handle internal paragraph breaks
+			if ((imw.getNextRelation() != ImWord.NEXT_RELATION_PARAGRAPH_END) || (imw.getNextWord() == null))
+				continue;
+			
+			//	we have a hyphenated word, update text stream and adjust token sequence
+			if (ImUtils.isHyphenatedAfter(imw)) {
+				imw.setNextRelation(ImWord.NEXT_RELATION_HYPHENATED);
+				ImToken imwToken = this.getTokenFor(imw);
+				ImToken nextImwToken = this.getTokenFor(imw.getNextWord());
+				if (imwToken != nextImwToken)
+					this.dehyphenateTokens(imwToken, nextImwToken);
+			}
+			
+			//	we have two separate words
+			else imw.setNextRelation(ImWord.NEXT_RELATION_SEPARATE);
+		}
+		
+		//	... as well as paragraph regions ...
+		System.out.println("Got " + paragraphs.size() + " paragraphs:");
+		for (int p = 0; p < paragraphs.size(); p++) {
+			paragraph = ((ImRegion) paragraphs.get(p));
+			System.out.println(" - " + paragraph.pageId + "." + paragraph.bounds);
+		}
+		System.out.println("Got " + blocks.size() + " blocks:");
+		for (int b = 0; b < blocks.size(); b++) {
+			block = ((ImRegion) blocks.get(b));
+			System.out.println(" - " + block.pageId + "." + block.bounds);
+		}
+		for (int b = 0; b < blocks.size(); b++) {
+			block = ((ImRegion) blocks.get(b));
+			ArrayList modBlockWords = ((ArrayList) blockWords.get(b));
+			int modTop = ((ImWord) modBlockWords.get(0)).bounds.top;
+			int modBottom = ((ImWord) modBlockWords.get(modBlockWords.size()-1)).bounds.bottom;
+			adjustContainedRegions(block, ImagingConstants.PARAGRAPH_TYPE, modTop, modBottom);
+		}
+		
+		//	... and return emulated paragraph annotation
+		ImAnnotationBase imab = this.addAnnotation(firstWord, lastWord);
+		ImRegion[] firstWordPageBlocks = firstWord.getPage().getRegions(BLOCK_ANNOTATION_TYPE);
+		imab.pFirstBlockId = getParentBlockId(firstWordPageBlocks, firstWord);
+		ImRegion[] lastWordPageBlocks = firstWord.getPage().getRegions(BLOCK_ANNOTATION_TYPE);
+		imab.pLastBlockId = getParentBlockId(lastWordPageBlocks, lastWord);
+		return this.getAnnotationView(imab, sourceBase);
+	}
+	private ImAnnotationView addRegionAnnotation(int startIndex, int size, String type, ImAnnotationBase sourceBase) {
+		
+		//	collect blocks and paragraphs or columns and blocks ...
+		String parentRegionType = ((ImagingConstants.PARAGRAPH_TYPE.equals(type) || ImagingConstants.LINE_ANNOTATION_TYPE.equals(type)) ? ImagingConstants.BLOCK_ANNOTATION_TYPE : ImagingConstants.COLUMN_ANNOTATION_TYPE);
+		ArrayList parentRegions = new ArrayList();
+		ImRegion parentRegion = null;
+		ArrayList parentRegionWords = new ArrayList();
+		ArrayList regions = new ArrayList();
+		ImRegion region = null;
+		
+		//	... along the words to be annotated
+		for (int t = startIndex; t < (startIndex + size); t++) {
+			ImToken token = this.imTokenAtIndex(t);
+			for (int w = 0; w < token.imWords.size(); w++) {
+				ImWord imw = ((ImWord) token.imWords.get(w));
+				
+				//	check block and paragraph or column and block
+				if (parentRegion == null) {}
+				else if (parentRegion.pageId != imw.pageId)
+					parentRegion = null;
+				else if (!parentRegion.bounds.includes(imw.bounds, true))
+					parentRegion = null;
+				if (region == null) {}
+				else if (region.pageId != imw.pageId)
+					region = null;
+				else if (!region.bounds.includes(imw.bounds, true))
+					region = null;
+				
+				//	get and collect new block and paragraph or column and block if required
+				if (parentRegion == null) {
+					ImRegion[] imwParentRegions = imw.getPage().getRegionsIncluding(parentRegionType, imw.bounds, true);
+					if (imwParentRegions.length != 0) {
+						parentRegion = imwParentRegions[0]; // simply use first one (there is something very hinky if there are more ...)
+						parentRegions.add(parentRegion);
+						parentRegionWords.add(new ArrayList());
+					}
+				}
+				if (region == null) {
+					ImRegion[] imwRegions = imw.getPage().getRegionsIncluding(type, imw.bounds, true);
+					if (imwRegions.length != 0) {
+						region = imwRegions[0]; // simply use first one (there is something very hinky if there are more ...)
+						regions.add(region);
+					}
+				}
+				
+				//	remember word belongs to block or column
+				if (parentRegion != null)
+					((ArrayList) parentRegionWords.get(parentRegionWords.size()-1)).add(imw);
+			}
+		}
+		
+		//	adjust paragraphs or blocks ...
+		System.out.println("Got " + regions.size() + " " + type + "s:");
+		for (int r = 0; r < regions.size(); r++) {
+			region = ((ImRegion) regions.get(r));
+			System.out.println(" - " + region.pageId + "." + region.bounds);
+		}
+		System.out.println("Got " + parentRegions.size() + " " + parentRegionType + "s:");
+		for (int p = 0; p < parentRegions.size(); p++) {
+			parentRegion = ((ImRegion) parentRegions.get(p));
+			System.out.println(" - " + parentRegion.pageId + "." + parentRegion.bounds);
+		}
+		
+		//	... if we have exactly one parent region (handle line separately, no need to do any top and bottom splits) ...
+		if (ImagingConstants.LINE_ANNOTATION_TYPE.equals(type) && (parentRegions.size() == 1)) {
+			parentRegion = ((ImRegion) parentRegions.get(0));
+			ArrayList modParentRegionWords = ((ArrayList) parentRegionWords.get(0));
+			int lineTop = ((ImWord) modParentRegionWords.get(0)).bounds.top;
+			int lineBottom = ((ImWord) modParentRegionWords.get(modParentRegionWords.size()-1)).bounds.bottom;
+			ImRegion modLine = markRegion(parentRegion, lineTop, lineBottom, type);
+			
+			//	... and return resulting annotation
+			if (modLine != null) {
+				ImAnnotationBase imab = this.addAnnotation(modLine, modLine.getWords(), false);
+				if (imab != null)
+					return this.getAnnotationView(imab, sourceBase);
+			}
+		}
+		
+		//	 ... if we have exactly one parent region ...
+		else if (parentRegions.size() == 1) {
+			parentRegion = ((ImRegion) parentRegions.get(0));
+			ArrayList modParentRegionWords = ((ArrayList) parentRegionWords.get(0));
+			int modTop = ((ImWord) modParentRegionWords.get(0)).bounds.top;
+			int modBottom = ((ImWord) modParentRegionWords.get(modParentRegionWords.size()-1)).bounds.bottom;
+			ImRegion modRegion = adjustContainedRegions(parentRegion, type, modTop, modBottom);
+			
+			//	... and return resulting annotation
+			if (modRegion != null) {
+				ImAnnotationBase imab = this.addAnnotation(modRegion, modRegion.getWords() /* need to make sure we get them all */, false);
+				if (imab != null)
+					return this.getAnnotationView(imab, sourceBase);
+			}
+		}
+		
+		//	unable to annotate across parent regions
+		return null;
+	}
+	private static ImRegion adjustContainedRegions(ImRegion parentRegion, String type, int modTop, int modBottom) {
+		ArrayList exRegions = new ArrayList(Arrays.asList(parentRegion.getRegions(type)));
+		Collections.sort(exRegions, ImUtils.topDownOrder);
+		
+		//	eliminate paragraphs or blocks above and below modified one
+		int topUnModBottom = parentRegion.bounds.top;
+		int bottomUnModTop = parentRegion.bounds.bottom;
+		for (int p = 0; p < exRegions.size(); p++) {
+			ImRegion exRegion = ((ImRegion) exRegions.get(p));
+			if (exRegion.bounds.bottom <= modTop) {
+				topUnModBottom = Math.max(topUnModBottom, exRegion.bounds.bottom);
+				exRegions.remove(p--); // this one is untouched, above modification
+			}
+			else if (modBottom <= exRegion.bounds.top) {
+				bottomUnModTop = Math.min(bottomUnModTop, exRegion.bounds.top);
+				exRegions.remove(p--); // this one is untouched, below modification
+			}
+		}
+		
+		//	get extent of newly created paragraph or block
+		int exTop = (exRegions.isEmpty() ? topUnModBottom : ((ImRegion) exRegions.get(0)).bounds.top);
+		int exBottom = (exRegions.isEmpty() ? bottomUnModTop : ((ImRegion) exRegions.get(exRegions.size()-1)).bounds.bottom);
+		
+		//	save all the hassle if there is no actual modification (one existing paragraph with correct bounds)
+		//	TODO cut a few pixels of slack on top and bottom
+		if ((exRegions.size() == 1) && (exTop == modTop) && (modBottom == exBottom))
+			return ((ImRegion) exRegions.get(0));
+		
+		//	mark paragraph above newly created one (there might have been a split)
+		if (exTop < modTop)
+			markRegion(parentRegion, exTop, modTop, type);
+		
+		//	mark paragraph below newly created one (there might have been a split)
+		if (modBottom < exBottom)
+			markRegion(parentRegion, modBottom, exBottom, type);
+		
+		//	mark newly created paragraph or block
+		ImRegion modRegion = markRegion(parentRegion, modTop, modBottom, type);
+		
+		//	remove overlapping existing paragraphs or blocks
+		for (int r = 0; r < exRegions.size(); r++) {
+			ImRegion exRegion = ((ImRegion) exRegions.get(r));
+			exRegion.getPage().removeRegion(exRegion);
+		}
+		
+		//	return modified region
+		return modRegion;
+	}
+	private static ImRegion markRegion(ImRegion parentRegion, int top, int bottom, String type) {
+		BoundingBox modRegionBounds = new BoundingBox(parentRegion.bounds.left, parentRegion.bounds.right, top, bottom);
+//		ImRegion[] modRegionLines = parentRegion.getPage().getRegionsInside(LINE_ANNOTATION_TYPE, modRegionBounds, true);
+//		if (modRegionLines.length == 0)
+//			return null;
+//		modRegionBounds = ImLayoutObject.getAggregateBox(modRegionLines);
+		ImWord[] modRegionWords = parentRegion.getPage().getWordsInside(modRegionBounds);
+		if (modRegionWords.length == 0)
+			return null;
+		modRegionBounds = ImLayoutObject.getAggregateBox(modRegionWords);
+		ImRegion[] exRegions = parentRegion.getPage().getRegionsInside(type, modRegionBounds, true);
+		for (int r = 0; r < exRegions.length; r++) {
+			if (modRegionBounds.equals(exRegions[r].bounds))
+				return exRegions[r]; // prevent duplicates
+		}
+		ImRegion modRegion = new ImRegion(parentRegion.getPage(), modRegionBounds, type);
+		if (parentRegion.hasAttribute(TEXT_ORIENTATION_ATTRIBUTE))
+			modRegion.setAttribute(TEXT_ORIENTATION_ATTRIBUTE, parentRegion.getAttribute(TEXT_ORIENTATION_ATTRIBUTE));
+		if (parentRegion.hasAttribute(INDENTATION_ATTRIBUTE))
+			modRegion.setAttribute(INDENTATION_ATTRIBUTE, parentRegion.getAttribute(INDENTATION_ATTRIBUTE));
+		return modRegion;
 	}
 	private ImAnnotationBase getAnnotationBase(ImAnnotation ima) {
 		ImAnnotationBase imab = ((ImAnnotationBase) this.annotationBasesByAnnotations.get(ima));
@@ -2289,9 +2565,9 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	private static String asHex(int i, int bytes) {
 		StringBuffer hex = new StringBuffer();
 		while (bytes != 0) {
-			hex.insert(0, hexDigits.charAt(i & 15));
+			hex.insert(0, hexDigits.charAt(i & 0xF));
 			i >>>= 4;
-			hex.insert(0, hexDigits.charAt(i & 15));
+			hex.insert(0, hexDigits.charAt(i & 0xF));
 			i >>>= 4;
 			bytes--;
 		}

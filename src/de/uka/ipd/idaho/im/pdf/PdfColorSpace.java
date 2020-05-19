@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -32,12 +32,11 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.Hashtable;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
-import java.util.Vector;
 
 import de.uka.ipd.idaho.gamta.util.CountingSet;
 import de.uka.ipd.idaho.im.pdf.PdfParser.PStream;
@@ -108,8 +107,10 @@ abstract class PdfColorSpace {
 	
 	static PdfColorSpace getColorSpace(Object csObj, Map objects) {
 		csObj = PdfParser.dereference(csObj, objects);
-		if (csObj instanceof Vector) {
-			Vector csData = ((Vector) csObj);
+//		if (csObj instanceof Vector) {
+		if (csObj instanceof List) {
+//			Vector csData = ((Vector) csObj);
+			List csData = ((List) csObj);
 			PdfParser.dereferenceObjects(csData, objects);
 			if (csData.size() < 1)
 				throw new RuntimeException("Invalid empty Color Space data.");
@@ -165,12 +166,15 @@ abstract class PdfColorSpace {
 		else return getColorSpace(csObj.toString());
 	}
 	
-	static PdfColorSpace getImageMaskColorSpace(Hashtable params, Map objects) {
+//	static PdfColorSpace getImageMaskColorSpace(Hashtable params, Map objects) {
+	static PdfColorSpace getImageMaskColorSpace(Map params, Map objects) {
 		Object decodeObj = PdfParser.dereference(params.get("Decode"), objects);
 		//	Decode: [0, 1] => 0 is black, 1 is white; [1, 0] => the other way around
 		boolean zeroIsBlack = true;
-		if ((decodeObj instanceof Vector) && (((Vector) decodeObj).size() == 2))
-			zeroIsBlack = (((Number) ((Vector) decodeObj).get(0)).intValue() == 0);
+//		if ((decodeObj instanceof Vector) && (((Vector) decodeObj).size() == 2))
+//			zeroIsBlack = (((Number) ((Vector) decodeObj).get(0)).intValue() == 0);
+		if ((decodeObj instanceof List) && (((List) decodeObj).size() == 2))
+			zeroIsBlack = (((Number) ((List) decodeObj).get(0)).intValue() == 0);
 		return (zeroIsBlack ? imageMask01 : imageMask10);
 	}
 	private static PdfColorSpace imageMask01 = new PdfColorSpace("ImageMask01", 1, true) {
@@ -227,16 +231,17 @@ abstract class PdfColorSpace {
 			float x = ((lab_a / 500) + y);
 			float z = (y - (lab_b / 200));
 			
-			if ((y * y * y) > 0.008856)
+			if (y > 0.2069) // if ((y * y * y) > 0.008856)
 				y = (y * y * y);
 			else y = ((y - (16.0f / 116)) / 7.787f);
-			if ((x * x * x) > 0.008856)
+			if (x > 0.2069) // if ((x * x * x) > 0.008856)
 				x = (x * x * x);
 			else x = ((x - (16.0f / 116)) / 7.787f);
-			if ((z * z * z) > 0.008856)
+			if (z > 0.2069) // if ((z * z * z) > 0.008856)
 				z = (z * z * z);
 			else z = ((z - (16.0f / 116)) / 7.787f);
 			
+			//	multiplication factors for 2° D65 (Daylight, sRGB, Adobe-RGB)
 			x = (x * 95.047f);
 			y = (y * 100.0f);
 			z = (z * 108.883f);
@@ -299,7 +304,8 @@ abstract class PdfColorSpace {
 		private int hival;
 		private byte[] lookup;
 		HashMap colorCache = new HashMap();
-		IndexedColorSpace(String name, Vector data, PdfColorSpace baseCs, Map objects) {
+//		IndexedColorSpace(String name, Vector data, PdfColorSpace baseCs, Map objects) {
+		IndexedColorSpace(String name, List data, PdfColorSpace baseCs, Map objects) {
 			super(name, 1, baseCs.isAdditive);
 			if (data.size() < 4)
 				throw new RuntimeException("Invalid data for Indexed Color Space: " + data);
@@ -396,7 +402,8 @@ abstract class PdfColorSpace {
 		private PdfColorSpace altColorSpace;
 		private Function tintTransformer;
 		private HashMap colorCache = new HashMap();
-		SeparationColorSpace(String name, Vector data, PdfColorSpace altCs, Map objects) {
+//		SeparationColorSpace(String name, Vector data, PdfColorSpace altCs, Map objects) {
+		SeparationColorSpace(String name, List data, PdfColorSpace altCs, Map objects) {
 			super(name, 1, false);
 			if (data.size() < 4)
 				throw new RuntimeException("Invalid data for Separation Color Space: " + data);
@@ -412,7 +419,8 @@ abstract class PdfColorSpace {
 				PStream ffStream = ((PStream) ttObj);
 				this.tintTransformer = new Function(ffStream.params, ffStream, objects);
 			}
-			else this.tintTransformer = new Function(((Hashtable) ttObj), null, objects);
+//			else this.tintTransformer = new Function(((Hashtable) ttObj), null, objects);
+			else this.tintTransformer = new Function(((Map) ttObj), null, objects);
 		}
 		Color decodeColor(LinkedList stack, String indent) {
 			float t = ((Number) stack.removeLast()).floatValue();
@@ -477,10 +485,13 @@ abstract class PdfColorSpace {
 		private String[] altComponentNames;
 		private int[] colorantAltComponentIndices;
 		private HashMap colorCache = new HashMap();
-		DeviceNColorSpace(String name, Vector data, PdfColorSpace altCs, Map objects) {
-			super(name, ((Vector) data.get(1)).size(), ((data.size() < 5) || !(data.get(4) instanceof Hashtable) || (((Hashtable) data.get(4)).get("Subtype") == null) || !"NChannel".equals(((Hashtable) data.get(4)).get("Subtype"))));
+//		DeviceNColorSpace(String name, Vector data, PdfColorSpace altCs, Map objects) {
+		DeviceNColorSpace(String name, List data, PdfColorSpace altCs, Map objects) {
+//			super(name, ((Vector) data.get(1)).size(), ((data.size() < 5) || !(data.get(4) instanceof Hashtable) || (((Hashtable) data.get(4)).get("Subtype") == null) || !"NChannel".equals(((Hashtable) data.get(4)).get("Subtype"))));
+			super(name, ((List) data.get(1)).size(), ((data.size() < 5) || !(data.get(4) instanceof Map) || (((Map) data.get(4)).get("Subtype") == null) || !"NChannel".equals(((Map) data.get(4)).get("Subtype"))));
 			
-			Vector colorantNames = ((Vector) data.get(1));
+//			Vector colorantNames = ((Vector) data.get(1));
+			List colorantNames = ((List) data.get(1));
 			this.colorantNames = new String[colorantNames.size()];
 			for (int c = 0; c < colorantNames.size(); c++)
 				this.colorantNames[c] = colorantNames.get(c).toString();
@@ -494,17 +505,21 @@ abstract class PdfColorSpace {
 				PStream ffStream = ((PStream) ttObj);
 				this.tintTransformer = new Function(ffStream.params, ffStream, objects);
 			}
-			else this.tintTransformer = new Function(((Hashtable) ttObj), null, objects);
+//			else this.tintTransformer = new Function(((Hashtable) ttObj), null, objects);
+			else this.tintTransformer = new Function(((Map) ttObj), null, objects);
 			
 			if (data.size() == 5) {
 				Object attribObj = PdfParser.dereference(data.get(4), objects);
 				System.out.println(this.name + ": attributes are " + attribObj);
-				if (attribObj instanceof Hashtable)
-					this.processAttributes(((Hashtable) attribObj), objects);
+//				if (attribObj instanceof Hashtable)
+//					this.processAttributes(((Hashtable) attribObj), objects);
+				if (attribObj instanceof Map)
+					this.processAttributes(((Map) attribObj), objects);
 			}
 		}
 		
-		private void processAttributes(Hashtable attribs, Map objects) {
+//		private void processAttributes(Hashtable attribs, Map objects) {
+		private void processAttributes(Map attribs, Map objects) {
 			Object subTypeObj = attribs.get("Subtype");
 			System.out.println(this.name + ": subtype is " + subTypeObj);
 			if ((subTypeObj == null) || !subTypeObj.equals("NChannel"))
@@ -512,15 +527,18 @@ abstract class PdfColorSpace {
 			
 			Object processObj = PdfParser.dereference(attribs.get("Process"), objects);
 			System.out.println(this.name + ": process is " + processObj);
-			if (!(processObj instanceof Hashtable))
+//			if (!(processObj instanceof Hashtable))
+			if (!(processObj instanceof Map))
 				return;
-			Hashtable process = ((Hashtable) processObj);
+//			Hashtable process = ((Hashtable) processObj);
+			Map process = ((Map) processObj);
 			
 			this.altColorSpace = getColorSpace(PdfParser.dereference(process.get("ColorSpace"), objects), objects);
 			if (this.altColorSpace == null)
 				throw new RuntimeException("Invalid process Color Space '" + PdfParser.dereference(process.get("ColorSpace"), objects) + "'");
 			
-			Vector processComponents = ((Vector) PdfParser.dereference(process.get("Components"), objects));
+//			Vector processComponents = ((Vector) PdfParser.dereference(process.get("Components"), objects));
+			List processComponents = ((List) PdfParser.dereference(process.get("Components"), objects));
 			this.altComponentNames = new String[processComponents.size()];
 			for (int c = 0; c < processComponents.size(); c++)
 				this.altComponentNames[c] = processComponents.get(c).toString();
@@ -623,18 +641,21 @@ abstract class PdfColorSpace {
 		Function[] functions;
 		float[] bounds;
 		
-		Function(Hashtable params, PStream stream, Map objects) {
+//		Function(Hashtable params, PStream stream, Map objects) {
+		Function(Map params, PStream stream, Map objects) {
 			Number type = ((Number) params.get("FunctionType"));
 			this.type = type.intValue();
 			
-			Vector domains = ((Vector) params.get("Domain"));
+//			Vector domains = ((Vector) params.get("Domain"));
+			List domains = ((List) params.get("Domain"));
 			this.domains = new float[domains.size() / 2][2];
 			for (int d = 0; d < this.domains.length; d++) {
 				this.domains[d][0] = ((Number) domains.get(d * 2)).floatValue();
 				this.domains[d][1] = ((Number) domains.get((d * 2) + 1)).floatValue();
 			}
 			
-			Vector ranges = ((Vector) params.get("Range"));
+//			Vector ranges = ((Vector) params.get("Range"));
+			List ranges = ((List) params.get("Range"));
 			if (ranges != null) {
 				this.ranges = new float[ranges.size() / 2][2];
 				for (int r = 0; r < this.ranges.length; r++) {
@@ -644,7 +665,8 @@ abstract class PdfColorSpace {
 			}
 			
 			if (this.type == 0) {
-				Vector size = ((Vector) params.get("Size"));
+//				Vector size = ((Vector) params.get("Size"));
+				List size = ((List) params.get("Size"));
 				this.size = new int[size.size()];
 				this.sampledValues = new float[this.size.length][];
 				for (int s = 0; s < this.size.length; s++) {
@@ -667,7 +689,8 @@ abstract class PdfColorSpace {
 				if (interpolationOrder != null)
 					this.interpolationOrder = interpolationOrder.intValue();
 				
-				Vector encode = ((Vector) params.get("Encode"));
+//				Vector encode = ((Vector) params.get("Encode"));
+				List encode = ((List) params.get("Encode"));
 				if (encode != null) {
 					this.encode = new float[encode.size() / 2][2];
 					for (int e = 0; e < this.encode.length; e++) {
@@ -683,7 +706,8 @@ abstract class PdfColorSpace {
 					}
 				}
 				
-				Vector decode = ((Vector) params.get("Decode"));
+//				Vector decode = ((Vector) params.get("Decode"));
+				List decode = ((List) params.get("Decode"));
 				if (decode != null) {
 					this.decode = new float[decode.size() / 2][2];
 					for (int d = 0; d < this.decode.length; d++) {
@@ -708,14 +732,16 @@ abstract class PdfColorSpace {
 				Number n = ((Number) params.get("N"));
 				this.n = n.floatValue();
 				
-				Vector c0 = ((Vector) params.get("C0"));
+//				Vector c0 = ((Vector) params.get("C0"));
+				List c0 = ((List) params.get("C0"));
 				if (c0 != null) {
 					this.c0 = new float[c0.size()];
 					for (int c = 0; c < this.c0.length; c++)
 						this.c0[c] = ((Number) c0.get(c)).floatValue();
 				}
 				
-				Vector c1 = ((Vector) params.get("C1"));
+//				Vector c1 = ((Vector) params.get("C1"));
+				List c1 = ((List) params.get("C1"));
 				if (c1 != null) {
 					this.c1 = new float[c1.size()];
 					for (int c = 0; c < this.c1.length; c++)
@@ -724,7 +750,8 @@ abstract class PdfColorSpace {
 			}
 			
 			else if (this.type == 3) {
-				Vector functions = ((Vector) params.get("Functions"));
+//				Vector functions = ((Vector) params.get("Functions"));
+				List functions = ((List) params.get("Functions"));
 				this.functions = new Function[functions.size()];
 				for (int f = 0; f < functions.size(); f++) {
 					Object fObj = PdfParser.dereference(functions.get(f), objects);
@@ -732,15 +759,18 @@ abstract class PdfColorSpace {
 						PStream fStream = ((PStream) fObj);
 						this.functions[f] = new Function(fStream.params, fStream, objects);
 					}
-					else this.functions[f] = new Function(((Hashtable) fObj), null, objects);
+//					else this.functions[f] = new Function(((Hashtable) fObj), null, objects);
+					else this.functions[f] = new Function(((Map) fObj), null, objects);
 				}
 				
-				Vector bounds = ((Vector) params.get("Bounds"));
+//				Vector bounds = ((Vector) params.get("Bounds"));
+				List bounds = ((List) params.get("Bounds"));
 				this.bounds = new float[bounds.size()];
 				for (int b = 0; b < this.bounds.length; b++)
 					this.bounds[b] = ((Number) bounds.get(b)).floatValue();
 				
-				Vector encode = ((Vector) params.get("Encode"));
+//				Vector encode = ((Vector) params.get("Encode"));
+				List encode = ((List) params.get("Encode"));
 				this.encode = new float[encode.size() / 2][2];
 				for (int e = 0; e < this.encode.length; e++) {
 					this.encode[e][0] = ((Number) encode.get(e * 2)).floatValue();
@@ -865,7 +895,8 @@ abstract class PdfColorSpace {
 			}
 			
 			else if (this.type == 4) {
-				Hashtable state = new Hashtable();
+//				Hashtable state = new Hashtable();
+				Map state = new HashMap();
 				LinkedList stack = new LinkedList();
 				for (int d = 0; d < x.length; d++)
 					stack.addLast(new Float(x[d]));

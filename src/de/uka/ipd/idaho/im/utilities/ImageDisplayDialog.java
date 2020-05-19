@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -28,6 +28,7 @@
 package de.uka.ipd.idaho.im.utilities;
 
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.Graphics;
@@ -50,16 +51,29 @@ import de.uka.ipd.idaho.gamta.util.swing.DialogFactory;
 public class ImageDisplayDialog extends JPanel {
 	private JDialog dialog;
 	private JTabbedPane tabs = new JTabbedPane();
+	private Color background;
 	public ImageDisplayDialog(String title) {
+		this(title, null);
+	}
+	public ImageDisplayDialog(String title, Color background) {
 		this.dialog = DialogFactory.produceDialog(title, true);
 		this.dialog.getContentPane().setLayout(new BorderLayout());
 		this.dialog.getContentPane().add(this.tabs, BorderLayout.CENTER);
 		this.tabs.setTabPlacement(JTabbedPane.LEFT);
+		this.tabs.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
+		this.background = background;
 	}
-	public void addImage(final BufferedImage image, String title) {
+	public void addImage(BufferedImage image, String title) {
+		this.addImage(image, title, this.background);
+	}
+	public void addImage(final BufferedImage image, String title, final Color background) {
 		JPanel imagePanel = new JPanel() {
 			public void paintComponent(Graphics graphics) {
 				super.paintComponent(graphics);
+				if (background != null) {
+					graphics.setColor(background);
+					graphics.fillRect(0, 0, this.getWidth(), this.getHeight());
+				}
 				graphics.drawImage(image, 0, 0, this.getWidth(), this.getHeight(), this);
 			}
 		};
@@ -74,6 +88,8 @@ public class ImageDisplayDialog extends JPanel {
 	}
 	public void setVisible(boolean visible) {
 		super.setVisible(visible);
+		if (this.tabs.getTabCount() != 0)
+			this.tabs.setSelectedIndex(0);
 		this.dialog.setVisible(visible);
 	}
 	public void setSize(int width, int height) {
@@ -81,5 +97,8 @@ public class ImageDisplayDialog extends JPanel {
 	}
 	public void setLocationRelativeTo(Component comp) {
 		this.dialog.setLocationRelativeTo(comp);
+	}
+	public int getImageCount() {
+		return this.tabs.getTabCount();
 	}
 }

@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -53,6 +53,7 @@ import de.uka.ipd.idaho.easyIO.streams.CharSequenceReader;
 import de.uka.ipd.idaho.gamta.AnnotationUtils;
 import de.uka.ipd.idaho.gamta.util.AnalyzerDataProvider;
 import de.uka.ipd.idaho.gamta.util.AnalyzerDataProviderFileBased;
+import de.uka.ipd.idaho.gamta.util.ParallelJobRunner;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImageInputStream;
@@ -223,7 +224,7 @@ public class PdfExtractorTool {
 			printError("Invalid conversion mode '" + mode + "'");
 			return;
 		}
-		if (("MS".indexOf(cpuMode) == -1) || (cpuMode.length() != 1)) {
+		if ((("MS".indexOf(cpuMode) == -1) || (cpuMode.length() != 1)) && !cpuMode.matches("[1-9][0-9]*")) {
 			printError("Invalid CPU usage mode '" + cpuMode + "'");
 			return;
 		}
@@ -428,6 +429,10 @@ public class PdfExtractorTool {
 		File supplementFolder = new File(cacheBasePath + "/Supplements/");
 		if (!supplementFolder.exists())
 			supplementFolder.mkdirs();
+		if (cpuMode.matches("[1-9][0-9]*")) {
+			ParallelJobRunner.setMaxCores(Integer.parseInt(cpuMode));
+			cpuMode = "M";
+		}
 		PdfExtractor pdfExtractor = new PetPdfExtractor(new File("."), new File(cacheBasePath), pis, "M".equals(cpuMode), supplementFolder);
 		
 		//	decode input PDF
@@ -522,8 +527,9 @@ public class PdfExtractorTool {
 			for (int s = 0; s < supplements.length; s++) {
 				if (supplements[s] instanceof ImSupplement.Figure) {
 					InputStream figDataIn = supplements[s].getInputStream();
-					String figMimeType = supplements[s].getMimeType();
-					String figFileName = (supplements[s].getId() + "." + figMimeType.substring(figMimeType.lastIndexOf('/') + "/".length()));
+//					String figMimeType = supplements[s].getMimeType();
+//					String figFileName = (supplements[s].getId() + "." + figMimeType.substring(figMimeType.lastIndexOf('/') + "/".length()));
+					String figFileName = supplements[s].getFileName();
 					File figOutFile = new File(outFile, figFileName);
 					BufferedOutputStream figOut = new BufferedOutputStream(new FileOutputStream(figOutFile));					
 					byte[] figDataBuffer = new byte[1024];
@@ -653,39 +659,46 @@ public class PdfExtractorTool {
 				"\r\n\t- M: scanned PDF with born-digital meta pages (leading or tailing)" +
 				"\r\n\t- O: scanned PDF with embedded OCR to reuse" +
 				"\r\n\t- G: generic PDF, let converter determine type (the default)");
-		System.out.println("-f <fontMode>\tSelect how to handle embedded fonts (relevant only for '-t D' and '-t G'):" +
+		System.out.println("-f <fontMode>\tSelect how to handle embedded fonts (relevant only for '-t D'" +
+				"\r\n\tand '-t G'):" +
 				"\r\n\t- D: completely decode embedded fonts (the default)" +
-				"\r\n\t- V: completely decode un-mapped characters from embedded fonts (ones without a Unicode mapping), and verify existing Unicode mappings" +
-				"\r\n\t- U: completely decode un-mapped characters from embedded fonts (ones without a Unicode mapping)" +
+				"\r\n\t- V: completely decode un-mapped characters from embedded fonts (ones" +
+				"\r\n\t     without a Unicode mapping), and verify existing Unicode mappings)" +
+				"\r\n\t- U: completely decode un-mapped characters from embedded fonts (ones" +
+				"\r\n\t     without a Unicode mapping)" +
 				"\r\n\t- R: render embedded fonts, but do not decode glyphs" +
 				"\r\n\t- Q: quick mode, use Unicode mapping only");
-		System.out.println("-cs <charSet>\tSelect char set for decoding embedded fonts (relevant only for '-f D' and '-f U'):" +
+		System.out.println("-cs <charSet>\tSelect char set for decoding embedded fonts (relevant only for" +
+				"\r\n\t'-f D' and '-f U'):" +
 				"\r\n\t- U: use all of Unicode (the default)" +
 				"\r\n\t- S: use Latin characters and scientific symbols only" +
 				"\r\n\t- M: use Latin characters and mathematical symbols only" +
 				"\r\n\t- F: use Full Latin and derived characters only" +
 				"\r\n\t- L: use Extended Latin characters only" +
 				"\r\n\t- B: use Basic Latin characters only" +
-				"\r\n\t- C: custom, use '-cp' parameter to specify path (file or URL) to load from");
-		System.out.println("-cp <charSetPath>\tSpecify file or URL to load char set for embedded font decoding from (relevant only for '-f D -cs C', and required then).");
+				"\r\n\t- C: custom, use '-cp' parameter to specify path (file or URL) to load" +
+				"\r\n\t     from");
+		System.out.println("-cp <charSetPath>\tSpecify file or URL to load char set for embedded font" +
+				"\r\n\tdecoding from (relevant only for '-f D -cs C', and required then).");
 		System.out.println("-l <logMode>\tSelect the log mode:" +
 				"\r\n\t- O: log to System.out" +
 				"\r\n\t- M: log to System.out with leading progress monitor tags" +
-				"\r\n\t- <logFileName>: log to <logFileName>" +
-				"\r\n\t- S: silent, don't log (the default)");
+				"\r\n\t- S: silent, don't log (the default)" +
+				"\r\n\t- <logFileName>: log to <logFileName>");
 		System.out.println("-c <cacheBaseFolder>\tSet the cache base folder:" +
 				"\r\n\t- .: cache in sub folders of execution folder (the default)" +
 				"\r\n\t- <cacheBaseFolder>: cache in folders under <cacheBaseFolder>");
 		System.out.println("-p <cpuMode>\tSet the CPU usage mode:" +
 				"\r\n\t- M: use all available CPU cores for fast decoding (the default)" +
-				"\r\n\t- S: use a single CPU core");
+				"\r\n\t- S: use a single CPU core" +
+				"\r\n\t- <numberOfCores>: use at most <numberOfCores> CPU cores");
 		System.out.println("-o <outputDestination>\tSelect where to write the converted data:" +
 				"\r\n\t- S: write IMF to file named after source file (creates <docId>.imf if" +
 				"\r\n\t     input comes from System.in)" +
 				"\r\n\t- O: write IMF to System.out" +
 				"\r\n\t- <outputFile>: write IMF to this file" +
 				"\r\n\t- <outputFolder>: write IMF contents to this folder (folder has to" +
-				"\r\n\t                   exist, required in mode F)");
+				"\r\n\t                  exist, required in mode F)");
 		System.out.println("-m <mode>\tSelect the conversion mode:" +
 				"\r\n\t- T: extract only text, output as plain text" +
 				"\r\n\t- R: extract only text, output as raw XML" +

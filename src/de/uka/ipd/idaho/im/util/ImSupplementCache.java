@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -31,6 +31,7 @@ import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.File;
+import java.io.FileFilter;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -170,19 +171,21 @@ public class ImSupplementCache {
 			sis.close();
 			return ims;
 		}
-		
-		//	get file name and extension
-		String sDataName = ims.getId().replaceAll("[^a-zA-Z0-9]", "_");
-		String sDataType = ims.getMimeType();
-		if (sDataType.indexOf('/') != -1)
-			sDataType = sDataType.substring(sDataType.indexOf('/') + "/".length());
+//		
+//		//	get file name and extension
+//		String sDataName = ims.getId().replaceAll("[^a-zA-Z0-9]", "_");
+//		String sDataType = ims.getMimeType();
+//		if (sDataType.indexOf('/') != -1)
+//			sDataType = sDataType.substring(sDataType.indexOf('/') + "/".length());
 		
 		//	create cache file
-		File sFile = new File(this.supplementFolder, (this.doc.docId + "." + sDataName + "." + sDataType));
+//		File sFile = new File(this.supplementFolder, (this.doc.docId + "." + sDataName + "." + sDataType));
+		File sFile = new File(this.supplementFolder, (this.doc.docId + "." + ims.getFileName()));
 		
 		//	store supplement in file (if not done previously)
 		if (!sFile.exists()) {
-			File sFileCaching = new File(this.supplementFolder, (this.doc.docId + "." + sDataName + "." + sDataType + ".caching"));
+//			File sFileCaching = new File(this.supplementFolder, (this.doc.docId + "." + sDataName + "." + sDataType + ".caching"));
+			File sFileCaching = new File(this.supplementFolder, (this.doc.docId + "." + ims.getFileName() + ".caching"));
 			OutputStream sos = new BufferedOutputStream(new FileOutputStream(sFileCaching));
 			byte[] sBuffer = new byte[1024];
 			for (int r; (r = sis.read(sBuffer, 0, sBuffer.length)) != -1;)
@@ -212,6 +215,23 @@ public class ImSupplementCache {
 	public void deleteSupplement(ImSupplement ims) {
 		if (ims instanceof CachedSupplement)
 			((CachedSupplement) ims).getCacheFile().delete();
+	}
+	
+	/**
+	 * Clear out the cache, deleting all cached data files from disk.
+	 */
+	public void clear() {
+		File[] cachedFiles = this.supplementFolder.listFiles(new FileFilter() {
+			public boolean accept(File path) {
+				return (path.exists() && path.isFile() && path.getName().startsWith(doc.docId + "."));
+			}
+		});
+		if (cachedFiles == null)
+			return;
+		for (int f = 0; f < cachedFiles.length; f++)
+			cachedFiles[f].delete();
+		if (this.supplementFolder.listFiles().length == 0)
+			this.supplementFolder.delete();
 	}
 	
 	private static interface CachedSupplement {

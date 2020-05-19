@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -384,12 +384,13 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	private String string;
 	private int fontSize = -1;
 	
-	private ImWord prevWord;
-	private ImWord nextWord;
+	private ImWord prevWord = null;
+	private ImWord nextWord = null;
 	private char nextRelation = NEXT_RELATION_SEPARATE;
 	
 	private String textStreamId; // local ID of first word in text stream
-	private int textStreamPos = 0; // position within text stream in page
+//	private int textStreamPos = 0; // position within text stream in page
+	private int textStreamPos = 0; // position within text stream, absolute
 	private String textStreamType = TEXT_STREAM_TYPE_MAIN_TEXT; // type of the text stream the word belongs to
 	
 	/** Constructor (automatically adds the word to the argument page; if this
@@ -582,14 +583,22 @@ public class ImWord extends ImRegion implements ImAnnotation {
 		else if ((prevWord != null) && (prevWord.textStreamId.equals(this.textStreamId)) && (this.pageId == prevWord.pageId) && (this.textStreamPos < prevWord.textStreamPos))
 			throw new IllegalArgumentException("Cannot set predecessor of '" + this.getString() + "' (page " + this.pageId + " at " + this.bounds + ") to successor '" + prevWord.getString() + "' (page " + prevWord.pageId + " at " + prevWord.bounds + ").");
 		final ImWord oldPrev = this.prevWord;
+		final String oldType = ((oldPrev != null) ? null : this.textStreamType);
 		final ImWord prevOldNext = ((prevWord == null) ? null : prevWord.nextWord);
 		this.prevWord = prevWord;
-		if (this.prevWord != null)
+		invalidatePageTextStreamEnds(this);
+		if (this.prevWord != null) {
 			this.prevWord.nextWord = this;
-		if (prevOldNext != null)
+			invalidatePageTextStreamEnds(this.prevWord);
+		}
+		if (prevOldNext != null) {
 			prevOldNext.prevWord = null;
-		if (oldPrev != null)
+			invalidatePageTextStreamEnds(prevOldNext);
+		}
+		if (oldPrev != null) {
 			oldPrev.nextWord = null;
+			invalidatePageTextStreamEnds(oldPrev);
+		}
 		
 		if (this.prevWord == null) {
 			this.textStreamId = this.getLocalID();
@@ -597,52 +606,50 @@ public class ImWord extends ImRegion implements ImAnnotation {
 		}
 		else {
 			this.textStreamId = this.prevWord.textStreamId;
-			if (this.pageId == this.prevWord.pageId)
-				this.textStreamPos = (this.prevWord.textStreamPos + 1);
-			else this.textStreamPos = 0;
+//			if (this.pageId == this.prevWord.pageId)
+//				this.textStreamPos = (this.prevWord.textStreamPos + 1);
+//			else this.textStreamPos = 0;
+			this.textStreamPos = (this.prevWord.textStreamPos + 1);
 			this.textStreamType = this.prevWord.textStreamType;
 		}
 		
-		for (ImWord imw = this.nextWord; imw != null; imw = imw.nextWord) {
-			if ((imw.pageId != this.pageId) && imw.textStreamId.equals(this.textStreamId))
-				break;
-			if (imw == this)
-				break;
-			if (imw.pageId == this.pageId)
-				imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
-			imw.textStreamId = this.textStreamId;
-			imw.textStreamType = this.textStreamType;
-		}
+		propagateTextStreamProperties(this.nextWord, this, (this.textStreamPos + 1), this.textStreamId, this.textStreamType);
+//		for (ImWord imw = this.nextWord; imw != null; imw = imw.nextWord) {
+////			if ((imw.pageId != this.pageId) && imw.textStreamId.equals(this.textStreamId))
+////				break;
+//			if (imw == this)
+//				break; // cycle breaker safety
+////			if (imw.pageId == this.pageId)
+////				imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
+//			imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
+//			imw.textStreamId = this.textStreamId;
+//			imw.textStreamType = this.textStreamType;
+//		}
 		
 		if (prevOldNext != null) {
 			prevOldNext.textStreamId = prevOldNext.getLocalID();
 			prevOldNext.textStreamPos = 0;
+			propagateTextStreamProperties(prevOldNext.nextWord, prevOldNext, (prevOldNext.textStreamPos + 1), prevOldNext.textStreamId, prevOldNext.textStreamType);
 			for (ImWord imw = prevOldNext.nextWord; imw != null; imw = imw.nextWord) {
-				if ((imw.pageId != prevOldNext.pageId) && imw.textStreamId.equals(prevOldNext.textStreamId))
-					break;
+//				if ((imw.pageId != prevOldNext.pageId) && imw.textStreamId.equals(prevOldNext.textStreamId))
+//					break;
 				if (imw == prevOldNext)
-					break;
-				if (imw.pageId == prevOldNext.pageId)
-					imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
+					break; // cycle breaker safety
+//				if (imw.pageId == prevOldNext.pageId)
+//					imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
+				imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
 				imw.textStreamId = prevOldNext.textStreamId;
 				imw.textStreamType = prevOldNext.textStreamType;
 			}
 		}
 		
 		if (this.getPage() != null) {
+			if ((oldType != null) && !oldType.equals(this.textStreamType))
+				this.getDocument().notifyAttributeChanged(this, TEXT_STREAM_TYPE_ATTRIBUTE, oldType);
 			this.getDocument().notifyAttributeChanged(this, PREVIOUS_WORD_ATTRIBUTE, oldPrev);
 			if (prevOldNext != null)
 				this.getDocument().notifyAttributeChanged(prevOldNext, PREVIOUS_WORD_ATTRIBUTE, this.prevWord);
 		}
-		
-		/* TODO consider registering as text stream head with
-		 * - page if predecessor is null or on other page
-		 * - document if predecessor is null
-		 * ==> on getting text stream heads
-		 *   - use registered words only
-		 *   - and sort out ones that ceased to be text stream heads
-		 * ==> way lower effort for getting text stream heads
-		 */
 	}
 	
 	/**
@@ -669,62 +676,86 @@ public class ImWord extends ImRegion implements ImAnnotation {
 			throw new IllegalArgumentException("Cannot set successor of '" + this.getString() + "' (page " + this.pageId + " at " + this.bounds + ") to predecessor '" + nextWord.getString() + "' (page " + nextWord.pageId + " at " + nextWord.bounds + ").");
 		final ImWord oldNext = this.nextWord;
 		final ImWord nextOldPrev = ((nextWord == null) ? null : nextWord.prevWord);
+		final String nextOldType = (((nextWord == null) || (nextOldPrev != null)) ? null : nextWord.getTextStreamType());
 		this.nextWord = nextWord;
-		if (this.nextWord != null)
-			this.nextWord.prevWord = this;
-		if (oldNext != null)
-			oldNext.prevWord = null;
-		if (nextOldPrev != null)
-			nextOldPrev.nextWord = null;
-		
+		invalidatePageTextStreamEnds(this);
 		if (this.nextWord != null) {
-			if (this.nextWord.pageId == this.pageId)
-				this.nextWord.textStreamPos = (this.textStreamPos + 1);
-			else this.nextWord.textStreamPos = 0;
-			this.nextWord.textStreamId = this.textStreamId;
-			this.nextWord.textStreamType = this.textStreamType;
-			
-			for (ImWord imw = this.nextWord.nextWord; imw != null; imw = imw.nextWord) {
-				if ((imw.pageId != this.nextWord.pageId) && imw.textStreamId.equals(this.nextWord.textStreamId))
-					break;
-				if (imw == this)
-					break;
-				if (imw.pageId == this.nextWord.pageId)
-					imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
-				imw.textStreamId = this.nextWord.textStreamId;
-				imw.textStreamType = this.textStreamType;
-			}
+			this.nextWord.prevWord = this;
+			invalidatePageTextStreamEnds(this.nextWord);
+		}
+		if (oldNext != null) {
+			oldNext.prevWord = null;
+			invalidatePageTextStreamEnds(oldNext);
+		}
+		if (nextOldPrev != null) {
+			nextOldPrev.nextWord = null;
+			invalidatePageTextStreamEnds(nextOldPrev);
+		}
+		if (this.nextWord != null) {
+//			if (this.nextWord.pageId == this.pageId)
+//				this.nextWord.textStreamPos = (this.textStreamPos + 1);
+//			else this.nextWord.textStreamPos = 0;
+//			this.nextWord.textStreamPos = (this.textStreamPos + 1);
+//			this.nextWord.textStreamId = this.textStreamId;
+//			this.nextWord.textStreamType = this.textStreamType;
+//			this.propagateTextStreamProperties(this.nextWord.nextWord, this, (this.nextWord.textStreamPos + 1), this.nextWord.textStreamId, this.nextWord.textStreamType);
+			propagateTextStreamProperties(this.nextWord, this, (this.textStreamPos + 1), this.textStreamId, this.textStreamType);
+//			for (ImWord imw = this.nextWord.nextWord; imw != null; imw = imw.nextWord) {
+////				if ((imw.pageId != this.nextWord.pageId) && imw.textStreamId.equals(this.nextWord.textStreamId))
+////					break;
+//				if (imw == this)
+//					break; // cycle breaker safety
+////				if (imw.pageId == this.nextWord.pageId)
+////					imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
+//				imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
+//				imw.textStreamId = this.nextWord.textStreamId;
+//				imw.textStreamType = this.nextWord.textStreamType;
+//			}
 		}
 		
 		if (oldNext != null) {
 			oldNext.textStreamId = oldNext.getLocalID();
 			oldNext.textStreamPos = 0;
-			for (ImWord imw = oldNext.nextWord; imw != null; imw = imw.nextWord) {
-				if ((imw.pageId != oldNext.pageId) && imw.textStreamId.equals(oldNext.textStreamId))
-					break;
-				if (imw == oldNext)
-					break;
-				if (imw.pageId == oldNext.pageId)
-					imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
-				imw.textStreamId = oldNext.textStreamId;
-				imw.textStreamType = oldNext.textStreamType;
-			}
+			propagateTextStreamProperties(oldNext.nextWord, oldNext, (oldNext.textStreamPos + 1), oldNext.textStreamId, oldNext.textStreamType);
+//			for (ImWord imw = oldNext.nextWord; imw != null; imw = imw.nextWord) {
+////				if ((imw.pageId != oldNext.pageId) && imw.textStreamId.equals(oldNext.textStreamId))
+////					break;
+//				if (imw == oldNext)
+//					break; // cycle breaker safety
+////				if (imw.pageId == oldNext.pageId)
+////					imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
+//				imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
+//				imw.textStreamId = oldNext.textStreamId;
+//				imw.textStreamType = oldNext.textStreamType;
+//			}
 		}
 		
 		if (this.getPage() != null) {
+			if ((nextOldType != null) && !nextOldType.equals(this.textStreamType))
+				this.getDocument().notifyAttributeChanged(nextWord, TEXT_STREAM_TYPE_ATTRIBUTE, nextOldType);
 			this.getDocument().notifyAttributeChanged(this, NEXT_WORD_ATTRIBUTE, oldNext);
 			if (nextOldPrev != null)
 				this.getDocument().notifyAttributeChanged(nextOldPrev, NEXT_WORD_ATTRIBUTE, this.nextWord);
 		}
-		
-		/* TODO consider registering old successor as text stream head with
-		 * - page if new predecessor is null or on other page
-		 * - document if new predecessor is null
-		 * ==> on getting text stream heads
-		 *   - use registered words only
-		 *   - and sort out ones that ceased to be text stream heads
-		 * ==> way lower effort for getting text stream heads
-		 */
+	}
+	
+	private static void propagateTextStreamProperties(ImWord fromWord, ImWord stopWord, int textStreamPos, String textStreamId, String textStreamType) {
+		for (ImWord imw = fromWord; imw != null; imw = imw.nextWord) {
+//			if ((imw.pageId != stopWord.pageId) && imw.textStreamId.equals(stopWord.textStreamId))
+//				break;
+			if (imw == stopWord)
+				break; // cycle breaker safety
+//			if (imw.pageId == stopWord.pageId)
+//				imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
+			imw.textStreamPos = textStreamPos++;
+			imw.textStreamId = textStreamId;
+			imw.textStreamType = textStreamType;
+		}
+	}
+	
+	private static void invalidatePageTextStreamEnds(ImWord word) {
+		if (word.getPage() != null)
+			word.getPage().invalidateTextStreamEnds();
 	}
 	
 	/**
@@ -917,10 +948,16 @@ public class ImWord extends ImRegion implements ImAnnotation {
 		return this.textStreamId;
 	}
 	
+//	/**
+//	 * Retrieve the position of the word within the logical text stream it
+//	 * belongs to, within this page. For each logical text stream, the
+//	 * position restarts at 0 after a page break.
+//	 * @return the text stream position
+//	 */
 	/**
 	 * Retrieve the position of the word within the logical text stream it
-	 * belongs to, within this page. For each logical text stream, the
-	 * position restarts at 0 after a page break.
+	 * belongs to. The position is absolute, increasing through the entire text
+	 * stream.
 	 * @return the text stream position
 	 */
 	public int getTextStreamPos() {
@@ -1072,13 +1109,13 @@ public class ImWord extends ImRegion implements ImAnnotation {
 		LineMetrics lineMetrics = renderingFont.getLineMetrics(word.getString(), fontRenderContext);
 		TextLayout textLayout = new TextLayout(word.getString(), renderingFont, fontRenderContext);
 		if (zoomToBounds) {
-			while (textLayout.getBounds().getHeight() < renderingWidth) {
+			while (textLayout.getBounds().getWidth() < renderingWidth) {
 				fontSize++;
 				renderingFont = font.deriveFont(fontStyle, fontSize);
 				lineMetrics = renderingFont.getLineMetrics(word.getString(), fontRenderContext);
 				textLayout = new TextLayout(word.getString(), renderingFont, fontRenderContext);
 			}
-			while (renderingWidth < textLayout.getBounds().getHeight())  {
+			while (renderingWidth < textLayout.getBounds().getWidth())  {
 				fontSize--;
 				renderingFont = font.deriveFont(fontStyle, fontSize);
 				lineMetrics = renderingFont.getLineMetrics(word.getString(), fontRenderContext);

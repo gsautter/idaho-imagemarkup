@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -28,6 +28,7 @@
 package de.uka.ipd.idaho.im.analysis;
 
 import java.awt.Color;
+import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -42,6 +43,7 @@ import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
 import de.uka.ipd.idaho.im.analysis.Imaging.AnalysisImage;
 import de.uka.ipd.idaho.im.analysis.Imaging.ImagePartRectangle;
+import de.uka.ipd.idaho.im.utilities.ImageDisplayDialog;
 
 /**
  * Function library for page image analysis.
@@ -334,11 +336,11 @@ public class PageImageAnalysis implements ImagingConstants {
 	 * @param filterImageBlocks filter out blocks that are likely to be images
 	 *            rather than text? (safe to switch off for born-digital page
 	 *            images)
-	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 * @return the root region, representing the whole page
 	 */
-	public static Region getPageRegion(AnalysisImage ai, int dpi, boolean filterImageBlocks, ProgressMonitor psm) {
-		return getPageRegion(ai, dpi, null, -1, filterImageBlocks, psm);
+	public static Region getPageRegion(AnalysisImage ai, int dpi, boolean filterImageBlocks, ProgressMonitor pm) {
+		return getPageRegion(ai, dpi, null, -1, filterImageBlocks, pm);
 	}
 	
 	/**
@@ -353,17 +355,17 @@ public class PageImageAnalysis implements ImagingConstants {
 	 * @param filterImageBlocks filter out blocks that are likely to be images
 	 *            rather than text? (safe to switch off for born-digital page
 	 *            images)
-	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 * @return the root region, representing the whole page
 	 */
-	public static Region getPageRegion(AnalysisImage ai, int dpi, BoundingBox[] columnAreas, int minColumnWidth, boolean filterImageBlocks, ProgressMonitor psm) {
+	public static Region getPageRegion(AnalysisImage ai, int dpi, BoundingBox[] columnAreas, int minColumnWidth, boolean filterImageBlocks, ProgressMonitor pm) {
 		ImagePartRectangle pageBounds = Imaging.getContentBox(ai);
 //		int minHorizontalBlockMargin = (dpi / 15); // TODO find out if this makes sense (will turn out in the long haul only, though)
 		int minHorizontalBlockMargin = (dpi / 10); // TODO find out if this makes sense (will turn out in the long haul only, though)
 //		int minHorizontalBlockMargin = (dpi / 8); // TODO find out if this makes sense (will turn out in the long haul only, though)
 //		int minVerticalBlockMargin = (dpi / 15); // TODO find out if this makes sense (will turn out in the long haul only, though)
 		int minVerticalBlockMargin = (dpi / 10); // TODO find out if this makes sense (will turn out in the long haul only, though)
-		return getPageRegion(pageBounds, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, minColumnWidth, dpi, filterImageBlocks, psm);
+		return getPageRegion(pageBounds, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, minColumnWidth, dpi, filterImageBlocks, pm);
 	}
 	
 	/**
@@ -382,11 +384,11 @@ public class PageImageAnalysis implements ImagingConstants {
 	 * @param filterImageBlocks filter out blocks that are likely to be images
 	 *            rather than text? (safe to switch off for born-digital page
 	 *            images)
-	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 * @return the root region, representing the whole page
 	 */
-	public static Region getPageRegion(AnalysisImage ai, int dpi, int minHorizontalBlockMargin, int minVerticalBlockMargin, boolean filterImageBlocks, ProgressMonitor psm) {
-		return getPageRegion(ai, dpi, minHorizontalBlockMargin, minVerticalBlockMargin, null, -1, filterImageBlocks, psm);
+	public static Region getPageRegion(AnalysisImage ai, int dpi, int minHorizontalBlockMargin, int minVerticalBlockMargin, boolean filterImageBlocks, ProgressMonitor pm) {
+		return getPageRegion(ai, dpi, minHorizontalBlockMargin, minVerticalBlockMargin, null, -1, filterImageBlocks, pm);
 	}
 	
 	/**
@@ -409,39 +411,55 @@ public class PageImageAnalysis implements ImagingConstants {
 	 * @param filterImageBlocks filter out blocks that are likely to be images
 	 *            rather than text? (safe to switch off for born-digital page
 	 *            images)
-	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 * @return the root region, representing the whole page
 	 */
-	public static Region getPageRegion(AnalysisImage ai, int dpi, int minHorizontalBlockMargin, int minVerticalBlockMargin, BoundingBox[] columnAreas, int minColumnWidth, boolean filterImageBlocks, ProgressMonitor psm) {
+	public static Region getPageRegion(AnalysisImage ai, int dpi, int minHorizontalBlockMargin, int minVerticalBlockMargin, BoundingBox[] columnAreas, int minColumnWidth, boolean filterImageBlocks, ProgressMonitor pm) {
 		ImagePartRectangle pageBounds = Imaging.getContentBox(ai);
-		return getPageRegion(pageBounds, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, minColumnWidth, dpi, filterImageBlocks, psm);
+		return getPageRegion(pageBounds, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, minColumnWidth, dpi, filterImageBlocks, pm);
 	}
 	
-	private static Region getPageRegion(ImagePartRectangle pageBounds, int minHorizontalBlockMargin, int minVerticalBlockMargin, BoundingBox[] columnAreas, int minColumnWidth, int dpi, boolean filterImageBlocks, ProgressMonitor psm) {
+	private static Region getPageRegion(ImagePartRectangle pageBounds, int minHorizontalBlockMargin, int minVerticalBlockMargin, BoundingBox[] columnAreas, int minColumnWidth, int dpi, boolean filterImageBlocks, ProgressMonitor pm) {
 		
 		//	create block comprising whole page
 		Region page = new Region(pageBounds, false, null);
 		
+		//	visualize splitting
+		ImageDisplayDialog idd = null;//new ImageDisplayDialog("Page split step by step");
+		
 		//	fill in region tree
-		fillInSubRegions(page, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, minColumnWidth, dpi, filterImageBlocks, psm);
+		fillInSubRegions(idd, "", page, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, minColumnWidth, dpi, filterImageBlocks, pm);
+		
+		//	show split
+		if (idd != null) {
+			idd.setSize(800, 1000);
+			idd.setLocationRelativeTo(null);
+			idd.setVisible(true);
+		}
 		
 		//	finally ...
 		return page;
 	}
 	
 	private static final float capitalIHeightWidthRatio = (((float) 8) / 2); // the height/width ratio of a capital I is usually lower in serif fonts, but we want to have some safety margin
-	private static void fillInSubRegions(Region region, int minHorizontalBlockMargin, int minVerticalBlockMargin, BoundingBox[] columnAreas, int minColumnWidth, int dpi, boolean filterImageBlocks, ProgressMonitor psm) {
-		if (minHorizontalBlockMargin != 1)
-			System.out.println("Splitting region " + region.getBoundingBox());
+	private static void fillInSubRegions(ImageDisplayDialog idd, String indent, Region region, int minHorizontalBlockMargin, int minVerticalBlockMargin, BoundingBox[] columnAreas, int minColumnWidth, int dpi, boolean filterImageBlocks, ProgressMonitor pm) {
+		if (minHorizontalBlockMargin != 1) {
+			System.out.println("Splitting " + (region.isColumn ? "column" : "block") + " " + region.getBoundingBox());
+			if (columnAreas != null) {
+				System.out.println("Column areas are:");
+				for (int c = 0; c < columnAreas.length; c++)
+					System.out.println(" - " + columnAreas[c]);
+			}
+		}
 		
 		//	do split orthogonal to the one this region originated from
 		ImagePartRectangle[] subRegions;
 		if (region.isColumn) {
-			if ((region.bounds.rightCol - region.bounds.leftCol) < dpi)
+			if (region.bounds.getWidth() < dpi)
 				subRegions = Imaging.splitIntoRows(region.bounds, minVerticalBlockMargin, 0.1);
 			else subRegions = Imaging.splitIntoRows(region.bounds, minVerticalBlockMargin, 0.3);
 		}
-		else if ((region.bounds.bottomRow - region.bounds.topRow) < dpi)
+		else if (region.bounds.getHeight() < dpi)
 			subRegions = Imaging.splitIntoColumns(region.bounds, minHorizontalBlockMargin, 0, true);
 		else {
 			ImagePartRectangle[][] subRegionsCandidates = new ImagePartRectangle[7][];
@@ -457,10 +475,24 @@ public class PageImageAnalysis implements ImagingConstants {
 					subRegions = subRegionsCandidates[c];
 			}
 		}
-		if (minHorizontalBlockMargin != 1)
+		if (minHorizontalBlockMargin != 1) {
 			System.out.println(" - got " + subRegions.length + " sub regions");
+			if ((idd != null) && (subRegions.length > 1)) {
+				BufferedImage pi = region.bounds.analysisImage.getImage();
+				BufferedImage bi = new BufferedImage((pi.getWidth() / 3), (pi.getHeight() / 3), BufferedImage.TYPE_INT_ARGB);
+				Graphics2D gr = bi.createGraphics();
+				gr.scale(0.33, 0.33);
+				gr.drawImage(pi, 0, 0, null);
+				gr.setColor(new Color(0, 255, 0, 64));
+				gr.fillRect(region.bounds.leftCol, region.bounds.topRow, region.bounds.getWidth(), region.bounds.getHeight());
+				gr.setColor(new Color(255, 0, 0, 64));
+				for (int s = 0; s < subRegions.length; s++)
+					gr.fillRect(subRegions[s].leftCol, subRegions[s].topRow, subRegions[s].getWidth(), subRegions[s].getHeight());
+				idd.addImage(bi, (idd.getImageCount() + "." + indent + " Initial " + (region.isColumn ? "block" : "column") + " split of " + region.bounds));
+			}
+		}
 		
-		//	nothing to merge if we're splitting into rows, only have a single sub region, or are down to single-pixle splits
+		//	nothing to merge if we're splitting into rows, only have a single sub region, or are down to single-pixel splits
 		if (region.isColumn) {}
 		else if (subRegions.length < 2) {}
 		else if (minHorizontalBlockMargin == 1) {}
@@ -486,6 +518,21 @@ public class PageImageAnalysis implements ImagingConstants {
 			}
 			subRegionList.add(subRegions[subRegions.length-1]);
 			if (subRegionList.size() < subRegions.length) {
+				if ((minHorizontalBlockMargin != 1) && (idd != null) && (subRegions.length > 1)) {
+					BufferedImage pi = region.bounds.analysisImage.getImage();
+					BufferedImage bi = new BufferedImage((pi.getWidth() / 3), (pi.getHeight() / 3), BufferedImage.TYPE_INT_ARGB);
+					Graphics2D gr = bi.createGraphics();
+					gr.scale(0.33, 0.33);
+					gr.drawImage(pi, 0, 0, null);
+					gr.setColor(new Color(0, 255, 0, 64));
+					gr.fillRect(region.bounds.leftCol, region.bounds.topRow, region.bounds.getWidth(), region.bounds.getHeight());
+					gr.setColor(new Color(255, 0, 0, 64));
+					for (int s = 0; s < subRegionList.size(); s++) {
+						ImagePartRectangle subRegion = ((ImagePartRectangle) subRegionList.get(s));
+						gr.fillRect(subRegion.leftCol, subRegion.topRow, subRegion.getWidth(), subRegion.getHeight());
+					}
+					idd.addImage(bi, (idd.getImageCount() + "." + indent + " After column area based repair of " + region.bounds));
+				}
 				subRegions = ((ImagePartRectangle[]) subRegionList.toArray(new ImagePartRectangle[subRegionList.size()]));
 				System.out.println(" - got " + subRegions.length + " sub regions after column repair");
 			}
@@ -567,6 +614,21 @@ public class PageImageAnalysis implements ImagingConstants {
 					if (subRegions[c] != null)
 						subRegionList.add(subRegions[c]);
 				}
+				if ((minHorizontalBlockMargin != 1) && (idd != null) && (subRegions.length > 1)) {
+					BufferedImage pi = region.bounds.analysisImage.getImage();
+					BufferedImage bi = new BufferedImage((pi.getWidth() / 3), (pi.getHeight() / 3), BufferedImage.TYPE_INT_ARGB);
+					Graphics2D gr = bi.createGraphics();
+					gr.scale(0.33, 0.33);
+					gr.drawImage(pi, 0, 0, null);
+					gr.setColor(new Color(0, 255, 0, 64));
+					gr.fillRect(region.bounds.leftCol, region.bounds.topRow, region.bounds.getWidth(), region.bounds.getHeight());
+					gr.setColor(new Color(255, 0, 0, 64));
+					for (int s = 0; s < subRegionList.size(); s++) {
+						ImagePartRectangle subRegion = ((ImagePartRectangle) subRegionList.get(s));
+						gr.fillRect(subRegion.leftCol, subRegion.topRow, subRegion.getWidth(), subRegion.getHeight());
+					}
+					idd.addImage(bi, (idd.getImageCount() + "." + indent + " After column width based repair of " + region.bounds));
+				}
 				subRegions = ((ImagePartRectangle[]) subRegionList.toArray(new ImagePartRectangle[subRegionList.size()]));
 				System.out.println(" - got " + subRegions.length + " sub regions after column repair");
 			}
@@ -600,7 +662,7 @@ public class PageImageAnalysis implements ImagingConstants {
 			Region subRegion = new Region(subRegions[r], !region.isColumn, region);
 			
 			//	analyze sub region recursively
-			fillInSubRegions(subRegion, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, minColumnWidth, dpi, filterImageBlocks, psm);
+			fillInSubRegions(idd, (indent + "  "), subRegion, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, minColumnWidth, dpi, filterImageBlocks, pm);
 			
 			//	this sub region is not atomic, but has no sub regions worth retaining either, so forget about it
 			if (!subRegion.isAtomic() && (subRegion.getSubRegionCount() == 0))
@@ -645,7 +707,7 @@ public class PageImageAnalysis implements ImagingConstants {
 				ImagePartRectangle testRegionBounds = new ImagePartRectangle(subRegion.bounds.analysisImage);
 				Imaging.copyBounds(subRegion.bounds, testRegionBounds);
 				Region testRegion = new Region(testRegionBounds, true, null);
-				fillInSubRegions(testRegion, 1, 1, null, -1, dpi, true, psm);
+				fillInSubRegions(idd, (indent + "  "), testRegion, 1, 1, null, -1, dpi, true, pm);
 				if (!testRegion.isAtomic() && (testRegion.getSubRegionCount() == 0))
 					continue;
 			}
@@ -677,29 +739,177 @@ public class PageImageAnalysis implements ImagingConstants {
 			Imaging.copyBounds(Imaging.getHull(subRegions), region.bounds);
 		}
 		
+		//	any columns to repair?
+		if (!region.isColumn || (region.getSubRegionCount() < 2) || (minHorizontalBlockMargin < 2))
+			return;
+		
+		//	TODO if we have column areas, merge any columns inside those areas ...
+		//	TODO ... if not over barrier blocks that overlap with multiple column areas
+		
+		//	check if we need to repair any columns (only count blocks of more than one line, though ... page titles with opposing page numbers !!!)
+		boolean needNoRepair = true;
+		for (int r = 0; r < region.getSubRegionCount(); r++) {
+			Region subRegion = region.getSubRegion(r);
+			if (subRegion.getSubRegionCount() > 1) {
+				System.out.println("Found top level block potentially requiring merger in " + region.bounds + ":");
+				System.out.println(" - " + subRegion.bounds);
+				needNoRepair = false;
+				break;
+			}
+		}
+		if (needNoRepair) {
+			System.out.println("Merger of top level blocks in " + region.bounds + " not required");
+			return;
+		}
+		
 		//	repair columns that have fallen victim to "cross" splits (only possible from two levels up the region tree though, as we need to go through the individual blocks)
-		if (region.isColumn && (region.getSubRegionCount() > 1) && (minHorizontalBlockMargin > 1)) {
-			for (int r = 0; r < (region.getSubRegionCount() - 1); r++) {
-				Region topSubRegion = region.getSubRegion(r);
-				Region bottomSubRegion = region.getSubRegion(r+1);
+		for (int repairCount = 0;;) {
+			int prevRepairCount = repairCount;
+			for (int r = 1; r < region.getSubRegionCount(); r++) {
+				Region topSubRegion = region.getSubRegion(r-1);
+				Region bottomSubRegion = region.getSubRegion(r);
+				System.out.println("Investigating merger of top level blocks in " + region.bounds + ":");
+				System.out.println(" - " + topSubRegion.bounds);
+				System.out.println(" - " + bottomSubRegion.bounds);
 				
-				//	do we have same >1 number of columns in each of the two blocks?
-				if ((topSubRegion.getSubRegionCount() < 2) || (bottomSubRegion.getSubRegionCount() < 2))
+				//	do we have same >1 number of columns in each of the two blocks (cut some slack for sub regions less than a third of an inch high, might hit gaps)?
+//				if ((topSubRegion.getSubRegionCount() < 2) || (bottomSubRegion.getSubRegionCount() < 2))
+//					continue;
+				if ((topSubRegion.bounds.getHeight() > (dpi / 3)) && (topSubRegion.getSubRegionCount() < 2)) {
+					System.out.println(" ==> too few columns in top " + topSubRegion.bounds);
 					continue;
-				if (topSubRegion.getSubRegionCount() != bottomSubRegion.getSubRegionCount())
+				}
+				if ((bottomSubRegion.bounds.getHeight() > (dpi / 3)) && (bottomSubRegion.getSubRegionCount() < 2)) {
+					System.out.println(" ==> too few columns in bottom " + bottomSubRegion.bounds);
 					continue;
+				}
+//				if (topSubRegion.getSubRegionCount() != bottomSubRegion.getSubRegionCount())
+//					continue;
+				if ((topSubRegion.bounds.getHeight() > (dpi / 3)) && (bottomSubRegion.bounds.getHeight() > (dpi / 3)) && (topSubRegion.getSubRegionCount() != bottomSubRegion.getSubRegionCount())) {
+					System.out.println(" ==> unequal number of columns");
+					continue;
+				}
 				
 				//	are the blocks aligned?
-				if (!areTopBottom(topSubRegion, bottomSubRegion))
+				if (!areTopBottom(topSubRegion, bottomSubRegion)) {
+					System.out.println(" ==> not top-bottom");
 					continue;
+				}
+				
+				//	make sure to not merge two atomic blocks inside same column unless there already was at least one actual multi-column repair
+				if ((topSubRegion.getSubRegionCount() < 2) && (bottomSubRegion.getSubRegionCount() < 2)) {
+					Region topSubSubRegion = ((topSubRegion.getSubRegionCount() == 0) ? topSubRegion : topSubRegion.getSubRegion(0));
+					Region bottomSubSubRegion = ((bottomSubRegion.getSubRegionCount() == 0) ? bottomSubRegion : bottomSubRegion.getSubRegion(0));
+					if (topSubSubRegion.bounds.rightCol <= bottomSubSubRegion.bounds.leftCol) {}
+					else if (bottomSubSubRegion.bounds.rightCol <= topSubSubRegion.bounds.leftCol) {}
+					else {
+						System.out.println(" ==> only child blocks in same column");
+						if (repairCount == 0)
+							continue; // require at least one actual repair before merging those
+					}
+				}
+				
+				//	catch barrier blocks
+				int maxOverlapCount = 0;
+				if (topSubRegion.getSubRegionCount() == 0) {
+					int overlapCount = 0;
+					System.out.println(" - checking overlaps of atomic top " + topSubRegion.bounds);
+					for (int bs = 0; bs < bottomSubRegion.getSubRegionCount(); bs++) {
+						Region bottomSubSubRegion = bottomSubRegion.getSubRegion(bs);
+						System.out.println("   - against bottom " + bottomSubSubRegion.bounds);
+						if (topSubRegion.bounds.rightCol <= bottomSubSubRegion.bounds.leftCol) {
+							System.out.println("     ==> top off left");
+							continue;
+						}
+						if (bottomSubSubRegion.bounds.rightCol <= topSubRegion.bounds.leftCol) {
+							System.out.println("     ==> bottom off left");
+							continue;
+						}
+						System.out.println("     ==> overlaps");
+						overlapCount++;
+					}
+					maxOverlapCount = Math.max(maxOverlapCount, overlapCount);
+				}
+				else for (int ts = 0; ts < topSubRegion.getSubRegionCount(); ts++) {
+					int overlapCount = 0;
+					Region topSubSubRegion = topSubRegion.getSubRegion(ts);
+					System.out.println(" - checking overlaps of top " + topSubSubRegion.bounds);
+					for (int bs = 0; bs < bottomSubRegion.getSubRegionCount(); bs++) {
+						Region bottomSubSubRegion = bottomSubRegion.getSubRegion(bs);
+						System.out.println("   - against bottom " + bottomSubSubRegion.bounds);
+						if (topSubSubRegion.bounds.rightCol <= bottomSubSubRegion.bounds.leftCol) {
+							System.out.println("     ==> top off left");
+							continue;
+						}
+						if (bottomSubSubRegion.bounds.rightCol <= topSubSubRegion.bounds.leftCol) {
+							System.out.println("     ==> bottom off left");
+							continue;
+						}
+						System.out.println("     ==> overlaps");
+						overlapCount++;
+					}
+					maxOverlapCount = Math.max(maxOverlapCount, overlapCount);
+				}
+				if (maxOverlapCount > 1) {
+					System.out.println(" ==> top is barrier block");
+					continue;
+				}
+				
+				if (bottomSubRegion.getSubRegionCount() == 0) {
+					int overlapCount = 0;
+					System.out.println(" - checking overlaps of atomic bottom " + bottomSubRegion.bounds);
+					for (int ts = 0; ts < topSubRegion.getSubRegionCount(); ts++) {
+						Region topSubSubRegion = topSubRegion.getSubRegion(ts);
+						System.out.println("   - against top " + topSubSubRegion.bounds);
+						if (topSubSubRegion.bounds.rightCol <= bottomSubRegion.bounds.leftCol) {
+							System.out.println("     ==> top off left");
+							continue;
+						}
+						if (bottomSubRegion.bounds.rightCol <= topSubSubRegion.bounds.leftCol) {
+							System.out.println("     ==> bottom off left");
+							continue;
+						}
+						System.out.println("     ==> overlaps");
+						overlapCount++;
+					}
+					maxOverlapCount = Math.max(maxOverlapCount, overlapCount);
+				}
+				for (int bs = 0; bs < bottomSubRegion.getSubRegionCount(); bs++) {
+					int overlapCount = 0;
+					Region bottomSubSubRegion = bottomSubRegion.getSubRegion(bs);
+					System.out.println(" - checking overlaps of bottom " + bottomSubSubRegion.bounds);
+					for (int ts = 0; ts < topSubRegion.getSubRegionCount(); ts++) {
+						Region topSubSubRegion = topSubRegion.getSubRegion(ts);
+						System.out.println("   - against " + topSubSubRegion.bounds);
+						if (topSubSubRegion.bounds.rightCol <= bottomSubSubRegion.bounds.leftCol) {
+							System.out.println("     ==> top off left");
+							continue;
+						}
+						if (bottomSubSubRegion.bounds.rightCol <= topSubSubRegion.bounds.leftCol) {
+							System.out.println("     ==> bottom off left");
+							continue;
+						}
+						System.out.println("     ==> overlaps");
+						overlapCount++;
+					}
+					maxOverlapCount = Math.max(maxOverlapCount, overlapCount);
+				}
+				if (maxOverlapCount > 1) {
+					System.out.println(" ==> bottom is barrier block");
+					continue;
+				}
 				
 				//	are the columns within the blocks aligned?
+				//	TODO catch gap in left column
 				boolean subSubRegionMismatch = false;
 				for (int s = 0; s < Math.min(topSubRegion.getSubRegionCount(), bottomSubRegion.getSubRegionCount()); s++) {
 					Region topSubSubRegion = topSubRegion.getSubRegion(s);
 					Region bottomSubSubRegion = bottomSubRegion.getSubRegion(s);
 					if (!areTopBottom(topSubSubRegion, bottomSubSubRegion)) {
 						subSubRegionMismatch = true;
+						System.out.println(" ==> sub regions not top-bottom");
+						System.out.println("   - " + topSubSubRegion.bounds);
+						System.out.println("   - " + bottomSubSubRegion.bounds);
 						break;
 					}
 				}
@@ -711,15 +921,38 @@ public class PageImageAnalysis implements ImagingConstants {
 				Region mergedSubRegion = new Region(Imaging.getHull(subRegionBounds), !region.isColumn, region);
 				
 				//	re-get sub structure (easier than copying)
-				fillInSubRegions(mergedSubRegion, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, dpi, minColumnWidth, filterImageBlocks, psm);
+				fillInSubRegions(idd, (indent + "  "), mergedSubRegion, minHorizontalBlockMargin, minVerticalBlockMargin, columnAreas, dpi, minColumnWidth, filterImageBlocks, pm);
 				
 				//	does the merged sub region have as many columns as the original sub regions?
-				if (mergedSubRegion.getSubRegionCount() < topSubRegion.getSubRegionCount())
+				if (mergedSubRegion.getSubRegionCount() < Math.max(topSubRegion.getSubRegionCount(), bottomSubRegion.getSubRegionCount())) {
+					System.out.println(" ==> would incur column loss");
 					continue;
+				}
 				
 				//	replace merged blocks in parent column, compensating for loop increment
+				region.setSubRegion((r-1), mergedSubRegion);
 				region.removeSubRegion(r);
-				region.setSubRegion(r--, mergedSubRegion);
+				r--;
+				repairCount++;
+			}
+			if (prevRepairCount == repairCount)
+				break; // nothing new this round, we're done
+			if ((minHorizontalBlockMargin != 1) && (idd != null)) {
+				BufferedImage pi = region.bounds.analysisImage.getImage();
+				BufferedImage bi = new BufferedImage((pi.getWidth() / 3), (pi.getHeight() / 3), BufferedImage.TYPE_INT_ARGB);
+				Graphics2D gr = bi.createGraphics();
+				gr.scale(0.33, 0.33);
+				gr.drawImage(pi, 0, 0, null);
+				gr.setColor(new Color(0, 255, 0, 64));
+				gr.fillRect(region.bounds.leftCol, region.bounds.topRow, region.bounds.getWidth(), region.bounds.getHeight());
+				gr.setColor(new Color(255, 0, 0, 64));
+//				for (int s = 0; s < subRegions.length; s++)
+//					gr.fillRect(subRegions[s].leftCol, subRegions[s].topRow, subRegions[s].getWidth(), subRegions[s].getHeight());
+				for (int s = 0; s < region.getSubRegionCount(); s++) {
+					Region subRegion = region.getSubRegion(s);
+					gr.fillRect(subRegion.bounds.leftCol, subRegion.bounds.topRow, subRegion.bounds.getWidth(), subRegion.bounds.getHeight());
+				}
+				idd.addImage(bi, (idd.getImageCount() + "." + indent + " After column cross split repair of " + region.bounds));
 			}
 		}
 	}
@@ -742,8 +975,10 @@ public class PageImageAnalysis implements ImagingConstants {
 		int overlapWidth = (Math.min(topRegion.bounds.rightCol, bottomRegion.bounds.rightCol) - Math.max(topRegion.bounds.leftCol, bottomRegion.bounds.leftCol));
 		int minWidth = Math.min(topRegion.bounds.getWidth(), bottomRegion.bounds.getWidth());
 		
-		//	do w have at least 90% overlap?
-		return ((overlapWidth * 10) >= (minWidth * 9));
+//		//	do we have at least 90% overlap?
+//		return ((overlapWidth * 10) >= (minWidth * 9));
+		//	do we have at least 70% overlap?
+		return ((overlapWidth * 10) >= (minWidth * 7));
 	}
 	
 	/**
@@ -753,11 +988,11 @@ public class PageImageAnalysis implements ImagingConstants {
 	 * via the getBlock() method.
 	 * @param region the text block to analyze
 	 * @param dpi the resolution of the underlying page image
-	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 */
-	public static void getBlockLines(Region region, int dpi, ProgressMonitor psm) {
+	public static void getBlockLines(Region region, int dpi, ProgressMonitor pm) {
 		Block block = new Block(region.bounds);
-		getBlockLines(block, dpi, psm);
+		getBlockLines(block, dpi, pm);
 		region.setBlock(block);
 	}
 	
@@ -766,16 +1001,16 @@ public class PageImageAnalysis implements ImagingConstants {
 	 * but not words.
 	 * @param block the text block to analyze
 	 * @param dpi the resolution of the underlying page image
-	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 */
-	public static void getBlockLines(Block block, int dpi, ProgressMonitor psm) {
+	public static void getBlockLines(Block block, int dpi, ProgressMonitor pm) {
 		
 		//	compute margin thresholds
 		int minVerticalBlockMargin = (dpi / 10); // TODO find out if this makes sense (will turn out in the long haul only, though)
 		int minLineMargin = (dpi / 40); // TODO find out if this makes sense (will turn out in the long haul only, though)
 		
 		//	find text lines
-		getBlockLines(block, dpi, minVerticalBlockMargin, minLineMargin, psm);
+		getBlockLines(block, dpi, minVerticalBlockMargin, minLineMargin, pm);
 	}
 	
 	/**
@@ -790,10 +1025,10 @@ public class PageImageAnalysis implements ImagingConstants {
 	 *            the same column)
 	 * @param minLineMargin the minimum number of white pixels rows between two
 	 *            lines of text
-	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 */
-	public static void getBlockLines(Block block, int dpi, int minVerticalBlockMargin, int minLineMargin, ProgressMonitor psm) {
-		psm.setInfo("   - doing block " + block.getBoundingBox().toString());
+	public static void getBlockLines(Block block, int dpi, int minVerticalBlockMargin, int minLineMargin, ProgressMonitor pm) {
+		pm.setInfo("   - doing block " + block.getBoundingBox().toString());
 		
 		double maxSplitSlopeAngle;
 		int minZigzagPartLength;
@@ -803,7 +1038,7 @@ public class PageImageAnalysis implements ImagingConstants {
 		//	do conservative initial line split, so not to zigzag through page headers
 		maxSplitSlopeAngle = 0.1;
 		ImagePartRectangle[] lBlocks = Imaging.splitIntoRows(block.bounds, 1, maxSplitSlopeAngle, -1, 0);
-		psm.setInfo("     - got " + lBlocks.length + " initial lines");
+		pm.setInfo("     - got " + lBlocks.length + " initial lines");
 		
 		//	split initial lines into columns
 		ArrayList bLines = new ArrayList();
@@ -821,7 +1056,7 @@ public class PageImageAnalysis implements ImagingConstants {
 				bLines.add(cBlocks[c]);
 			}
 		}
-		psm.setInfo("     - got " + bLines.size() + " col block lines at margin " + (minVerticalBlockMargin * 3));
+		pm.setInfo("     - got " + bLines.size() + " col block lines at margin " + (minVerticalBlockMargin * 3));
 		
 		//	do more aggressive line splitting, but only for lines that are higher than a fifth of the dpi, as anything below that will hardly consist of two lines
 		int minLineHeight = (dpi / 10); // a single line of text will rarely be lower than one thenth of an inch in total
@@ -846,7 +1081,7 @@ public class PageImageAnalysis implements ImagingConstants {
 		
 		//	recover line blocks
 		lBlocks = ((ImagePartRectangle[]) bLines.toArray(new ImagePartRectangle[bLines.size()]));
-		psm.setInfo("     - got " + lBlocks.length + " block lines");
+		pm.setInfo("     - got " + lBlocks.length + " block lines");
 		if (lBlocks.length == 0)
 			return;
 		
@@ -908,7 +1143,7 @@ public class PageImageAnalysis implements ImagingConstants {
 	 * the returned lines have their baseline set.
 	 * @param block the text block to analyze
 	 * @param dpi the resolution of the underlying page image
-	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 * @return an array holding the extracted lines
 	 */
 	public static Line[] findBlockLines(Block block, int dpi, ProgressMonitor pm) {
@@ -920,7 +1155,7 @@ public class PageImageAnalysis implements ImagingConstants {
 	 * Further, the returned lines have their baseline set.
 	 * @param block the bounds of the text block to analyze
 	 * @param dpi the resolution of the underlying page image
-	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 * @return an array holding the extracted lines
 	 */
 	public static Line[] findBlockLines(ImagePartRectangle block, int dpi, ProgressMonitor pm) {
@@ -1341,11 +1576,11 @@ public class PageImageAnalysis implements ImagingConstants {
 	 * @param dpi the resolution of the underlying page image
 	 * @param existingWords bounding boxes of words already known to be in the
 	 *            block
-	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 */
-	public static void getBlockStructure(Region region, int dpi, BoundingBox[] existingWords, ProgressMonitor psm) {
+	public static void getBlockStructure(Region region, int dpi, BoundingBox[] existingWords, ProgressMonitor pm) {
 		Block block = new Block(region.bounds);
-		getBlockStructure(block, dpi, existingWords, psm);
+		getBlockStructure(block, dpi, existingWords, pm);
 		region.setBlock(block);
 	}
 	
@@ -1355,9 +1590,9 @@ public class PageImageAnalysis implements ImagingConstants {
 	 * @param dpi the resolution of the underlying page image
 	 * @param existingWords bounding boxes of words already known to be in the
 	 *            block
-	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 */
-	public static void getBlockStructure(Block block, int dpi, BoundingBox[] existingWords, ProgressMonitor psm) {
+	public static void getBlockStructure(Block block, int dpi, BoundingBox[] existingWords, ProgressMonitor pm) {
 		
 		//	compute margin thresholds
 		int minVerticalBlockMargin = (dpi / 10); // TODO find out if this makes sense (will turn out in the long haul only, though)
@@ -1366,12 +1601,12 @@ public class PageImageAnalysis implements ImagingConstants {
 		
 		//	find text lines and words
 		if (existingWords == null)
-			getBlockStructure(block, dpi, minVerticalBlockMargin, minLineMargin, minWordMargin, psm);
-		else getBlockStructure(block, existingWords, psm);
+			getBlockStructure(block, dpi, minVerticalBlockMargin, minLineMargin, minWordMargin, pm);
+		else getBlockStructure(block, existingWords, pm);
 		
 		//	catch empty blocks larger than half an inch in both dimensions, might be (to-parse) table 
 		if (block.isEmpty() && (dpi < ((block.bounds.rightCol - block.bounds.leftCol) * 2)) && (dpi < ((block.bounds.bottomRow - block.bounds.topRow) * 2)))
-			analyzeTable(block, dpi, existingWords, psm);
+			analyzeTable(block, dpi, existingWords, pm);
 	}
 	
 	
@@ -1398,21 +1633,21 @@ public class PageImageAnalysis implements ImagingConstants {
 	 *            two adjacent words
 	 * @param existingWords bounding boxes of words already known to be in the
 	 *            block
-	 * @param psm a monitor object for reporting progress, e.g. to a UI
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
 	 */
-	public static void getBlockStructure(Block block, int dpi, int minVerticalBlockMargin, int minLineMargin, int minWordMargin, BoundingBox[] existingWords, ProgressMonitor psm) {
+	public static void getBlockStructure(Block block, int dpi, int minVerticalBlockMargin, int minLineMargin, int minWordMargin, BoundingBox[] existingWords, ProgressMonitor pm) {
 		
 		//	find text lines and words
 		if (existingWords == null)
-			getBlockStructure(block, dpi, minVerticalBlockMargin, minLineMargin, minWordMargin, psm);
-		else getBlockStructure(block, existingWords, psm);
+			getBlockStructure(block, dpi, minVerticalBlockMargin, minLineMargin, minWordMargin, pm);
+		else getBlockStructure(block, existingWords, pm);
 		
 		//	catch empty blocks larger than half an inch in both dimensions, might be (to-parse) table 
 		if (block.isEmpty() && (dpi < ((block.bounds.rightCol - block.bounds.leftCol) * 2)) && (dpi < ((block.bounds.bottomRow - block.bounds.topRow) * 2)))
-			analyzeTable(block, dpi, existingWords, psm);
+			analyzeTable(block, dpi, existingWords, pm);
 	}
 	
-	private static void analyzeTable(Block block, int dpi, BoundingBox[] existingWords, ProgressMonitor psm) {
+	private static void analyzeTable(Block block, int dpi, BoundingBox[] existingWords, ProgressMonitor pm) {
 //		
 //		//	run Sobel gradient analysis
 //		float[][] xs = getSobelGrid(block.bounds, xSobel);
@@ -1622,8 +1857,8 @@ public class PageImageAnalysis implements ImagingConstants {
 		int minWordMargin = (dpi / 30); // TODOne_above find out if this makes sense (will turn out in the long haul only, though)
 		int minVerticalBlockMargin = minWordMargin; // using same as word margin here, as we already know we have a coherent table
 		if (existingWords == null)
-			getBlockStructure(tBlock, dpi, minVerticalBlockMargin, 1, minWordMargin, psm);
-		else getBlockStructure(tBlock, existingWords, psm);
+			getBlockStructure(tBlock, dpi, minVerticalBlockMargin, 1, minWordMargin, pm);
+		else getBlockStructure(tBlock, existingWords, pm);
 		
 		//	adjust table content back to original table block boundaries, and wrap lines in cells
 		Line[] tLines = tBlock.getLines();
@@ -2005,8 +2240,8 @@ public class PageImageAnalysis implements ImagingConstants {
 	
 	private static final int whiteRgb = Color.WHITE.getRGB();
 	
-	private static void getBlockStructure(Block block, int dpi, int minVerticalBlockMargin, int minLineMargin, int minWordMargin, ProgressMonitor psm) {
-		psm.setInfo("   - doing block " + block.getBoundingBox().toString());
+	private static void getBlockStructure(Block block, int dpi, int minVerticalBlockMargin, int minLineMargin, int minWordMargin, ProgressMonitor pm) {
+		pm.setInfo("   - doing block " + block.getBoundingBox().toString());
 		
 		double maxSplitSlopeAngle;
 		int minZigzagPartLength;
@@ -2016,7 +2251,7 @@ public class PageImageAnalysis implements ImagingConstants {
 		//	do conservative initial line split, so not to zigzag through page headers
 		maxSplitSlopeAngle = 0.2;
 		ImagePartRectangle[] lBlocks = Imaging.splitIntoRows(block.bounds, 1, maxSplitSlopeAngle, -1, 0);
-		psm.setInfo("     - got " + lBlocks.length + " initial lines");
+		pm.setInfo("     - got " + lBlocks.length + " initial lines");
 		
 		//	split initial lines into columns
 		ArrayList bLines = new ArrayList();
@@ -2034,7 +2269,7 @@ public class PageImageAnalysis implements ImagingConstants {
 				bLines.add(cBlocks[c]);
 			}
 		}
-		psm.setInfo("     - got " + bLines.size() + " col block lines at margin " + (minVerticalBlockMargin * 3));
+		pm.setInfo("     - got " + bLines.size() + " col block lines at margin " + (minVerticalBlockMargin * 3));
 		
 		//	do more aggressive line splitting, but only for lines that are higher than a fifth of the dpi, as anything below that will hardly consist of two lines
 		int minLineHeight = (dpi / 10); // a single line of text will rarely be lower than one thenth of an inch in total
@@ -2059,7 +2294,7 @@ public class PageImageAnalysis implements ImagingConstants {
 		
 		//	recover line blocks
 		lBlocks = ((ImagePartRectangle[]) bLines.toArray(new ImagePartRectangle[bLines.size()]));
-		psm.setInfo("     - got " + lBlocks.length + " block lines");
+		pm.setInfo("     - got " + lBlocks.length + " block lines");
 		if (lBlocks.length == 0)
 			return;
 		
@@ -2117,9 +2352,9 @@ public class PageImageAnalysis implements ImagingConstants {
 		//	split lines into words
 		for (int l = 0; l < block.lines.size(); l++) {
 			Line line = ((Line) block.lines.get(l));
-			psm.setInfo("     - doing line " + line.getBoundingBox().toString());
+			pm.setInfo("     - doing line " + line.getBoundingBox().toString());
 			ImagePartRectangle[] lwBlocks = Imaging.splitIntoColumns(line.bounds, minWordMargin);
-			psm.setInfo("       - got " + lwBlocks.length + " raw words in line " + l + " at margin " + minWordMargin);
+			pm.setInfo("       - got " + lwBlocks.length + " raw words in line " + l + " at margin " + minWordMargin);
 			
 			//	split words at gaps at least twice as wide as word-local average, and at least half the global minimum margin
 			ArrayList lwBlockList = new ArrayList();
@@ -2131,7 +2366,7 @@ public class PageImageAnalysis implements ImagingConstants {
 				lwBlocks = ((ImagePartRectangle[]) lwBlockList.toArray(new ImagePartRectangle[lwBlockList.size()]));
 			
 			//	filter words
-			psm.setInfo("       - got " + lwBlocks.length + " words in line " + l);
+			pm.setInfo("       - got " + lwBlocks.length + " words in line " + l);
 			boolean omittedFirst = false;
 			boolean omittedLast = false;
 			for (int w = 0; w < lwBlocks.length; w++) {
@@ -2159,7 +2394,7 @@ public class PageImageAnalysis implements ImagingConstants {
 				
 				//	sort out everything sized at most one hundredth of an inch in both dimensions
 				if ((maxWidth * maxHeight) <= ((dpi / 100) * (dpi / 100))) {
-					psm.setInfo("       --> stain omitted for size below " + (dpi / 100) + " x " + (dpi / 100));
+					pm.setInfo("       --> stain omitted for size below " + (dpi / 100) + " x " + (dpi / 100));
 					if (w == 0)
 						omittedFirst = true;
 					omittedLast = true;
@@ -2169,7 +2404,7 @@ public class PageImageAnalysis implements ImagingConstants {
 				
 //				//	sort out everything larger than one inch in either dimension TODOne find out if this is safe ==> seems not so, as German compounds can be longer ...
 //				else if ((dpi < minWidth) || (dpi < minHeight)) {
-//					psm.setInfo("     - word omitted for massive size " + Math.max(minWidth, minHeight) + " exceeding " + dpi + " in either dimension");
+//					pm.setInfo("     - word omitted for massive size " + Math.max(minWidth, minHeight) + " exceeding " + dpi + " in either dimension");
 //					if (w == 0)
 //						omittedFirst = true;
 //					omittedLast = true;
@@ -2178,7 +2413,7 @@ public class PageImageAnalysis implements ImagingConstants {
 //				}
 				//	sort out everything larger than two inches in either dimension TODOne SEEMS SO find out if this is safe now
 				else if (((dpi * 2) < minWidth) || ((dpi * 2) < minHeight)) {
-					psm.setInfo("       --> word omitted for massive size " + Math.max(minWidth, minHeight) + " exceeding " + (2*dpi) + " in either dimension");
+					pm.setInfo("       --> word omitted for massive size " + Math.max(minWidth, minHeight) + " exceeding " + (2*dpi) + " in either dimension");
 					if (w == 0)
 						omittedFirst = true;
 					omittedLast = true;
@@ -2189,13 +2424,13 @@ public class PageImageAnalysis implements ImagingConstants {
 				//	store word in line
 				omittedLast = false;
 				line.addWord(new Word(lwBlocks[w]));
-				psm.setInfo("       --> word added");
+				pm.setInfo("       --> word added");
 			}
 			
 			//	catch empty lines
 			if (line.words.isEmpty())
 				continue;
-			psm.setInfo("       - got " + line.words.size() + " words in line " + l + ", ultimately");
+			pm.setInfo("       - got " + line.words.size() + " words in line " + l + ", ultimately");
 			
 			//	correct line bounds
 			if (omittedFirst || omittedLast) {
@@ -2221,9 +2456,9 @@ public class PageImageAnalysis implements ImagingConstants {
 		adjustWordsAndLines(block);
 	}
 	
-	private static int getBlockStructure(Block block, BoundingBox[] existingWords, ProgressMonitor psm) {
+	private static int getBlockStructure(Block block, BoundingBox[] existingWords, ProgressMonitor pm) {
 		BoundingBox[] existingBlockWords = extractOverlapping(block.bounds, existingWords);
-		psm.setInfo("   - doing block " + block.getBoundingBox().toString());
+		pm.setInfo("   - doing block " + block.getBoundingBox().toString());
 		
 		//	sort words left to right
 		Arrays.sort(existingBlockWords, new Comparator() {
@@ -2354,7 +2589,7 @@ public class PageImageAnalysis implements ImagingConstants {
 					lineBottom = existingBlockWords[w].bottom;
 					lastWord = existingBlockWords[w];
 					existingBlockWords[w] = null;
-					psm.setInfo("     - starting line with " + lastWord);
+					pm.setInfo("     - starting line with " + lastWord);
 					continue;
 				}
 				
@@ -2395,14 +2630,14 @@ public class PageImageAnalysis implements ImagingConstants {
 							Math.max(existingBlockWords[w].bottom, lastWord.bottom)
 						);
 					lineWords.set((lineWords.size()-1), lastWord);
-					psm.setInfo("       - merged overlapping words " + lastWord);
+					pm.setInfo("       - merged overlapping words " + lastWord);
 				}
 				
 				//	separate word, add it
 				else {
 					lastWord = existingBlockWords[w];
 					lineWords.add(lastWord);
-					psm.setInfo("       - added word " + lastWord);
+					pm.setInfo("       - added word " + lastWord);
 				}
 				
 				//	adjust line bounds
@@ -2422,7 +2657,7 @@ public class PageImageAnalysis implements ImagingConstants {
 			//	create and store line
 			Line line = new Line(block.bounds.getSubRectangle(lineLeft, lineRight, lineTop, lineBottom));
 			block.addLine(line);
-			psm.setInfo("     - created line " + line.bounds.getId() + " with " + lineWords.size() + " words");
+			pm.setInfo("     - created line " + line.bounds.getId() + " with " + lineWords.size() + " words");
 			
 			//	add words
 			for (int w = 0; w < lineWords.size(); w++) {

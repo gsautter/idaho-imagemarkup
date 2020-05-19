@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -56,6 +56,7 @@ import java.util.LinkedList;
 import javax.swing.BorderFactory;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
+import javax.swing.JColorChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -119,7 +120,6 @@ public class ImImageEditorPanel extends JPanel {
 				this.pageWords.add(words[w]);
 				this.pageWordIDs.add(words[w].getLocalID());
 			}
-//			Collections.sort(this.pageWords, wordOrder);
 			Collections.sort(this.pageWords, ImUtils.textStreamOrder);
 		}
 		
@@ -194,6 +194,27 @@ public class ImImageEditorPanel extends JPanel {
 		
 		this.toolPanel = new JPanel(new GridLayout(0, 1, 2, 2));
 		
+		//	add word color button
+		final JButton wordBoxColorButton = new JButton("Word Box Color");
+		wordBoxColorButton.setToolTipText("Click to change color used for word bounding boxes");
+		wordBoxColorButton.setBorder(BorderFactory.createRaisedBevelBorder());
+		wordBoxColorButton.setOpaque(true);
+		wordBoxColorButton.setBackground(this.wordBoxColor);
+		wordBoxColorButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent ae) {
+				Color wbc = JColorChooser.showDialog(DialogFactory.getTopWindow(), "Select Word Box Color", ImImageEditorPanel.this.wordBoxColor);
+				if (wbc == null)
+					return;
+				ImImageEditorPanel.this.wordBoxColor = wbc;
+				wordBoxColorButton.setBackground(ImImageEditorPanel.this.wordBoxColor);
+				ImImageEditorPanel.this.wordImage = null;
+				ImImageEditorPanel.this.imagePanel.validate();
+				ImImageEditorPanel.this.imagePanel.repaint();
+			}
+		});
+		this.toolPanel.add(wordBoxColorButton);
+		this.toolPanel.add(new JLabel(" "));
+		
 		//	add whole-page edit tools and a label (with explanatory tooltip)
 		if (mietButtonList.size() != 0) {
 			JLabel mietLabel = new JLabel("Whole-Image Tools");
@@ -230,6 +251,10 @@ public class ImImageEditorPanel extends JPanel {
 		this.add(imagePanelBox, BorderLayout.CENTER);
 	}
 	
+	Color getWordBoxColor() {
+		return this.wordBoxColor;
+	}
+	
 	private BufferedImage getWordImage() {
 		if (this.wordImage == null) {
 			this.wordImage = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_4BYTE_ABGR);
@@ -244,15 +269,6 @@ public class ImImageEditorPanel extends JPanel {
 	}
 	private BufferedImage wordImage = null;
 	
-//	private static final Comparator wordOrder = new Comparator() {
-//		public int compare(Object obj1, Object obj2) {
-//			ImWord imw1 = ((ImWord) obj1);
-//			ImWord imw2 = ((ImWord) obj2);
-//			int c = imw1.getTextStreamId().compareTo(imw2.getTextStreamId());
-//			return ((c == 0) ? (imw1.getTextStreamPos() - imw2.getTextStreamPos()) : c);
-//		}
-//	};
-//	
 	private class MenuImageEditToolButton extends JButton implements ActionListener {
 		MenuImageEditTool tool;
 		MenuImageEditToolButton(MenuImageEditTool tool) {
