@@ -39,13 +39,14 @@ import java.util.TreeSet;
 
 import de.uka.ipd.idaho.gamta.Gamta;
 import de.uka.ipd.idaho.gamta.util.CountingSet;
+import de.uka.ipd.idaho.gamta.util.DocumentStyle;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
-import de.uka.ipd.idaho.gamta.util.imaging.DocumentStyle;
 import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
 import de.uka.ipd.idaho.im.ImLayoutObject;
 import de.uka.ipd.idaho.im.ImPage;
 import de.uka.ipd.idaho.im.ImRegion;
 import de.uka.ipd.idaho.im.ImWord;
+import de.uka.ipd.idaho.im.util.ImDocumentStyle;
 import de.uka.ipd.idaho.im.util.ImUtils;
 import de.uka.ipd.idaho.im.util.LinePattern;
 
@@ -519,7 +520,7 @@ public class PageAnalysis implements ImagingConstants {
 	 * @param blockLayout a style template describing block layout
 	 * @return true if the the two blocks are compatible
 	 */
-	public static boolean areContinuousStyle(BlockMetrics firstBlockMetrics, BlockMetrics secondBlockMetrics, DocumentStyle blockLayout) {
+	public static boolean areContinuousStyle(BlockMetrics firstBlockMetrics, BlockMetrics secondBlockMetrics, ImDocumentStyle blockLayout) {
 		
 		//	compute block layouts
 		BlockLayout firstBlockLayout = firstBlockMetrics.analyze(blockLayout);
@@ -726,6 +727,10 @@ public class PageAnalysis implements ImagingConstants {
 		//	get lines
 		ImRegion[] lines = block.getRegions(ImRegion.LINE_ANNOTATION_TYPE);
 		//	TODO create lines if absent (e.g. in a table cell analyzed as a block against its column)
+		//	TODO ALSO ensure that lines don't overlap ...
+		//	TODO ... merging lines what are left-right adjacent (happens if blocks are shattered due to large word distances)
+		//	TODO ALSO make sure OCR words have height of line (cut or expand) ...
+		//	TODO ... and observe text direction in the process
 		if (lines.length == 0)
 			return null; // nothing to work with
 		Arrays.sort(lines, ImUtils.topDownOrder);
@@ -915,7 +920,7 @@ public class PageAnalysis implements ImagingConstants {
 	 * @param layout a style template describing block layout
 	 * @return true if any paragraphs were changed
 	 */
-	public static boolean splitIntoParagraphs(ImRegion block, DocumentStyle layout) {
+	public static boolean splitIntoParagraphs(ImRegion block, ImDocumentStyle layout) {
 		ImPage page = block.getPage();
 		if (page == null)
 			return false;
@@ -934,7 +939,7 @@ public class PageAnalysis implements ImagingConstants {
 	 * @param layout a style template describing block layout
 	 * @return true if any paragraphs were changed
 	 */
-	public static boolean splitIntoParagraphs(ImPage page, int pageImageDpi, ImRegion block, DocumentStyle layout) {
+	public static boolean splitIntoParagraphs(ImPage page, int pageImageDpi, ImRegion block, ImDocumentStyle layout) {
 		BlockMetrics blockMetrics = computeBlockMetrics(page, pageImageDpi, block);
 		if (blockMetrics == null)
 			return false; // happens if there are no lines at all
@@ -951,7 +956,7 @@ public class PageAnalysis implements ImagingConstants {
 	}
 	
 	private static LinePattern[] getSplitLinePatters(DocumentStyle layout) {
-		String[] splitLinePatterStrs = layout.getListProperty("splitLinePatterns", null, " ");
+		String[] splitLinePatterStrs = layout.getStringListProperty("splitLinePatterns", null, " ");
 		if ((splitLinePatterStrs == null) || (splitLinePatterStrs.length == 0))
 			return new LinePattern[0];
 		ArrayList splitLinePatters = new ArrayList(splitLinePatterStrs.length);
@@ -1442,7 +1447,7 @@ public class PageAnalysis implements ImagingConstants {
 		 * @param layout a style template describing block layout
 		 * @return the analysis result
 		 */
-		public BlockLayout analyze(DocumentStyle layout) {
+		public BlockLayout analyze(ImDocumentStyle layout) {
 			return this.doAnalyze(null, -1, layout);
 		}
 		
@@ -1471,7 +1476,7 @@ public class PageAnalysis implements ImagingConstants {
 		 * @param layout a style template describing block layout
 		 * @return the analysis result
 		 */
-		public BlockLayout analyzeContinuingFrom(BlockMetrics predecessorBlockMetrics, int blockMargin, DocumentStyle layout) {
+		public BlockLayout analyzeContinuingFrom(BlockMetrics predecessorBlockMetrics, int blockMargin, ImDocumentStyle layout) {
 			return this.doAnalyze(predecessorBlockMetrics, blockMargin, layout);
 		}
 		
@@ -1534,7 +1539,7 @@ public class PageAnalysis implements ImagingConstants {
 		}
 		
 		//	the tamplate based version (still falling back on the defaults if template is null, though)
-		private BlockLayout doAnalyze(BlockMetrics predecessorBlockMetrics, int blockMargin, DocumentStyle layout) {
+		private BlockLayout doAnalyze(BlockMetrics predecessorBlockMetrics, int blockMargin, ImDocumentStyle layout) {
 			if (layout == null)
 				return this.doAnalyze(predecessorBlockMetrics, blockMargin);
 			int maxAccPointSquashDistDenom = 25; // makes the tolerance about a millimeter

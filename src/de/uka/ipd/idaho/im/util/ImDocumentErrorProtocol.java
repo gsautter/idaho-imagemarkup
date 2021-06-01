@@ -588,7 +588,6 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 	 * @throws IOException
 	 */
 	public static void fillErrorProtocol(ImDocumentErrorProtocol idep, Reader in) throws IOException {
-		//	TODOnot consider zipping ==> IMF is zipped anyway, and IMD is huge, so ease of access more important
 		
 		//	load error protocol, scoping error categories and types
 		BufferedReader epBr = ((in instanceof BufferedReader) ? ((BufferedReader) in) : new BufferedReader(in));
@@ -703,7 +702,6 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 	 * @throws IOException
 	 */
 	public static void storeErrorProtocol(ImDocumentErrorProtocol idep, Writer out) throws IOException {
-		//	TODOnot consider zipping ==> IMF is zipped anyway, and IMD is huge, so ease of access more important
 		
 		//	persist error protocol
 		BufferedWriter epBw = ((out instanceof BufferedWriter) ? ((BufferedWriter) out) : new BufferedWriter(out));
@@ -736,7 +734,6 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 				
 				//	store false positives
 				if (falsePositives == null)
-//					falsePositives = idep.getFalsePositives();
 					falsePositives = idep.getFalsePositiveList();
 				for (int fp = 0; fp < falsePositives.size(); fp++) {
 					ImDocumentError ide = ((ImDocumentError) falsePositives.get(fp));

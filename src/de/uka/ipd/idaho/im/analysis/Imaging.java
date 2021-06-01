@@ -126,6 +126,7 @@ public class Imaging {
 	public static class AnalysisImage {
 		private BufferedImage image;
 		private byte[][] brightness;
+		private double rotatedBy = 0;
 		AnalysisImage(BufferedImage image) {
 			this.image = image;
 		}
@@ -140,6 +141,19 @@ public class Imaging {
 			this.image = image;
 			this.brightness = null;
 			this.fftCache.clear();
+		}
+		
+		/**
+		 * Retrieve the angle (in radiants) an image was rotated by during
+		 * correction. If the image was never passed to the
+		 * <code>correctRotation()</code> method, this method always returns 0.
+		 * @return the angle by which the image was rotated during correction
+		 */
+		public double getRotatedBy() {
+			return this.rotatedBy;
+		}
+		void setRotatedBy(double rotatedBy) {
+			this.rotatedBy = rotatedBy;
 		}
 		
 		/**
@@ -180,6 +194,8 @@ public class Imaging {
 			}
 			return fft;
 		}
+		private HashMap fftCache = new HashMap(2);
+		
 		/**
 		 * Retrieve the FFT of the wrapped image. Having the image repeated
 		 * computes the FFT of a plain parquetted with the argument image
@@ -193,6 +209,7 @@ public class Imaging {
 			while (dim < size) dim *= 2;
 			return this.getFft(dim, repeatImage);
 		}
+		
 		/**
 		 * @return the FFT of the wrapped image
 		 */
@@ -202,7 +219,6 @@ public class Imaging {
 			while (dim < size) dim *= 2;
 			return this.getFft(dim, (this.image.getWidth() < this.image.getHeight()));
 		}
-		private HashMap fftCache = new HashMap(2);
 	}
 	
 	/**
@@ -321,6 +337,33 @@ public class Imaging {
 		return ((byte) ((lMax + lMin) / 2)); // return average
 	}
 	
+	/** control flag switching on or off check for and inversion of extremely dark page images */
+	public static final int INVERT_WHITE_ON_BLACK = 0x01;
+	
+	/** control flag switching on or off smoothing of letters and other edges */
+	public static final int SMOOTH_LETTERS = 0x02;
+	
+	/** control flag switching on or off background elimination */
+	public static final int ELIMINATE_BACKGROUND = 0x04;
+	
+	/** control flag switching on or off white balance (use strongly recommended) */
+	public static final int WHITE_BALANCE = 0x08;
+	
+	/** control flag switching on or off removal of dark areas along page edges (e.g. shadows on recessed areas of materials on a scanner surface) */
+	public static final int CLEAN_PAGE_EDGES = 0x10;
+	
+	/** control flag switching on or off removal of speckles (dark areas too small to even be punctuation marks) */
+	public static final int REMOVE_SPECKLES = 0x20;
+	
+	/** control flag switching on or off detection and correction of large deviations (>2°) from the upright */
+	public static final int CORRECT_ROTATION = 0x40;
+	
+	/** control flag switching on or off detection and correction of small deviations (<2°) from the upright (use strongly recommended) */
+	public static final int CORRECT_SKEW = 0x80;
+	
+	/** control flag combination switching on all page image correction steps (useful as shorthand for defaults, and for bit masking) */
+	public static final int ALL_OPTIONS = 0xFF;
+	
 	/**
 	 * Correct a page image. This method aggregates several lower level
 	 * corrections for convenience, namely inversion check, white balance,
@@ -331,7 +374,21 @@ public class Imaging {
 	 * @return the corrected image
 	 */
 	public static AnalysisImage correctImage(AnalysisImage ai, int dpi, ProgressMonitor pm) {
-		return correctImage(ai, dpi, null, pm);
+		return correctImage(ai, dpi, null, ALL_OPTIONS, pm);
+	}
+	
+	/**
+	 * Correct a page image. This method aggregates several lower level
+	 * corrections for convenience, namely inversion check, white balance,
+	 * rotation correction, and cutting off white margins.
+	 * @param ai the image to correct
+	 * @param dpi the resolution of the image
+	 * @param flags flags controlling individual steps of image correction
+	 * @param pm a monitor object observing progress
+	 * @return the corrected image
+	 */
+	public static AnalysisImage correctImage(AnalysisImage ai, int dpi, int flags, ProgressMonitor pm) {
+		return correctImage(ai, dpi, null, flags, pm);
 	}
 	
 	/**
@@ -351,6 +408,27 @@ public class Imaging {
 	 * @return the corrected image
 	 */
 	public static AnalysisImage correctImage(AnalysisImage ai, int dpi, BoundingBox[] exOcrWordBounds, ProgressMonitor pm) {
+		return correctImage(ai, dpi, exOcrWordBounds, ALL_OPTIONS, pm);
+	}
+	
+	/**
+	 * Correct a page image. This method aggregates several lower level
+	 * corrections for convenience, namely inversion check, white balance,
+	 * rotation correction, and cutting off white margins. If rotation has to
+	 * be corrected and the argument OCR word boundaries are not null, they are
+	 * rotated alongside the page image and placed in the array in the order
+	 * they come in. The bounding boxes have to be in the same coordinate
+	 * system and resolution as the argument page image proper for results to
+	 * be meaningful.
+	 * @param ai the image to correct
+	 * @param dpi the resolution of the image
+	 * @param exOcrWordBounds an array holding the bounding boxes of existing
+	 *            OCR words
+	 * @param flags flags controlling individual steps of image correction
+	 * @param pm a monitor object observing progress
+	 * @return the corrected image
+	 */
+	public static AnalysisImage correctImage(AnalysisImage ai, int dpi, BoundingBox[] exOcrWordBounds, int flags, ProgressMonitor pm) {
 		if (pm == null)
 			pm = ProgressMonitor.dummy;
 		
@@ -363,22 +441,25 @@ public class Imaging {
 		boolean changed;
 		
 		//	check for white on black
-		changed = false;
-		changed = correctWhiteOnBlack(ai, ((byte) 32));
-		if (changed) {
-			pm.setInfo("   - white-on-black inverted");
-			if (idd != null)
-				idd.addImage(copyImage(ai.getImage()), "White/Black Inverted");
+		if ((flags & INVERT_WHITE_ON_BLACK) != 0) {
+			changed = false;
+			changed = correctWhiteOnBlack(ai, ((byte) 32));
+			if (changed) {
+				pm.setInfo("   - white-on-black inverted");
+				if (idd != null)
+					idd.addImage(copyImage(ai.getImage()), "White/Black Inverted");
+			}
 		}
 		
 		//	check binary vs. gray scale or color
 		boolean isGrayScale = isGrayScale(ai);
 		boolean isSharp = true;
+		byte[][] faintingDiffs = null;
 		
 		//	do the fuzzy stuff only to gray scale images
 		if (isGrayScale) {
 			
-			//	measure blurrieness
+			//	measure blurriness
 			int contrast = measureContrast(ai);
 			if (contrast < 16)
 				isSharp = false;
@@ -387,59 +468,100 @@ public class Imaging {
 			if (!isSharp) {
 				
 				//	smooth out unevenly printed letters
-				changed = false;
-				changed = gaussBlur(ai, 1);
-				if (changed) {
-					pm.setInfo("   - letters smoothed");
-					if (idd != null)
-						idd.addImage(copyImage(ai.getImage()), "Letters Smoothed");
+				if ((flags & SMOOTH_LETTERS) != 0) {
+					changed = false;
+					changed = gaussBlur(ai, 1);
+					if (changed) {
+						pm.setInfo("   - letters smoothed");
+						if (idd != null)
+							idd.addImage(copyImage(ai.getImage()), "Letters Smoothed");
+					}
 				}
 				
 				//	apply low pass filter
-				/* TODO figure out if this makes sense here, as images might suffer,
-				 * maybe better in OCR engine, applied to individual text images, but
-				 * then, this also hampers block identification */
-				changed = false;
-//				changed = eliminateBackground(ai, (dpi / 4), 3, 12);
-				changed = eliminateBackground(ai, dpi);
-				if (changed) {
-					pm.setInfo("   - background elimination done");
-					if (idd != null)
-						idd.addImage(copyImage(ai.getImage()), "Background Eliminated");
+				if ((flags & ELIMINATE_BACKGROUND) != 0) {
+					/* TODO figure out if this makes sense here, as images might suffer,
+					 * maybe better in OCR engine, applied to individual text images, but
+					 * then, this also hampers block identification */
+					changed = false;
+//					changed = eliminateBackground(ai, (dpi / 4), 3, 12);
+//					changed = eliminateBackground(ai, dpi);
+					faintingDiffs = doEliminateBackground(ai, dpi);
+					changed = (faintingDiffs != null);
+					if (changed) {
+						pm.setInfo("   - background elimination done");
+						if (idd != null)
+							idd.addImage(copyImage(ai.getImage()), "Background Eliminated");
+					}
 				}
 			}
 			
 			//	apply low pass filter also if contrast somewhat higher
 			else if (contrast < 32) {
-				/* TODO figure out if this makes sense here, as images might suffer,
-				 * maybe better in OCR engine, applied to individual text images, but
-				 * then, this also hampers block identification */
-				changed = false;
-				changed = eliminateBackground(ai, dpi);
-				if (changed) {
-					pm.setInfo("   - background elimination done");
-					if (idd != null)
-						idd.addImage(copyImage(ai.getImage()), "Background Eliminated");
+				if ((flags & ELIMINATE_BACKGROUND) != 0) {
+					/* TODO figure out if this makes sense here, as images might suffer,
+					 * maybe better in OCR engine, applied to individual text images, but
+					 * then, this also hampers block identification */
+					changed = false;
+//					changed = eliminateBackground(ai, dpi);
+					faintingDiffs = doEliminateBackground(ai, dpi);
+					changed = (faintingDiffs != null);
+					if (changed) {
+						pm.setInfo("   - background elimination done");
+						if (idd != null)
+							idd.addImage(copyImage(ai.getImage()), "Background Eliminated");
+					}
 				}
 			}
 			
 			//	whiten white
-			changed = false;
-			changed = whitenWhite(ai);
-			if (changed) {
-				pm.setInfo("   - white balance done");
-				if (idd != null)
-					idd.addImage(copyImage(ai.getImage()), "White Balanced");
+			if ((flags & WHITE_BALANCE) != 0) {
+				changed = false;
+				changed = whitenWhite(ai);
+				if (changed) {
+					pm.setInfo("   - white balance done");
+					if (idd != null)
+						idd.addImage(copyImage(ai.getImage()), "White Balanced");
+				}
 			}
 		}
 		
-		//	do feather dusting to get rid of spots in the middle of nowhere
-		changed = false;
-		changed = featherDust(ai, dpi, !isGrayScale, isSharp);
-		if (changed) {
-			pm.setInfo("   - feather dusting done");
-			if (idd != null)
-				idd.addImage(copyImage(ai.getImage()), "Feather Dusted");
+//		//	do feather dusting to get rid of spots in the middle of nowhere
+//		if ((flags & REMOVE_SPECKLES) != 0) {
+//			changed = false;
+//			changed = featherDust(ai, dpi, !isGrayScale, isSharp);
+//			if (changed) {
+//				pm.setInfo("   - feather dusting done");
+//				if (idd != null)
+//					idd.addImage(copyImage(ai.getImage()), "Feather Dusted");
+//			}
+//		}
+		//	remove speckles, dark page edges, and faint areas (or any subset of the three)
+		if ((flags & (ELIMINATE_BACKGROUND | CLEAN_PAGE_EDGES | REMOVE_SPECKLES)) != 0) {
+			int minRetainSize = (((flags & REMOVE_SPECKLES) == 0) ? 1 : (dpi / 100));
+			int minSoloRetainSize = (((flags & REMOVE_SPECKLES) == 0) ? 1 : (dpi / 25));
+			byte maxRetainExtentPercentage = (((flags & CLEAN_PAGE_EDGES) == 0) ? Byte.MAX_VALUE : ((byte) 70)); // region exceeding 70% of page width or height TODO find out if this threshold makes sense
+			byte maxRetainBrightness = (((flags & ELIMINATE_BACKGROUND) == 0) ? Byte.MAX_VALUE : ((byte) 96)); // whole region lighter than 25% gray TODO find out if this threshold makes sense
+			changed = false;
+			changed = regionColorAndClean(ai, minRetainSize, minSoloRetainSize, maxRetainExtentPercentage, maxRetainBrightness, dpi, !isGrayScale, isSharp);
+			if (changed) {
+				pm.setInfo("   - page edge removal done");
+				if (idd != null)
+					idd.addImage(copyImage(ai.getImage()), "Page Edges Removed");
+			}
+		}
+		
+		//	reverse any fainting effects on pixels that were not cleaned up
+		if (faintingDiffs != null) {
+			byte[][] brightness = ai.getBrightness();
+			for (int c = 0; c < brightness.length; c++)
+				for (int r = 0; r < brightness[c].length; r++) {
+					if (brightness[c][r] == 127)
+						continue; // eliminated
+					brightness[c][r] = ((byte) Math.max(0, (brightness[c][r] - faintingDiffs[c][r])));
+					ai.image.setRGB(c, r, Color.HSBtoRGB(0, 0, (((float) brightness[c][r]) / 127)));
+				}
+			pm.setInfo("   - image unfainted");
 		}
 		
 //		//	do fine grained feather dusting to get rid of smaller spots
@@ -457,12 +579,15 @@ public class Imaging {
 //			psm.setInfo("   - coarse feather dusting done");
 		
 		//	correct page rotation
-		changed = false;
-		changed = correctPageRotation(ai, dpi, 0.1, ADJUST_MODE_SQUARE_ROOT, exOcrWordBounds);
-		if (changed) {
-			pm.setInfo("   - page rotation corrected");
-			if (idd != null)
-				idd.addImage(copyImage(ai.getImage()), "Put Upright");
+		if (((flags & CORRECT_ROTATION) != 0) || (flags & CORRECT_SKEW) != 0) {
+			changed = false;
+			double granularity = (((flags & CORRECT_ROTATION) == 0) ? -1 : 0.1);
+			changed = correctPageRotation(ai, dpi, granularity, ADJUST_MODE_SQUARE_ROOT, exOcrWordBounds);
+			if (changed) {
+				pm.setInfo("   - page rotation corrected");
+				if (idd != null)
+					idd.addImage(copyImage(ai.getImage()), "Put Upright");
+			}
 		}
 		
 //		//	cut white margins
@@ -798,27 +923,42 @@ public class Imaging {
 	 * @return true
 	 */
 	public static boolean eliminateBackground(AnalysisImage analysisImage, int dpi) {
+		return (doEliminateBackground(analysisImage, dpi) != null);
+	}
+	
+	private static byte[][] doEliminateBackground(AnalysisImage analysisImage, int dpi) {
 		
 		//	get brightness array
 		byte[][] brightness = analysisImage.getBrightness();
 		
 		//	copy and blur brightness array
-		byte[][] backgroundBrightness = new byte[brightness.length][brightness[0].length];
-		for (int c = 0; c < brightness.length; c++) {
-			for (int r = 0; r < brightness[c].length; r++)
-				backgroundBrightness[c][r] = brightness[c][r];
-		}
-		gaussBlur2D(backgroundBrightness, (dpi / 10), false);
+//		byte[][] backgroundBrightness = new byte[brightness.length][brightness[0].length];
+//		for (int c = 0; c < brightness.length; c++) {
+//			for (int r = 0; r < brightness[c].length; r++)
+//				backgroundBrightness[c][r] = brightness[c][r];
+//		}
+//		gaussBlur2D(backgroundBrightness, (dpi / 10), false);
+		byte[][] workingBrightness = new byte[brightness.length][brightness[0].length];
+		for (int c = 0; c < brightness.length; c++)
+			System.arraycopy(brightness[c], 0, workingBrightness[c], 0, brightness[c].length);
+		gaussBlur2D(workingBrightness, (dpi / 10), false);
 		
 		//	scale brightness to use background as white
 		for (int c = 0; c < brightness.length; c++)
 			for (int r = 0; r < brightness[c].length; r++) {
-				if (backgroundBrightness[c][r] == 0)
+//				if (backgroundBrightness[c][r] == 0)
+//					continue;
+				if (workingBrightness[c][r] == 0)
 					continue;
-				int b = ((brightness[c][r] * 127) / backgroundBrightness[c][r]);
+//				int b = ((brightness[c][r] * 127) / backgroundBrightness[c][r]);
+				int b = ((brightness[c][r] * 127) / workingBrightness[c][r]);
 				if (b > 127)
 					b = 127;
-				analysisImage.brightness[c][r] = ((byte) b);
+				int faintingDiff = (b - brightness[c][r]);
+				brightness[c][r] = ((byte) b);
+				workingBrightness[c][r] = ((byte) faintingDiff);
+//				if (brightness[c][r] >= backgroundBrightness[c][r])
+//					analysisImage.brightness[c][r] = ((byte) 127);
 			}
 		
 		//	update image
@@ -828,7 +968,8 @@ public class Imaging {
 		}
 		
 		//	indicate update
-		return true;
+//		return true;
+		return workingBrightness;
 	}
 	
 	/**
@@ -1014,7 +1155,7 @@ public class Imaging {
 	 * @return true if the image was modified, false otherwise
 	 */
 	public static boolean featherDust(AnalysisImage analysisImage, int minSize, int minSoloSize, int dpi, boolean isBinary, boolean isSharp) {
-		return regionColorAndClean(analysisImage, minSize, minSoloSize, dpi, isBinary, isSharp);
+		return regionColorAndClean(analysisImage, minSize, minSoloSize, ((byte) 101), Byte.MAX_VALUE, dpi, isBinary, isSharp);
 		//	TODOne use color coding for coarse cleanup as well
 		//	- merge regions closer than chopMargin, measured by bounding box
 		//	- re-compute size and bounding box in the process
@@ -1121,60 +1262,7 @@ public class Imaging {
 	}
 	private static final boolean DEBUG_REGION_COLORING = false;
 	
-//	/**
-//	 * Apply feather dusting to an image, i.e., set all non-white blocks below a
-//	 * given size threshold to white.
-//	 * @param analysisImage the wrapped image
-//	 * @param chopMargin the minimum margin for chopping up the image
-//	 * @param minSize the minimum size for non-white spots to be retained
-//	 * @param minSoloSize the minimum size for non-white spots far apart from
-//	 *            others to be retained
-//	 * @param dpi the resolution of the image
-//	 * @param isBinaryImage is the image binary, or gray scale or color?
-//	 * @return true if the image was modified, false otherwise
-//	 */
-//	public static boolean featherDust(AnalysisImage analysisImage, int chopMargin, int minSize, int minSoloSize, int dpi, boolean isBinaryImage) {
-//		//	no need to chop & clean if we do region coloring, as it would do the same, only region coloring is more effective
-//		if (chopMargin == 1)
-//			return regionColorAndClean(analysisImage, minSize, minSoloSize, dpi, isBinaryImage);
-//		else return chopAndClean(getContentBox(analysisImage), chopMargin, true, minSize, false);
-//	}
-//	private static boolean chopAndClean(ImagePartRectangle rect, int chopMargin, boolean chopVertically, int minSize, boolean returnOnSingleSubRegion) {
-//		ImagePartRectangle[] subRects = (chopVertically ? splitIntoColumns(rect, chopMargin) : splitIntoRows(rect, chopMargin));
-//		
-//		//	only one sub part, we're done
-//		if (returnOnSingleSubRegion && (subRects.length == 1))
-//			return false;
-//		
-//		//	investigate sub rectangles
-//		boolean changed = false;
-//		for (int s = 0; s < subRects.length; s++) {
-//			
-//			//	make sure it's compact
-//			subRects[s] = narrowTopAndBottom(subRects[s]);
-//			subRects[s] = narrowLeftAndRight(subRects[s]);
-//			
-//			//	too small to retain, clean it up
-//			if (((subRects[s].rightCol - subRects[s].leftCol) < minSize) || ((subRects[s].bottomRow - subRects[s].topRow) < minSize)) {
-//				for (int c = subRects[s].leftCol; c < subRects[s].rightCol; c++)
-//					for (int r = subRects[s].topRow; r < subRects[s].bottomRow; r++) {
-//						subRects[s].analysisImage.brightness[c][r] = 127;
-////						subRects[s].analysisImage.image.setRGB(c, r, white);
-//						subRects[s].analysisImage.image.setRGB(c, r, orange);
-//					}
-//				changed = true;
-//			}
-//			
-//			//	this one's above size threshold
-//			else if (chopAndClean(subRects[s], chopMargin, !chopVertically, minSize, true))
-//				changed = true;
-//		}
-//		
-//		//	finally ...
-//		return changed;
-//	}
-	
-	private static boolean regionColorAndClean(AnalysisImage ai, int minSize, int minSoloSize, int dpi, boolean isBinary, boolean isSharp) {
+	private static boolean regionColorAndClean(AnalysisImage ai, int minRetainSize, int minSoloRetainSize, byte maxRetainExtentPercentage, byte maxRetainBrightness, int dpi, boolean isBinary, boolean isSharp) {
 		boolean changed = false;
 		
 		byte[][] brightness = ai.getBrightness();
@@ -1188,20 +1276,6 @@ public class Imaging {
 				regionCodeCount = Math.max(regionCodeCount, regionCodes[c][r]);
 		}
 		regionCodeCount++; // account for 0
-//		final int[][] regionCodes = new int[brightness.length][brightness[0].length];
-//		for (int c = 0; c < regionCodes.length; c++)
-//			Arrays.fill(regionCodes[c], 0);
-//		int currentRegionCode = 1;
-//		for (int c = 0; c < brightness.length; c++)
-//			for (int r = 0; r < brightness[c].length; r++) {
-//				if (brightness[c][r] == 127)
-//					continue;
-//				if (regionCodes[c][r] != 0)
-//					continue;
-//				int rs = colorRegion(brightness, regionCodes, c, r, currentRegionCode, ((byte) 127), isBinary);
-//				if (DEBUG_FEATHERDUST) System.out.println("Region " + currentRegionCode + " is sized " + rs);
-//				currentRegionCode++;
-//			}
 		
 		//	measure regions (size, surface, min and max column and row, min brightness)
 		int[] regionSizes = new int[regionCodeCount];
@@ -1276,7 +1350,7 @@ public class Imaging {
 				if (DEBUG_FEATHERDUST) System.out.println("Assessing region " + regionCode + " (size " + regionSizes[regionCode] + ", surface " + regionSurfaces[regionCode] + ")");
 				
 				//	too faint to retain
-				if (retain && (regionMinBrightness[regionCode] > 96)) // whole region lighter than 25% gray TODO find out if this threshold makes sense
+				if (retain && (regionMinBrightness[regionCode] > maxRetainBrightness))
 					retain = false;
 				if (!retain) {
 					for (int cc = regionMinCols[regionCode]; cc <= regionMaxCols[regionCode]; cc++)
@@ -1301,7 +1375,7 @@ public class Imaging {
 				//	TODO refine this estimate, ceil(sqrt) is too coarse for small regions, retains too much
 				
 				//	too thin in whichever direction
-				if ((regionSizes[regionCode] < (minSize * minSoloSize)) && (((minSurface + maxSurface) / 2) <= regionSurfaces[regionCode])) {
+				if ((regionSizes[regionCode] < (minRetainSize * minSoloRetainSize)) && (((minSurface + maxSurface) / 2) <= regionSurfaces[regionCode])) {
 					retain = false;
 					if (DEBUG_FEATHERDUST) System.out.println(" --> removed as too thin");
 				}
@@ -1313,13 +1387,15 @@ public class Imaging {
 //					retain = false;
 //				if (retain && (colorCodeCounts[colorCode] < (isBinaryImage ? ((minSize-1) * (minSize-1)) : (minSize * minSize))))
 //					retain = false;
-				if (retain && ((regionSizes[regionCode] * (isBinary ? 2 : 1)) < ((minSize * minSize) + (isBinary ? 1 : 0)))) {
+				if (retain && ((regionSizes[regionCode] * (isBinary ? 2 : 1)) < ((minRetainSize * minRetainSize) + (isBinary ? 1 : 0)))) {
 					retain = false;
-					if (DEBUG_FEATHERDUST) System.out.println(" --> removed for size below " + ((minSize * minSize) / (isBinary ? 2 : 1)));
+					if (DEBUG_FEATHERDUST) System.out.println(" --> removed for size below " + ((minRetainSize * minRetainSize) / (isBinary ? 2 : 1)));
 				}
 				
 				//	covering at least 70% of page width or height (e.g. A5 scanned A4), likely dark scanning margin (subject to check, though)
-				if (retain && ((regionMaxCols[regionCode] - regionMinCols[regionCode] + 1) > ((brightness.length * 7) / 10))) {
+//				if (retain && ((regionMaxCols[regionCode] - regionMinCols[regionCode] + 1) > ((brightness.length * 7) / 10))) {
+//				if (retain && (((regionMaxCols[regionCode] - regionMinCols[regionCode] + 1) * 100) > (brightness.length * 70))) {
+				if (retain && (((regionMaxCols[regionCode] - regionMinCols[regionCode] + 1) * 100) > (brightness.length * maxRetainExtentPercentage))) {
 					if (DEBUG_FEATHERDUST) System.out.println(" - page wide");
 					
 					//	test if region close to page edges (outer 3% of page height)
@@ -1358,7 +1434,9 @@ public class Imaging {
 						}
 					}
 				}
-				if (retain && ((regionMaxRows[regionCode] - regionMinRows[regionCode] + 1) > ((brightness[0].length * 7) / 10))) {
+//				if (retain && ((regionMaxRows[regionCode] - regionMinRows[regionCode] + 1) > ((brightness[0].length * 7) / 10))) {
+//				if (retain && (((regionMaxRows[regionCode] - regionMinRows[regionCode] + 1) * 100) > (brightness[0].length * 70))) {
+				if (retain && (((regionMaxRows[regionCode] - regionMinRows[regionCode] + 1) * 100) > (brightness[0].length * maxRetainExtentPercentage))) {
 					if (DEBUG_FEATHERDUST) System.out.println(" - page high");
 					
 					//	test if region close to page edges (outer 4% of page width)
@@ -1437,29 +1515,29 @@ public class Imaging {
 				
 				//	too narrow, low, or overall small to stand alone
 				if (isBinary || isSharp) {
-					if (standalone && ((regionMaxCols[regionCode] - regionMinCols[regionCode] + 1) < minSoloSize) && ((regionMaxRows[regionCode] - regionMinRows[regionCode] + 1) < minSoloSize)) {
+					if (standalone && ((regionMaxCols[regionCode] - regionMinCols[regionCode] + 1) < minSoloRetainSize) && ((regionMaxRows[regionCode] - regionMinRows[regionCode] + 1) < minSoloRetainSize)) {
 						standalone = false;
 						if (DEBUG_FEATHERDUST) System.out.println(" --> too small for standalone");
 					}
 				}
 				else {
-					if (standalone && ((regionMaxCols[regionCode] - regionMinCols[regionCode] + 1) < minSoloSize)) {
+					if (standalone && ((regionMaxCols[regionCode] - regionMinCols[regionCode] + 1) < minSoloRetainSize)) {
 						standalone = false;
 						if (DEBUG_FEATHERDUST) System.out.println(" --> too small for standalone");
 					}
-					if (standalone && ((regionMaxRows[regionCode] - regionMinRows[regionCode] + 1) < minSoloSize)) {
+					if (standalone && ((regionMaxRows[regionCode] - regionMinRows[regionCode] + 1) < minSoloRetainSize)) {
 						standalone = false;
 						if (DEBUG_FEATHERDUST) System.out.println(" --> too small for standalone");
 					}
 				}
-				if (standalone && ((regionSizes[regionCode] * (isBinary ? 2 : 1)) < (minSize * minSoloSize))) {
+				if (standalone && ((regionSizes[regionCode] * (isBinary ? 2 : 1)) < (minRetainSize * minSoloRetainSize))) {
 					standalone = false;
-					if (DEBUG_FEATHERDUST) System.out.println(" --> too small for standalone, below " + ((minSize * minSoloSize) / (isBinary ? 2 : 1)));
+					if (DEBUG_FEATHERDUST) System.out.println(" --> too small for standalone, below " + ((minRetainSize * minSoloRetainSize) / (isBinary ? 2 : 1)));
 				}
 				
 				//	count minSize by minSize squares, and deny standalone if not covering at least 33% of region
 				if (standalone && !isBinary && !isSharp) {
-					int squareArea = getSquareArea(regionCodes, regionMinCols[regionCode], regionMaxCols[regionCode], regionMinRows[regionCode], regionMaxRows[regionCode], -regionCode, minSize, false);
+					int squareArea = getSquareArea(regionCodes, regionMinCols[regionCode], regionMaxCols[regionCode], regionMinRows[regionCode], regionMaxRows[regionCode], -regionCode, minRetainSize, false);
 					if ((squareArea * 3) < regionSizes[regionCode]) {
 						standalone = false;
 						if (DEBUG_FEATHERDUST) System.out.println(" --> too strewn for standalone");
@@ -1496,8 +1574,8 @@ public class Imaging {
 					if (DEBUG_FEATHERDUST) System.out.println("Attaching region " + regionCode + " (size " + regionSizes[regionCode] + ")");
 					
 					//	determine maximum distance, dependent on region size, as dots and hyphens in small fonts are also closer to adjacent letters
-					int maxHorizontalMargin = Math.min(minSoloSize, regionSizes[regionCode]);
-					int maxVerticalMargin = Math.min(((isBinary || isSharp) ? minSoloSize : (minSoloSize / 2)), regionSizes[regionCode]);
+					int maxHorizontalMargin = Math.min(minSoloRetainSize, regionSizes[regionCode]);
+					int maxVerticalMargin = Math.min(((isBinary || isSharp) ? minSoloRetainSize : (minSoloRetainSize / 2)), regionSizes[regionCode]);
 					
 					//	search for standalone or attached regions around current one
 					for (int cc = Math.max(0, (regionMinCols[regionCode] - maxHorizontalMargin)); cc <= Math.min((brightness.length-1), (regionMaxCols[regionCode] + maxHorizontalMargin)); cc++) {
@@ -2752,36 +2830,42 @@ public class Imaging {
 	 * @return true if the argument AnalysisImage was modified, false otherwise
 	 */
 	public static boolean correctPageRotation(AnalysisImage analysisImage, int dpi, double granularity, Complex[][] fft, double max, int adjustMode, BoundingBox[] exOcrWordBounds) {
-		if (fft == null) {
-			fft = analysisImage.getFft();
-			max = getMax(fft, adjustMode);
-		}
-		else if (max < 0)
-			max = getMax(fft, adjustMode);
-		ArrayList peaks = new ArrayList();
-		collectPeaks(fft, peaks, max/4, adjustMode);
-		
-//		//	TODO keep this deactivated for export !!!
-//		BufferedImage fftImage = getFftImage(fft, adjustMode);
-//		try {
-//			ImageIO.write(fftImage, "png", new File("E:/Testdaten/PdfExtract/FFT." + System.currentTimeMillis() + ".png"));
-//		} catch (IOException ioe) {}
-		
 		boolean rotationCorrected = false;
+		double rotatedBy = 0;
 		
-		//	detect and correct major skewing via FFT
-		double pageRotationAngle = getPageRotationAngle(peaks, 20, (180 * ((int) (1 / granularity))));
-		System.out.println("Page rotation angle by FFT is " + (((float) ((int) ((180 / Math.PI) * pageRotationAngle * 100))) / 100) + "°");
-//		if (fftAngle > maxPageRotationCorrectionAngle)
-//			return false;
-//		if (Math.abs(angle) > ((Math.PI / 180) * granularity)) {
-//			analysisImage.setImage(rotateImage(analysisImage.getImage(), -angle));
-//			return true;
-//		}
-//		else return false;
-		if ((pageRotationAngle < maxPageRotationCorrectionAngle) && (Math.abs(pageRotationAngle) > ((Math.PI / 180) * granularity))) {
-			analysisImage.setImage(rotateImage(analysisImage.getImage(), -pageRotationAngle, exOcrWordBounds));
-			rotationCorrected = true;
+		//	use FFT
+		if (0 < granularity) {
+			if (fft == null) {
+				fft = analysisImage.getFft();
+				max = getMax(fft, adjustMode);
+			}
+			else if (max < 0)
+				max = getMax(fft, adjustMode);
+			ArrayList peaks = new ArrayList();
+			collectPeaks(fft, peaks, max/4, adjustMode);
+			
+//			//	TODO keep this deactivated for export !!!
+//			BufferedImage fftImage = getFftImage(fft, adjustMode);
+//			try {
+//				ImageIO.write(fftImage, "png", new File("E:/Testdaten/PdfExtract/FFT." + System.currentTimeMillis() + ".png"));
+//			} catch (IOException ioe) {}
+			
+			
+			//	detect and correct major skewing via FFT
+			double pageRotationAngle = getPageRotationAngle(peaks, 20, (180 * ((int) (1 / granularity))));
+			System.out.println("Page rotation angle by FFT is " + (((float) ((int) ((180 / Math.PI) * pageRotationAngle * 100))) / 100) + "°");
+//			if (fftAngle > maxPageRotationCorrectionAngle)
+//				return false;
+//			if (Math.abs(angle) > ((Math.PI / 180) * granularity)) {
+//				analysisImage.setImage(rotateImage(analysisImage.getImage(), -angle));
+//				return true;
+//			}
+//			else return false;
+			if ((pageRotationAngle < maxPageRotationCorrectionAngle) && (Math.abs(pageRotationAngle) > ((Math.PI / 180) * granularity))) {
+				analysisImage.setImage(rotateImage(analysisImage.getImage(), -pageRotationAngle, exOcrWordBounds));
+				rotatedBy -= pageRotationAngle;
+				rotationCorrected = true;
+			}
 		}
 		
 		//	detect and correct minor skewing via block line focusing
@@ -2857,10 +2941,12 @@ public class Imaging {
 		System.out.println("Page rotation angle by block line focusing is " + (((float) ((int) (blockRotationAngle * 100))) / 100) + "°");
 		if (Math.abs(blockRotationAngle) > blockRotationAngleStep) {
 			analysisImage.setImage(rotateImage(analysisImage.getImage(), ((Math.PI / 180) * -blockRotationAngle), exOcrWordBounds));
+			rotatedBy -= ((Math.PI / 180) * blockRotationAngle);
 			rotationCorrected = true;
 		}
 		
 		//	finally ...
+		analysisImage.setRotatedBy(rotatedBy);
 		return rotationCorrected;
 	}
 //	private static final double maxPageRotationAngle = ((Math.PI / 180) * 30); // 30°;
@@ -3068,10 +3154,21 @@ public class Imaging {
 	 * @return the rotated image
 	 */
 	public static BufferedImage rotateImage(BufferedImage image, double angle, BoundingBox[] exOcrWordBounds) {
-		BufferedImage rImage = new BufferedImage(image.getWidth(), image.getHeight(), ((image.getType() == BufferedImage.TYPE_CUSTOM) ? BufferedImage.TYPE_INT_ARGB : image.getType()));
+		double aAngle = angle;
+		while (aAngle < 0)
+			aAngle += (2 * Math.PI);
+		if (aAngle > Math.PI)
+			aAngle -= Math.PI;
+		boolean flipDimensions = (((Math.PI / 4) < aAngle) && (aAngle < ((Math.PI * 3) / 4)));
+		BufferedImage rImage;
+		if (flipDimensions)
+			rImage = new BufferedImage(image.getHeight(), image.getWidth(), ((image.getType() == BufferedImage.TYPE_CUSTOM) ? BufferedImage.TYPE_INT_ARGB : image.getType()));
+		else rImage = new BufferedImage(image.getWidth(), image.getHeight(), ((image.getType() == BufferedImage.TYPE_CUSTOM) ? BufferedImage.TYPE_INT_ARGB : image.getType()));
 		Graphics2D rImageGraphics = rImage.createGraphics();
 		rImageGraphics.setColor(Color.WHITE);
 		rImageGraphics.fillRect(0, 0, rImage.getWidth(), rImage.getHeight());
+		if (flipDimensions)
+			rImageGraphics.translate(((rImage.getWidth() - image.getWidth()) / 2), ((rImage.getHeight() - image.getHeight()) / 2));
 		rImageGraphics.rotate(angle, (image.getWidth() / 2), (image.getHeight() / 2));
 		rImageGraphics.drawRenderedImage(image, null);
 		rImageGraphics.dispose();

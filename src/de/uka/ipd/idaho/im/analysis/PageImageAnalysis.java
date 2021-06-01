@@ -34,10 +34,13 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.TreeMap;
 import java.util.TreeSet;
 
+import de.uka.ipd.idaho.gamta.util.CountingSet;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
@@ -1318,7 +1321,7 @@ public class PageImageAnalysis implements ImagingConstants {
 			System.out.println("last line x-height is " + avgLastLineHighRowPixelWidth + " from " + Arrays.toString(lastLineHighRowPixelWidths));
 			
 			//	x-height differs more than 20% from block average, too unreliable
-			if (((avgLastLineHighRowPixelWidth * 10) < (this.avgHighRowPixelWidth * 8)) && ((this.avgHighRowPixelWidth * 8) < (avgLastLineHighRowPixelWidth * 8))) {
+			if ((avgLastLineHighRowPixelWidth == -1) || (((avgLastLineHighRowPixelWidth * 10) < (this.avgHighRowPixelWidth * 8)) && ((this.avgHighRowPixelWidth * 8) < (avgLastLineHighRowPixelWidth * 8)))) {
 				System.out.println(" ==> x-height of last line too far off");
 				return;
 			}
@@ -1422,6 +1425,8 @@ public class PageImageAnalysis implements ImagingConstants {
 	}
 	
 	private static int getHistogramAverage(int[] histogram) {
+		if (histogram.length == 0)
+			return -1;
 		int histogramSum = 0;
 		for (int h = 0; h < histogram.length; h++)
 			histogramSum += histogram[h];
@@ -3274,5 +3279,1616 @@ Literature ideas for bold:
 			}
 		
 		return (top + maxDropRow);
+	}
+	
+	private static final boolean DEBUG_BLOCK_ANALYSIS = true;
+	
+	/**
+	 * Analyze the structure of a document page, i.e., chop it into sub regions
+	 * and text blocks.
+	 * @param ai the page image to analyze
+	 * @param dpi the resolution of the underlying page image
+	 * @param block the block to analyze
+	 * @param separateLines untangle mingled lines?
+	 * @param regroupWords group words based upon spaces in line?
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the root region, representing the whole page
+	 */
+//	public static BlockLine[] getBlockLinesAndWords(AnalysisImage pageAi, int dpi, Region block, ProgressMonitor pm) {
+	public static BlockLine[] getBlockLinesAndWords(AnalysisImage pageAi, int dpi, BoundingBox blockBounds, boolean separateLines, boolean regroupWords, ProgressMonitor pm) {
+//		return getBlockLinesAndWords(pageAi, dpi, block, pm, null);
+		return getBlockLinesAndWords(pageAi, dpi, blockBounds, separateLines, regroupWords, pm, null);
+	}
+	
+	/**
+	 * Analyze the structure of a block in a document page, i.e., chop it into
+	 * lines and words.
+	 * @param ai the page image to analyze
+	 * @param dpi the resolution of the underlying page image
+	 * @param block the block to analyze
+	 * @param separateLines untangle mingled lines?
+	 * @param regroupWords group words based upon spaces in line?
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @param vbi a buffered image to visualize analysis in (for debugging)
+	 * @return the root region, representing the whole page
+	 */
+	public static BlockLine[] getBlockLinesAndWords(AnalysisImage pageAi, int dpi, BoundingBox blockBounds, boolean separateLines, boolean regroupWords, ProgressMonitor pm, BufferedImage vbi) {
+		Graphics2D vbiGr = ((vbi == null) ? null : vbi.createGraphics());
+		
+		//	get region coloring of block
+		AnalysisImage blockAi = Imaging.wrapImage(pageAi.getImage().getSubimage(blockBounds.left, blockBounds.top, blockBounds.getWidth(), blockBounds.getHeight()), null);
+		if (DEBUG_BLOCK_ANALYSIS) {
+			CountingSet aiPixelBrightnesses = new CountingSet(new TreeMap());
+			byte[][] aiBrightness = blockAi.getBrightness();
+			for (int c = 0; c < aiBrightness.length; c++) {
+				for (int r = 0; r < aiBrightness[c].length; r++)
+					aiPixelBrightnesses.add(new Byte(aiBrightness[c][r]));
+			}
+			System.out.println("Brightnesses are: " + aiPixelBrightnesses);
+			//	TODO try this on background elimination: re-add subtracted background to all retained pixels to improve contrast
+		}
+		int[][] blockRegions = Imaging.getRegionColoring(blockAi, ((byte) 120), true);
+		
+		//	determine maximum region
+		int maxBlockRegion = getMaxRegionColor(blockRegions);
+		
+		//	determine vertical extent of every region
+		int[] blockRegionSizes = new int[maxBlockRegion + 1];
+		int[] blockRegionMinCols = new int[maxBlockRegion + 1];
+		int[] blockRegionMaxCols = new int[maxBlockRegion + 1];
+		int[] blockRegionMinRows = new int[maxBlockRegion + 1];
+		int[] blockRegionMaxRows = new int[maxBlockRegion + 1];
+		measureRegions(blockRegions, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows);
+//		
+//		//	eliminate regions that are too small to even see (beware of periods and dots, though)
+//		cleanRegions(blockRegions, pi.currentDpi, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows);
+		
+		//	gather statistics TODOne do we still need those ==> yes, if not all of them
+//		if (DEBUG_BLOCK_ANALYSIS) System.out.println("Region colors in " + block.getBoundingBox() + ":");
+		if (DEBUG_BLOCK_ANALYSIS) System.out.println("Region colors in " + blockBounds + ":");
+		CountingSet blockRegionTopCounts = new CountingSet(new TreeMap());
+		CountingSet blockRegionBottomCounts = new CountingSet(new TreeMap());
+		CountingSet blockRegionHeightCounts = new CountingSet(new TreeMap());
+		CountingSet blockRegionSizeCounts = new CountingSet(new TreeMap());
+		for (int reg = 1; reg <= maxBlockRegion; reg++) {
+			if (blockRegionSizes[reg] == 0)
+				continue; // eliminated above
+//			System.out.println(" - " + reg + ": " + blockRegionSizes[reg] + " pixels in " + blockRegionMinCols[reg] + "-" + blockRegionMaxCols[reg] + " x " + blockRegionMinRows[reg] + "-" + blockRegionMaxRows[reg]);
+			blockRegionTopCounts.add(new Integer(blockRegionMinRows[reg]));
+			blockRegionBottomCounts.add(new Integer(blockRegionMaxRows[reg]));
+			blockRegionHeightCounts.add(new Integer(blockRegionMaxRows[reg] - blockRegionMinRows[reg] + 1));
+			blockRegionSizeCounts.add(new Integer(blockRegionSizes[reg]));
+			if (vbi != null) {
+				int regRgb = Color.HSBtoRGB(((1.0f / 32) * (reg % 32)), 1.0f, 1.0f);
+				for (int c = blockRegionMinCols[reg]; c <= blockRegionMaxCols[reg]; c++)
+					for (int r = blockRegionMinRows[reg]; r <= blockRegionMaxRows[reg]; r++) {
+						if (blockRegions[c][r] == reg)
+//							vbi.setRGB((block.bounds.getLeftCol() + c), (block.bounds.getTopRow() + r), regRgb);
+							vbi.setRGB((blockBounds.left + c), (blockBounds.top + r), regRgb);
+					}
+			}
+		}
+		int avgBlockRegionHeight = getAverage(blockRegionHeightCounts, 0, Integer.MAX_VALUE); // should be about the x-height
+		if (DEBUG_BLOCK_ANALYSIS) {
+			System.out.println(" ==> tops are " + blockRegionTopCounts);
+			System.out.println(" ==> bottoms are " + blockRegionBottomCounts);
+			System.out.println(" ==> heights are " + blockRegionHeightCounts);
+			System.out.println("     average height is " + avgBlockRegionHeight);
+			System.out.println(" ==> sizes are " + blockRegionSizeCounts);
+			System.out.println("     average size is " + getAverage(blockRegionSizeCounts, 0, Integer.MAX_VALUE));
+		}
+		
+		//	eliminate altogether if totally out of proportion (sans-serif lower case L is about 8 times as tall as wide, at worst)
+		for (int reg = 1; reg <= maxBlockRegion; reg++) {
+			if (blockRegionSizes[reg] == 0)
+				continue; // eliminated above
+			int regHeight = (blockRegionMaxRows[reg] - blockRegionMinRows[reg] + 1);
+			int regWidth = (blockRegionMaxCols[reg] - blockRegionMinCols[reg] + 1);
+			if ((regHeight * 1) < (regWidth * 10))
+				continue;
+			if (vbi != null) {
+				int killRegRgb = Color.GRAY.getRGB();
+				for (int c = blockRegionMinCols[reg]; c <= blockRegionMaxCols[reg]; c++)
+					for (int r = blockRegionMinRows[reg]; r <= blockRegionMaxRows[reg]; r++) {
+						if (blockRegions[c][r] == reg)
+//							vbi.setRGB((block.bounds.getLeftCol() + c), (block.bounds.getTopRow() + r), killRegRgb);
+							vbi.setRGB((blockBounds.left + c), (blockBounds.top + r), killRegRgb);
+					}
+			}
+			if (DEBUG_BLOCK_ANALYSIS) System.out.println(" - eliminating for aspect ratio " + reg + ": " + blockRegionSizes[reg] + " pixels in " + blockRegionMinCols[reg] + "-" + blockRegionMaxCols[reg] + " x " + blockRegionMinRows[reg] + "-" + blockRegionMaxRows[reg]);
+//			attachRegion(blockRegions, reg, 0, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
+			attachRegion(blockRegions, reg, 0, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
+		}
+		
+		//	assimilate regions into (larger) ones completely enclosing them
+		for (int reg = 1; reg <= maxBlockRegion; reg++) {
+			if (blockRegionSizes[reg] == 0)
+				continue; // eliminated above
+			for (int aReg = 1; aReg <= maxBlockRegion; aReg++) {
+				if (aReg == reg)
+					continue;
+				if (blockRegionSizes[aReg] == 0)
+					continue; // eliminated above
+				if (blockRegionMinCols[reg] < blockRegionMinCols[aReg])
+					continue;
+				if (blockRegionMaxCols[aReg] < blockRegionMaxCols[reg])
+					continue;
+				if (blockRegionMinRows[reg] < blockRegionMinRows[aReg])
+					continue;
+				if (blockRegionMaxRows[aReg] < blockRegionMaxRows[reg])
+					continue;
+				if (DEBUG_BLOCK_ANALYSIS) System.out.println(" - assimilating " + reg + " into " + aReg + ": " + blockRegionSizes[reg] + " pixels in " + blockRegionMinCols[reg] + "-" + blockRegionMaxCols[reg] + " x " + blockRegionMinRows[reg] + "-" + blockRegionMaxRows[reg] + " inside " + blockRegionMinCols[aReg] + "-" + blockRegionMaxCols[aReg] + " x " + blockRegionMinRows[aReg] + "-" + blockRegionMaxRows[aReg]);
+//				attachRegion(blockRegions, reg, 0, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
+				attachRegion(blockRegions, reg, aReg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
+				break;
+			}
+		}
+		
+		//	find pronounced upward outliers to detect line mingled letters, and eliminate such regions
+		//	DO NOT eliminate in region coloring, though, as we need them later for expanding lines to include their descenders
+		for (int reg = 1; reg <= maxBlockRegion; reg++) {
+			if (blockRegionSizes[reg] == 0)
+				continue; // eliminated above
+			int regHeight = (blockRegionMaxRows[reg] - blockRegionMinRows[reg] + 1);
+			if (separateLines) {
+				if (regHeight < (avgBlockRegionHeight * 2) /* twice the x-height should be about the line height */)
+					continue;
+			}
+			else {
+				if (regHeight < (avgBlockRegionHeight * 5) /* account for variations in font size, etc., but still eliminate all too large regions */)
+					continue;
+			}
+			if (vbi != null) {
+				int killRegRgb = Color.GRAY.getRGB();
+				for (int c = blockRegionMinCols[reg]; c <= blockRegionMaxCols[reg]; c++)
+					for (int r = blockRegionMinRows[reg]; r <= blockRegionMaxRows[reg]; r++) {
+						if (blockRegions[c][r] == reg)
+//							vbi.setRGB((block.bounds.getLeftCol() + c), (block.bounds.getTopRow() + r), killRegRgb);
+							vbi.setRGB((blockBounds.left + c), (blockBounds.top + r), killRegRgb);
+					}
+			}
+			if (separateLines) {
+				blockRegionSizes[reg] = 0;
+//				blockRegionMinCols[reg] = block.bounds.getWidth();
+//				blockRegionMaxCols[reg] = 0;
+//				blockRegionMinRows[reg] = block.bounds.getHeight();
+//				blockRegionMaxRows[reg] = 0;
+			}
+			else {
+				if (DEBUG_BLOCK_ANALYSIS) System.out.println(" - eliminating for size " + reg + ": " + blockRegionSizes[reg] + " pixels in " + blockRegionMinCols[reg] + "-" + blockRegionMaxCols[reg] + " x " + blockRegionMinRows[reg] + "-" + blockRegionMaxRows[reg]);
+//				attachRegion(blockRegions, reg, 0, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
+				attachRegion(blockRegions, reg, 0, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
+			}
+		}
+		
+		//	amalgamate very small regions with larger regions right below them (attach accents to letters)
+//		attachSmallRegionsDownward(blockRegions, (dpi / 25), (dpi / 50), (dpi / 25), blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
+		attachSmallRegionsDownward(blockRegions, (dpi / 25), (dpi / 50), (dpi / 25), blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
+		
+//		if (DEBUG_BLOCK_ANALYSIS) {
+//			int regCount = 0;
+//			for (int reg = 1; reg <= maxBlockRegion; reg++) {
+//				if (blockRegionSizes[reg] != 0)
+//					regCount++;
+//			}
+//			System.out.println(" - starting line assembly with " + regCount + " regions:");
+//			for (int reg = 1; reg <= maxBlockRegion; reg++) {
+//				if (blockRegionSizes[reg] == 0)
+//					continue; // already attached
+//				System.out.println("   - " + reg + " sized " + blockRegionSizes[reg] + " pixels in " + (blockBounds.left + blockRegionMinCols[reg]) + "-" + (blockBounds.left + blockRegionMaxCols[reg]) + " x " + (blockBounds.top + blockRegionMinRows[reg]) + "-" + (blockBounds.top + blockRegionMaxRows[reg]));
+//			}
+//		}
+//		
+		//	amalgamate every two regions if (a) one contains full vertical extent of other or (b) each contains center of vertical extent of other
+		for (boolean changed = true; changed;) {
+			changed = false;
+			for (int reg = 1; reg <= maxBlockRegion; reg++) {
+				if (blockRegionSizes[reg] == 0)
+					continue; // already attached
+				int aReg = -1;
+				
+				//	scan left to find adjacent regions
+				for (int r = blockRegionMinRows[reg]; r <= blockRegionMaxRows[reg]; r++) {
+					for (int c = (blockRegionMinCols[reg] - 1); c >= 0; c--) {
+						if (blockRegions[c][r] == 0)
+							continue;
+						int lReg = blockRegions[c][r];
+						if (lReg == reg)
+							continue;
+						if (blockRegionSizes[lReg] == 0)
+							continue; // already attached
+						boolean lRegContaining;
+						boolean lRegContained;
+						if ((blockRegionMinRows[reg] <= blockRegionMinRows[lReg]) && (blockRegionMaxRows[lReg] <= blockRegionMaxRows[reg])) {
+							lRegContained = true;
+							lRegContaining = false;
+						}
+						else if ((blockRegionMinRows[lReg] <= blockRegionMinRows[reg]) && (blockRegionMaxRows[reg] <= blockRegionMaxRows[lReg])) {
+							lRegContained = false;
+							lRegContaining = true;
+						}
+						else {
+							lRegContained = false;
+							lRegContaining = false;
+						}
+						
+						//	attach vertically contained region to current one
+						if (lRegContained) {
+//							attachRegion(blockRegions, lReg, reg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
+							attachRegion(blockRegions, lReg, reg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
+							changed = true;
+						}
+						
+						//	attach current region to vertically containing one
+						else if (lRegContaining) {
+							aReg = lReg;
+							break;
+						}
+					}
+					if (aReg != -1)
+						break;
+				}
+				if (aReg == -1)
+					continue;
+//				attachRegion(blockRegions, reg, aReg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
+				attachRegion(blockRegions, reg, aReg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
+				changed = true;
+			}
+			for (int reg = 1; reg <= maxBlockRegion; reg++) {
+				if (blockRegionSizes[reg] == 0)
+					continue; // already attached
+				int aReg = -1;
+				
+				//	scan right to find adjacent regions
+				for (int r = blockRegionMinRows[reg]; r <= blockRegionMaxRows[reg]; r++) {
+					for (int c = (blockRegionMaxCols[reg] + 1); c < blockRegions.length; c++) {
+						if (blockRegions[c][r] == 0)
+							continue;
+						int lReg = blockRegions[c][r];
+						if (lReg == reg)
+							continue;
+						if (blockRegionSizes[lReg] == 0)
+							continue; // already attached
+						boolean lRegContaining;
+						boolean lRegContained;
+						if ((blockRegionMinRows[reg] <= blockRegionMinRows[lReg]) && (blockRegionMaxRows[lReg] <= blockRegionMaxRows[reg])) {
+							lRegContained = true;
+							lRegContaining = false;
+						}
+						else if ((blockRegionMinRows[lReg] <= blockRegionMinRows[reg]) && (blockRegionMaxRows[reg] <= blockRegionMaxRows[lReg])) {
+							lRegContained = false;
+							lRegContaining = true;
+						}
+						else {
+							lRegContained = false;
+							lRegContaining = false;
+						}
+						
+						//	attach vertically contained region to current one
+						if (lRegContained) {
+//							attachRegion(blockRegions, lReg, reg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
+							attachRegion(blockRegions, lReg, reg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
+							changed = true;
+						}
+						
+						//	attach current region to vertically containing one
+						else if (lRegContaining) {
+							aReg = lReg;
+							break;
+						}
+					}
+					if (aReg != -1)
+						break;
+				}
+				if (aReg == -1)
+					continue;
+//				attachRegion(blockRegions, reg, aReg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
+				attachRegion(blockRegions, reg, aReg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
+				changed = true;
+			}
+		}
+		
+		//	compute center of mass of every remaining region
+		int[] blockRegionRowCenters = new int[maxBlockRegion + 1];
+		for (int reg = 1; reg <= maxBlockRegion; reg++) {
+			if (blockRegionSizes[reg] == 0)
+				continue; // already attached
+			long blockRegionRowSum = 0;
+			for (int c = blockRegionMinCols[reg]; c <= blockRegionMaxCols[reg]; c++)
+				for (int r = blockRegionMinRows[reg]; r <= blockRegionMaxRows[reg]; r++) {
+					if (blockRegions[c][r] == reg)
+						blockRegionRowSum += r;
+				}
+			blockRegionRowCenters[reg] = ((int) ((blockRegionRowSum + (blockRegionSizes[reg] / 2)) / blockRegionSizes[reg]));
+		}
+		
+		//	order regions by increasing size
+		long[] blockRegionSizesAndNumbers = new long[maxBlockRegion + 1];
+		for (int reg = 1; reg <= maxBlockRegion; reg++) {
+			if (blockRegionSizes[reg] == 0)
+				blockRegionSizesAndNumbers[reg] = Long.MAX_VALUE;
+			else blockRegionSizesAndNumbers[reg] = ((((long) blockRegionSizes[reg]) << 32) | reg);
+		}
+		Arrays.sort(blockRegionSizesAndNumbers);
+		
+		//	attach smaller regions to larger ones at same height as center of mass
+		for (boolean changed = true; changed;) {
+			changed = false;
+			for (int sizeAndReg = 1; sizeAndReg <= maxBlockRegion; sizeAndReg++) {
+				if (blockRegionSizesAndNumbers[sizeAndReg] == Long.MAX_VALUE)
+					break; // already attached
+				int reg = ((int) (blockRegionSizesAndNumbers[sizeAndReg] & 0x7FFFFFFF));
+				if (blockRegionSizes[reg] == 0)
+					continue; // already attached
+				int aReg = -1;
+				
+				//	scan left to find adjacent regions
+				if (aReg == -1)
+					for (int c = (blockRegionMinCols[reg] - 1); c >= 0; c--) {
+						if (blockRegions[c][blockRegionRowCenters[reg]] == 0)
+							continue;
+						int lReg = blockRegions[c][blockRegionRowCenters[reg]];
+						if (lReg == reg)
+							continue;
+						if (blockRegionSizes[lReg] == 0)
+							continue; // already attached
+						if (blockRegionMaxRows[lReg] < blockRegionRowCenters[reg])
+							continue; // bottom above center of mass
+						if (blockRegionRowCenters[reg] < blockRegionMinRows[lReg])
+							continue; // top below center of mass
+						aReg = lReg;
+						break;
+					}
+				
+				//	scan right to find adjacent regions
+				if (aReg == -1)
+					for (int c = (blockRegionMaxCols[reg] + 1); c < blockRegions.length; c++) {
+						if (blockRegions[c][blockRegionRowCenters[reg]] == 0)
+							continue;
+						int lReg = blockRegions[c][blockRegionRowCenters[reg]];
+						if (lReg == reg)
+							continue;
+						if (blockRegionSizes[lReg] == 0)
+							continue; // already attached
+						if (blockRegionMaxRows[lReg] < blockRegionRowCenters[reg])
+							continue; // bottom above center of mass
+						if (blockRegionRowCenters[reg] < blockRegionMinRows[lReg])
+							continue; // top below center of mass
+						aReg = lReg;
+						break;
+					}
+				if (aReg == -1)
+					continue;
+//				attachRegion(blockRegions, reg, aReg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
+				attachRegion(blockRegions, reg, aReg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
+				changed = true;
+			}
+			if (changed)
+				for (int reg = 1; reg <= maxBlockRegion; reg++) {
+					if (blockRegionSizes[reg] == 0)
+						continue; // already attached
+					long blockRegionRowSum = 0;
+					for (int c = blockRegionMinCols[reg]; c <= blockRegionMaxCols[reg]; c++)
+						for (int r = blockRegionMinRows[reg]; r <= blockRegionMaxRows[reg]; r++) {
+							if (blockRegions[c][r] == reg)
+								blockRegionRowSum += r;
+						}
+					blockRegionRowCenters[reg] = ((int) ((blockRegionRowSum + (blockRegionSizes[reg] / 2)) / blockRegionSizes[reg]));
+				}
+		}
+		
+		//	amalgamate every small region with larger region right below (attach dots to Is and Js in all-lower-case lines without letters reaching cap height)
+		//	no risk of erroneously attaching periods or commas any more, as those attach to letters on same line above
+//		attachSmallRegionsDownward(blockRegions, (dpi / 25), (dpi / 12), (dpi / 25), blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
+		attachSmallRegionsDownward(blockRegions, (dpi / 25), (dpi / 12), (dpi / 25), blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
+		
+		//	amalgamate regions that overlap with over 50% of their respective heights
+		for (boolean changed = true; changed;) {
+			changed = false;
+			for (int reg = 1; reg <= maxBlockRegion; reg++) {
+				if (blockRegionSizes[reg] == 0)
+					continue; // attached above
+				int regHeight = (blockRegionMaxRows[reg] - blockRegionMinRows[reg]);
+				int aReg = -1;
+				for (int lReg = (reg+1); lReg <= maxBlockRegion; lReg++) {
+					if (blockRegionSizes[lReg] == 0)
+						continue; // attached above
+					if (blockRegionMaxRows[lReg] <= blockRegionMinRows[reg])
+						continue; // above current region
+					if (blockRegionMaxRows[reg] <= blockRegionMinRows[lReg])
+						continue; // below current region
+					int lRegHeight = (blockRegionMaxRows[lReg] - blockRegionMinRows[lReg]);
+					int overlapHeight = (Math.min(blockRegionMaxRows[reg], blockRegionMaxRows[lReg]) - Math.max(blockRegionMinRows[reg], blockRegionMinRows[lReg]));
+					if (DEBUG_BLOCK_ANALYSIS) System.out.println("Got regions of heights " + regHeight + " and " + lRegHeight + " overlapping by " + overlapHeight);
+					if ((overlapHeight * 2) < regHeight)
+						continue;
+					if ((overlapHeight * 2) < lRegHeight)
+						continue;
+					aReg = lReg;
+					break;
+				}
+				if (aReg == -1)
+					continue;
+//				attachRegion(blockRegions, reg, aReg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
+				attachRegion(blockRegions, reg, aReg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
+				changed = true;
+			}
+		}
+		
+		//	materialize detected lines, and sort them top-down
+		ArrayList blockLineList = new ArrayList();
+		for (int reg = 1; reg <= maxBlockRegion; reg++) {
+			if (blockRegionSizes[reg] == 0)
+				continue; // attached above
+			int regHeight = (blockRegionMaxRows[reg] - blockRegionMinRows[reg]);
+			if (regHeight < (dpi / 25))
+				continue; // less than x-height letters in font size 6 (1 millimeters) tall (horizontal separator or table grid line, etc.)
+			if (regHeight > dpi)
+				continue; // more than full-height letters in font size 72 (25 millimeters) tall (illustration, or vertical separator or table grid line, etc.)
+			int regWidth = (blockRegionMaxCols[reg] - blockRegionMinCols[reg]);
+			if (regWidth < (dpi / 50))
+				continue; // less than half a millimeter wide (vertical separator or table grid line, etc.)
+//			BlockLine blockLine = new BlockLine(block, reg, 0, block.bounds.getWidth(), blockRegionMinRows[reg], (blockRegionMaxRows[reg] + 1));
+			BlockLine blockLine = new BlockLine(blockBounds, reg, 0, blockBounds.getWidth(), blockRegionMinRows[reg], (blockRegionMaxRows[reg] + 1));
+			blockLineList.add(blockLine);
+		}
+		BlockLine[] blockLines = ((BlockLine[]) blockLineList.toArray(new BlockLine[blockLineList.size()]));
+		Arrays.sort(blockLines, new Comparator() {
+			public int compare(Object obj1, Object obj2) {
+				BlockLine bl1 = ((BlockLine) obj1);
+				BlockLine bl2 = ((BlockLine) obj2);
+				return (bl1.top - bl2.top);
+			}
+		});
+		
+		//	for each ignored block region, compute how many lines they overlap with
+		HashSet[] blockRegionLines = new HashSet[maxBlockRegion + 1];
+		for (int l = 0; l < blockLines.length; l++) {
+			BlockLine blockLine = blockLines[l];
+			for (int c = blockLine.left; c < blockLine.right; c++)
+				for (int r = blockLine.top; r < blockLine.bottom; r++) {
+					int reg = blockRegions[c][r];
+					if (reg == 0)
+						continue;
+					if (blockRegionLines[reg] == null)
+						blockRegionLines[reg] = new HashSet();
+					blockRegionLines[reg].add(blockLine);
+				}
+		}
+		
+		//	expand lines upwards and downwards to fully cover partially included single-line regions
+		for (int l = 0; l < blockLines.length; l++) {
+			BlockLine regLine = blockLines[l];
+			if (DEBUG_BLOCK_ANALYSIS) System.out.println(" - expanding line at " + regLine.getPageBounds());
+			int prevRegLineBottom = ((l == 0) ? 0 : blockLines[l-1].bottom);
+			int nextRegLineTop = (((l + 1) == blockLines.length) ? blockRegions[0].length : blockLines[l+1].top);
+			while (regLine.top > prevRegLineBottom) {
+				int rowRegCount = 0;
+				for (int c = regLine.left; c < regLine.right; c++) {
+					int reg = blockRegions[c][regLine.top - 1];
+					if (reg == 0)
+						continue;
+					if (blockRegionLines[reg] == null)
+						continue;
+					if (blockRegionLines[reg].size() == 1) {}
+					else if ((blockRegionMinRows[reg] < ((regLine.top + regLine.bottom + regLine.bottom) / 3)) && (blockRegionMaxRows[reg] > ((regLine.top + regLine.top + regLine.bottom) / 3))) {}
+					else continue; // accept region anyway if center third of line
+					rowRegCount++;
+				}
+				if (rowRegCount == 0)
+					break;
+				regLine.top--;
+			}
+			while (regLine.bottom < nextRegLineTop) {
+				int rowRegCount = 0;
+				for (int c = regLine.left; c < regLine.right; c++) {
+					int reg = blockRegions[c][regLine.bottom];
+					if (reg == 0)
+						continue;
+					if (blockRegionLines[reg] == null)
+						continue;
+					if (blockRegionLines[reg].size() == 1) {}
+					else if ((blockRegionMinRows[reg] < ((regLine.top + regLine.bottom + regLine.bottom) / 3)) && (blockRegionMaxRows[reg] > ((regLine.top + regLine.top + regLine.bottom) / 3))) {}
+					else continue; // accept region anyway if overlapping center third of line
+					rowRegCount++;
+				}
+				if (rowRegCount == 0)
+					break;
+				regLine.bottom++;
+			}
+			if (DEBUG_BLOCK_ANALYSIS) System.out.println("   ==> expanded line to " + regLine.getPageBounds());
+		}
+		
+		//	shrink line left and right boundaries
+		for (int l = 0; l < blockLines.length; l++) {
+			BlockLine regLine = blockLines[l];
+			while (regLine.left < regLine.right) {
+				int colRegCount = 0;
+				for (int r = regLine.top; r < regLine.bottom; r++) {
+					int reg = blockRegions[regLine.left][r];
+					if (reg == 0)
+						continue;
+					if (blockRegionLines[reg] == null)
+						continue;
+					if (blockRegionLines[reg].size() == 1) {}
+					else if ((blockRegionMinRows[reg] < ((regLine.top + regLine.bottom) / 2)) && (blockRegionMaxRows[reg] > ((regLine.top + regLine.bottom) / 2))) {}
+					else continue; // TODOne accept region anyway if overlapping line center
+					colRegCount++;
+				}
+				if (colRegCount == 0)
+					regLine.left++;
+				else break;
+			}
+			while (regLine.left < regLine.right) {
+				int colRegCount = 0;
+				for (int r = regLine.top; r < regLine.bottom; r++) {
+					int reg = blockRegions[regLine.right - 1][r];
+					if (reg == 0)
+						continue;
+					if (blockRegionLines[reg] == null)
+						continue;
+					if (blockRegionLines[reg].size() == 1) {}
+					else if ((blockRegionMinRows[reg] < ((regLine.top + regLine.bottom) / 2)) && (blockRegionMaxRows[reg] > ((regLine.top + regLine.bottom) / 2))) {}
+					else continue; // TODOne accept region anyway if overlapping line center
+					colRegCount++;
+				}
+				if (colRegCount == 0)
+					regLine.right--;
+				else break;
+			}
+			if (vbiGr != null) {
+				int regRgb = Color.HSBtoRGB(((1.0f / 32) * (regLine.color % 32)), 1.0f, 1.0f);
+				vbiGr.setColor(new Color(regRgb));
+				vbiGr.drawRect(regLine.getPageLeft(), regLine.getPageTop(), regLine.getWidth(), regLine.getHeight());
+			}
+		}
+		
+		//	find accumulation points in region height to get average letter heights
+		//	find accumulation points in region bottoms to determine baseline
+		int[][] lineRegionSizeReserves = new int[blockLines.length][];
+		for (int l = 0; l < blockLines.length; l++) {
+			
+			//	get region coloring of line (eliminate protrusions from adjacent lines beforehand)
+			if (DEBUG_BLOCK_ANALYSIS) System.out.println(" - doing " + blockLines[l].getPageBounds() + " with color " + blockLines[l].color + ":");
+			AnalysisImage lineAi = Imaging.wrapImage(pageAi.getImage().getSubimage(blockLines[l].getPageLeft(), blockLines[l].getPageTop(), blockLines[l].getWidth(), blockLines[l].getHeight()), null);
+			byte[][] lineAiBrightness = lineAi.getBrightness();
+			int adjacentLinePixelKillCount = 0;
+			for (int c = 0; c < lineAiBrightness.length; c++) {
+				int bc = (c + blockLines[l].getBlockLeft());
+				for (int r = 0; r < lineAiBrightness[c].length; r++) {
+					int br = (r + blockLines[l].getBlockTop());
+					if (blockRegions[bc][br] == 0)
+						continue;
+					if (blockRegionSizes[blockRegions[bc][br]] == 0)
+						continue;
+					if (blockRegions[bc][br] == blockLines[l].color)
+						continue;
+//					System.out.println(" - eliminating pixel " + c + "/" + r + " (" + (c + blockLines[l].getPageLeft()) + "/" + (r + blockLines[l].getPageTop()) + ") for being colored " + blockRegions[c][br]);
+					lineAiBrightness[c][r] = ((byte) 127);
+					adjacentLinePixelKillCount++;
+				}
+			}
+			if (DEBUG_BLOCK_ANALYSIS && (adjacentLinePixelKillCount != 0))
+				System.out.println(" - eliminated " + adjacentLinePixelKillCount + " pixels from adjacent lines");
+			blockLines[l].setRegions(lineAi);
+			
+			//	measure region coloring of line
+			measureRegions(blockLines[l].regionColors, blockLines[l].regionSizes, blockLines[l].regionMinCols, blockLines[l].regionMaxCols, blockLines[l].regionMinRows, blockLines[l].regionMaxRows);
+//			
+//			//	eliminate regions that are too small to even see (beware of periods and dots, though)
+//			this.cleanRegions(blockLines[l].regionColors, dpi, blockLines[l].regionSizes, blockLines[l].regionMinCols, blockLines[l].regionMaxCols, blockLines[l].regionMinRows, blockLines[l].regionMaxRows);
+			
+			//	eliminate regions whose top is in bottom 20% of line
+			//	DO NOT eliminate dimensions just yet, though, as without a descender, we'd eliminate periods, and we need those for word detection
+			lineRegionSizeReserves[l] = new int[blockLines[l].regionSizes.length];
+			Arrays.fill(lineRegionSizeReserves[l], 0);
+			for (int reg = 1; reg < blockLines[l].regionSizes.length; reg++) {
+				if ((blockLines[l].regionMinRows[reg] * 5) < (blockLines[l].regionColors[0].length * 4))
+					continue;
+				lineRegionSizeReserves[l][reg] = blockLines[l].regionSizes[reg];
+				blockLines[l].regionSizes[reg] = 0;
+			}
+			
+			//	attach small regions (dots, accents) downward
+			attachSmallRegionsDownward(blockLines[l].regionColors, (dpi / 12), (dpi / 6), 0, blockLines[l].regionSizes, blockLines[l].regionMinCols, blockLines[l].regionMaxCols, blockLines[l].regionMinRows, blockLines[l].regionMaxRows, -1, -1, null);
+			
+			//	gather statistics
+			System.out.println(" - region colors in " + blockLines[l].getPageBounds() + ":");
+			CountingSet lineRegionTopCounts = new CountingSet(new TreeMap());
+			CountingSet lineRegionBottomCounts = new CountingSet(new TreeMap());
+			CountingSet lineRegionSizeCounts = new CountingSet(new TreeMap());
+			CountingSet lineRegionHeightCounts = new CountingSet(new TreeMap());
+			for (int reg = 1; reg < blockLines[l].regionSizes.length; reg++) {
+				if (blockLines[l].regionSizes[reg] == 0)
+					continue; // attached above
+				//System.out.println(" - " + reg + ": " + blockLines[l].lineRegionSizes[reg] + " pixels in " + blockLines[l].lineRegionMinCols[reg] + "-" + blockLines[l].lineRegionMaxCols[reg] + " x " + blockLines[l].lineRegionMinRows[reg] + "-" + blockLines[l].lineRegionMaxRows[reg]);
+				lineRegionTopCounts.add(new Integer(blockLines[l].regionMinRows[reg]));
+				lineRegionBottomCounts.add(new Integer(blockLines[l].regionMaxRows[reg]));
+				lineRegionSizeCounts.add(new Integer(blockLines[l].regionSizes[reg]));
+				lineRegionHeightCounts.add(new Integer(blockLines[l].regionMaxRows[reg] - blockLines[l].regionMinRows[reg] + 1));
+			}
+			int lineRegionAboveCenterBottomCount = countElementsUpTo(lineRegionBottomCounts, (blockLines[l].getHeight() / 2));
+			int lineRegionBelowCenterBottomCount = (lineRegionBottomCounts.size() - lineRegionAboveCenterBottomCount);
+			int avgLineRegionBottom = getAverageMid60(lineRegionBottomCounts, (blockLines[l].getHeight() / 2), Integer.MAX_VALUE);
+			blockLines[l].baseline = avgLineRegionBottom;
+			if (DEBUG_BLOCK_ANALYSIS) {
+				System.out.println("   ==> tops are " + lineRegionTopCounts);
+				System.out.println("   ==> bottoms are " + lineRegionBottomCounts);
+				System.out.println("       above line center bottoms are " + lineRegionAboveCenterBottomCount);
+				System.out.println("       below line center bottoms are " + lineRegionBelowCenterBottomCount);
+//				int avgLineRegionBottom;
+//				if (lineRegionBelowCenterBottomCount < lineRegionAboveCenterBottomCount) {
+//					int maxAboveCenterBottom = this.getMaxUpTo(lineRegionBottomCounts, (blockLines[l].getHeight() / 2));
+//					avgLineRegionBottom = this.getAverageMid60(lineRegionBottomCounts, (maxAboveCenterBottom / 2), (blockLines[l].getHeight() / 2));
+//				}
+//				else avgLineRegionBottom = this.getAverageMid60(lineRegionBottomCounts, (blockLines[l].getHeight() / 2), Integer.MAX_VALUE);
+				//	ignore region bottoms above line center (works even if line has no ascenders, as x-height is at least 40% in but any font)
+				System.out.println("       mid 60% average bottom is " + avgLineRegionBottom);
+				//	==> looks darn good for baseline detection !!!
+			}
+			if (vbiGr != null) {
+				vbiGr.setColor(Color.RED);
+				vbiGr.drawLine(blockLines[l].getPageLeft(), (blockLines[l].getPageTop() + avgLineRegionBottom), blockLines[l].getPageRight(), (blockLines[l].getPageTop() + avgLineRegionBottom));
+			}
+			
+			int avgLineRegionHeight = getAverage(lineRegionHeightCounts, (blockLines[l].getHeight() / 4) /* x-height below 25% is very unlikely */, Integer.MAX_VALUE);
+			int avgLineRegionHeightBelowAvg = getAverage(lineRegionHeightCounts, (blockLines[l].getHeight() / 4) /* x-height below 25% is very unlikely */, avgLineRegionHeight);
+			int avgLineRegionHeightAboveAvg = getAverage(lineRegionHeightCounts, (avgLineRegionHeight + 1), Integer.MAX_VALUE);
+			if (DEBUG_BLOCK_ANALYSIS) {
+				System.out.println("   ==> sizes are " + lineRegionSizeCounts);
+				System.out.println("       average size is " + getAverage(lineRegionSizeCounts, 0, Integer.MAX_VALUE));
+				System.out.println("   ==> heights are " + lineRegionHeightCounts);
+				System.out.println("       average height " + (blockLines[l].getHeight() / 4) + " and above is " + avgLineRegionHeight);
+				System.out.println("       average height between " + (blockLines[l].getHeight() / 4) + " and " + avgLineRegionHeight + " is " + avgLineRegionHeightBelowAvg);
+				System.out.println("       average height " + (avgLineRegionHeight + 1) + " and above is " + avgLineRegionHeightAboveAvg);
+			}
+//			//	ignore x-height if above 67% of cap height (likely line with very few glyphs without ascender)
+//			//	==> RATIO CAN BE EVEN HIGHER IN SMALL FONT SIZES, BETTER OFF WITH 75%
+//			if ((avgLineRegionBottom * 2) < (avgLineRegionHeightBelowAvg * 3)) {
+			//	ignore x-height if above 75% of cap height (likely line with very few glyphs without ascender)
+			if ((avgLineRegionBottom * 3) < (avgLineRegionHeightBelowAvg * 4)) {
+				avgLineRegionHeightBelowAvg = -1;
+				avgLineRegionHeightAboveAvg = avgLineRegionHeight;
+				if (DEBUG_BLOCK_ANALYSIS) System.out.println("       ==> average below average height too close to average region bottom, most likely all caps");
+			}
+			//	ignore x-height if above 75% of line height (likely line with very few glyphs without ascender)
+			if ((avgLineRegionHeightAboveAvg * 3) < (avgLineRegionHeightBelowAvg * 4)) {
+				avgLineRegionHeightBelowAvg = -1;
+				avgLineRegionHeightAboveAvg = avgLineRegionHeight;
+				if (DEBUG_BLOCK_ANALYSIS) System.out.println("       ==> average below average height too close to average above average height, most likely all caps");
+			}
+			if (avgLineRegionHeightBelowAvg != -1) {
+				blockLines[l].xHeight = avgLineRegionHeightBelowAvg;
+				if (vbiGr != null) {
+					vbiGr.setColor(Color.GREEN);
+					vbiGr.drawLine(blockLines[l].getPageLeft(), (blockLines[l].getPageTop() + avgLineRegionBottom - avgLineRegionHeightBelowAvg), blockLines[l].getPageRight(), (blockLines[l].getPageTop() + avgLineRegionBottom - avgLineRegionHeightBelowAvg));
+				}
+			}
+			//	cap off cap height to hight above baseline
+			if (avgLineRegionHeightAboveAvg > avgLineRegionBottom) {
+				avgLineRegionHeightAboveAvg = avgLineRegionBottom;
+				if (DEBUG_BLOCK_ANALYSIS) System.out.println("       ==> capping average above average height to average region bottom, line most likely has many below baseline or above cap height overshoots");
+			}
+			if (avgLineRegionHeightAboveAvg != -1) {
+				blockLines[l].capHeight = avgLineRegionHeightAboveAvg;
+				if (vbiGr != null) {
+					vbiGr.setColor(Color.BLUE);
+					vbiGr.drawLine(blockLines[l].getPageLeft(), (blockLines[l].getPageTop() + avgLineRegionBottom - avgLineRegionHeightAboveAvg), blockLines[l].getPageRight(), (blockLines[l].getPageTop() + avgLineRegionBottom - avgLineRegionHeightAboveAvg));
+				}
+			}
+			float fontSizeXHeight = ((avgLineRegionHeightBelowAvg * 300 /* measured DPI */ * 24.0f /* measured font size */) / (dpi * 45 /* x-height of 24pt at 300 DPI */));
+			float fontSizeCapHeight = ((avgLineRegionHeightAboveAvg * 300 /* measured DPI */ * 24.0f /* measured font size */) / (dpi * 67 /* cap height of 24pt at 300 DPI */));
+			if (DEBUG_BLOCK_ANALYSIS) System.out.println("       ==> font size is " + fontSizeXHeight + " by x-height, " + fontSizeCapHeight + " by cap height");
+		}
+		
+		//	get average retio of cap height to x-height
+		CountingSet xHeightCapHeightRelationCounts = new CountingSet(new TreeMap());
+		for (int l = 0; l < blockLines.length; l++) {
+			if (blockLines[l].xHeight == -1)
+				continue;
+			if (blockLines[l].capHeight == -1)
+				continue;
+			xHeightCapHeightRelationCounts.add(new Integer((blockLines[l].xHeight * 100) / blockLines[l].capHeight));
+		}
+		System.out.println(" - x-height to cap height ratios are " + xHeightCapHeightRelationCounts);
+		int avgXHeightCapHeightRatio = getAverage(xHeightCapHeightRelationCounts, 0, 100);
+		System.out.println("   average x-height to cap height ratio is " + avgXHeightCapHeightRatio);
+		
+		//	extrapolate x-height from cap height where former missing
+		HashSet extrapolatedXHeightLines = new HashSet();
+		if (avgXHeightCapHeightRatio != -1)
+			for (int l = 0; l < blockLines.length; l++) {
+				if (blockLines[l].xHeight != -1)
+					continue;
+				if (blockLines[l].capHeight == -1)
+					continue;
+				blockLines[l].xHeight = ((blockLines[l].capHeight * avgXHeightCapHeightRatio) / 100);
+				extrapolatedXHeightLines.add(blockLines[l]);
+				if (DEBUG_BLOCK_ANALYSIS) System.out.println("   - extrapolated x-height to " + blockLines[l].xHeight + " in " + blockLines[l].getPageBounds());
+			}
+//		
+//		//	increase line top to reduce height where top exceeds cap height
+//		for (int l = 0; l < blockLines.length; l++) {
+//			if (blockLines[l].capHeight == -1)
+//				continue; // nothing to work with
+//			if (Math.abs(blockLines[l].capHeight - blockLines[l].baseline) < 2)
+//				continue; // this one is in range
+//			System.out.println("   - increasing top of " + blockLines[l].getPageBounds() + " for cap height " + blockLines[l].capHeight + " vs. baseline " + blockLines[l].baseline);
+//			while (blockLines[l].capHeight < blockLines[l].baseline) {
+//				blockLines[l].top++;
+//				blockLines[l].baseline--;
+//			}
+//			System.out.println("     --> top now is at " + blockLines[l].getPageTop() + " with bounds " + blockLines[l].getPageBounds());
+//		}
+		
+		//	adjust split between overlapping lines (make sure of one pixel of distance to facilitate downstream splitting)
+		for (int l = 1; l < blockLines.length; l++) {
+			if (blockLines[l].top > blockLines[l-1].bottom)
+				continue; // this one is OK
+			if ((blockLines[l].left >= blockLines[l-1].right) || (blockLines[l].right <= blockLines[l-1].left))
+				continue; // side by side
+			if (DEBUG_BLOCK_ANALYSIS) {
+				System.out.println("   - resolving overlap of bottom of " + blockLines[l-1].getPageBounds() + " with top of " + blockLines[l].getPageBounds());
+				System.out.println("     top line descender is " + (blockLines[l-1].getHeight() - blockLines[l-1].baseline) + " below baseline " + blockLines[l - 1].getPageBaseline());
+				System.out.println("     bottom line ascender is " + (blockLines[l].baseline - blockLines[l].xHeight) + " above x-height line " + (blockLines[l].getPageBaseline() - blockLines[l].xHeight));
+			}
+			if (blockLines[l].bottom <= blockLines[l-1].bottom) {
+				if (DEBUG_BLOCK_ANALYSIS)
+					System.out.println("     ==> completely contained");
+				//	TODO merge these suckers, swap them, or whatever ...
+				continue;
+			}
+			//	TODOne check which line loses fewer pixels, and decrease bottom of line above instead, depending on comparison result
+			//	TODOne factor in pixel counts for regions that go above baseline or below x-height, respectively
+			//	TODOne factor in deviation of descender vs. line height or cap height ascender vs. line height, respectively
+			//	==> TODOne use latter as weighting factor for loss at individual pixel rows
+			
+			//	compute pixes losses for each conflicting line
+			int[] tlbLosses = new int[blockLines[l-1].bottom - blockLines[l].top + 1];
+			int[] bltLosses = new int[blockLines[l-1].bottom - blockLines[l].top + 1];
+			for (int r = blockLines[l].top; r <= blockLines[l-1].bottom; r++) {
+				int lossIndex = (r - blockLines[l].top);
+				
+				tlbLosses[lossIndex] = 0;
+				int tlr = (r - blockLines[l-1].oTop - 1 /* bottom is exclusive */);
+				if (tlr < blockLines[l-1].regionColors[0].length) {
+					int lineTopShift = (blockLines[l-1].top - blockLines[l-1].oTop);
+					int lossWeight = (tlbLosses.length - lossIndex);
+					for (int c = 0; c < blockLines[l-1].regionColors.length; c++) {
+						int reg = blockLines[l-1].regionColors[c][tlr];
+						if (reg == 0)
+							continue; // nothing there
+						if (blockLines[l-1].regionSizes[reg] == 0)
+							continue; // eliminated above
+						if ((blockLines[l-1].regionMinRows[reg]) > (blockLines[l-1].baseline + lineTopShift))
+							continue; // exists only below baseline
+						tlbLosses[lossIndex] += lossWeight;
+					}
+				}
+				if (((blockLines[l - 1].baseline * 4) / 3) < tlr)
+					tlbLosses[lossIndex] /= 2; // cut in half if below normal 25% descender
+				
+				bltLosses[lossIndex] = 0;
+				int blr = (r - blockLines[l].oTop);
+				if (blr >= 0) {
+//					int lineTopShift = (blockLines[l].top - blockLines[l].oTop);
+					int lossWeight = (lossIndex + 1);
+					for (int c = 0; c < blockLines[l].regionColors.length; c++) {
+						int reg = blockLines[l].regionColors[c][blr];
+						if (reg == 0)
+							continue; // nothing there
+						if (blockLines[l].regionSizes[reg] == 0)
+							continue; // eliminated above
+//						if ((blockLines[l].lineRegionMaxRows[reg]) < (blockLines[l].capHeight + lineTopShift))
+//							continue; // exists only above cap height
+						bltLosses[lossIndex] += lossWeight;
+					}
+				}
+				if (blr < (blockLines[l].baseline - blockLines[l].capHeight))
+					bltLosses[lossIndex] /= 2; // cut in half if above cap height
+			}
+			
+			//	compute cumulative losses
+			for (int r = (tlbLosses.length - 1); r > 0; r--)
+				tlbLosses[r - 1] += tlbLosses[r];
+			if (DEBUG_BLOCK_ANALYSIS) System.out.println("     top line losses are " + Arrays.toString(tlbLosses));
+			for (int r = 1; r < bltLosses.length; r++)
+				bltLosses[r] += bltLosses[r - 1];
+			if (DEBUG_BLOCK_ANALYSIS) System.out.println("     bottom line losses are " + Arrays.toString(bltLosses));
+			
+			//	use split that minimizes overall loss (akin to two springs centering split between them)
+			int tlbCutRows = tlbLosses.length;
+			int bltCutRows = 0;
+			for (int sr = 0; sr < tlbLosses.length; sr++) {
+				if (tlbLosses[sr] < bltLosses[sr])
+					break;
+				tlbCutRows--;
+				bltCutRows++;
+			}
+			if (DEBUG_BLOCK_ANALYSIS) System.out.println("     decreasing bottom of " + blockLines[l-1].getPageBounds() + " by " + tlbCutRows);
+			blockLines[l-1].bottom -= tlbCutRows;
+			if (DEBUG_BLOCK_ANALYSIS) System.out.println("     --> bottom now is at " + blockLines[l-1].getPageBottom() + " with bounds " + blockLines[l-1].getPageBounds());
+			if (DEBUG_BLOCK_ANALYSIS) System.out.println("     increasing top of " + blockLines[l].getPageBounds() + " by " + bltCutRows);
+			blockLines[l].top += bltCutRows;
+			blockLines[l].baseline -= bltCutRows;
+			if (DEBUG_BLOCK_ANALYSIS) System.out.println("     --> top now is at " + blockLines[l].getPageTop() + " with bounds " + blockLines[l].getPageBounds());
+		}
+		
+		//	extend lines to include descender (at least 25% of height below baseline)
+		for (int l = 0; l < blockLines.length; l++) {
+			if ((blockLines[l].baseline * 4) <= (blockLines[l].getHeight() * 3))
+				continue; // baseline above 75% of height
+			int maxBottom = (((l+1) < blockLines.length) ? (blockLines[l+1].top - 1) : Integer.MAX_VALUE /* allow downward expanding block proper */);
+			if (DEBUG_BLOCK_ANALYSIS) System.out.println("   - increasing bottom of " + blockLines[l].getPageBounds() + " for too small descender, at most to " + (blockBounds.top + maxBottom));
+			while ((blockLines[l].bottom < maxBottom) && ((blockLines[l].baseline * 4) > (blockLines[l].getHeight() * 3)))
+				blockLines[l].bottom++;
+			if (DEBUG_BLOCK_ANALYSIS) System.out.println("     --> bottom now is at " + blockLines[l].getPageBottom() + " with bounds " + blockLines[l].getPageBounds());
+		}
+		
+		//	add ascender to lines whose cap height is closer to x-height of previous line (even if we extrapolated x-height above)
+		//	TODO also check line below (if any), as there might be mid-block font size changes
+		for (int l = 0; l < blockLines.length; l++) {
+			if (blockLines[l].capHeight == -1)
+				continue; // nothing to work with
+			if ((blockLines[l].xHeight != -1) && !extrapolatedXHeightLines.contains(blockLines[l])) 
+				continue; // we have a measured x-height
+			BlockLine cBlockLine;
+			if ((l != 0))
+				cBlockLine = blockLines[l - 1]; // should work unless subject line overflows alone from previous column or page
+			else if ((l+1) < blockLines.length)
+				cBlockLine = blockLines[l + 1]; // fall back to line below
+			else cBlockLine = null; // preciously little we can do
+			if ((cBlockLine == null) || (cBlockLine.capHeight == -1) || (cBlockLine.xHeight == -1))
+				continue;
+			int capHeightDist = Math.abs(blockLines[l].capHeight - cBlockLine.capHeight);
+			int xHeightDist = Math.abs(blockLines[l].capHeight - cBlockLine.xHeight);
+			if (capHeightDist < xHeightDist)
+				continue; // this one's in the ballpark
+			blockLines[l].xHeight = blockLines[l].capHeight; // this is what we actually measured
+			blockLines[l].capHeight = ((blockLines[l].xHeight * 100) / avgXHeightCapHeightRatio);
+			if (DEBUG_BLOCK_ANALYSIS) System.out.println("   - extrapolated cap height to " + blockLines[l].capHeight + " in " + blockLines[l].getPageBounds());
+			int minTop = ((l != 0) ? (blockLines[l-1].bottom + 1) : Integer.MIN_VALUE /* allow upward expanding block proper */);
+			if (DEBUG_BLOCK_ANALYSIS) System.out.println("   - decreasing top of " + blockLines[l].getPageBounds() + " for too small ascender, at most to " + minTop);
+			while ((blockLines[l].top > minTop) && (blockLines[l].baseline < blockLines[l].capHeight)) {
+				blockLines[l].top--;
+				blockLines[l].baseline++;
+			}
+			if (DEBUG_BLOCK_ANALYSIS) System.out.println("     --> top now is at " + blockLines[l].getPageTop() + " with bounds " + blockLines[l].getPageBounds());
+		}
+		
+		//	identify words in individual lines
+		for (int l = 0; l < blockLines.length; l++) {
+			System.out.println("   - detecting words in " + blockLines[l].getPageBounds() + ":");
+			//	measure occupation of each column to identify word gaps ==> doesn't work reliably with italics and/or kerning
+//			int[] lineApiColOccupations = new int[lineRegions.length];
+//			Arrays.fill(lineApiColOccupations, 0);
+//			for (int c = 0; c < lineRegions.length; c++)
+//				for (int r = 0; r < lineRegions[c].length; r++) {
+//					//	TODO_ might have to ignore regions that (a) touch either of line top or bottom and (b) don't overlap with line center
+//					//	==> keeps intrusions from lines below and above from interferring
+//					if (lineRegions[c][r] != 0)
+//						lineApiColOccupations[c]++;
+//				}
+//			CountingSet lineApiColOccupationGaps = new CountingSet(new TreeMap());
+//			ArrayList lineApiColOccupationGapList = new ArrayList();
+//			int lastLineApiColOccupation = -1;
+//			for (int c = 0; c < lineRegions.length; c++) {
+//				if (lineApiColOccupations[c] == 0) {
+//					if (lastLineApiColOccupation == -1)
+//						lastLineApiColOccupation = c;
+//				}
+//				else if (lastLineApiColOccupation != -1) {
+//					lineApiColOccupationGaps.add(new Integer(c - lastLineApiColOccupation));
+//					int cog = ((lastLineApiColOccupation << 16) | c);
+//					lineApiColOccupationGapList.add(new Integer(cog));
+//					lastLineApiColOccupation = -1;
+//				}
+//			}
+//			System.out.println("   - column occupations: " + Arrays.toString(lineApiColOccupations));
+//			System.out.println("   - column occupation gaps: " + lineApiColOccupationGaps);
+//			System.out.println("     average column occupation gap is " + this.getAverage(lineApiColOccupationGaps, 0, Integer.MAX_VALUE));
+//			int lastLineApiColOccupationGap = -1;
+//			int maxLineApiColOccupationGapJump = 0;
+//			int maxBelowJumpLineApiColOccupationGap = -1;
+//			int minAboveJumpLineApiColOccupationGap = -1;
+//			for (Iterator cogit = lineApiColOccupationGaps.iterator(); cogit.hasNext();) {
+//				Integer cog = ((Integer) cogit.next());
+//				if (lastLineApiColOccupationGap == -1) {
+//					lastLineApiColOccupationGap = cog.intValue();
+//					continue;
+//				}
+//				int cogJump = (cog.intValue() - lastLineApiColOccupationGap);
+//				if (cogJump > maxLineApiColOccupationGapJump) {
+//					maxBelowJumpLineApiColOccupationGap = lastLineApiColOccupationGap;
+//					minAboveJumpLineApiColOccupationGap = cog.intValue();
+//					maxLineApiColOccupationGapJump = cogJump;
+//				}
+//				lastLineApiColOccupationGap = cog.intValue();
+//			}
+//			System.out.println("     largest column occupation gap jump is " + maxLineApiColOccupationGapJump + " between " + maxBelowJumpLineApiColOccupationGap + " and " + minAboveJumpLineApiColOccupationGap);
+//			int minLineApiWordGap = minAboveJumpLineApiColOccupationGap;
+//			if (maxLineApiColOccupationGapJump < (dpi / 50) /* half a millimeter */) {
+//				minLineApiWordGap = ((blockLines[l].getHeight() + 2) / 4);
+//				System.out.println("     ==> too insignificant below " + (dpi / 50) + ", falling back to quarter line height " + minLineApiWordGap);
+//			}
+			
+			//	restore sizes of baseline regions
+			for (int reg = 1; reg < blockLines[l].regionSizes.length; reg++) {
+				if (blockLines[l].regionSizes[reg] == 0)
+					blockLines[l].regionSizes[reg] = lineRegionSizeReserves[l][reg];
+			}
+			
+			//	sort regions left to right
+			long[] lineRegionsLeftRight = new long[blockLines[l].regionSizes.length];
+			Arrays.fill(lineRegionsLeftRight, Long.MAX_VALUE);
+			for (int reg = 1; reg < blockLines[l].regionSizes.length; reg++) {
+				if (blockLines[l].regionSizes[reg] == 0)
+					continue; // attached above
+				lineRegionsLeftRight[reg] &= blockLines[l].regionMinCols[reg];
+				lineRegionsLeftRight[reg] <<= 32;
+				lineRegionsLeftRight[reg] |= reg;
+			}
+			Arrays.sort(lineRegionsLeftRight);
+			
+			//	merge regions with ones at most (DPI / 50) away (horizontal distance only)
+			for (int lrReg = 0; lrReg < (lineRegionsLeftRight.length - 1); lrReg++) {
+				if (lineRegionsLeftRight[lrReg] == Long.MAX_VALUE)
+					break; // nothing more to come
+				if (lineRegionsLeftRight[lrReg + 1] == Long.MAX_VALUE)
+					break; // nothing more to come on our right
+				int lReg = ((int) (lineRegionsLeftRight[lrReg] & 0x7FFFFFFF));
+				if (blockLines[l].regionSizes[lReg] == 0)
+					continue; // attached above
+				int rReg = ((int) (lineRegionsLeftRight[lrReg + 1] & 0x7FFFFFFF));
+				if (blockLines[l].regionSizes[rReg] == 0)
+					continue; // attached above
+//				if ((dpi / 50) <= (blockLines[l].lineRegionMinCols[rReg] - (blockLines[l].lineRegionMaxCols[lReg] + 1)))
+//					continue; // too far apart TODOne make this dependent on line height instead (latter alo reflects both font size and DPI) !!!
+				int minSpaceWidth = (blockLines[l].getHeight() / 6); // now that we're all but sure line height includes both ascender and descender, we can cap this at the normal width of a thin space (according to https://en.wikipedia.org/wiki/Thin_space)
+				if (minSpaceWidth < (dpi / 50))
+					minSpaceWidth = (dpi / 50); // anything less would be extremely hard to discern by a pair of human eyeballs
+				if (minSpaceWidth <= (blockLines[l].regionMinCols[rReg] - (blockLines[l].regionMaxCols[lReg] + 1)))
+					continue; // too far apart
+				attachRegion(blockLines[l].regionColors, rReg, lReg, blockLines[l].regionSizes, blockLines[l].regionMinCols, blockLines[l].regionMaxCols, blockLines[l].regionMinRows, blockLines[l].regionMaxRows, -1, -1, null);
+				if ((lrReg + 2) < lineRegionsLeftRight.length)
+					System.arraycopy(lineRegionsLeftRight, (lrReg + 2), lineRegionsLeftRight, (lrReg + 1), (lineRegionsLeftRight.length - (lrReg + 2)));
+				lineRegionsLeftRight[lineRegionsLeftRight.length - 1] = Long.MAX_VALUE;
+				lrReg--;
+			}
+			
+			//	measure actual distances of regions to closest right neighbor
+			int[] lineRegionNeighbors = new int[blockLines[l].regionSizes.length];
+			Arrays.fill(lineRegionNeighbors, 0);
+			int[] lineRegionNeighborDistances = new int[blockLines[l].regionSizes.length];
+			Arrays.fill(lineRegionNeighborDistances, Integer.MAX_VALUE);
+			CountingSet lineRegionNeighborGaps = new CountingSet(new TreeMap());
+			for (int lrReg = 0; lrReg < (lineRegionsLeftRight.length - 1); lrReg++) {
+				if (lineRegionsLeftRight[lrReg] == Long.MAX_VALUE)
+					break; // nothing more to come
+				if (lineRegionsLeftRight[lrReg + 1] == Long.MAX_VALUE)
+					break; // nothing more to come on our right
+				int reg = ((int) (lineRegionsLeftRight[lrReg] & 0x7FFFFFFF));
+				if (blockLines[l].regionSizes[reg] == 0)
+					continue; // attached above
+				int enReg = ((int) (lineRegionsLeftRight[lrReg + 1] & 0x7FFFFFFF));
+				if (blockLines[l].regionSizes[enReg] == 0)
+					continue; // attached above
+				for (int c = blockLines[l].regionMinCols[reg]; c <= blockLines[l].regionMaxCols[reg]; c++) {
+					for (int r = blockLines[l].regionMinRows[reg]; r <= blockLines[l].regionMaxRows[reg]; r++) {
+						if (blockLines[l].regionColors[c][r] != reg)
+							continue;
+						int nReg = -1;
+						int nRegDist = -1;
+						for (int lc = (c+1); lc < blockLines[l].regionColors.length; lc++) {
+							if (blockLines[l].regionColors[lc][r] == reg)
+								break; // we're getting back to this one in next column
+							if (blockLines[l].regionColors[lc][r] == 0)
+								continue; // nothing there
+							int lReg = blockLines[l].regionColors[lc][r];
+							if (blockLines[l].regionSizes[lReg] == 0)
+								continue; // attached above
+							nReg = lReg;
+							nRegDist = (lc - (c + 1));
+							break; // we found our neighbor on current row
+						}
+						if (nRegDist == -1)
+							continue; // nothing found at all, or we were in our own middle
+						if (nRegDist < lineRegionNeighborDistances[reg]) {
+							lineRegionNeighbors[reg] = nReg;
+							lineRegionNeighborDistances[reg] = nRegDist;
+						}
+					}
+				}
+				if (lineRegionNeighbors[reg] != enReg) /* we _should_ have found our neighbor to the right */ {
+					lineRegionNeighbors[reg] = enReg;
+					lineRegionNeighborDistances[reg] = Math.max((blockLines[l].regionMinCols[enReg] - (blockLines[l].regionMaxCols[reg] + 1)), 0);
+				}
+				if (lineRegionNeighborDistances[reg] == Integer.MAX_VALUE)
+					continue;
+				if (lineRegionNeighborDistances[reg] > (blockLines[l].getHeight() / 2)) // cap distance off at half the line width, no space is hardly wider
+					lineRegionNeighborDistances[reg] = (blockLines[l].getHeight() / 2);
+				lineRegionNeighborGaps.add(new Integer(lineRegionNeighborDistances[reg]));
+			}
+			if (DEBUG_BLOCK_ANALYSIS) {
+				System.out.println("   - region neighbor gaps: " + lineRegionNeighborGaps);
+				System.out.println("     average neighbor gap is " + getAverage(lineRegionNeighborGaps, 0, Integer.MAX_VALUE));
+			}
+			int minLineApiWordGap;
+			if (regroupWords) {
+				int lastLineApiNeighborGap = -1;
+				int maxLineApiNeighborGapJump = 0;
+				int maxBelowJumpLineApiNeighborGap = -1;
+				int minAboveJumpLineApiNeighborGap = -1;
+				for (Iterator rngit = lineRegionNeighborGaps.iterator(); rngit.hasNext();) {
+					Integer rng = ((Integer) rngit.next());
+					if (lastLineApiNeighborGap == -1) {
+						lastLineApiNeighborGap = rng.intValue();
+						continue;
+					}
+					int cogJump = (rng.intValue() - lastLineApiNeighborGap);
+					if (cogJump > maxLineApiNeighborGapJump) {
+						maxBelowJumpLineApiNeighborGap = lastLineApiNeighborGap;
+						minAboveJumpLineApiNeighborGap = rng.intValue();
+						maxLineApiNeighborGapJump = cogJump;
+					}
+					lastLineApiNeighborGap = rng.intValue();
+				}
+				if (DEBUG_BLOCK_ANALYSIS) System.out.println("     largest neighbor gap jump is " + maxLineApiNeighborGapJump + " between " + maxBelowJumpLineApiNeighborGap + " and " + minAboveJumpLineApiNeighborGap);
+				minLineApiWordGap = minAboveJumpLineApiNeighborGap;
+				if (maxLineApiNeighborGapJump < (dpi / 50) /* half a millimeter */) {
+					minLineApiWordGap = ((blockLines[l].getHeight() + 2) / 4);
+					if (DEBUG_BLOCK_ANALYSIS) System.out.println("     ==> too insignificant below " + (dpi / 50) + ", falling back to quarter line height " + minLineApiWordGap);
+				}
+			}
+			else {
+				minLineApiWordGap = ((blockLines[l].getHeight() + 3) / 6); // width of a thin space (according to https://en.wikipedia.org/wiki/Thin_space)
+				if (DEBUG_BLOCK_ANALYSIS) System.out.println("     using sixth of line height " + minLineApiWordGap);
+			}
+			
+			//	group occupied areas into words
+			LineWord regWord = new LineWord(blockLines[l], 0, blockLines[l].getWidth());
+//			for (int g = 0; g < lineApiColOccupationGapList.size(); g++) {
+//				Integer cog = ((Integer) lineApiColOccupationGapList.get(g));
+//				int cogLeft = ((cog.intValue() >> 16) & 0xFFFF);
+//				int cogRight = (cog.intValue() & 0xFFFF);
+//				int cogWidth = (cogRight - cogLeft);
+//				if (cogWidth < minLineApiWordGap)
+//					continue;
+//				regWord.right = cogLeft;
+//				regWord = new RegWord(blockLines[l], cogRight, blockLines[l].getWidth());
+//			}
+			for (int lrReg = 0; lrReg < lineRegionsLeftRight.length; lrReg++) {
+				if (lineRegionsLeftRight[lrReg] == Long.MAX_VALUE)
+					break; // nothing more to come
+				int reg = ((int) (lineRegionsLeftRight[lrReg] & 0x7FFFFFFF));
+				int nRegDist = lineRegionNeighborDistances[reg];
+				if (nRegDist < minLineApiWordGap)
+					continue;
+				int nReg = lineRegionNeighbors[reg];
+				if (nReg == 0)
+					continue;
+				regWord.right = (blockLines[l].regionMaxCols[reg] + 1);
+				regWord = new LineWord(blockLines[l], blockLines[l].regionMinCols[nReg], blockLines[l].getWidth());
+			}
+			
+			/* TODO handle words connected by a mingled underline (easily happens via descender):
+			 * - apply same grouping as used here restricted to baseline and above (with fresh region coloring)
+			 * - compare results ...
+			 * - ... and use better one */
+			
+			//	visualize words
+			if (vbiGr != null) {
+				vbiGr.setColor(Color.MAGENTA);
+				for (int w = 0; w < blockLines[l].words.size(); w++) {
+					regWord = ((LineWord) blockLines[l].words.get(w));
+					vbiGr.drawRect(regWord.getPageLeft(), regWord.line.getPageTop(), regWord.getWidth(), regWord.line.getHeight());
+				}
+			}
+		}
+		
+		//	finally
+		return blockLines;
+	}
+	
+	private static int getAverage(CountingSet cs, int minToCount, int maxToCount) {
+		if (cs.isEmpty())
+			return -1;
+		int count = 0;
+		int sum = 0;
+		for (Iterator it = cs.iterator(); it.hasNext();) {
+			Integer i = ((Integer) it.next());
+			if (i.intValue() < minToCount)
+				continue;
+			if (maxToCount < i.intValue())
+				break;
+			count += cs.getCount(i);
+			sum += (i.intValue() * cs.getCount(i));
+		}
+		return ((count == 0) ? -1 : ((sum + (count / 2)) / count));
+	}
+	
+	private static int getAverageMid60(CountingSet cs, int minToCount, int maxToCount) {
+		if (cs.isEmpty())
+			return -1;
+		int checkCount = 0;
+		int count = 0;
+		int sum = 0;
+		for (Iterator it = cs.iterator(); it.hasNext();) {
+			Integer i = ((Integer) it.next());
+			if ((cs.size() * 80) < (checkCount * 100))
+				break; // beyond 80%
+			int iCount = cs.getCount(i);
+			checkCount += iCount;
+			if (i.intValue() < minToCount)
+				continue;
+			if (maxToCount < i.intValue())
+				break;
+			if ((cs.size() * (100 - 80)) < (checkCount * 100)) /* we're beyond smallest 20% */ {
+				count += iCount;
+				sum += (i.intValue() * iCount);
+			}
+		}
+		return ((count == 0) ? -1 : ((sum + (count / 2)) / count));
+	}
+	
+	private static int countElementsUpTo(CountingSet cs, int maxToCount) {
+		if (cs.isEmpty())
+			return 0;
+		int count = 0;
+		for (Iterator it = cs.iterator(); it.hasNext();) {
+			Integer i = ((Integer) it.next());
+			if (maxToCount < i.intValue())
+				break;
+			count += cs.getCount(i);
+		}
+		return count;
+	}
+//	
+//	private static int getMaxUpTo(CountingSet cs, int maxToCount) {
+//		if (cs.isEmpty())
+//			return -1;
+//		int maxUpTo = -1;
+//		for (Iterator it = cs.iterator(); it.hasNext();) {
+//			Integer i = ((Integer) it.next());
+//			if (maxToCount < i.intValue())
+//				break;
+//			maxUpTo = i.intValue();
+//		}
+//		return maxUpTo;
+//	}
+//	
+//	private static int getMinAbove(CountingSet cs, int maxToIgnore) {
+//		if (cs.isEmpty())
+//			return -1;
+//		for (Iterator it = cs.iterator(); it.hasNext();) {
+//			Integer i = ((Integer) it.next());
+//			if (maxToIgnore < i.intValue())
+//				return i.intValue();
+//		}
+//		return -1;
+//	}
+	
+	private static int getMaxRegionColor(int[][] regionColors) {
+		int maxRegionColor = 0;
+		for (int c = 0; c < regionColors.length; c++) {
+			for (int r = 0; r < regionColors[c].length; r++)
+				maxRegionColor = Math.max(maxRegionColor, regionColors[c][r]);
+		}
+		return maxRegionColor;
+	}
+	
+	private static void measureRegions(int[][] regionColors, int[] regionSizes, int[] regionMinCols, int[] regionMaxCols, int[] regionMinRows, int[] regionMaxRows) {
+		Arrays.fill(regionSizes, 0);
+		Arrays.fill(regionMinCols, regionColors.length);
+		Arrays.fill(regionMaxCols, 0);
+		Arrays.fill(regionMinRows, regionColors[0].length);
+		Arrays.fill(regionMaxRows, 0);
+		for (int c = 0; c < regionColors.length; c++)
+			for (int r = 0; r < regionColors[c].length; r++) {
+				int reg = regionColors[c][r];
+				if (reg == 0)
+					continue;
+				regionSizes[reg]++;
+				regionMinCols[reg] = Math.min(regionMinCols[reg], c);
+				regionMaxCols[reg] = Math.max(regionMaxCols[reg], c);
+				regionMinRows[reg] = Math.min(regionMinRows[reg], r);
+				regionMaxRows[reg] = Math.max(regionMaxRows[reg], r);
+			}
+	}
+	
+//	private static void cleanRegions(int[][] regionColors, int dpi, int[] regionSizes, int[] regionMinCols, int[] regionMaxCols, int[] regionMinRows, int[] regionMaxRows) {
+//		int minDim = ((dpi + (100 / 2)) / 100); // quarter of a millimeter
+//		int minSize = (minDim * minDim);
+//		int minKeepDim = ((dpi + (50 / 2)) / 50); // half of a millimeter
+//		for (int reg = 1; reg < regionSizes.length; reg++) {
+//			if (regionSizes[reg] == 0)
+//				continue; // eliminated before
+//			if (minSize < regionSizes[reg])
+//				continue; // too large to consider for elimination
+//			int regWidth = (regionMaxCols[reg] - regionMinCols[reg] + 1);
+//			if (minKeepDim < regWidth)
+//				continue; // too wide to eliminate
+//			int regHeight = (regionMaxRows[reg] - regionMinRows[reg] + 1);
+//			if (minKeepDim < regHeight)
+//				continue; // too high to eliminate
+//			if ((minDim < regWidth) && (minDim < regWidth))
+//				continue; // above threshold in both directions
+//			System.out.println("Eliminating region " + reg + " of " + regionSizes[reg] + " pixels in " + regionMinCols[reg] + "-" + regionMaxCols[reg] + " x " + regionMinRows[reg] + "-" + regionMaxRows[reg]);
+//			this.attachRegion(regionColors, reg, 0, regionSizes, regionMinCols, regionMaxCols, regionMinRows, regionMaxRows, -1, -1, null);
+//		}
+//	}
+	
+	private static void attachSmallRegionsDownward(int[][] regionColors, int maxAttachSize, int maxAttachDist, int minAttachToSize, int[] regionSizes, int[] regionMinCols, int[] regionMaxCols, int[] regionMinRows, int[] regionMaxRows, int pageLeft, int pageTop, BufferedImage vbi) {
+		for (int reg = 1; reg < regionSizes.length; reg++) {
+			if (regionSizes[reg] == 0)
+				continue; // eliminated before
+			int regWidth = (regionMaxCols[reg] - regionMinCols[reg] + 1);
+			if (regWidth > maxAttachSize)
+				continue;
+			int regHeight = (regionMaxRows[reg] - regionMinRows[reg] + 1);
+			if (regHeight > maxAttachSize)
+				continue;
+			int aReg = -1;
+			for (int lr = (regionMaxRows[reg] + 1); lr <= (regionMaxRows[reg] + maxAttachDist); lr++) {
+				if (lr >= regionColors[0].length)
+					break;
+				for (int c = regionMinCols[reg]; c <= regionMaxCols[reg]; c++) {
+					int lReg = regionColors[c][lr];
+					if (lReg == 0)
+						continue; // nothing there
+					if (lReg == reg)
+						continue; // no use attaching region to itself
+					if (regionSizes[lReg] == 0)
+						continue; // eliminated before
+					int lRegWidth = (regionMaxCols[lReg] - regionMinCols[lReg] + 1);
+					if (lRegWidth <= minAttachToSize)
+						continue;
+					int lRegHeight = (regionMaxRows[lReg] - regionMinRows[lReg] + 1);
+					if (lRegHeight <= minAttachToSize)
+						continue;
+					aReg = lReg;
+					break;
+				}
+				if (aReg != -1)
+					break;
+			}
+			if (aReg == -1)
+				continue;
+			attachRegion(regionColors, reg, aReg, regionSizes, regionMinCols, regionMaxCols, regionMinRows, regionMaxRows, pageLeft, pageTop, vbi);
+		}
+	}
+	
+	private static void attachRegion(int[][] regionColors, int reg, int toReg, int[] regionSizes, int[] regionMinCols, int[] regionMaxCols, int[] regionMinRows, int[] regionMaxRows, int pageLeft, int pageTop, BufferedImage vbi) {
+		int toRegRgb = Color.HSBtoRGB(((1.0f / 32) * (toReg % 32)), 1.0f, 1.0f);
+		for (int c = regionMinCols[reg]; c <= regionMaxCols[reg]; c++) {
+			for (int r = regionMinRows[reg]; r <= regionMaxRows[reg]; r++)
+				if (regionColors[c][r] == reg) {
+					regionColors[c][r] = toReg;
+					if ((vbi != null) && (toReg != 0))
+						vbi.setRGB((pageLeft + c), (pageTop + r), toRegRgb);
+				}
+		}
+		regionSizes[toReg] += regionSizes[reg];
+		regionSizes[reg] = 0;
+		regionMinCols[toReg] = Math.min(regionMinCols[toReg], regionMinCols[reg]);
+		regionMaxCols[toReg] = Math.max(regionMaxCols[toReg], regionMaxCols[reg]);
+		regionMinRows[toReg] = Math.min(regionMinRows[toReg], regionMinRows[reg]);
+		regionMaxRows[toReg] = Math.max(regionMaxRows[toReg], regionMaxRows[reg]);
+	}
+	
+	/**
+	 * A line in a page block (for word extraction)
+	 * 
+	 * @author sautter
+	 */
+	public static class BlockLine {
+		//final Region block;
+		final BoundingBox blockBounds;
+		int color;
+		int left; // relative to parent block
+		int right; // relative to parent block
+		int top; // relative to parent block
+		final int oTop; // relative to parent block (need this as basis of region colors as we adjust top)
+		int bottom; // relative to parent block
+		//final int oBottom; // relative to parent block (need this as basis of region colors as we adjust bottom)
+		int baseline = -1; // relative to own top
+		int xHeight = -1;
+		int capHeight = -1;
+		int fontSize = -1;
+		ArrayList words = new ArrayList();
+//		BlockLine(Region block, int color, int left, int right, int top, int bottom) {
+		BlockLine(BoundingBox blockBounds, int color, int left, int right, int top, int bottom) {
+//			this.block = block;
+			this.blockBounds = blockBounds;
+			this.color = color;
+			this.left = left;
+			this.right = right;
+			this.top = top;
+			this.oTop = top;
+			this.bottom = bottom;
+			//this.oBottom = bottom;
+		}
+		
+		/**
+		 * Get the number of words in the line.
+		 * @return the number of words
+		 */
+		public int getWordCount() {
+			return this.words.size();
+		}
+		
+		/**
+		 * Get the word at a specific position in the line.
+		 * @param pos the position of the word
+		 * @return the word at the argument position
+		 */
+		public LineWord getWord(int pos) {
+			return ((LineWord) this.words.get(pos));
+		}
+		
+		/**
+		 * Get the words in the line.
+		 * @return an array holding the words
+		 */
+		public LineWord[] getWords() {
+			return ((LineWord[]) this.words.toArray(new LineWord[this.words.size()]));
+		}
+		
+		/**
+		 * Get the bounding box of the line relative to the underlying page.
+		 * @return the bounding box relative to the page
+		 */
+		public BoundingBox getPageBounds() {
+			return new BoundingBox(this.getPageLeft(), this.getPageRight(), this.getPageTop(), this.getPageBottom());
+		}
+		
+		/**
+		 * Get the left edge of the line relative to the underlying page.
+		 * @return the left edge relative to the page
+		 */
+		public int getPageLeft() {
+//			return (this.block.bounds.getLeftCol() + this.left);
+			return (this.blockBounds.left + this.left);
+		}
+		
+		/**
+		 * Get the right edge of the line relative to the underlying page.
+		 * @return the right edge relative to the page
+		 */
+		public int getPageRight() {
+//			return (this.block.bounds.getLeftCol() + this.right);
+			return (this.blockBounds.left + this.right);
+		}
+		
+		/**
+		 * Get the top edge of the line relative to the underlying page.
+		 * @return the top edge relative to the page
+		 */
+		public int getPageTop() {
+//			return (this.block.bounds.getTopRow() + this.top);
+			return (this.blockBounds.top + this.top);
+		}
+		
+		/**
+		 * Get the bottom edge of the line relative to the underlying page.
+		 * @return the bottom edge relative to the page
+		 */
+		public int getPageBottom() {
+//			return (this.block.bounds.getTopRow() + this.bottom);
+			return (this.blockBounds.top + this.bottom);
+		}
+		
+		/**
+		 * Get the bounding box of the line relative to the parent block.
+		 * @return the bounding box relative to the block
+		 */
+		public BoundingBox getBlockBounds() {
+			return new BoundingBox(this.getBlockLeft(), this.getBlockRight(), this.getBlockTop(), this.getBlockBottom());
+		}
+		
+		/**
+		 * Get the left edge of the line relative to the parent block.
+		 * @return the left edge relative to the block
+		 */
+		public int getBlockLeft() {
+			return this.left;
+		}
+		
+		/**
+		 * Get the right edge of the line relative to the parent block.
+		 * @return the right edge relative to the block
+		 */
+		public int getBlockRight() {
+			return this.right;
+		}
+		
+		/**
+		 * Get the top edge of the line relative to the parent block.
+		 * @return the top edge relative to the block
+		 */
+		public int getBlockTop() {
+			return this.top;
+		}
+		
+		/**
+		 * Get the bottom edge of the line relative to the parent block.
+		 * @return the bottom edge relative to the block
+		 */
+		public int getBlockBottom() {
+			return this.bottom;
+		}
+		
+		/**
+		 * Get the width of the line.
+		 * @return the width
+		 */
+		public int getWidth() {
+			return (this.right - this.left);
+		}
+		
+		/**
+		 * Get the height of the line.
+		 * @return the height
+		 */
+		public int getHeight() {
+			return (this.bottom - this.top);
+		}
+		
+		/**
+		 * Get the baseline of the line relative to the parent block.
+		 * @return the baseline relative to the block
+		 */
+		public int getBlockBaseline() {
+			return (this.top + this.baseline);
+		}
+		
+		/**
+		 * Get the baseline of the line relative to underlying page.
+		 * @return the baseline relative to the page
+		 */
+		public int getPageBaseline() {
+			return (this.getPageTop() + this.baseline);
+		}
+		
+		/**
+		 * Get the height of capital letters above the baseline. This value is
+		 * measured using region coloring and statistical analyses and thus
+		 * might not be absolutely accurate.
+		 * @return the cap height
+		 */
+		public int getCapHeight() {
+			return this.capHeight;
+		}
+		
+		/**
+		 * Get the height of lower case letters (without ascender, like 'x')
+		 * above the baseline. This value is measured using region coloring and
+		 * statistical analyses and thus might not be absolutely accurate.
+		 * @return the x-height
+		 */
+		public int getXHeight() {
+			return this.xHeight;
+		}
+		
+		int[][] regionColors = null;
+		int[] regionSizes = null;
+		int[] regionMinCols = null;
+		int[] regionMaxCols = null;
+		int[] regionMinRows = null;
+		int[] regionMaxRows = null;
+		void setRegions(AnalysisImage lineAi) {
+			this.regionColors = Imaging.getRegionColoring(lineAi, ((byte) 112), true);
+			int maxLineAiRegion = getMaxRegionColor(this.regionColors);
+			this.regionSizes = new int[maxLineAiRegion + 1];
+			this.regionMinCols = new int[maxLineAiRegion + 1];
+			this.regionMaxCols = new int[maxLineAiRegion + 1];
+			this.regionMinRows = new int[maxLineAiRegion + 1];
+			this.regionMaxRows = new int[maxLineAiRegion + 1];
+		}
+	}
+	
+	/**
+	 * A word in a block line (for word extraction)
+	 * 
+	 * @author sautter
+	 */
+	public static class LineWord {
+		final BlockLine line;
+		int left; // relative to parent line
+		int right; // relative to parent line
+		LineWord(BlockLine line, int left, int right) {
+			this.line = line;
+			this.left = left;
+			this.right = right;
+			this.line.words.add(this);
+		}
+		
+		/**
+		 * Get the bounding box of the word relative to the underlying page.
+		 * @return the bounding box relative to the page
+		 */
+		public BoundingBox getPageBounds() {
+			return new BoundingBox(this.getPageLeft(), this.getPageRight(), this.line.getPageTop(), this.line.getPageBottom());
+		}
+		
+		/**
+		 * Get the left edge of the word relative to the underlying page.
+		 * @return the left edge relative to the page
+		 */
+		public int getPageLeft() {
+			return (this.line.getPageLeft() + this.left);
+		}
+		
+		/**
+		 * Get the right edge of the word relative to the underlying page.
+		 * @return the right edge relative to the page
+		 */
+		public int getPageRight() {
+			return (this.line.getPageLeft() + this.right);
+		}
+		
+		/**
+		 * Get the bounding box of the word relative to the parent block.
+		 * @return the bounding box relative to the block
+		 */
+		public BoundingBox getBlockBounds() {
+			return new BoundingBox(this.getBlockLeft(), this.getBlockRight(), this.line.getBlockTop(), this.line.getBlockBottom());
+		}
+		
+		/**
+		 * Get the left edge of the word relative to the parent block.
+		 * @return the left edge relative to the block
+		 */
+		public int getBlockLeft() {
+			return (this.line.getBlockLeft() + this.left);
+		}
+		
+		/**
+		 * Get the right edge of the word relative to the parent block.
+		 * @return the right edge relative to the block
+		 */
+		public int getBlockRight() {
+			return (this.line.getBlockLeft() + this.right);
+		}
+		
+		/**
+		 * Get the bounding box of the word relative to the parent line.
+		 * @return the bounding box relative to the line
+		 */
+		public BoundingBox getLineBounds() {
+			return new BoundingBox(this.getLineLeft(), this.getLineRight(), 0, this.line.getHeight());
+		}
+		
+		/**
+		 * Get the left edge of the word relative to the parent line.
+		 * @return the left edge relative to the line
+		 */
+		public int getLineLeft() {
+			return this.left;
+		}
+		
+		/**
+		 * Get the right edge of the word relative to the parent line.
+		 * @return the right edge relative to the line
+		 */
+		public int getLineRight() {
+			return this.right;
+		}
+		
+		/**
+		 * Get the width of the word.
+		 * @return the width
+		 */
+		public int getWidth() {
+			return (this.right - this.left);
+		}
+		
+		/**
+		 * Get the height of the word (same as for the parent line).
+		 * @return the height
+		 */
+		public int getHeight() {
+			return this.line.getHeight();
+		}
 	}
 }

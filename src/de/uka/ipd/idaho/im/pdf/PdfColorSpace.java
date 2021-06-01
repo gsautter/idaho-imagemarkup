@@ -76,6 +76,9 @@ abstract class PdfColorSpace {
 			this.colorantNames[2] = "C";
 		}
 	}
+	int getColorNumComponents() {
+		return this.numComponents;
+	}
 	Color getColor(LinkedList stack, String indent) {
 		while (!(stack.getLast() instanceof Number))
 			stack.removeLast();
@@ -107,9 +110,7 @@ abstract class PdfColorSpace {
 	
 	static PdfColorSpace getColorSpace(Object csObj, Map objects) {
 		csObj = PdfParser.dereference(csObj, objects);
-//		if (csObj instanceof Vector) {
 		if (csObj instanceof List) {
-//			Vector csData = ((Vector) csObj);
 			List csData = ((List) csObj);
 			PdfParser.dereferenceObjects(csData, objects);
 			if (csData.size() < 1)
@@ -145,6 +146,22 @@ abstract class PdfColorSpace {
 					catch (RuntimeException re) {
 						System.out.println("Strange alternate Color Space '" + re.getMessage() + "'");
 					}
+//					if (PdfExtractorTest.aimAtPage != -1) try {
+//						Object csContentFilter = csContent.params.get("Filter");
+//						byte[] csContentData;
+//						if (csContentFilter == null)
+//							csContentData = csContent.bytes;
+//						else {
+//							ByteArrayOutputStream csdDataBaos = new ByteArrayOutputStream();
+//							PdfParser.decode(csContentFilter, csContent.bytes, csContent.params, csdDataBaos, objects);
+//							csContentData = csdDataBaos.toByteArray();
+//						}
+//						System.out.println("ICC Base data: " + Arrays.toString(csContentData));
+//					}
+//					catch (IOException ioe) {
+//						System.out.println("Strange ICC Color Space '" + ioe.getMessage() + "'");
+//						ioe.printStackTrace(System.out);
+//					}
 					int n = ((Number) csContent.params.get("N")).intValue();
 					if (n == 1)
 						return deviceGray;
@@ -152,6 +169,12 @@ abstract class PdfColorSpace {
 						return deviceRgb;
 					else if (n == 4)
 						return deviceCmyk;
+//					if (n == 1)
+//						return alphaDeviceGray;
+//					else if (n == 3)
+//						return alphaDeviceRgb;
+//					else if (n == 4)
+//						return alphaDeviceCmyk;
 					else throw new RuntimeException("Invalid ICCBased Color Space component count: " + n);
 				}
 				else throw new RuntimeException("Invalid ICCBased Color Space content: " + csContentObj);
@@ -166,13 +189,10 @@ abstract class PdfColorSpace {
 		else return getColorSpace(csObj.toString());
 	}
 	
-//	static PdfColorSpace getImageMaskColorSpace(Hashtable params, Map objects) {
 	static PdfColorSpace getImageMaskColorSpace(Map params, Map objects) {
 		Object decodeObj = PdfParser.dereference(params.get("Decode"), objects);
 		//	Decode: [0, 1] => 0 is black, 1 is white; [1, 0] => the other way around
 		boolean zeroIsBlack = true;
-//		if ((decodeObj instanceof Vector) && (((Vector) decodeObj).size() == 2))
-//			zeroIsBlack = (((Number) ((Vector) decodeObj).get(0)).intValue() == 0);
 		if ((decodeObj instanceof List) && (((List) decodeObj).size() == 2))
 			zeroIsBlack = (((Number) ((List) decodeObj).get(0)).intValue() == 0);
 		return (zeroIsBlack ? imageMask01 : imageMask10);
@@ -180,13 +200,13 @@ abstract class PdfColorSpace {
 	private static PdfColorSpace imageMask01 = new PdfColorSpace("ImageMask01", 1, true) {
 		Color decodeColor(LinkedList stack, String indent) {
 			boolean pixelIsZero = (((Number) stack.removeLast()).floatValue() < 0.5);
-			return (pixelIsZero ? Color.BLACK : Color.WHITE);
+			return (pixelIsZero ? Color.BLACK : Color.WHITE); // TODO do we need white to be transparent ???
 		}
 	};
 	private static PdfColorSpace imageMask10 = new PdfColorSpace("ImageMask10", 1, true) {
 		Color decodeColor(LinkedList stack, String indent) {
 			boolean pixelIsZero = (((Number) stack.removeLast()).floatValue() < 0.5);
-			return (pixelIsZero ? Color.WHITE : Color.BLACK);
+			return (pixelIsZero ? Color.WHITE : Color.BLACK); // TODO do we need white to be transparent ???
 		}
 	};
 	
@@ -200,6 +220,16 @@ abstract class PdfColorSpace {
 		}
 	};
 	
+//	private static PdfColorSpace alphaDeviceCmyk = new PdfColorSpace("AlphaDeviceCMYK", 4, false) {
+//		Color decodeColor(LinkedList stack, String indent) {
+//			float k = ((Number) stack.removeLast()).floatValue();
+//			float y = ((Number) stack.removeLast()).floatValue();
+//			float m = ((Number) stack.removeLast()).floatValue();
+//			float c = ((Number) stack.removeLast()).floatValue();
+//			return setAlphaToInverseLuminosity(convertCmykToRgb(c, m, y, k));
+//		}
+//	};
+//	
 	private static PdfColorSpace deviceRgb = new PdfColorSpace("DeviceRGB", 3, true) {
 		Color decodeColor(LinkedList stack, String indent) {
 			float b = ((Number) stack.removeLast()).floatValue();
@@ -209,6 +239,15 @@ abstract class PdfColorSpace {
 		}
 	};
 	
+//	private static PdfColorSpace alphaDeviceRgb = new PdfColorSpace("AlphaDeviceRGB", 3, true) {
+//		Color decodeColor(LinkedList stack, String indent) {
+//			float b = ((Number) stack.removeLast()).floatValue();
+//			float g = ((Number) stack.removeLast()).floatValue();
+//			float r = ((Number) stack.removeLast()).floatValue();
+//			return setAlphaToInverseLuminosity(new Color(r, g, b));
+//		}
+//	};
+//	
 	private static PdfColorSpace calRgb = new PdfColorSpace("CalRGB", 3, true) {
 		Color decodeColor(LinkedList stack, String indent) {
 			float b = ((Number) stack.removeLast()).floatValue();
@@ -286,6 +325,13 @@ abstract class PdfColorSpace {
 		}
 	};
 	
+//	private static PdfColorSpace alphaDeviceGray = new PdfColorSpace("AlphaDeviceGray", 1, true) {
+//		Color decodeColor(LinkedList stack, String indent) {
+//			float g = ((Number) stack.removeLast()).floatValue();
+//			return new Color(g, g, g, (1-g));
+//		}
+//	};
+//	
 	private static PdfColorSpace calGray = new PdfColorSpace("CalGray", 1, true) {
 		Color decodeColor(LinkedList stack, String indent) {
 			float g = ((Number) stack.removeLast()).floatValue();
@@ -304,7 +350,6 @@ abstract class PdfColorSpace {
 		private int hival;
 		private byte[] lookup;
 		HashMap colorCache = new HashMap();
-//		IndexedColorSpace(String name, Vector data, PdfColorSpace baseCs, Map objects) {
 		IndexedColorSpace(String name, List data, PdfColorSpace baseCs, Map objects) {
 			super(name, 1, baseCs.isAdditive);
 			if (data.size() < 4)
@@ -353,8 +398,13 @@ abstract class PdfColorSpace {
 				}
 			}
 		}
+		int getColorNumComponents() {
+			return this.baseColorSpace.getColorNumComponents();
+		}
 		Color decodeColor(LinkedList stack, String indent) {
-			int index = Math.round((255 * ((Number) stack.removeLast()).floatValue()));
+//			int index = Math.round((255 * ((Number) stack.removeLast()).floatValue()));
+			Number indexObj = ((Number) stack.removeLast());
+			int index = ((indexObj instanceof Integer) ? indexObj.intValue() : Math.round((255 * indexObj.floatValue())));
 			index = Math.min(index, this.hival);
 			Color color = ((Color) this.colorCache.get(new Integer(index)));
 			if (color == null) {
@@ -613,6 +663,17 @@ abstract class PdfColorSpace {
 		float g = ((1 - m) * (1 - k));
 		float b = ((1 - y) * (1 - k));
 		return new Color(r, g, b);
+	}
+	
+	private static Color setAlphaToInverseLuminosity(Color color) {
+		//	0-255 int based version from http://www.rapidtables.com/convert/color/cmyk-to-rgb.htm
+		int r = color.getRed();
+		int g = color.getGreen();
+		int b = color.getBlue();
+		int min = Math.min(r, Math.min(g, b));
+		int max = Math.max(r, Math.max(g, b));
+		int luminosity = ((min + max) / 2);
+		return new Color(r, g, b, (255 - luminosity));
 	}
 	
 	private static class Function {

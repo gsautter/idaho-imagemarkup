@@ -28,15 +28,11 @@
 package de.uka.ipd.idaho.im;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedList;
+import java.util.HashSet;
 import java.util.TreeMap;
-import java.util.TreeSet;
 
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
@@ -52,15 +48,54 @@ public class ImPage extends ImRegion {
 	public static final String PAGE_IMAGE_ATTRIBUTE = "pageImage";
 	
 	private static class WordIndex {
-		private static class WordIndexRegion extends LinkedList {
+		private static class WordIndexRegion {
+			/* using our own little list gets us rid of the overhead required 
+			 * in general purpose collections and also facilitates more code
+			 * inlining by the compiler, improving overall performance */
+//			private static int instanceCount = 0;
+//			private static int arrayDuplications = 0;
+//			private ImWord[] words = new ImWord[8];
+			private ImWord[] words = new ImWord[16]; // looks like the better initial size, based on several documents
+			private int wordCount = 0;
+//			WordIndexRegion() {
+//				instanceCount++;
+//			}
 			void addWord(ImWord imw) {
-				if (this.isEmpty() || (this.getLast() != imw))
-					this.addLast(imw);
+				for (int w = 0; w < this.wordCount; w++) {
+					if (this.words[w] == imw)
+						return;
+				}
+				if (this.wordCount == this.words.length) {
+					ImWord[] words = new ImWord[this.words.length * 2];
+					System.arraycopy(this.words, 0, words, 0, this.words.length);
+					this.words = words;
+//					arrayDuplications++;
+//					System.out.println("WordIndexRegion: enlarged array to " + this.words.length + ", " + arrayDuplications + " enlargement in " + instanceCount + " instances");
+				}
+				this.words[this.wordCount++] = imw;
 			}
 			void removeWord(ImWord imw) {
-				this.remove(imw);
+				for (int w = 0; w < this.wordCount; w++)
+					if (this.words[w] == imw) {
+						System.arraycopy(this.words, (w+1), this.words, w, (this.wordCount - (w+1)));
+						this.wordCount--;
+						this.words[this.wordCount] = null;
+						break;
+					}
+			}
+			void clear() {
+				Arrays.fill(this.words, null);
+				this.wordCount = 0;
+			}
+			ImWord wordAt(int x, int y) {
+				for (int w = 0; w < this.wordCount; w++) {
+					if (contains(this.words[w].bounds, x, y))
+						return this.words[w];
+				}
+				return null;
 			}
 		}
+		
 		private int step;
 		private WordIndexRegion[][] wirs;
 		WordIndex(int width, int height) {
@@ -110,24 +145,188 @@ public class ImPage extends ImRegion {
 			WordIndexRegion wir = this.getRegionAt(x, y, false);
 			if (wir == null)
 				return null;
-			for (Iterator wit = wir.iterator(); wit.hasNext();) {
-				ImWord imw = ((ImWord) wit.next());
-				if (contains(imw.bounds, x, y))
-					return imw;
-			}
-			return null;
+			return wir.wordAt(x, y);
 		}
 		private static final boolean contains(BoundingBox box, int x, int y) {
 			return ((box.left <= x) && (x < box.right) && (box.top <= y) && (y < box.bottom));
 		}
 		void clear() {
-			for (int c = 0; c < this.wirs.length; c++) {
-				if (this.wirs[c] != null)
-					for (int r = 0; r < this.wirs[c].length; r++) {
-						if (this.wirs[c][r] != null)
+			for (int c = 0; c < this.wirs.length; c++)
+				if (this.wirs[c] != null) {
+					for (int r = 0; r < this.wirs[c].length; r++)
+						if (this.wirs[c][r] != null) {
 							this.wirs[c][r].clear();
-					}
+							this.wirs[c][r] = null;
+						}
+				}
+		}
+	}
+	
+	private class ImPageWordList {
+		private ImWord[] words = new ImWord[128];
+		private int wordCount = 0;
+		private HashSet contained = new HashSet();
+		private HashSet removed = new HashSet();
+		private int addCount = 0;
+		private int cleanAddCount = 0;
+		void addWord(ImWord word) {
+			if (word == null)
+				return;
+			if (this.contained.contains(word))
+				return;
+			this.contained.add(word);
+			if (this.removed.remove(word)) {
+				if (this.wordCount != (this.contained.size() + this.removed.size()))
+					System.out.println("FUCK, array " + this.wordCount + " != (contained " + this.contained.size() + " + removed " + this.removed.size() + ") on adding " + word.getType());
+				return; // this one is was flagged for removal, but still in the array, no need to add to again (also, addition has been counter before)
 			}
+			if (this.wordCount == this.words.length) {
+				ImWord[] words = new ImWord[this.words.length * 2];
+				System.arraycopy(this.words, 0, words, 0, this.words.length);
+				this.words = words;
+			}
+			this.words[this.wordCount++] = word;
+			this.addCount++;
+			if (this.wordCount != (this.contained.size() + this.removed.size()))
+				System.out.println("FUCK, array " + this.wordCount + " != (contained " + this.contained.size() + " + removed " + this.removed.size() + ") on adding " + word.getType());
+		}
+		int size() {
+			return this.contained.size();
+		}
+		ImWord getWord(int index) {
+			this.ensureSorted();
+			return this.words[index];
+		}
+		void removeWord(ImWord word) {
+			if (word == null)
+				return;
+			if (this.contained.remove(word))
+				this.removed.add(word);
+			if (this.wordCount != (this.contained.size() + this.removed.size()))
+				System.out.println("FUCK, array " + this.wordCount + " != (contained " + this.contained.size() + " + removed " + this.removed.size() + ") on removing " + word.getType());
+		}
+		void clear() {
+			Arrays.fill(this.words, 0, this.wordCount, null); // free up references to help GC
+			this.wordCount = 0;
+			this.contained.clear();
+			this.removed.clear();
+		}
+		ImWord[] toWordArray() {
+			this.ensureSorted();
+			return Arrays.copyOfRange(this.words, 0, this.wordCount);
+		}
+		ImRegion[] toRegionArray() {
+			this.ensureSorted();
+			return Arrays.copyOfRange(this.words, 0, this.wordCount, ImRegion[].class);
+		}
+		private void ensureSorted() {
+			this.ensureClean();
+			if (this.cleanAddCount == this.addCount)
+				return;
+			/* TODOnot if order and types unmodified, we can even save sorting the whole list:
+			 * - sort only added annotations ...
+			 * - ... and then merge them into main list in single pass
+			 * ==> but then, TimSort already does pretty much that ... */
+			Arrays.sort(this.words, 0, this.wordCount, wordOrder);
+			this.cleanAddCount = this.addCount;
+		}
+		private void ensureClean() {
+			if (this.removed.isEmpty())
+				return;
+			int removed = 0;
+			for (int w = 0; w < this.wordCount; w++) {
+				if (this.removed.contains(this.words[w]))
+					removed++;
+				else if (removed != 0)
+					this.words[w - removed] = this.words[w];
+			}
+			Arrays.fill(this.words, (this.wordCount - removed), this.wordCount, null); // free up references to help GC
+			this.wordCount -= removed;
+			this.removed.clear();
+		}
+	}
+	
+	private class ImPageRegionList {
+		private ImRegion[] regions = new ImRegion[16];
+		private int regionCount = 0;
+		private HashSet contained = new HashSet();
+		private HashSet removed = new HashSet();
+		private int addCount = 0;
+		private int cleanAddCount = 0;
+		void addRegion(ImRegion region) {
+			if (region == null)
+				return;
+			if (this.contained.contains(region))
+				return;
+			this.contained.add(region);
+			if (this.removed.remove(region)) {
+				if (this.regionCount != (this.contained.size() + this.removed.size()))
+					System.out.println("FUCK, array " + this.regionCount + " != (contained " + this.contained.size() + " + removed " + this.removed.size() + ") on adding " + region.getType());
+				return; // this one is was flagged for removal, but still in the array, no need to add to again (also, addition has been counter before)
+			}
+			if (this.regionCount == this.regions.length) {
+				ImRegion[] regions = new ImRegion[this.regions.length * 2];
+				System.arraycopy(this.regions, 0, regions, 0, this.regions.length);
+				this.regions = regions;
+			}
+			this.regions[this.regionCount++] = region;
+			this.addCount++;
+			if (this.regionCount != (this.contained.size() + this.removed.size()))
+				System.out.println("FUCK, array " + this.regionCount + " != (contained " + this.contained.size() + " + removed " + this.removed.size() + ") on adding " + region.getType());
+		}
+		boolean isEmpty() {
+			return this.contained.isEmpty();
+		}
+		int size() {
+			return this.contained.size();
+		}
+		ImRegion getRegion(int index) {
+			this.ensureSorted();
+			return this.regions[index];
+		}
+		void removeRegion(ImRegion region) {
+			if (region == null)
+				return;
+			if (this.contained.remove(region)) {
+				this.removed.add(region);
+			}
+			if (this.regionCount != (this.contained.size() + this.removed.size()))
+				System.out.println("FUCK, array " + this.regionCount + " != (contained " + this.contained.size() + " + removed " + this.removed.size() + ") on removing " + region.getType());
+		}
+		void clear() {
+			Arrays.fill(this.regions, 0, this.regionCount, null); // free up references to help GC
+			this.regionCount = 0;
+			this.contained.clear();
+			this.removed.clear();
+		}
+		ImRegion[] toRegionArray() {
+			this.ensureSorted();
+			return Arrays.copyOfRange(this.regions, 0, this.regionCount);
+		}
+		private void ensureSorted() {
+			this.ensureClean();
+			if (this.cleanAddCount == this.addCount)
+				return;
+			/* TODOnot if order and types unmodified, we can even save sorting the whole list:
+			 * - sort only added annotations ...
+			 * - ... and then merge them into main list in single pass
+			 * ==> but then, TimSort already does pretty much that ... */
+			Arrays.sort(this.regions, 0, this.regionCount, regionOrder);
+			this.cleanAddCount = this.addCount;
+		}
+		private void ensureClean() {
+			if (this.removed.isEmpty())
+				return;
+			int removed = 0;
+			for (int a = 0; a < this.regionCount; a++) {
+				if (this.removed.contains(this.regions[a]))
+					removed++;
+				else if (removed != 0)
+					this.regions[a - removed] = this.regions[a];
+			}
+			Arrays.fill(this.regions, (this.regionCount - removed), this.regionCount, null); // free up references to help GC
+			this.regionCount -= removed;
+			this.removed.clear();
 		}
 	}
 	
@@ -137,9 +336,6 @@ public class ImPage extends ImRegion {
 	 */
 	private static final Comparator sizeRegionOrder = new Comparator() {
 		public int compare(Object obj1, Object obj2) {
-//			ImRegion reg1 = ((ImRegion) obj1);
-//			ImRegion reg2 = ((ImRegion) obj2);
-//			return (getSize(reg2.bounds) - getSize(reg1.bounds));
 			return (((ImRegion) obj2).bounds.getArea() - ((ImRegion) obj1).bounds.getArea());
 		}
 	};
@@ -165,13 +361,14 @@ public class ImPage extends ImRegion {
 //		}
 //	};
 	
-	private TreeSet words;
+	private ImPageWordList words = new ImPageWordList();
+	private Comparator wordOrder;
 	private HashMap wordsByBounds = new HashMap();
 	private WordIndex wordsByPoints;
 	private ImWord[] textStreamHeads = null;
 	private ImWord[] textStreamTails = null;
 	
-	private ArrayList regions = new ArrayList();
+	private ImPageRegionList regions = new ImPageRegionList();
 	private TreeMap regionsByType = new TreeMap();
 	private Comparator regionOrder;
 	
@@ -184,7 +381,7 @@ public class ImPage extends ImRegion {
 	 */
 	public ImPage(ImDocument doc, int pageId, BoundingBox bounds) {
 		super(doc, pageId, bounds, PAGE_TYPE);
-		this.words = new TreeSet(ImWord.getComparator(doc.orientation));
+		this.wordOrder = ImWord.getComparator(doc.orientation);
 		this.wordsByPoints = new WordIndex((this.bounds.right - this.bounds.left), (this.bounds.bottom - this.bounds.top));
 		this.regionOrder = sizeRegionOrder;
 		doc.addPage(this);
@@ -329,7 +526,7 @@ public class ImPage extends ImRegion {
 		if (word.pageId != this.pageId)
 			throw new IllegalArgumentException("Page ID mismatch, " + word.pageId + " != " + this.pageId);
 		synchronized (this.words) {
-			this.words.add(word);
+			this.words.addWord(word);
 			this.wordsByBounds.put(word.bounds.toString(), word);
 			this.wordsByPoints.addWord(word);
 		}
@@ -376,7 +573,7 @@ public class ImPage extends ImRegion {
 		synchronized (this.words) {
 			this.wordsByPoints.removeWord(word);
 			this.wordsByBounds.remove(word.bounds.toString());
-			this.words.remove(word);
+			this.words.removeWord(word);
 		}
 		
 		//	detach word & notify listeners
@@ -422,7 +619,7 @@ public class ImPage extends ImRegion {
 	 * @return an array holding the words
 	 */
 	public ImWord[] getWords() {
-		return ((ImWord[]) this.words.toArray(new ImWord[this.words.size()]));
+		return this.words.toWordArray();
 	}
 	
 	/**
@@ -439,13 +636,32 @@ public class ImPage extends ImRegion {
 	 * @return an array holding the words lying inside the argument box
 	 */
 	public ImWord[] getWordsInside(BoundingBox box) {
-		ArrayList wi = new ArrayList();
-		for (Iterator wit = this.words.iterator(); wit.hasNext();) {
-			ImWord imw = ((ImWord) wit.next());
+		ImWordCollectorList wi = new ImWordCollectorList();
+		for (int w = 0; w < this.words.size(); w++) {
+			ImWord imw = this.words.getWord(w);
 			if ((imw.centerX >= box.left) && (imw.centerX < box.right) && (imw.centerY >= box.top) && (imw.centerY < box.bottom))
-				wi.add(imw);
+				wi.addWord(imw);
 		}
-		return ((ImWord[]) wi.toArray(new ImWord[wi.size()]));
+		return wi.toWordArray();
+	}
+	
+	private class ImWordCollectorList {
+		/* using our own little list gets us rid of the overhead required in
+		 * general purpose collections and also facilitates more code inlining
+		 * by the compiler, improving overall performance */
+		private ImWord[] words = new ImWord[16];
+		private int wordCount = 0;
+		void addWord(ImWord word) {
+			if (this.wordCount == this.words.length) {
+				ImWord[] words = new ImWord[this.words.length * 2];
+				System.arraycopy(this.words, 0, words, 0, this.words.length);
+				this.words = words;
+			}
+			this.words[this.wordCount++] = word;
+		}
+		ImWord[] toWordArray() {
+			return ((this.wordCount < this.words.length) ? Arrays.copyOf(this.words, this.wordCount) : this.words);
+		}
 	}
 	
 	/**
@@ -459,13 +675,6 @@ public class ImPage extends ImRegion {
 		ImWord[] tshs = new ImWord[this.textStreamHeads.length];
 		System.arraycopy(this.textStreamHeads, 0, tshs, 0, tshs.length);
 		return tshs;
-//		ArrayList tshs = new ArrayList();
-//		for (Iterator wit = this.words.iterator(); wit.hasNext();) {
-//			ImWord imw = ((ImWord) wit.next());
-//			if ((imw.getPreviousWord() == null) || (imw.getPreviousWord().pageId != imw.pageId))
-//				tshs.add(imw);
-//		}
-//		return ((ImWord[]) tshs.toArray(new ImWord[tshs.size()]));
 	}
 	
 	/**
@@ -491,39 +700,39 @@ public class ImPage extends ImRegion {
 	private void ensureTextStreamEnds() {
 		if ((this.textStreamHeads != null) && (this.textStreamTails != null))
 			return;
-		ArrayList tshs = new ArrayList();
-		ArrayList tsts = new ArrayList();
-		for (Iterator wit = this.words.iterator(); wit.hasNext();) {
-			ImWord imw = ((ImWord) wit.next());
-			if ((imw.getPreviousWord() == null) || (imw.getPreviousWord().pageId != imw.pageId))
-				tshs.add(imw);
-			if ((imw.getNextWord() == null) || (imw.getNextWord().pageId != imw.pageId))
-				tsts.add(imw);
+		ImWordCollectorList tshs = new ImWordCollectorList();
+		ImWordCollectorList tsts = new ImWordCollectorList();
+		for (int w = 0; w < this.words.size(); w++) {
+			ImWord imw = this.words.getWord(w);
+			if ((imw.getPreviousWord() == null) || (imw.getPreviousWord().pageId != imw.pageId) || (imw.getPreviousWord().getPage() == null))
+				tshs.addWord(imw);
+			if ((imw.getNextWord() == null) || (imw.getNextWord().pageId != imw.pageId) || (imw.getNextWord().getPage() == null))
+				tsts.addWord(imw);
 		}
-		this.textStreamHeads = ((ImWord[]) tshs.toArray(new ImWord[tshs.size()]));
-		this.textStreamTails = ((ImWord[]) tsts.toArray(new ImWord[tsts.size()]));
+		this.textStreamHeads = tshs.toWordArray();
+		this.textStreamTails = tsts.toWordArray();
 	}
 	
 	void layoutObjectTypeChanged(ImLayoutObject imlo, String oldType) {
-		if (imlo instanceof ImRegion) synchronized (this.regions) {
-			ArrayList imrs = this.getRegionList(oldType, false);
-			if (imrs != null) {
-				imrs.remove(imlo);
-				if (imrs.isEmpty())
-					this.regionsByType.remove(oldType);
+		if (imlo instanceof ImRegion) 
+			synchronized (this.regions) {
+				ImPageRegionList imrs = this.getRegionList(oldType, false);
+				if (imrs != null) {
+					imrs.removeRegion((ImRegion) imlo);
+					if (imrs.isEmpty())
+						this.regionsByType.remove(oldType);
+				}
+				imrs = this.getRegionList(imlo.getType(), true);
+				imrs.addRegion((ImRegion) imlo);
 			}
-			imrs = this.getRegionList(imlo.getType(), true);
-			imrs.add(imlo);
-			Collections.sort(imrs, this.regionOrder);
-		}
 	}
 	
-	private ArrayList getRegionList(String type, boolean create) {
+	private ImPageRegionList getRegionList(String type, boolean create) {
 		if (type == null)
 			return this.regions;
-		ArrayList regions = ((ArrayList) this.regionsByType.get(type));
+		ImPageRegionList regions = ((ImPageRegionList) this.regionsByType.get(type));
 		if ((regions == null) && create) {
-			regions = new ArrayList();
+			regions = new ImPageRegionList();
 			this.regionsByType.put(type, regions);
 		}
 		return regions;
@@ -546,11 +755,8 @@ public class ImPage extends ImRegion {
 		else if (region instanceof ImPage) {}
 		else {
 			synchronized (this.regions) {
-				this.regions.add(region);
-				Collections.sort(this.regions, this.regionOrder);
-				ArrayList imrs = this.getRegionList(region.getType(), true);
-				imrs.add(region);
-				Collections.sort(imrs, this.regionOrder);
+				this.regions.addRegion(region);
+				this.getRegionList(region.getType(), true).addRegion(region);
 			}
 			region.setPage(this);
 			this.getDocument().notifyRegionAdded(region);
@@ -570,10 +776,10 @@ public class ImPage extends ImRegion {
 		else if (region instanceof ImPage) {}
 		else if (region.getPage() == this) {
 			synchronized (this.regions) {
-				this.regions.remove(region);
-				ArrayList imrs = this.getRegionList(region.getType(), false);
+				this.regions.removeRegion(region);
+				ImPageRegionList imrs = this.getRegionList(region.getType(), false);
 				if (imrs != null) {
-					imrs.remove(region);
+					imrs.removeRegion(region);
 					if (imrs.isEmpty())
 						this.regionsByType.remove(region.getType());
 				}
@@ -612,18 +818,18 @@ public class ImPage extends ImRegion {
 	 *            the argument box
 	 */
 	public ImRegion[] getRegionsIncluding(String type, BoundingBox box, boolean fuzzy) {
-		ArrayList rs = new ArrayList();
-		ArrayList imrs = this.getRegionList(type, false);
+		ImRegionCollectorList rs = new ImRegionCollectorList();
+		ImPageRegionList imrs = this.getRegionList(type, false);
 		if (imrs == null)
 			return new ImRegion[0];
-		for (Iterator rit = imrs.iterator(); rit.hasNext();) {
-			ImRegion imr = ((ImRegion) rit.next());
+		for (int r = 0; r < imrs.size(); r++) {
+			ImRegion imr = imrs.getRegion(r);
 			if (imr.bounds.includes(box, fuzzy))
-				rs.add(imr);
+				rs.addRegion(imr);
 			if (!fuzzy && (imr.bounds.getArea() < box.getArea()))
 				break; // all to come is smaller than argument box, so we can stop right here if full inclusion required
 		}
-		return ((ImRegion[]) rs.toArray(new ImRegion[rs.size()]));
+		return rs.toRegionArray();
 	}
 	
 	/**
@@ -654,16 +860,35 @@ public class ImPage extends ImRegion {
 	 * @return an array holding the regions that lie inside the argument box
 	 */
 	public ImRegion[] getRegionsInside(String type, BoundingBox box, boolean fuzzy) {
-		ArrayList rs = new ArrayList();
-		ArrayList imrs = this.getRegionList(type, false);
+		ImRegionCollectorList rs = new ImRegionCollectorList();
+		ImPageRegionList imrs = this.getRegionList(type, false);
 		if (imrs == null)
 			return new ImRegion[0];
-		for (Iterator rit = imrs.iterator(); rit.hasNext();) {
-			ImRegion imr = ((ImRegion) rit.next());
+		for (int r = 0; r < imrs.size(); r++) {
+			ImRegion imr = imrs.getRegion(r);
 			if (box.includes(imr.bounds, fuzzy))
-				rs.add(imr);
+				rs.addRegion(imr);
 		}
-		return ((ImRegion[]) rs.toArray(new ImRegion[rs.size()]));
+		return rs.toRegionArray();
+	}
+	
+	private class ImRegionCollectorList {
+		/* using our own little list gets us rid of the overhead required in
+		 * general purpose collections and also facilitates more code inlining
+		 * by the compiler, improving overall performance */
+		private ImRegion[] regions = new ImRegion[16];
+		private int regionCount = 0;
+		void addRegion(ImRegion region) {
+			if (this.regionCount == this.regions.length) {
+				ImRegion[] regions = new ImRegion[this.regions.length * 2];
+				System.arraycopy(this.regions, 0, regions, 0, this.regions.length);
+				this.regions = regions;
+			}
+			this.regions[this.regionCount++] = region;
+		}
+		ImRegion[] toRegionArray() {
+			return ((this.regionCount < this.regions.length) ? Arrays.copyOf(this.regions, this.regionCount) : this.regions);
+		}
 	}
 	
 	/**
@@ -686,13 +911,12 @@ public class ImPage extends ImRegion {
 	 * @return an array holding the regions representing the layout of the page
 	 */
 	public ImRegion[] getRegions(String type) {
-		Collection imrs;
 		if (type == null)
-			imrs = this.regions;
+			return this.regions.toRegionArray();
 		else if (WORD_ANNOTATION_TYPE.equals(type))
-			imrs = this.words;
-		else imrs = this.getRegionList(type, false);
-		return ((imrs == null) ? new ImRegion[0] : ((ImRegion[]) imrs.toArray(new ImRegion[imrs.size()])));
+			return this.words.toRegionArray();
+		ImPageRegionList imrs = this.getRegionList(type, false);
+		return ((imrs == null) ? new ImRegion[0] : imrs.toRegionArray());
 	}
 	
 	/**
@@ -710,11 +934,17 @@ public class ImPage extends ImRegion {
 	 */
 	public ImSupplement[] getSupplements() {
 		ImSupplement[] docSupplements = this.getDocument().getSupplements();
-		ArrayList pageSupplements = new ArrayList();
+//		ArrayList pageSupplements = new ArrayList();
+//		for (int s = 0; s < docSupplements.length; s++) {
+//			if (("" + this.pageId).equals(docSupplements[s].getAttribute(PAGE_ID_ATTRIBUTE, "").toString()))
+//				pageSupplements.add(docSupplements[s]);
+//		}
+//		return ((ImSupplement[]) pageSupplements.toArray(new ImSupplement[pageSupplements.size()]));
+		int retained = 0;
 		for (int s = 0; s < docSupplements.length; s++) {
 			if (("" + this.pageId).equals(docSupplements[s].getAttribute(PAGE_ID_ATTRIBUTE, "").toString()))
-				pageSupplements.add(docSupplements[s]);
+				docSupplements[retained++] = docSupplements[s];
 		}
-		return ((ImSupplement[]) pageSupplements.toArray(new ImSupplement[pageSupplements.size()]));
+		return Arrays.copyOf(docSupplements, retained);
 	}
 }

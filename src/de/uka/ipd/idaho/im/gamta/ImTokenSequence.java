@@ -204,7 +204,7 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 			return tokenizer;
 		}
 		public boolean hasAttribute(String name) {
-			if (Token.PARAGRAPH_END_ATTRIBUTE.equals(name) && ((((ImWord) this.imWords.get(this.imWords.size() - 1)).getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END) || (((ImWord) this.imWords.get(this.imWords.size() - 1)).getNextWord() == null)))
+			if (Token.PARAGRAPH_END_ATTRIBUTE.equals(name) && this.isParagraphEnd())
 				return true;
 			else if (PAGE_ID_ATTRIBUTE.equals(name))
 				return true;
@@ -246,7 +246,7 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 			return this.getAttribute(name, null);
 		}
 		public Object getAttribute(String name, Object def) {
-			if (Token.PARAGRAPH_END_ATTRIBUTE.equals(name) && ((((ImWord) this.imWords.get(this.imWords.size() - 1)).getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END) || (((ImWord) this.imWords.get(this.imWords.size() - 1)).getNextWord() == null)))
+			if (Token.PARAGRAPH_END_ATTRIBUTE.equals(name) && this.isParagraphEnd())
 				return "true";
 			else if (PAGE_ID_ATTRIBUTE.equals(name))
 				return ("" + ((ImWord) this.imWords.get(0)).getPage().pageId);
@@ -293,8 +293,7 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 				ans.addAll(Arrays.asList(((ImWord) this.imWords.get(0)).getAttributeNames()));
 			else for (int w = 0; w < this.imWords.size(); w++)
 				ans.addAll(Arrays.asList(((ImWord) this.imWords.get(w)).getAttributeNames()));
-			
-			if (((ImWord) this.imWords.get(this.imWords.size() - 1)).getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END)
+			if (this.isParagraphEnd())
 				ans.add(PARAGRAPH_END_ATTRIBUTE);
 			if (this.getBoundingBox() != null)
 				ans.add(BOUNDING_BOX_ATTRIBUTE);
@@ -332,10 +331,11 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 		}
 		public Object setAttribute(String name, Object value) {
 			if (Token.PARAGRAPH_END_ATTRIBUTE.equals(name)) {
-				Object oldValue = ((((ImWord) this.imWords.get(this.imWords.size() - 1)).getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END) ? "true" : null);
+				ImWord lastWord = ((ImWord) this.imWords.get(this.imWords.size() - 1));
+				Object oldValue = (((lastWord.getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END) || (lastWord.getNextWord() == null)) ? "true" : null);
 				if (value == null)
-					((ImWord) this.imWords.get(this.imWords.size() - 1)).setNextRelation(ImWord.NEXT_RELATION_SEPARATE);
-				else ((ImWord) this.imWords.get(this.imWords.size() - 1)).setNextRelation(ImWord.NEXT_RELATION_PARAGRAPH_END);
+					lastWord.setNextRelation(ImWord.NEXT_RELATION_SEPARATE);
+				else lastWord.setNextRelation(ImWord.NEXT_RELATION_PARAGRAPH_END);
 				return oldValue;
 			}
 			else if (PAGE_ID_ATTRIBUTE.equals(name))
@@ -376,6 +376,10 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 					oldValue = imwOldValue;
 			}
 			return oldValue;
+		}
+		boolean isParagraphEnd() {
+			ImWord lastWord = ((ImWord) this.imWords.get(this.imWords.size() - 1));
+			return ((lastWord.getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END) || (lastWord.getNextWord() == null));
 		}
 		ImToken deltaClone(int deltaOffset, int deltaIndex) {
 			ImToken imt = new ImToken((this.startOffset - deltaOffset), (this.index - deltaIndex));
@@ -718,7 +722,7 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 	
 	private void addImWord(ImWord imw, boolean forceNewToken, boolean normalizeChars) {
 //		System.out.println("ADDING WORD " + imw.getString() + " " + imw.getLocalID());
-		if ((imw.getString() == null) || (imw.getString().length() == 0))
+		if ((imw.getString() == null) || (imw.getString().length() == 0) || (imw.getPage() == null))
 			return;
 		
 		if (this.tokens.isEmpty()) {
@@ -740,6 +744,11 @@ public class ImTokenSequence implements MutableTokenSequence, ImagingConstants {
 			if (pImw == null) {
 				pImt.whitespace = " ";
 //				System.out.println("   ==> space for null predecessor");
+			}
+			
+			else if (pImw.getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END) {
+				pImt.whitespace = "\n";
+//				System.out.println("   ==> explicit paragraph break");
 			}
 			
 			//	words not on same page ==> set whitespace

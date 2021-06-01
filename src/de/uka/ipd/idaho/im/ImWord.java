@@ -41,6 +41,8 @@ import de.uka.ipd.idaho.gamta.Gamta;
 import de.uka.ipd.idaho.gamta.util.constants.LiteratureConstants;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
+import de.uka.ipd.idaho.im.util.ImObjectTransformer;
+import de.uka.ipd.idaho.im.util.ImObjectTransformer.AttributeTransformer;
 
 /**
  * A single word in an image markup document, i.e., a bounding box enclosing a
@@ -326,15 +328,6 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	/** the text stream type indicating a text stream is a label in a bitmap figure or vector graphics */
 	public static final String TEXT_STREAM_TYPE_LABEL = "label";
 	
-	/** the text direction indicating a word written left to right */
-	public static final String TEXT_DIRECTION_LEFT_RIGHT = "lr";
-	
-	/** the text direction indicating a word written bottom up */
-	public static final String TEXT_DIRECTION_BOTTOM_UP = "bu";
-	
-	/** the text direction indicating a word written top down */
-	public static final String TEXT_DIRECTION_TOP_DOWN = "td";
-	
 	/** the text stream type indicating a text stream is a page title (i.e., a
 	 * page header or footer) */
 	public static final String TEXT_STREAM_TYPE_PAGE_TITLE = LiteratureConstants.PAGE_TITLE_TYPE;
@@ -368,12 +361,33 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	 * <code>setAttribute()</code> methods */
 	public static final String TEXT_STREAM_TYPE_ATTRIBUTE = "textStreamType";
 	
-	/** the name of the attribute holding the direction a word is written in,
-	 * namely 'textDirection'. Its associated values are 'lr' for left-to-right
-	 * (the default, can be omitted), 'bu' for bottom-up, or 'td' for top-down.
-	 * Other values may be added over time to represent non-Cartesian text
-	 * orientations. */
-	public static final String TEXT_DIRECTION_ATTRIBUTE = "textDirection";
+	static {
+		ImObjectTransformer.addGlobalAttributeTransformer(new AttributeTransformer() {
+			public boolean canTransformAttribute(String name) {
+				return BASELINE_ATTRIBUTE.equals(name);
+			}
+			public Object transformAttributeValue(ImObject object, String name, Object value, ImObjectTransformer transformer) {
+				if (value == null)
+					return null;
+				int baseline;
+				try {
+					baseline = Integer.parseInt(value.toString());
+				}
+				catch (NumberFormatException nfe) {
+					return null;
+				}
+				Object textDirection = object.getAttribute(TEXT_DIRECTION_ATTRIBUTE, TEXT_DIRECTION_LEFT_RIGHT);
+				if (TEXT_DIRECTION_BOTTOM_UP.equals(textDirection) || TEXT_DIRECTION_TOP_DOWN.equals(textDirection))
+					baseline = (baseline - transformer.fromBounds.left);
+				else baseline = (baseline - transformer.fromBounds.top);
+				textDirection = transformTextDirection(value, transformer);
+				if (TEXT_DIRECTION_BOTTOM_UP.equals(textDirection) || TEXT_DIRECTION_TOP_DOWN.equals(textDirection))
+					baseline = (baseline + transformer.toBounds.left);
+				else baseline = (baseline + transformer.toBounds.top);
+				return ("" + baseline);
+			}
+		});
+	}
 	
 	/** the horizontal center of the word's bounding box, to speed up inclusion tests */
 	public final int centerX;

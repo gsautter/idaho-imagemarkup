@@ -29,6 +29,7 @@ package de.uka.ipd.idaho.im;
 
 
 
+
 /**
  * A semantic annotation in an image markup document. An annotation always
  * refers to a single logical text stream, marking a part thereof.
@@ -68,4 +69,28 @@ public interface ImAnnotation extends ImObject {
 	 * @param lastWord the word to use as the new last
 	 */
 	public abstract void setLastWord(ImWord lastWord);
+	
+	/**
+	 * Carrier class of helper methods for local UID and UUID computation.
+	 * 
+	 * @author sautter
+	 */
+	public static class AnnotationUuidHelper extends UuidHelper {
+		
+		/**
+		 * Compute the locally unique ID of an annotation.
+		 * @param annot the annotation to compute the UID for
+		 * @return the UID of the argument annotation
+		 */
+		public static String getLocalUID(ImAnnotation annot) {
+			ImWord fImw = annot.getFirstWord();
+			ImWord lImw = annot.getLastWord();
+			return getLocalUID(annot.getType(), fImw.pageId, lImw.pageId, fImw.bounds.left, fImw.bounds.top, lImw.bounds.right, lImw.bounds.bottom);
+			/* TODO make selection of points dependent on document orientation
+			 * - top-left + bottom-right in left-right + top-down orientation (also top-down + left-right, like in Chinese)
+			 * - top-right + bottom-left in right-left + top-down orientation (like in Hebrew and Arabic)
+			 * - and so forth ...
+			 */
+		}
+	}
 }

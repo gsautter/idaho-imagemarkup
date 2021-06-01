@@ -279,18 +279,4 @@ public class ImSupplementCache {
 			return new BufferedInputStream(new FileInputStream(this.cacheFile));
 		}
 	}
-//	
-//	private static class CachedGraphics extends ImSupplement.Graphics implements CachedSupplement {
-//		private File cacheFile;
-//		CachedGraphics(ImDocument doc, int pageId, int renderOrderNumber, BoundingBox bounds, File cacheFile) {
-//			super(doc, pageId, renderOrderNumber, bounds);
-//			this.cacheFile = cacheFile;
-//		}
-//		public File getCacheFile() {
-//			return this.cacheFile;
-//		}
-//		public InputStream getInputStream() throws IOException {
-//			return new BufferedInputStream(new FileInputStream(this.cacheFile));
-//		}
-//	}
 }

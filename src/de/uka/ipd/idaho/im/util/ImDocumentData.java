@@ -53,6 +53,7 @@ import de.uka.ipd.idaho.easyIO.util.HashUtils.MD5;
 import de.uka.ipd.idaho.gamta.Attributed;
 import de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
+import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.im.ImAnnotation;
 import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.ImObject;
@@ -474,10 +475,11 @@ public abstract class ImDocumentData {
 			this.annotations = new ArrayList();
 			for (int s = 0; s < annotsData.size(); s++) {
 				StringTupel annotData = annotsData.get(s);
-				ImAnnotationStub annot = new ImAnnotationStub();
+//				ImAnnotationStub annot = new ImAnnotationStub();
+				ImAnnotationStub annot = new ImAnnotationStub(this.documentId, annotData.getValue(ImAnnotation.FIRST_WORD_ATTRIBUTE), annotData.getValue(ImAnnotation.LAST_WORD_ATTRIBUTE));
 				ImDocumentIO.setAttributes(annot, annotData.getValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE, ""));
-				annot.setFirstWordId(annotData.getValue(ImAnnotation.FIRST_WORD_ATTRIBUTE));
-				annot.setLastWordId(annotData.getValue(ImAnnotation.LAST_WORD_ATTRIBUTE));
+//				annot.setFirstWordId(annotData.getValue(ImAnnotation.FIRST_WORD_ATTRIBUTE));
+//				annot.setLastWordId(annotData.getValue(ImAnnotation.LAST_WORD_ATTRIBUTE));
 				annot.setType(annotData.getValue(ImAnnotation.TYPE_ATTRIBUTE)); // after all the other attributes, as this makes it read-only
 				this.annotations.add(annot);
 			}
@@ -489,9 +491,17 @@ public abstract class ImDocumentData {
 	}
 	
 	private static class ImAnnotationStub extends AbstractAttributed implements ImAnnotation {
-		private String type;
+		private String docId;
 		private String firstWordId;
 		private String lastWordId;
+		private String type;
+		private String luid = null;
+		private String uuid = null;
+		ImAnnotationStub(String docId, String firstWordId, String lastWordId) {
+			this.docId = docId;
+			this.firstWordId = firstWordId;
+			this.lastWordId = lastWordId;
+		}
 		public String getType() {
 			return this.type;
 		}
@@ -499,14 +509,29 @@ public abstract class ImDocumentData {
 			if (this.type == null)
 				this.type = type; // we're read-only for now (first call seals the attributes)
 		}
-		void setFirstWordId(String firstWordId) {
-			this.firstWordId = firstWordId;
-		}
-		void setLastWordId(String lastWordId) {
-			this.lastWordId = lastWordId;
-		}
+//		void setFirstWordId(String firstWordId) {
+//			this.firstWordId = firstWordId;
+//		}
+//		void setLastWordId(String lastWordId) {
+//			this.lastWordId = lastWordId;
+//		}
 		public String getLocalID() {
 			return (this.type + "@" + this.firstWordId + "-" + this.lastWordId);
+		}
+		public String getLocalUID() {
+			if (this.luid == null) {
+				int fwPageId = Integer.parseInt(this.firstWordId.substring(0, this.firstWordId.indexOf(".")));
+				BoundingBox fwBounds = BoundingBox.parse(this.firstWordId.substring(this.firstWordId.indexOf(".") + ".".length()));
+				int lwPageId = Integer.parseInt(this.lastWordId.substring(0, this.lastWordId.indexOf(".")));
+				BoundingBox lwBounds = BoundingBox.parse(this.lastWordId.substring(this.lastWordId.indexOf(".") + ".".length()));
+				this.luid = AnnotationUuidHelper.getLocalUID(this.type, fwPageId, lwPageId, fwBounds.left, fwBounds.top, lwBounds.right, lwBounds.bottom);
+			}
+			return this.luid;
+		}
+		public String getUUID() {
+			if (this.uuid == null)
+				this.uuid = UuidHelper.getUUID(this, this.docId);
+			return this.uuid;
 		}
 		public ImDocument getDocument() {
 			return null;
@@ -567,42 +592,33 @@ public abstract class ImDocumentData {
 				String sid = supplementData.getValue(ImSupplement.ID_ATTRIBUTE);
 				String st = supplementData.getValue(ImSupplement.TYPE_ATTRIBUTE);
 				String smt = supplementData.getValue(ImSupplement.MIME_TYPE_ATTRIBUTE);
-//				final String sfn = (sid + "." + smt.substring(smt.lastIndexOf('/') + "/".length()));
 				ImSupplement supplement;
 				if (ImSupplement.SOURCE_TYPE.equals(st))
 					supplement = new ImSupplement.Source(null, smt) {
 						public InputStream getInputStream() throws IOException {
-//							return ImDocumentData.this.getInputStream(sfn);
 							return ImDocumentData.this.getInputStream(this.getFileName());
 						}
 					};
 				else if (ImSupplement.SCAN_TYPE.equals(st))
 					supplement = new ImSupplement.Scan(null, sid, smt) {
 						public InputStream getInputStream() throws IOException {
-//							return ImDocumentData.this.getInputStream(sfn);
 							return ImDocumentData.this.getInputStream(this.getFileName());
 						}
 					};
 				else if (ImSupplement.FIGURE_TYPE.equals(st))
 					supplement = new ImSupplement.Figure(null, sid, smt) {
 						public InputStream getInputStream() throws IOException {
-//							return ImDocumentData.this.getInputStream(sfn);
 							return ImDocumentData.this.getInputStream(this.getFileName());
 						}
 					};
 				else if (ImSupplement.GRAPHICS_TYPE.equals(st))
 					supplement = new ImSupplement.Graphics(null, sid) {
 						public InputStream getInputStream() throws IOException {
-//							return ImDocumentData.this.getInputStream(sfn);
 							return ImDocumentData.this.getInputStream(this.getFileName());
 						}
 					};
 				else supplement = new ImSupplement(null, sid, st, smt) {
-//					public String getId() {
-//						return sid;
-//					}
 					public InputStream getInputStream() throws IOException {
-//						return ImDocumentData.this.getInputStream(sfn);
 						return ImDocumentData.this.getInputStream(this.getFileName());
 					}
 				};
@@ -737,7 +753,6 @@ public abstract class ImDocumentData {
 	 * @author sautter
 	 */
 	public static class DataHashOutputStream extends FilterOutputStream {
-//		private MessageDigest dataHasher = getDataHasher();
 		private MD5 dataHasher = new MD5();
 		private String dataHash = null;
 		
@@ -784,11 +799,9 @@ public abstract class ImDocumentData {
 				return;
 			
 			//	finalize hash and rename file
-//			this.dataHash = new String(RandomByteSource.getHexCode(this.dataHasher.digest()));
 			this.dataHash = this.dataHasher.digestHex();
 			
 			//	return digester to instance pool
-//			returnDataHash(this.dataHasher);
 			this.dataHasher = null;
 		}
 		
@@ -802,28 +815,6 @@ public abstract class ImDocumentData {
 			return this.dataHash;
 		}
 	}
-//	
-//	private static LinkedList dataHashPool = new LinkedList();
-//	private static synchronized MessageDigest getDataHasher() {
-//		if (dataHashPool.size() != 0) {
-//			MessageDigest dataHash = ((MessageDigest) dataHashPool.removeFirst());
-//			dataHash.reset();
-//			return dataHash;
-//		}
-//		try {
-//			MessageDigest dataHash = MessageDigest.getInstance("MD5");
-//			dataHash.reset();
-//			return dataHash;
-//		}
-//		catch (NoSuchAlgorithmException nsae) {
-//			System.out.println(nsae.getClass().getName() + " (" + nsae.getMessage() + ") while creating checksum digester.");
-//			nsae.printStackTrace(System.out); // should not happen, but Java don't know ...
-//			return null;
-//		}
-//	}
-//	private static synchronized void returnDataHash(MessageDigest dataHash) {
-//		dataHashPool.addLast(dataHash);
-//	}
 	
 	/**
 	 * A document data object backed by a folder that contains the data of the

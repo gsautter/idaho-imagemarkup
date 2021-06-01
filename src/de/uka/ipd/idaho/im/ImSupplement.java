@@ -29,15 +29,11 @@ package de.uka.ipd.idaho.im;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
-import java.awt.Font;
-import java.awt.Graphics2D;
-import java.awt.RenderingHints;
 import java.awt.Shape;
-import java.awt.Stroke;
-import java.awt.geom.AffineTransform;
 import java.awt.geom.CubicCurve2D;
 import java.awt.geom.Line2D;
 import java.awt.geom.Path2D;
+import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
@@ -48,9 +44,6 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
@@ -58,13 +51,10 @@ import java.util.TreeSet;
 import javax.imageio.ImageIO;
 
 import de.uka.ipd.idaho.easyIO.util.JsonParser;
-import de.uka.ipd.idaho.gamta.AnnotationUtils;
+import de.uka.ipd.idaho.easyIO.util.RandomByteSource;
 import de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
-import de.uka.ipd.idaho.im.ImSupplement.Graphics.Path;
-import de.uka.ipd.idaho.im.ImSupplement.Graphics.SubPath;
-import de.uka.ipd.idaho.im.analysis.Imaging;
-import de.uka.ipd.idaho.im.analysis.Imaging.AnalysisImage;
+import de.uka.ipd.idaho.im.util.ImObjectTransformer;
 
 /**
  * A binary supplement to an Image Markup document, e.g. an embedded figure or
@@ -94,6 +84,8 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 	public static final String MIME_TYPE_ATTRIBUTE = "mimeType";
 	
 	private ImDocument doc;
+	String luid;
+	String uuid;
 	
 	private final String id;
 	private final String type;
@@ -203,15 +195,6 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		if (this.doc != null)
 			this.doc.notifyAttributeChanged(this, name, oldValue);
 	}
-//	
-//	/**
-//	 * Obtain the identifier of the supplement, unique within the scope of the
-//	 * Image Markup document the supplement belongs to. The value returned by
-//	 * this method must not include any spaces or control characters and should
-//	 * start with a letter.
-//	 * @return the identifier of the supplement
-//	 */
-//	public abstract String getId();
 	
 	/**
 	 * Obtain the identifier of the supplement, unique within the scope of the
@@ -229,6 +212,35 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 	 */
 	public String getLocalID() {
 		return this.id;
+	}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.im.ImObject#getLocalUID()
+	 */
+	public String getLocalUID() {
+		if (this.luid == null) {
+			String id = this.id;
+			while (id.length() < 10)
+				id = (id + id);
+			this.luid = (UuidHelper.asHex(this.id.hashCode(), 4) +
+					UuidHelper.asHex(-1, 2) +
+					String.valueOf(RandomByteSource.getHexCode(id.substring(0, 5).getBytes())) +
+					String.valueOf(RandomByteSource.getHexCode(id.substring(id.length() - 5).getBytes())) +
+//					//	CANNOT USE CALSS NAME, AS LUID WOULD CHANGE ON DOCUMENT LOADING WITH GENERIC SUPPLEMENTS
+//					UuidHelper.asHex(this.getClass().getName().hashCode(), 4) +
+//					String.valueOf(RandomByteSource.getHexCode(id.substring(0, 6).getBytes())) +
+				"");
+		}
+		return this.luid;
+	}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.im.ImObject#getUUID()
+	 */
+	public String getUUID() {
+		if ((this.uuid == null) && (this.doc != null))
+			this.uuid = UuidHelper.getUUID(this, this.doc.docId);
+		return this.uuid;
 	}
 	
 	/**
@@ -265,6 +277,12 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 	 */
 	public ImDocument getDocument() {
 		return this.doc;
+	}
+	void setDocument(ImDocument doc) {
+		if (this.doc == doc)
+			return;
+		this.doc = doc;
+		this.uuid = null;
 	}
 	
 	/* (non-Javadoc)
@@ -331,13 +349,6 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			if (doc != null)
 				doc.addSupplement(this);
 		}
-//		
-//		/* (non-Javadoc)
-//		 * @see de.uka.ipd.idaho.im.ImSupplement#getId()
-//		 */
-//		public String getId() {
-//			return this.getType();
-//		}
 		
 		/**
 		 * Create a Source around binary data held in an array of bytes. The
@@ -377,9 +388,6 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		/** the name of the attribute holding the page internal rendering order position of an image, namely 'ron' */
 		public static final String RENDER_ORDER_NUMBER_ATTRIBUTE = "ron";
 		
-		/** the name of the attribute holding the bounding box of the visible portion of the image on the document page (in page image resolution), namely 'clipBox' */
-		public static final String CLIP_BOX_ATTRIBUTE = "clipBox";
-		
 		int pageId = -1;
 		int renderOrderNumber = -1;
 		int dpi = -1;
@@ -394,6 +402,11 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			this.renderOrderNumber = renderOrderNumber;
 			this.dpi = dpi;
 		}
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.ImSupplement#getLocalUID()
+		 */
+		public abstract String getLocalUID();
 		
 		/**
 		 * @return the ID of the page the image belongs to
@@ -485,6 +498,8 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 				if (value == null)
 					this.dpi = -1;
 				else this.dpi = Integer.parseInt(value.toString());
+				this.luid = null;
+				this.uuid = null;
 				return ("" + oldDpi);
 			}
 			else if (RENDER_ORDER_NUMBER_ATTRIBUTE.equals(name)) {
@@ -492,6 +507,8 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 				if (value == null)
 					this.renderOrderNumber = -1;
 				else this.renderOrderNumber = Integer.parseInt(value.toString());
+				this.luid = null;
+				this.uuid = null;
 				return ("" + oldRon);
 			}
 			else return super.setAttribute(name, value);
@@ -528,13 +545,15 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			if (doc != null)
 				doc.addSupplement(this);
 		}
-//		
-//		/* (non-Javadoc)
-//		 * @see de.uka.ipd.idaho.im.ImSupplement#getId()
-//		 */
-//		public String getId() {
-//			return (SCAN_TYPE + "@" + this.pageId);
-//		}
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.ImSupplement.Image#getLocalUID()
+		 */
+		public String getLocalUID() {
+			if (this.luid == null)
+				this.luid = UuidHelper.getLocalUID(this.getId(), this.pageId, this.renderOrderNumber, this.dpi, this.dpi, 0, 0);
+			return this.luid;
+		}
 		
 		/**
 		 * Create a Scan around a <code>BufferedImage</code>. The argument
@@ -560,6 +579,31 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 				}
 			};
 		}
+		
+		/**
+		 * Transform a scan through an object transformer. The data of the
+		 * returned scan is backed by argument scan and extracted only on first
+		 * access. The scan constitutes a cut-out of the argument scan defined
+		 * by the origin bounds of the argument transformer.
+		 * @param scan the scan to transform
+		 * @param transformer the transform to use
+		 * @return the transformed scan
+		 */
+		public static Scan transformScan(final Scan scan, final ImObjectTransformer transformer) {
+			return new Scan(null, scan.getMimeType(), transformer.toPageId, scan.getRenderOrderNumber(), scan.getDpi()) {
+				private byte[] data = null;
+				public InputStream getInputStream() throws IOException {
+					if (this.data == null) {
+						BufferedImage bi = ImageIO.read(scan.getInputStream()).getSubimage(transformer.fromBounds.left, transformer.fromBounds.top, transformer.fromBounds.getWidth(), transformer.fromBounds.getHeight());
+						BufferedImage tBi = transformer.transformImage(bi);
+						ByteArrayOutputStream baos = new ByteArrayOutputStream();
+						ImageIO.write(tBi, "PNG", baos);
+						this.data = baos.toByteArray();
+					}
+					return new ByteArrayInputStream(this.data);
+				}
+			};
+		}
 	}
 	
 	/**
@@ -570,6 +614,10 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 	 * @author sautter
 	 */
 	static abstract class Illustration extends Image {
+		
+		/** the name of the attribute holding the bounding box of the visible portion of the image on the document page (in page image resolution), namely 'clipBox' */
+		public static final String CLIP_BOX_ATTRIBUTE = "clipBox";
+		
 		BoundingBox bounds = null;
 		BoundingBox clipBounds = null;
 		
@@ -577,14 +625,19 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			super(doc, id, type, mimeType);
 		}
 		
-//		Illustration(ImDocument doc, String type, String mimeType, int pageId, int renderOrderNumber, int dpi) {
-//			super(doc, type, mimeType, pageId, renderOrderNumber, dpi);
-//		}
-//		
 		Illustration(ImDocument doc, String type, String mimeType, int pageId, int renderOrderNumber, int dpi, BoundingBox bounds, BoundingBox clipBounds) {
-			super(doc, ((type + "@" + pageId + "." + bounds.toString())), type, mimeType, pageId, renderOrderNumber, dpi);
+			super(doc, ((type + "-" + renderOrderNumber + "@" + pageId + "." + bounds.toString())), type, mimeType, pageId, renderOrderNumber, dpi);
 			this.bounds = bounds;
 			this.clipBounds = ((clipBounds == null) ? this.bounds : clipBounds);
+		}
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.ImSupplement.Image#getLocalUID()
+		 */
+		public String getLocalUID() {
+			if ((this.luid == null) && (this.bounds != null))
+				this.luid = UuidHelper.getLocalUID(this.getId(), this.pageId, this.renderOrderNumber, this.bounds.left, this.bounds.top, this.bounds.right, this.bounds.bottom);
+			return this.luid;
 		}
 		
 		/**
@@ -641,7 +694,7 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		public boolean hasAttribute(String name) {
 			if (BOUNDING_BOX_ATTRIBUTE.equals(name))
 				return (this.bounds != null);
-			else if (BOUNDING_BOX_ATTRIBUTE.equals(name))
+			else if (CLIP_BOX_ATTRIBUTE.equals(name))
 				return ((this.clipBounds != null) && !this.clipBounds.equals(this.bounds));
 			else return super.hasAttribute(name);
 		}
@@ -657,6 +710,8 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 				else if (value instanceof BoundingBox)
 					this.bounds = ((BoundingBox) value);
 				else this.bounds = BoundingBox.parse(value.toString());
+				this.luid = null;
+				this.uuid = null;
 				return oldBounds;
 			}
 			else if (CLIP_BOX_ATTRIBUTE.equals(name)) {
@@ -684,6 +739,9 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 	 * @author sautter
 	 */
 	public static abstract class Figure extends Illustration {
+		
+		/** the attribute marking a figure as an image mask, as a rendering hint */
+		public static final String IMAGE_MASK_MARKER_ATTRIBUTE = "isImageMask";
 		
 		/** Constructor
 		 * @param doc the document the figure belongs to
@@ -720,13 +778,6 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			if (doc != null)
 				doc.addSupplement(this);
 		}
-//		
-//		/* (non-Javadoc)
-//		 * @see de.uka.ipd.idaho.im.ImSupplement#getId()
-//		 */
-//		public String getId() {
-//			return (FIGURE_TYPE + "@" + this.pageId + "." + this.bounds.toString());
-//		}
 		
 		/**
 		 * Create a Figure around a <code>BufferedImage</code>. The argument
@@ -769,11 +820,40 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
 			try {
 				ImageIO.write(figure, "PNG", baos);
-			} catch (IOException ioe) { /* never gonna happen, but Java don't know */ }
+			}
+			catch (IOException ioe) { /* never gonna happen, but Java don't know */ }
 			final byte[] figureBytes = baos.toByteArray();
 			return new Figure(doc, "image/png", pageId, renderOrderNumber, dpi, bounds, clipBounds) {
 				public InputStream getInputStream() throws IOException {
 					return new ByteArrayInputStream(figureBytes);
+				}
+			};
+		}
+		
+		/**
+		 * Transform a figure through an object transformer. The data of the
+		 * returned figure is backed by argument figure and extracted only on
+		 * first access. The size of the figure image remain, potentially with
+		 * swapped dimensions if the argument transformer performs a rotation.
+		 * @param figure the figure to transform
+		 * @param transformer the transform to use
+		 * @return the transformed figure
+		 */
+		public static Figure transformFigure(final Figure figure, final ImObjectTransformer transformer) {
+			BoundingBox tFigureBounds = transformer.transformBounds(figure.getBounds());
+			return new Figure(null, figure.getMimeType(), transformer.toPageId, figure.getRenderOrderNumber(), figure.getDpi(), tFigureBounds) {
+				private byte[] data = null;
+				public InputStream getInputStream() throws IOException {
+					if (transformer.turnDegrees == 0)
+						return figure.getInputStream();
+					if (this.data == null) {
+						BufferedImage bi = ImageIO.read(figure.getInputStream());
+						BufferedImage tBi = transformer.transformImage(bi);
+						ByteArrayOutputStream baos = new ByteArrayOutputStream();
+						ImageIO.write(tBi, "PNG", baos);
+						this.data = baos.toByteArray();
+					}
+					return new ByteArrayInputStream(this.data);
 				}
 			};
 		}
@@ -842,13 +922,6 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			if (doc != null)
 				doc.addSupplement(this);
 		}
-//		
-//		/* (non-Javadoc)
-//		 * @see de.uka.ipd.idaho.im.ImSupplement#getId()
-//		 */
-//		public String getId() {
-//			return (GRAPHICS_TYPE + "@" + this.pageId + "." + this.bounds.toString());
-//		}
 		
 		/**
 		 * Add a path to the Graphics. If the Graphics object was created in
@@ -940,7 +1013,6 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			private byte lineCapStyle = ((byte) -1);
 			private byte lineJointStyle = ((byte) -1);
 			private float miterLimit = Float.NaN;
-//			private Vector dashPattern = null;
 			private List dashPattern = null;
 			private float dashPatternPhase = Float.NaN;
 			
@@ -972,7 +1044,6 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			 * @param dashPatternPhase the phase of the dash pattern to use for stroking (if the path is stroked)
 			 * @param fillColor the color to use for filling sub path (if the path is filled)
 			 */
-//			public Path(BoundingBox bounds, BoundingBox clipBounds, int renderOrderNumber, Color strokeColor, float lineWidth, byte lineCapStyle, byte lineJointStyle, float miterLimit, Vector dashPattern, float dashPatternPhase, Color fillColor) {
 			public Path(BoundingBox bounds, BoundingBox clipBounds, int renderOrderNumber, Color strokeColor, float lineWidth, byte lineCapStyle, byte lineJointStyle, float miterLimit, List dashPattern, float dashPatternPhase, Color fillColor) {
 				this(bounds, clipBounds, renderOrderNumber);
 				this.strokeColor = strokeColor;
@@ -1193,7 +1264,6 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 				
 				List dashPattern = JsonParser.getArray(data, "dashPattern");
 				if (dashPattern != null) {
-//					path.dashPattern = new Vector();
 					path.dashPattern = new ArrayList();
 					for (int e = 0; e < dashPattern.size(); e++) {
 						Number element = JsonParser.getNumber(dashPattern, e);
@@ -1568,6 +1638,84 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 				m.addPath(ps2[p]);
 			return m;
 		}
+		
+		/**
+		 * Transform a graphics object through an object transformer. The data
+		 * of the returned graphics object is backed by argument graphics object
+		 * and generated only on first access. The size of the graphics object
+		 * remains unchanged, potentially with swapped dimensions if the argument
+		 * transformer performs a rotation.
+		 * @param graphics the graphics to transform
+		 * @param transformer the transform to use
+		 * @return the transformed graphics
+		 */
+		public static Graphics transformGraphics(final Graphics graphics, final ImObjectTransformer transformer) {
+			BoundingBox tGraphicsBounds = transformer.transformBounds(graphics.getBounds());
+			BoundingBox tGraphicsClipBounds = transformer.transformBounds(graphics.getClipBounds());
+			ImSupplement.Graphics tGraphics = new ImSupplement.Graphics(null, transformer.toPageId, graphics.getRenderOrderNumber(), tGraphicsBounds, tGraphicsClipBounds) {
+				private ImSupplement.Graphics ioHelperGraphics;
+				public InputStream getInputStream() throws IOException {
+					if (this.ioHelperGraphics == null) {
+						this.ioHelperGraphics = ImSupplement.Graphics.createGraphics(null, this.getPageId(), this.getRenderOrderNumber(), this.getBounds(), this.getClipBounds());
+						Path[] paths = this.getPaths(); // performs lazy initialization
+						for (int p = 0; p < paths.length; p++)
+							this.ioHelperGraphics.addPath(paths[p]);
+					}
+					return this.ioHelperGraphics.getInputStream();
+				}
+				private Path[] tPaths = null;
+				public Path[] getPaths() {
+					if (this.tPaths == null) {
+						Path[] paths = graphics.getPaths();
+						this.tPaths = new Path[paths.length];
+						for (int p = 0; p < paths.length; p++) {
+							BoundingBox tPathBounds = transformer.transformBounds(paths[p].bounds);
+							BoundingBox tPathClipBounds = transformer.transformBounds(paths[p].clipBounds);
+							BasicStroke pathStroke = paths[p].getStroke();
+							if (pathStroke == null)
+								this.tPaths[p] = new Path(tPathBounds, tPathClipBounds, paths[p].renderOrderNumber, paths[p].getStrokeColor(), 1, ((byte) 0), ((byte) 0), 0, null, 0, paths[p].getFillColor());
+							else {
+								ArrayList pathDashPattern = null;
+								if (pathStroke.getDashArray() != null) {
+									float[] strokeDashPattern = pathStroke.getDashArray();
+									pathDashPattern = new ArrayList();
+									for (int s = 0; s < strokeDashPattern.length; s++)
+										pathDashPattern.add(new Float(strokeDashPattern[s]));
+								}
+								this.tPaths[p] = new Path(tPathBounds, tPathClipBounds, paths[p].renderOrderNumber, paths[p].getStrokeColor(), pathStroke.getLineWidth(), ((byte) pathStroke.getEndCap()), ((byte) pathStroke.getLineJoin()), pathStroke.getMiterLimit(), pathDashPattern, pathStroke.getDashPhase(), paths[p].getFillColor());
+							}
+							SubPath[] subPaths = paths[p].getSubPaths();
+							for (int sp = 0; sp < subPaths.length; sp++) {
+								BoundingBox tSubPathBounds = transformer.transformBounds(subPaths[sp].bounds);
+								SubPath tSubPath = new SubPath(tSubPathBounds);
+								this.tPaths[p].addSubPath(tSubPath);
+								Shape[] shapes = subPaths[sp].getShapes();
+								for (int s = 0; s < shapes.length; s++) {
+									if (shapes[s] instanceof CubicCurve2D) {
+										CubicCurve2D curve = ((CubicCurve2D) shapes[s]);
+										Point2D.Float p1 = transformer.transformPoint(curve.getP1());
+										Point2D.Float cp1 = transformer.transformPoint(curve.getCtrlP1());
+										Point2D.Float cp2 = transformer.transformPoint(curve.getCtrlP2());
+										Point2D.Float p2 = transformer.transformPoint(curve.getP2());
+										tSubPath.addCurve(new CubicCurve2D.Float(p1.x, p1.y, cp1.x, cp1.y, cp2.x, cp2.y, p2.x, p2.y));
+									}
+									else if (shapes[s] instanceof Line2D) {
+										Line2D line = ((Line2D) shapes[s]);
+										Point2D.Float p1 = transformer.transformPoint(line.getP1());
+										Point2D.Float p2 = transformer.transformPoint(line.getP2());
+										tSubPath.addLine(new Line2D.Float(p1.x, p1.y, p2.x, p2.y));
+									}
+								}
+							}
+						}
+					}
+					return this.tPaths;
+				}
+			};
+			if (graphics.hasAttribute(ImSupplement.Graphics.PAGE_DECORATION_ATTRIBUTE))
+				tGraphics.setAttribute(ImSupplement.Graphics.PAGE_DECORATION_ATTRIBUTE);
+			return tGraphics;
+		}
 	}
 	
 	/**
@@ -1635,635 +1783,17 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 	}
 	
 	/**
-	 * Render an image from a combination of <code>Figure</code> and
-	 * <code>Graphics</code> supplements, overlaid with any labeling
-	 * <code>ImWord</code>s. While there is no strict need for the arguments
-	 * objects to lie in the argument page, the latter is the most sensible
-	 * scenario. If the argument rendering DPI is a positive integer, it is
-	 * used as it is; otherwise, the maximum resolution of any of the argument
-	 * <code>Figure</code> and <code>Graphics</code> supplements is used.<br/>
-	 * Rendering adds two pixels of margin on every edge of the returned image,
-	 * so the image slightly exceeds the aggregate bounds of the rendered
-	 * objects.
-	 * @param figures the figures to include
-	 * @param scaleToDpi the resolution to render at
-	 * @param graphics the graphics to include
-	 * @param words the labeling words to include
-	 * @param page the page the other argument objects lie in
-	 * @return the composed image
+	 * From an array of supplements, filter out the (first) one that is a
+	 * <code>Scan</code>. If the argument array does not contain a
+	 * <code>Scan</code>, this method returns null.
+	 * @param supplements the supplements to choose from
+	 * @return the scan
 	 */
-	public static BufferedImage getCompositeImage(Figure[] figures, int scaleToDpi, Graphics[] graphics, ImWord[] words, ImPage page) {
-		return getCompositeImage(figures, scaleToDpi, graphics, words, page, BufferedImage.TYPE_INT_RGB);
-	}
-	
-	/**
-	 * Render an image from a combination of <code>Figure</code> and
-	 * <code>Graphics</code> supplements, overlaid with any labeling
-	 * <code>ImWord</code>s. While there is no strict need for the arguments
-	 * objects to lie in the argument page, the latter is the most sensible
-	 * scenario. If the argument rendering DPI is a positive integer, it is
-	 * used as it is; otherwise, the maximum resolution of any of the argument
-	 * <code>Figure</code> and <code>Graphics</code> supplements is used.<br/>
-	 * Rendering adds two pixels of margin on every edge of the returned image,
-	 * so the image slightly exceeds the aggregate bounds of the rendered
-	 * objects.<br/>
-	 * The argument <code>imageType</code> has to be one of the type constants
-	 * from <code>BufferedImage</code>.
-	 * @param figures the figures to include
-	 * @param scaleToDpi the resolution to render at
-	 * @param graphics the graphics to include
-	 * @param words the labeling words to include
-	 * @param page the page the other argument objects lie in
-	 * @param imageType the type of image (color model) to use
-	 * @return the composed image
-	 */
-	public static BufferedImage getCompositeImage(Figure[] figures, int scaleToDpi, Graphics[] graphics, ImWord[] words, ImPage page, int imageType) {
-		
-		//	compute export figure bounds in page resolution
-		BoundingBox peBounds = getCompositeBounds(figures, graphics, words);
-		if (peBounds == null)
-			return null;
-		
-		//	compute resolution if none specifically given
-		if (scaleToDpi < 1) {
-			if (figures != null) {
-				for (int f = 0; f < figures.length; f++)
-					scaleToDpi = Math.max(scaleToDpi, figures[f].getDpi());
-			}
-			if (graphics != null) {
-				for (int g = 0; g < graphics.length; g++)
-					scaleToDpi = Math.max(scaleToDpi, graphics[g].getDpi());
-			}
-			if (scaleToDpi < 1)
-				return null;
+	public static Scan getScan(ImSupplement[] supplements) {
+		for (int s = 0; s < supplements.length; s++) {
+			if (supplements[s] instanceof Scan)
+				return ((Scan) supplements[s]);
 		}
-		
-		//	translate any words to export bounds
-		BoundingBox[] peWordBounds = new BoundingBox[0];
-		if (words != null) {
-			peWordBounds = new BoundingBox[words.length];
-			for (int w = 0; w < words.length; w++)
-				peWordBounds[w] = words[w].getBounds().translate(-peBounds.left, -peBounds.top);
-		}
-		
-		//	scale everything to export resolution
-		float boundsScale = (((float) scaleToDpi) / page.getImageDPI());
-		BoundingBox eBounds = peBounds.translate(-peBounds.left, -peBounds.top).scale(boundsScale);
-		BoundingBox[] eWordBounds = new BoundingBox[peWordBounds.length];
-		for (int w = 0; w < peWordBounds.length; w++)
-			eWordBounds[w] = peWordBounds[w].scale(boundsScale);
-		
-		//	tray up figures and graphics or paths, and collect rendering order numbers
-		ArrayList objects = new ArrayList();
-		HashSet objectRenderingOrderPositions = new HashSet();
-		if (figures != null)
-			for (int f = 0; f < figures.length; f++) {
-				BoundingBox peFigureBounds = figures[f].getBounds().translate(-peBounds.left, -peBounds.top);
-				BoundingBox eFigureBounds = peFigureBounds.scale(boundsScale);
-				objects.add(new ObjectRenderingTray(figures[f], eFigureBounds));
-				objectRenderingOrderPositions.add(new Integer(figures[f].getRenderOrderNumber()));
-			}
-		if (graphics != null)
-			for (int g = 0; g < graphics.length; g++) {
-				BoundingBox peGraphicsBounds = graphics[g].getBounds().translate(-peBounds.left, -peBounds.top);
-				BoundingBox eGraphicsBounds = peGraphicsBounds.scale(boundsScale);
-				
-				//	without figures, we can render graphics objects as a whole
-				if ((figures == null) || (figures.length == 0)) {
-					objects.add(new ObjectRenderingTray(graphics[g], eGraphicsBounds));
-					objectRenderingOrderPositions.add(new Integer(graphics[g].getRenderOrderNumber()));
-				}
-				
-				//	with figures present, we need to make sure individual paths and figures are rendered in the appropriate order
-				else {
-					Path[] paths = graphics[g].getPaths();
-					for (int p = 0; p < paths.length; p++) {
-						BoundingBox pePathBounds = paths[p].bounds.translate(-peBounds.left, -peBounds.top);
-						BoundingBox ePathBounds = pePathBounds.scale(boundsScale);
-						objects.add(new ObjectRenderingTray(paths[p], ePathBounds, graphics[g].getDpi(), eGraphicsBounds));
-						objectRenderingOrderPositions.add(new Integer(paths[p].renderOrderNumber));
-					}
-				}
-			}
-//		System.out.println("Got " + objects.size() + " images and " + objectRenderingOrderPositions.size() + " distinct rendering positions");
-		
-		//	sort trays, either by rendering order position (if we have sufficiently many distinct ones), or by size
-		if ((objectRenderingOrderPositions.size() * 2) > objects.size()) {
-//			System.out.println("Using rendering sequence order");
-			Collections.sort(objects, renderingSequenceOrder);
-		}
-		else {
-//			System.out.println("Using size order");
-			Collections.sort(objects, imageSizeOrder);
-		}
-		
-		//	set up rendering
-		BufferedImage image = new BufferedImage((eBounds.getWidth() + 4), (eBounds.getHeight() + 4), imageType);
-		Graphics2D renderer = image.createGraphics();
-		renderer.setColor(Color.WHITE);
-		renderer.fillRect(0, 0, image.getWidth(), image.getHeight());
-		renderer.translate(2, 2);
-		renderer.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-		
-		//	render figures and graphics
-		for (int o = 0; o < objects.size(); o++)
-			((ObjectRenderingTray) objects.get(o)).render(renderer, scaleToDpi);
-		
-		//	render words
-		if (words != null) {
-			for (int w = 0; w < words.length; w++) {
-				AffineTransform preAt = renderer.getTransform();
-				renderer.translate(eWordBounds[w].left, eWordBounds[w].bottom);
-				
-				//	determine rendering color based on background
-				Color wordColor = getTextColorAt(image, eWordBounds[w]);
-				renderer.setColor(wordColor);
-				
-				//	prepare font
-				Font font = new Font("FreeSans", Font.PLAIN, 1);
-				
-				//	render word, finally ...
-				ImWord.render(words[w], font, scaleToDpi, false, renderer);
-				
-				//	reset rendering graphics
-				renderer.setTransform(preAt);
-			}
-		}
-		
-		//	finally ...
-		return image;
-	}
-	
-	private static class ObjectRenderingTray {
-		private Figure figure;
-		private Graphics graphics;
-		private Path path;
-		private int sourceDpi;
-		private BoundingBox renderingBounds;
-		final BoundingBox renderingArea;
-		final int renderingOrderPrecedence;
-		ObjectRenderingTray(Figure figure, BoundingBox renderingBounds) {
-			this.figure = figure;
-			this.sourceDpi = this.figure.getDpi();
-			this.renderingBounds = renderingBounds;
-			this.renderingArea = this.renderingBounds;
-			this.renderingOrderPrecedence = 1;
-//			System.out.println("Got Figure at " + this.renderingBounds.toString());
-		}
-		ObjectRenderingTray(Graphics graphics, BoundingBox renderingBounds) {
-			this.graphics = graphics;
-			this.sourceDpi = this.graphics.getDpi();
-			this.renderingBounds = renderingBounds;
-			this.renderingArea = this.renderingBounds;
-			this.renderingOrderPrecedence = 1;
-//			System.out.println("Got Graphics at " + this.renderingBounds.toString());
-		}
-		ObjectRenderingTray(Path path, BoundingBox renderingBounds, int parentGraphicsDpi, BoundingBox parentGraphicsRenderingBounds) {
-			this.path = path;
-			this.sourceDpi = parentGraphicsDpi;
-			this.renderingBounds = parentGraphicsRenderingBounds;
-			this.renderingArea = renderingBounds;
-			this.renderingOrderPrecedence = ((path.getFillColor() == null) ? 2 : 0);
-//			System.out.println("Got Path at " + this.renderingBounds.toString());
-		}
-		void render(Graphics2D renderer, int scaleToDpi) {
-			AffineTransform preAt = renderer.getTransform();
-			renderer.translate(this.renderingBounds.left, this.renderingBounds.top);
-			
-			if (this.graphics != null) {
-				System.out.println("Rendering Graphics at " + this.renderingBounds.toString());
-				float renderScale = (((float) scaleToDpi) / this.sourceDpi);
-				renderer.scale(renderScale, renderScale);
-				
-				Path[] paths = this.graphics.getPaths();
-				for (int p = 0; p < paths.length; p++) {
-					Color preColor = renderer.getColor();
-					Stroke preStroke = renderer.getStroke();
-					Color strokeColor = paths[p].getStrokeColor();
-					Stroke stroke = paths[p].getStroke();
-					Color fillColor = paths[p].getFillColor();
-					if ((strokeColor == null) && (fillColor == null))
-						continue;
-					
-					Path2D path = new Path2D.Float();
-					Graphics.SubPath[] subPaths = paths[p].getSubPaths();
-					for (int s = 0; s < subPaths.length; s++) {
-						Path2D subPath = subPaths[s].getPath();
-						path.append(subPath, false);
-					}
-					
-					if (fillColor != null) {
-//						System.out.println(" - filling in " + fillColor);
-						renderer.setColor(fillColor);
-						renderer.fill(path);
-					}
-					if (strokeColor != null) {
-//						System.out.println(" - stroking in " + strokeColor);
-						renderer.setColor(strokeColor);
-						renderer.setStroke(stroke);
-						renderer.draw(path);
-					}
-//					else if (fillColor != null) {
-//						renderer.setColor(fillColor);
-//						renderer.draw(path);
-//					}
-					
-//					NEED TO FIRST COLLECT ALL SUB PATHS AND THEN FILL THE WHOLE PATH SO EVEN-ODD RULE CAN TAKE EFFECT ON FILLING
-//					SubPath[] subPaths = paths[p].getSubPaths();
-//					for (int s = 0; s < subPaths.length; s++) {
-//						
-//						//	render sub path
-//						Path2D path = subPaths[s].getPath();
-//						if (fillColor != null) {
-//							renderer.setColor(fillColor);
-//							renderer.fill(path);
-//						}
-//						if (strokeColor != null) {
-//							renderer.setColor(strokeColor);
-//							renderer.setStroke(stroke);
-//							renderer.draw(path);
-//						}
-//						else if (fillColor != null) {
-//							renderer.setColor(fillColor);
-//							renderer.draw(path);
-//						}
-//					}
-					renderer.setColor(preColor);
-					renderer.setStroke(preStroke);
-				}
-			}
-			else if (this.path != null) {
-				System.out.println("Rendering Path at " + this.renderingBounds.toString());
-				float renderScale = (((float) scaleToDpi) / this.sourceDpi);
-				renderer.scale(renderScale, renderScale);
-				
-				Color preColor = renderer.getColor();
-				Stroke preStroke = renderer.getStroke();
-				Color strokeColor = this.path.getStrokeColor();
-				Stroke stroke = this.path.getStroke();
-				Color fillColor = this.path.getFillColor();
-				
-				Path2D path = new Path2D.Float();
-				Graphics.SubPath[] subPaths = this.path.getSubPaths();
-				for (int s = 0; s < subPaths.length; s++) {
-					Path2D subPath = subPaths[s].getPath();
-					path.append(subPath, false);
-				}
-				
-				if (fillColor != null) {
-//					System.out.println(" - filling in " + fillColor);
-					renderer.setColor(fillColor);
-					renderer.fill(path);
-				}
-				if (strokeColor != null) {
-//					System.out.println(" - stroking in " + strokeColor);
-					renderer.setColor(strokeColor);
-					renderer.setStroke(stroke);
-					renderer.draw(path);
-				}
-//				else if (fillColor != null) {
-//					renderer.setColor(fillColor);
-//					renderer.draw(path);
-//				}
-				
-//				NEED TO FIRST COLLECT ALL SUB PATHS AND THEN FILL THE WHOLE PATH SO EVEN-ODD RULE CAN TAKE EFFECT ON FILLING
-//				SubPath[] subPaths = this.path.getSubPaths();
-//				for (int s = 0; s < subPaths.length; s++) {
-//					
-//					//	render sub path
-//					Path2D path = subPaths[s].getPath();
-//					if (fillColor != null) {
-//						renderer.setColor(fillColor);
-//						renderer.fill(path);
-//					}
-//					if (strokeColor != null) {
-//						renderer.setColor(strokeColor);
-//						renderer.setStroke(stroke);
-//						renderer.draw(path);
-//					}
-//					else if (fillColor != null) {
-//						renderer.setColor(fillColor);
-//						renderer.draw(path);
-//					}
-//				}
-				renderer.setColor(preColor);
-				renderer.setStroke(preStroke);
-			}
-			else if (this.figure != null) try {
-//				System.out.println("Rendering Figure at " + this.renderingBounds.toString());
-				BufferedImage fImage = ImageIO.read(this.figure.getInputStream());
-//				NO NEED TO SCALE EXPLICITLY, draw() DOES THAT BY ITSELF
-//				float hRenderScale = (((float) (eFigureBounds[f].right - eFigureBounds[f].left)) / fImage.getWidth());
-//				float vRenderScale = (((float) (eFigureBounds[f].bottom - eFigureBounds[f].top)) / fImage.getHeight());
-//				renderer.scale(hRenderScale, vRenderScale);
-				renderer.drawImage(fImage, 0, 0, (this.renderingBounds.right - this.renderingBounds.left), (this.renderingBounds.bottom - this.renderingBounds.top), null);
-			} catch (IOException ioe) {}
-			
-			renderer.setTransform(preAt);
-		}
-		
-		int getRenderOrderNumber() {
-			if (this.figure != null)
-				return this.figure.getRenderOrderNumber();
-			else if (this.graphics != null)
-				return this.graphics.getRenderOrderNumber();
-			else if (this.path != null)
-				return this.path.renderOrderNumber;
-			else return -1;
-		}
-	}
-	
-	private static final Comparator imageSizeOrder = new Comparator() {
-		public int compare(Object obj1, Object obj2) {
-			BoundingBox bb1 = ((ObjectRenderingTray) obj1).renderingArea;
-			BoundingBox bb2 = ((ObjectRenderingTray) obj2).renderingArea;
-			int a1 = ((bb1.right - bb1.left) * (bb1.bottom - bb1.top));
-			int a2 = ((bb2.right - bb2.left) * (bb2.bottom - bb2.top));
-			if (a1 != a2)
-				return (a2 - a1);
-			int rop1 = ((ObjectRenderingTray) obj1).renderingOrderPrecedence;
-			int rop2 = ((ObjectRenderingTray) obj2).renderingOrderPrecedence;
-			return (rop1 - rop2);
-		}
-	};
-	
-	private static final Comparator renderingSequenceOrder = new Comparator() {
-		public int compare(Object obj1, Object obj2) {
-			int ron1 = ((ObjectRenderingTray) obj1).getRenderOrderNumber();
-			int ron2 = ((ObjectRenderingTray) obj2).getRenderOrderNumber();
-			return (ron1 - ron2);
-		}
-	};
-	
-	/**
-	 * Produce SVG (Scalable Vector Graphics) XML from one or more
-	 * <code>Graphics</code> objects, including labeling <code>ImWord</code>s.
-	 * The nominal resolution of the returned SVG is the default 72 DPI. While
-	 * there is no strict need for the arguments objects to lie in the argument
-	 * page, the latter is the most sensible scenario.
-	 * @param graphics the graphics to include
-	 * @param words the words to include
-	 * @param page the page the other argument objects lie in
-	 * @return the SVG XML representing the argument objects
-	 */
-	public static CharSequence getSvg(Graphics[] graphics, ImWord[] words, ImPage page) {
-		
-		//	compute overall bounds
-		BoundingBox peBounds = getCompositeBounds(null, graphics, words);
-		if (peBounds == null)
-			return null;
-		
-		//	translate contents to export bounds
-		BoundingBox[] peGraphicsBounds = new BoundingBox[0];
-		if (graphics != null) {
-			peGraphicsBounds = new BoundingBox[graphics.length];
-			for (int g = 0; g < graphics.length; g++)
-				peGraphicsBounds[g] = graphics[g].getBounds().translate(-peBounds.left, -peBounds.top);
-		}
-		BoundingBox[] peWordBounds = new BoundingBox[0];
-		if (words != null) {
-			peWordBounds = new BoundingBox[words.length];
-			for (int w = 0; w < words.length; w++)
-				peWordBounds[w] = words[w].getBounds().translate(-peBounds.left, -peBounds.top);
-		}
-		
-		//	scale everything to export resolution
-		float boundsScale = (((float) Graphics.RESOLUTION) / page.getImageDPI());
-		BoundingBox eBounds = peBounds.translate(-peBounds.left, -peBounds.top).scale(boundsScale);
-		BoundingBox[] eGraphicsBounds = new BoundingBox[peGraphicsBounds.length];
-		for (int g = 0; g < peGraphicsBounds.length; g++)
-			eGraphicsBounds[g] = peGraphicsBounds[g].scale(boundsScale);
-		BoundingBox[] eWordBounds = new BoundingBox[peWordBounds.length];
-		for (int w = 0; w < peWordBounds.length; w++)
-			eWordBounds[w] = peWordBounds[w].scale(boundsScale);
-		
-		//	prepare SVG generation
-		StringBuffer svg = new StringBuffer();
-		
-		//	add preface TODOne do we really need this sucker, especially the DTD? ==> does not seem so
-		svg.append("<?xml version=\"1.0\" standalone=\"no\"?>");
-//		svg.append("<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">");
-		
-		//	write start tag (including nominal width and height at 72 DPI)
-		svg.append("<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\"");
-		svg.append(" width=\"" + (eBounds.right - eBounds.left) + "px\"");
-		svg.append(" height=\"" + (eBounds.bottom - eBounds.top) + "px\"");
-		svg.append(">");
-		
-		//	render graphics
-		for (int g = 0; g < graphics.length; g++) {
-			
-			//	translate rendering bounds
-			float hTrans = (eGraphicsBounds[g].left - eBounds.left);
-			float vTrans = (eGraphicsBounds[g].top - eBounds.top);
-			
-			//	render paths
-			Path[] paths = graphics[g].getPaths();
-			for (int p = 0; p < paths.length; p++) {
-				
-				//	get path properties
-				Color strokeColor = paths[p].getStrokeColor();
-				Color fillColor = paths[p].getFillColor();
-				
-				//	open tag (including stroking and filling properties) and open data attribute
-				svg.append("<path");
-				if (strokeColor != null) {
-					svg.append(" stroke=\"#" + getHexRGB(strokeColor) + "\"");
-					if (strokeColor.getAlpha() < 255)
-						svg.append(" stroke-opacity=\"" + (((float) strokeColor.getAlpha()) / 255) + "\"");
-					BasicStroke bStroke = ((BasicStroke) paths[p].getStroke());
-					svg.append(" stroke-width=\"" + bStroke.getLineWidth() + "px\"");
-					svg.append(" stroke-linecap=\"" + bStroke.getEndCap() + "\"");
-					svg.append(" stroke-linejoin=\"" + bStroke.getLineJoin() + "\"");
-					svg.append(" stroke-miterlimit=\"" + bStroke.getMiterLimit() + "\"");
-					float[] dashArray = bStroke.getDashArray();
-					if (dashArray != null) {
-						svg.append(" stroke-dasharray=\"");
-						for (int d = 0; d < dashArray.length; d++) {
-							if (d != 0)
-								svg.append(",");
-							svg.append("" + dashArray[d]);
-						}
-						svg.append("\"");
-						svg.append(" stroke-dashoffset=\"" + bStroke.getDashPhase() + "\"");
-					}
-				}
-				if (fillColor != null) {
-					svg.append(" fill=\"#" + getHexRGB(fillColor) + "\"");
-					if (fillColor.getAlpha() < 255)
-						svg.append(" fill-opacity=\"" + (((float) fillColor.getAlpha()) / 255) + "\"");
-				}
-				else svg.append(" fill=\"none\"");
-				svg.append(" d=\"");
-				
-				//	add rendering commands for sub paths
-				SubPath[] subPaths = paths[p].getSubPaths();
-				for (int sp = 0; sp < subPaths.length; sp++) {
-					
-					//	render shapes
-					Shape[] shapes = subPaths[sp].getShapes();
-					for (int s = 0; s < shapes.length; s++) {
-						if (shapes[s] instanceof Line2D) {
-							Line2D line = ((Line2D) shapes[s]);
-							
-							//	move to starting point
-							if (s == 0) {
-								svg.append(((sp == 0) ? "" : " ") + "M");
-								svg.append(" " + (hTrans + line.getX1()));
-								svg.append(" " + (vTrans + line.getY1()));
-							}
-							
-							//	draw line
-							svg.append(" L");
-							svg.append(" " + (hTrans + line.getX2()));
-							svg.append(" " + (vTrans + line.getY2()));
-						}
-						else if (shapes[s] instanceof CubicCurve2D) {
-							CubicCurve2D curve = ((CubicCurve2D) shapes[s]);
-							
-							//	move to starting point
-							if (s == 0) {
-								svg.append(((sp == 0) ? "" : " ") + "M");
-								svg.append(" " + (hTrans + curve.getX1()));
-								svg.append(" " + (vTrans + curve.getY1()));
-							}
-							
-							//	draw curve
-							svg.append(" C");
-							svg.append(" " + (hTrans + curve.getCtrlX1()));
-							svg.append(" " + (vTrans + curve.getCtrlY1()));
-							svg.append(" " + (hTrans + curve.getCtrlX2()));
-							svg.append(" " + (vTrans + curve.getCtrlY2()));
-							svg.append(" " + (hTrans + curve.getX2()));
-							svg.append(" " + (vTrans + curve.getY2()));
-						}
-					}
-				}
-				
-				//	close data attribute and tag
-				svg.append("\"/>");
-			}
-		}
-		
-		//	render words
-		if (words != null)
-			for (int w = 0; w < words.length; w++) {
-				
-				//	translate rendering bounds and position
-				float x = (eWordBounds[w].left - eBounds.left);
-				float y;
-				
-				//	get font size and text orientation
-				int fontSize = words[w].getFontSize();
-				Object to = words[w].getAttribute(ImWord.TEXT_DIRECTION_ATTRIBUTE, ImWord.TEXT_DIRECTION_LEFT_RIGHT);
-				
-				//	write start tag, including rendering properties
-				svg.append("<text ");
-				svg.append(" x=\"" + x + "px\"");
-				if (ImWord.TEXT_DIRECTION_BOTTOM_UP.equals(to)) {
-					y = ((eWordBounds[w].bottom - eBounds.top) - (eWordBounds[w].getWidth() * 0.275f)); // factor in that text is anchored at baseline (some 25-30 percent from bottom of word box in most fonts), not top left corner
-					svg.append(" y=\"" + y + "px\"");
-					svg.append(" transform=\"rotate(-90, " + (x + (((float) eWordBounds[w].getWidth()) / 2)) + ", " + (y - (((float) eWordBounds[w].getWidth()) / 2)) + ")\"");
-					svg.append(" textLength=\"" + eWordBounds[w].getHeight() + "px\"");
-				}
-				else if (ImWord.TEXT_DIRECTION_TOP_DOWN.equals(to)) {
-					y = ((eWordBounds[w].bottom - eBounds.top) - (eWordBounds[w].getWidth() * 0.275f)); // factor in that text is anchored at baseline (some 25-30 percent from bottom of word box in most fonts), not top left corner
-					svg.append(" y=\"" + y + "px\"");
-					svg.append(" transform=\"rotate(90, " + (x + (((float) eWordBounds[w].getHeight()) / 2)) + ", " + (y - (((float) eWordBounds[w].getHeight()) / 2)) + ")\"");
-					svg.append(" textLength=\"" + eWordBounds[w].getHeight() + "px\"");
-				}
-				else {
-					y = ((eWordBounds[w].bottom - eBounds.top) - (eWordBounds[w].getHeight() * 0.275f)); // factor in that text is anchored at baseline (some 25-30 percent from bottom of word box in most fonts), not top left corner
-					svg.append(" y=\"" + y + "px\"");
-					svg.append(" textLength=\"" + eWordBounds[w].getWidth() + "px\"");
-				}
-				svg.append(" font-family=\"" + "sans-serif" + "\""); // default to sans-serif font for now ...
-				if (fontSize != -1)
-					svg.append(" font-size=\"" + fontSize + "\"");
-				if (words[w].hasAttribute(ImWord.BOLD_ATTRIBUTE))
-					svg.append(" font-weight=\"bold\"");
-				if (words[w].hasAttribute(ImWord.ITALICS_ATTRIBUTE))
-					svg.append(" font-style=\"italic\"");
-				svg.append(" fill=\"#" + "000000" + "\""); // default to black TODO use actual word color once we start tracking it
-				svg.append(">");
-				
-				//	add word string
-				svg.append(AnnotationUtils.escapeForXml(words[w].getString()));
-				
-				//	write end tag
-				svg.append("</text>");
-		}
-		
-		//	write end tag
-		svg.append("</svg>");
-		
-		//	finally ...
-		return svg;
-	}
-	
-	private static String getHexRGB(Color color) {
-		return ("" +
-				getHex(color.getRed()) + 
-				getHex(color.getGreen()) +
-				getHex(color.getBlue()) +
-				"");
-	}
-	
-	private static final String getHex(int c) {
-		int high = (c >>> 4) & 15;
-		int low = c & 15;
-		String hex = "";
-		if (high < 10) hex += ("" + high);
-		else hex += ("" + ((char) ('A' + (high - 10))));
-		if (low < 10) hex += ("" + low);
-		else hex += ("" +  ((char) ('A' + (low - 10))));
-		return hex;
-	}
-	
-	private static BoundingBox getCompositeBounds(Figure[] figures, Graphics[] graphics, ImWord[] words) {
-		int left = Integer.MAX_VALUE;
-		int right = 0;
-		int top = Integer.MAX_VALUE;
-		int bottom = 0;
-		if (figures != null)
-			for (int f = 0; f < figures.length; f++) {
-				BoundingBox fBounds = figures[f].getBounds();
-				left = Math.min(left, fBounds.left);
-				right = Math.max(right, fBounds.right);
-				top = Math.min(top, fBounds.top);
-				bottom = Math.max(bottom, fBounds.bottom);
-			}
-		if (graphics != null)
-			for (int g = 0; g < graphics.length; g++) {
-				BoundingBox gBounds = graphics[g].getBounds();
-				left = Math.min(left, gBounds.left);
-				right = Math.max(right, gBounds.right);
-				top = Math.min(top, gBounds.top);
-				bottom = Math.max(bottom, gBounds.bottom);
-			}
-		if (words != null)
-			for (int w = 0; w < words.length; w++) {
-				BoundingBox gBounds = words[w].getBounds();
-				left = Math.min(left, gBounds.left);
-				right = Math.max(right, gBounds.right);
-				top = Math.min(top, gBounds.top);
-				bottom = Math.max(bottom, gBounds.bottom);
-			}
-		return (((left < right) && (top < bottom)) ? new BoundingBox(left, right, top, bottom) : null);
-	}
-	
-	//	compute average brightness of text rendering area, and then use black or white, whichever contrasts better
-	private static Color getTextColorAt(BufferedImage bi, BoundingBox bb) {
-		BufferedImage bbBi = bi.getSubimage(bb.left, bb.top, bb.getWidth(), bb.getHeight());
-		AnalysisImage aBbBi = Imaging.wrapImage(bbBi, null);
-		byte[][] brightness = aBbBi.getBrightness();
-		int brightnessSum = 0;
-		for (int c = 0; c < brightness.length; c++) {
-			for (int r = 0; r < brightness[c].length; r++)
-				brightnessSum += brightness[c][r];
-		}
-		int avgBrightness = (brightnessSum / (bbBi.getWidth() * bbBi.getHeight()));
-//		System.out.println("- average brightness is " + avgBrightness);
-		return ((avgBrightness < 64) ? Color.WHITE : Color.BLACK);
+		return null;
 	}
 }

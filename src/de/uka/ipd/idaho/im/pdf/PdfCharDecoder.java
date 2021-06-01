@@ -91,6 +91,7 @@ public class PdfCharDecoder {
 	 */
 	
 	static final int SERIF = 4;
+	static final int MONOSPACED = 8;
 	private static final boolean SERIF_IS_STYLE = false;
 	
 	private static final String[] styleNames4 = {"Plain", "Bold", "Italics", "BoldItalics"};
@@ -690,7 +691,7 @@ public class PdfCharDecoder {
 	private static final boolean DEBUG_CHAR_PROG_DECODING = false;
 	private static final boolean DEBUG_DISPLAY_CHAR_PROG_IMAGES = false;
 	
-	static char getChar(PdfFont pFont, PStream charProg, int charCode, String charName, FontDecoderCharset charSet, Map objects, Font[] serifFonts, Font[] sansFonts, HashMap cache, boolean debug) throws IOException {
+	static char getChar(PdfFont pFont, PStream charProg, int charCode, String charName, FontDecoderCharset charSet, Map objects, Font[] serifFonts, Font[] sansFonts, Font[] monoFonts, HashMap cache, boolean debug) throws IOException {
 		byte[] cpBytes;
 		try {
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -724,17 +725,17 @@ public class PdfCharDecoder {
 				break;
 			if (PdfUtils.endsWith(line, " d1")) {
 				String[] glyphParams = (new String(line)).split("\\s+");
-				System.out.println("Glyph dimension params: " + Arrays.toString(glyphParams));
+				if (DEBUG_CHAR_PROG_DECODING) System.out.println("Glyph dimension params: " + Arrays.toString(glyphParams));
 				if (glyphParams.length >= 6) {
-					System.out.println(" - lower left Y: " + Integer.parseInt(glyphParams[3]));
+					if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - lower left Y: " + Integer.parseInt(glyphParams[3]));
 					imgMinY = Integer.parseInt(glyphParams[3]);
-					System.out.println(" - upper right Y: " + Integer.parseInt(glyphParams[5]));
+					if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - upper right Y: " + Integer.parseInt(glyphParams[5]));
 					imgMaxY = Integer.parseInt(glyphParams[5]);
 				}
 			}
 			else if (PdfUtils.endsWith(line, " cm")) {
 				String[] glyphTransMatrix = (new String(line)).split("\\s+");
-				System.out.println("Glyph transformation matrix: " + Arrays.toString(glyphTransMatrix));
+				if (DEBUG_CHAR_PROG_DECODING) System.out.println("Glyph transformation matrix: " + Arrays.toString(glyphTransMatrix));
 				if (glyphTransMatrix.length >= 6) {
 					float[][] gtm = new float[3][3];
 					gtm[2][2] = 1;
@@ -747,11 +748,11 @@ public class PdfCharDecoder {
 					gtm[1][0] = Float.parseFloat(glyphTransMatrix[1]);
 					gtm[0][0] = Float.parseFloat(glyphTransMatrix[0]);
 					float[] translate = transform(0, 0, 1, gtm);
-					System.out.println(" - glyph rendering origin " + Arrays.toString(translate));
+					if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - glyph rendering origin " + Arrays.toString(translate));
 					float[] scaleRotate1 = transform(1, 0, 0, gtm);
-					System.out.println(" - glyph rotation and scaling 1 " + Arrays.toString(scaleRotate1));
+					if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - glyph rotation and scaling 1 " + Arrays.toString(scaleRotate1));
 					float[] scaleRotate2 = transform(0, 1, 0, gtm);
-					System.out.println(" - glyph rotation and scaling 2 " + Arrays.toString(scaleRotate2));
+					if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - glyph rotation and scaling 2 " + Arrays.toString(scaleRotate2));
 					//	if image is upside-down (scaleRotate2[1] < 0), invert min and max Y
 					if (scaleRotate2[1] < 0) {
 						int minY = Math.min(-imgMinY, -imgMaxY);
@@ -763,7 +764,6 @@ public class PdfCharDecoder {
 			}
 			else if (DEBUG_CHAR_PROG_DECODING) System.out.println("IGNORING: " + new String(line));
 		}
-//		Hashtable imgParams = new Hashtable();
 		Map imgParams = new HashMap();
 		while ((line = lis.readLine()) != null) {
 			if (PdfUtils.startsWith(line, "EI", 0)) {
@@ -863,7 +863,7 @@ public class PdfCharDecoder {
 			if (scs.difference > 500)
 				break;
 			System.out.println(" testing '" + scs.cs.ch + "' (" + ((int) scs.cs.ch) + "), signature difference is " + scs.difference);
-			CharMatchResult matchResult = matchChar(chImage, scs.cs.ch, true, serifFonts, sansFonts, cache, false, false);
+			CharMatchResult matchResult = matchChar(chImage, scs.cs.ch, true, serifFonts, sansFonts, monoFonts, cache, false, false);
 			CharImageMatch cim = null;
 			for (int s = 0; s < matchResult.serifStyleCims.length; s++) {
 				if ((matchResult.serifStyleCims[s] != null) && ((cim == null) || (cim.sim < matchResult.serifStyleCims[s].sim)))
@@ -872,6 +872,10 @@ public class PdfCharDecoder {
 			for (int s = 0; s < matchResult.sansStyleCims.length; s++) {
 				if ((matchResult.sansStyleCims[s] != null) && ((cim == null) || (cim.sim < matchResult.sansStyleCims[s].sim)))
 					cim = matchResult.sansStyleCims[s];
+			}
+			for (int s = 0; s < matchResult.monoStyleCims.length; s++) {
+				if ((matchResult.monoStyleCims[s] != null) && ((cim == null) || (cim.sim < matchResult.monoStyleCims[s].sim)))
+					cim = matchResult.monoStyleCims[s];
 			}
 			
 			if (cim == null) {
@@ -986,6 +990,7 @@ public class PdfCharDecoder {
 		boolean rendered = false;
 		CharImageMatch[] serifStyleCims = new CharImageMatch[4];
 		CharImageMatch[] sansStyleCims = new CharImageMatch[4];
+		CharImageMatch[] monoStyleCims = new CharImageMatch[4];
 		CharMatchResult() {}
 		float getAverageSimilarity() {
 			float simSum = 0;
@@ -999,12 +1004,16 @@ public class PdfCharDecoder {
 					simSum += this.sansStyleCims[s].sim;
 					simCount++;
 				}
+				if (this.monoStyleCims[s] != null) {
+					simSum += this.monoStyleCims[s].sim;
+					simCount++;
+				}
 			}
 			return ((simCount == 0) ? 0 : (simSum / simCount));
 		}
 	}
 	
-	static CharMatchResult matchChar(CharImage charImage, char ch, boolean allowCaps, Font[] serifFonts, Font[] sansFonts, HashMap cache, boolean isVerificationMatch, boolean debug) {
+	static CharMatchResult matchChar(CharImage charImage, char ch, boolean allowCaps, Font[] serifFonts, Font[] sansFonts, Font[] monoFonts, HashMap cache, boolean isVerificationMatch, boolean debug) {
 		CharMatchResult matchResult = new CharMatchResult();
 		
 		//	anything to match against?
@@ -1028,7 +1037,7 @@ public class PdfCharDecoder {
 		
 		//	match argument char in different serif fonts
 		for (int s = 0; s < serifFonts.length; s++) {
-			CharImage matchImage = createCharImage(ch, serifFonts[s], true, cache, debug);
+			CharImage matchImage = createCharImage(ch, serifFonts[s], true, false, cache, debug);
 			if (matchImage == null)
 				continue;
 			if (charAboveBaseline && (matchImage.baseline <= matchImage.box.getTopRow()))
@@ -1043,7 +1052,7 @@ public class PdfCharDecoder {
 			}
 			matchResult.serifStyleCims[s] = matchCharImage(charImage, matchImage, serifFonts[s].getName(), doUseCharBoxMatch, isVerificationMatch, debug);
 			if (allowCaps && (ch != Character.toUpperCase(ch))) {
-				CharImage capMatchImage = createCharImage(Character.toUpperCase(ch), serifFonts[s], true, cache, debug);
+				CharImage capMatchImage = createCharImage(Character.toUpperCase(ch), serifFonts[s], true, false, cache, debug);
 				if (capMatchImage != null) {
 					doUseCharBoxMatch = (charImage.baseline < 1);
 					if (useCharBoxMatch != doUseCharBoxMatch) {
@@ -1062,7 +1071,7 @@ public class PdfCharDecoder {
 		
 		//	match argument char in different sans-serif fonts
 		for (int s = 0; s < sansFonts.length; s++) {
-			CharImage matchImage = createCharImage(ch, sansFonts[s], false, cache, debug);
+			CharImage matchImage = createCharImage(ch, sansFonts[s], false, false, cache, debug);
 			if (matchImage == null)
 				continue;
 			if (charAboveBaseline && (matchImage.baseline <= matchImage.box.getTopRow()))
@@ -1077,7 +1086,7 @@ public class PdfCharDecoder {
 			}
 			matchResult.sansStyleCims[s] = matchCharImage(charImage, matchImage, sansFonts[s].getName(), doUseCharBoxMatch, isVerificationMatch, debug);
 			if (allowCaps && (ch != Character.toUpperCase(ch))) {
-				CharImage capMatchImage = createCharImage(Character.toUpperCase(ch), sansFonts[s], false, cache, debug);
+				CharImage capMatchImage = createCharImage(Character.toUpperCase(ch), sansFonts[s], false, false, cache, debug);
 				if (capMatchImage != null) {
 					doUseCharBoxMatch = (charImage.baseline < 1);
 					if (useCharBoxMatch != doUseCharBoxMatch) {
@@ -1091,6 +1100,40 @@ public class PdfCharDecoder {
 				}
 			}
 			if (matchResult.sansStyleCims[s] != null)
+				matchResult.rendered = true;
+		}
+		
+		//	match argument char in different monospaced fonts
+		for (int s = 0; s < monoFonts.length; s++) {
+			CharImage matchImage = createCharImage(ch, monoFonts[s], false, true, cache, debug);
+			if (matchImage == null)
+				continue;
+			if (charAboveBaseline && (matchImage.baseline <= matchImage.box.getTopRow()))
+				continue;
+			if (charBelowBaseline && (matchImage.box.getBottomRow() <= matchImage.baseline))
+				continue;
+			boolean doUseCharBoxMatch = (charImage.baseline < 1);
+			if (useCharBoxMatch != doUseCharBoxMatch) {
+				double charBoxProportionDistance = computeCharBoxProportionDistance(charImage, matchImage);
+				if (charBoxProportionDistance < 1)
+					doUseCharBoxMatch = true;
+			}
+			matchResult.monoStyleCims[s] = matchCharImage(charImage, matchImage, monoFonts[s].getName(), doUseCharBoxMatch, isVerificationMatch, debug);
+			if (allowCaps && (ch != Character.toUpperCase(ch))) {
+				CharImage capMatchImage = createCharImage(Character.toUpperCase(ch), monoFonts[s], false, true, cache, debug);
+				if (capMatchImage != null) {
+					doUseCharBoxMatch = (charImage.baseline < 1);
+					if (useCharBoxMatch != doUseCharBoxMatch) {
+						double charBoxProportionDistance = computeCharBoxProportionDistance(charImage, capMatchImage);
+						if (charBoxProportionDistance < 1)
+							doUseCharBoxMatch = true;
+					}
+					CharImageMatch capCim = matchCharImage(charImage, capMatchImage, monoFonts[s].getName(), useCharBoxMatch, isVerificationMatch, debug);
+					if ((capCim != null) && ((matchResult.monoStyleCims[s] == null) || (matchResult.monoStyleCims[s].sim < capCim.sim)))
+						matchResult.monoStyleCims[s] = capCim;
+				}
+			}
+			if (matchResult.monoStyleCims[s] != null)
 				matchResult.rendered = true;
 		}
 		
@@ -1929,7 +1972,7 @@ public class PdfCharDecoder {
 	private static float charImageRenderingFontSize = 96.0f;
 	private static HashSet unrenderableChars = new HashSet();
 	
-	static CharImage createCharImage(char ch, Font font, boolean isSerifFont, HashMap cache, boolean debug) {
+	static CharImage createCharImage(char ch, Font font, boolean isSerifFont, boolean isMonospacedFont, HashMap cache, boolean debug) {
 		if (debug) System.out.println("Rendering char '" + ch + "' in " + font.getName() + "-" + font.getStyle());
 		if (!font.canDisplay(ch)) {
 			if (debug) System.out.println(" ==> font cannot display char");
@@ -1980,7 +2023,7 @@ public class PdfCharDecoder {
 		cgr.drawString(("" + ch), ((int) (Math.round(fontBox.getWidth() - tl.getBounds().getWidth() + 1) / 2)), cbl);
 		cgr.dispose();
 		if (debug) System.out.println(" - char image rendered");
-		CharImage ci = new CharImage(ch, font.getName(), (font.getStyle() | (isSerifFont ? SERIF : 0)), cbi, cbl);
+		CharImage ci = new CharImage(ch, font.getName(), (font.getStyle() | (isSerifFont ? SERIF : 0) | (isMonospacedFont ? MONOSPACED : 0)), cbi, cbl);
 		if (debug) JOptionPane.showMessageDialog(null, "", ("'" + ch + "' in " + font.getName() + "-" + font.getStyle()), JOptionPane.PLAIN_MESSAGE, new ImageIcon(cbi));
 		
 		//	cache image if possible and return it
@@ -2040,7 +2083,7 @@ public class PdfCharDecoder {
 		charSignatures = ((CharSignature[]) csList.toArray(new CharSignature[csList.size()]));
 	}
 	
-	private static final byte[][] parseSignature(String sigData) {
+	private static byte[][] parseSignature(String sigData) {
 		String[] sigRows = sigData.split("\\;");
 		byte[][] sig = new byte[sigRows[0].length()][sigRows.length];
 		for (int c = 0; c < sig.length; c++) {
@@ -2379,15 +2422,21 @@ public class PdfCharDecoder {
 	static final String COMBINABLE_ACCENTS;
 	static final HashMap COMBINABLE_ACCENT_MAPPINGS = new HashMap();
 	static {
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u005E'), "circumflex");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u0060'), "grave");
 		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u00A8'), "dieresis");
 		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u00AF'), "macron");
 		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u00B4'), "acute");
 		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u00B8'), "cedilla");
 		
-		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02C6'), "circumflex");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02C6'), "circumflex"); // 0x88 in Windows-1252 encoding
 		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02C7'), "caron");
 		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02D8'), "breve");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02D9'), "dot");
 		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02DA'), "ring");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02DB'), "ogonek");
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02DC'), "tilde"); // 0x98 in Windows-1252 encoding
+		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u02DD'), "dblacute");
 		
 		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u0300'), "grave");
 		COMBINABLE_ACCENT_MAPPINGS.put(new Character('\u0301'), "acute");
@@ -2431,6 +2480,21 @@ public class PdfCharDecoder {
 	
 	static char getCombinedChar(char ch, char cmbAccCh) {
 		return StringUtils.getCharForName(getCombinedCharName(ch, cmbAccCh));
+	}
+	
+	static char getNonCombiningChar(char ch) {
+		String charName = StringUtils.getCharName(ch);
+		if (charName == null)
+			return ch;
+		if (charName.endsWith("cmb")) {
+			char ncCh = StringUtils.getCharForName(charName.substring(0, (charName.length() - "cmb".length())));
+			return ((ncCh == 0) ? ch : ncCh);
+		}
+		else if (charName.endsWith("comb")) {
+			char ncCh = StringUtils.getCharForName(charName.substring(0, (charName.length() - "comb".length())));
+			return ((ncCh == 0) ? ch : ncCh);
+		}
+		else return ch;
 	}
 	
 	//	extrated from http://en.wikipedia.org/wiki/Unicode_block

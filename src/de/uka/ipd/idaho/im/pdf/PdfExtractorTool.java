@@ -67,6 +67,7 @@ import de.uka.ipd.idaho.im.pdf.PdfFontDecoder.CustomFontDecoderCharset;
 import de.uka.ipd.idaho.im.pdf.PdfFontDecoder.FontDecoderCharset;
 import de.uka.ipd.idaho.im.util.ImDocumentData.ImDocumentEntry;
 import de.uka.ipd.idaho.im.util.ImDocumentIO;
+import de.uka.ipd.idaho.im.util.ImIllustrationUtils;
 import de.uka.ipd.idaho.im.util.ImSupplementCache;
 
 /**
@@ -544,7 +545,7 @@ public class PdfExtractorTool {
 					if (page == null)
 						continue;
 					ImSupplement.Graphics[] graphicsTray = {((ImSupplement.Graphics) supplements[s])};
-					CharSequence svg = ImSupplement.getSvg(graphicsTray, page.getWordsInside(graphics.getBounds()), page);
+					CharSequence svg = ImIllustrationUtils.renderSvg(graphicsTray, page.getWordsInside(graphics.getBounds()), page);
 					Reader svgIn = new CharSequenceReader(svg);
 					String svgFileName = (supplements[s].getId() + ".svg");
 					File svgOutFile = new File(outFile, svgFileName);

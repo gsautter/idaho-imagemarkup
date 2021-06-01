@@ -31,6 +31,7 @@ import java.awt.Color;
 import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.RenderingHints;
 import java.awt.font.FontRenderContext;
 import java.awt.font.LineMetrics;
 import java.awt.font.TextLayout;
@@ -43,6 +44,9 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+
+import javax.swing.ImageIcon;
+import javax.swing.JOptionPane;
 
 import de.uka.ipd.idaho.gamta.Gamta;
 import de.uka.ipd.idaho.gamta.util.CountingSet;
@@ -388,6 +392,10 @@ public class WordImageAnalysis {
 			weightRelationWordCount++;
 		}
 		
+		//	any font sizes to work with?
+		if (maxFontSize < minFontSize)
+			return;
+		
 		//	average out image font size weights and stem widths
 		float[] fontSizeWeightRelations = new float[maxFontSize - minFontSize + 1];
 		Arrays.fill(fontSizeWeightRelations, -1);
@@ -464,22 +472,137 @@ public class WordImageAnalysis {
 		}
 	}
 	
+	/*
+Analyze sequence of block line heights (as now printed for logging):
+- identify jumps of line height by DPI/72 pixels (one full Cicero) or more:
+  - for individual lines
+  - for average of two adjacent lines on either side
+    - fall back to single line height at block edges
+  - for average of three adjacent lines on either side
+    - fall back to two line average at block edges
+- actual jumps should show in all three computations
+  ==> test it !!!
+- group lines based upon identified jumps ...
+- ... and compute font size(s) from average height of each group ...
+- ... for entirety of group
+==> fewer font sizes
+==> better basis for bold face detection (hopefully)
+
+Also use x-height for line height grouping:
+- varies less with ascenders, descenders, overshoots, and even line skew
+- measures quite accurately with region coloring
+  ==> should make for decent additional safety net for line height grouping
+==> store x-height in line attribute on OCR adjustment
+- simply extrapolate to short lines from line above it if differing ...
+- ... unless difference significant (heading vs. sub heading) ...
+- ... or line distance way above average (might be narrowly spaced heading) ...
+  ==> should help smooth out inaccuracies owed to small sample size
+  ==> should be rather safe, as font sizes hardly ever change on line wrap
+==> not a reliable basis for font size computation (varies between fonts) ...
+==> ... but good for backing up line grouping (fonts don't change between lines with semantic coherence between them, let along in mid sentence ...)
+  ==> base font size computation on distance between cap height and lower line boundary in block line extraction
+  ==> use difference between cap height and x-height for extrapolating descender (as ascender and descender symmetric in very most fonts)
+==> also store region coloring measured cap height as line attribute ...
+==> ... and extrapolate from line above just like x-height (with same blocker criteria as for latter)
+	 */
+	
 	private static void assessItalicsAndFontSize(WordImage[] wordImages, Map renderedMatchesByWords, Map wordImageCache) {
+		
+		//	TODO assess line height distribution
+		ImPage page = wordImages[0].word.getPage();
+		ImRegion[] pageBlocks = page.getRegions(ImRegion.BLOCK_ANNOTATION_TYPE);
+		CountingSet pageWordHeights = new CountingSet(new TreeMap());
+		for (int b = 0; b < pageBlocks.length; b++) {
+			ImWord[] blockWords = pageBlocks[b].getWords();
+			CountingSet blockWordHeights = new CountingSet(new TreeMap());
+			CountingSet blockWordCapHeights = new CountingSet(new TreeMap());
+			CountingSet blockWordXHeights = new CountingSet(new TreeMap());
+			for (int w = 0; w < blockWords.length; w++) {
+//				WordImage wi = wordImages[w];
+//				wordHeights.add(new Integer(wi.word.bounds.getHeight()));
+				blockWordHeights.add(new Integer(blockWords[w].bounds.getHeight()));
+				if (blockWords[w].hasAttribute("capHeight"))
+					blockWordCapHeights.add(new Integer((String) blockWords[w].getAttribute("capHeight")));
+				if (blockWords[w].hasAttribute("xHeight"))
+					blockWordXHeights.add(new Integer((String) blockWords[w].getAttribute("xHeight")));
+				pageWordHeights.add(new Integer(blockWords[w].bounds.getHeight()));
+			}
+			ImRegion[] blockLines = page.getRegionsInside(ImRegion.LINE_ANNOTATION_TYPE, pageBlocks[b].bounds, true);
+			Arrays.sort(blockLines, ImUtils.topDownOrder);
+			int[] blockLineHeights = new int[blockLines.length];
+			for (int l = 0; l < blockLines.length; l++)
+				blockLineHeights[l] = blockLines[l].bounds.getHeight();
+			int[] blockLineHeightsS2u = new int[blockLines.length];
+			int[] blockLineHeightsS2l = new int[blockLines.length];
+			int[] blockLineHeightsS3u = new int[blockLines.length];
+			int[] blockLineHeightsS3l = new int[blockLines.length];
+			for (int l = 0; l < blockLines.length; l++) {
+				if (l == 0)
+					blockLineHeightsS2u[l] = blockLineHeights[l];
+				else blockLineHeightsS2u[l] = ((blockLineHeights[l] + blockLineHeights[l-1]) / 2);
+				if ((l+1) == blockLines.length)
+					blockLineHeightsS2l[l] = blockLineHeights[l];
+				else blockLineHeightsS2l[l] = ((blockLineHeights[l] + blockLineHeights[l+1]) / 2);
+				
+				if (l == 0)
+					blockLineHeightsS3u[l] = blockLineHeights[l];
+				else if (l == 1)
+					blockLineHeightsS3u[l] = ((blockLineHeights[l] + blockLineHeights[l-1]) / 2);
+				else blockLineHeightsS3u[l] = ((blockLineHeights[l] + blockLineHeights[l-1] + blockLineHeights[l-2] + 1) / 3);
+				if ((l+1) == blockLines.length)
+					blockLineHeightsS3l[l] = blockLineHeights[l];
+				else if ((l+2) == blockLines.length)
+					blockLineHeightsS3l[l] = ((blockLineHeights[l] + blockLineHeights[l+1]) / 2);
+				else blockLineHeightsS3l[l] = ((blockLineHeights[l] + blockLineHeights[l+1] + blockLineHeights[l+2] + 1) / 3);
+			}
+			if (DEBUG_COMPUTE_FONT_METRICS) {
+				System.out.println("Got " + blockWordHeights.size() + " word heights in " + pageBlocks[b].bounds + ", " + blockWordHeights.elementCount() + " distinct ones:");
+				System.out.println("  word heights: " + blockWordHeights);
+				System.out.println("  cap heights: " + blockWordCapHeights);
+				System.out.println("  x-heights: " + blockWordXHeights);
+				System.out.println("  line heights:             " + Arrays.toString(blockLineHeights));
+				System.out.println("  2u-smoothed line heights: " + Arrays.toString(blockLineHeightsS2u));
+				System.out.println("  2l-smoothed line heights: " + Arrays.toString(blockLineHeightsS2l));
+				System.out.println("  3u-smoothed line heights: " + Arrays.toString(blockLineHeightsS3u));
+				System.out.println("  3l-smoothed line heights: " + Arrays.toString(blockLineHeightsS3l));
+			}
+		}
+//		int minPageWordHeight = ((Integer) pageWordHeights.first()).intValue();
+//		int maxPageWordHeight = ((Integer) pageWordHeights.last()).intValue();
+//		BufferedImage whbi = new BufferedImage(page.bounds.getWidth(), page.bounds.getHeight(), BufferedImage.TYPE_INT_ARGB);
+//		Graphics whg = whbi.getGraphics();
+//		whg.setColor(Color.WHITE);
+//		whg.fillRect(0, 0, whbi.getWidth(), whbi.getHeight());
+//		for (int w = 0; w < wordImages.length; w++) {
+//			BoundingBox wb = wordImages[w].word.bounds;
+//			Color whc = new Color(Color.HSBtoRGB(((float) (wb.getHeight() - minPageWordHeight) / (maxPageWordHeight - minPageWordHeight + 1)), 1, 1));
+//			whg.setColor(whc);
+//			whg.fillRect(wb.left, wb.top, wb.getWidth(), wb.getHeight());
+//		}
+//		ImageDisplayDialog idd = new ImageDisplayDialog("Word Height Distribution");
+//		idd.addImage(whbi, "");
+//		idd.setSize(1000, 1000);
+//		idd.setLocationRelativeTo(null);
+//		idd.setVisible(true);
 		
 		//	match word images against rendered OCR result for italics detection
 		for (int w = 0; w < wordImages.length; w++) {
 			WordImage wi = wordImages[w];
-			if (DEBUG_COMPUTE_FONT_METRICS) System.out.println("Assessing font sytle of word '" + wi.word.getString() + "' at " + wi.word.bounds);
+			if (DEBUG_COMPUTE_FONT_METRICS) {
+				System.out.println("Assessing font sytle of word '" + wi.word.getString() + "' at " + wi.word.bounds + " with baseline " + wi.word.getAttribute(ImWord.BASELINE_ATTRIBUTE));
+				System.out.println(" - word image is " + wi.box);
+			}
 			
-			//	ignore punctuation marks (for now, at least)
-			if ((wi.box.getWidth() < (wi.pageImageDpi / 30)) || (wi.box.getHeight() < (wi.pageImageDpi / 20))) {
-				if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" ==> punctuation mark, ignored");
+			//	ignore punctuation marks (for now, at least) TODO make sure not to ignore small-print letters
+//			if ((wi.box.getWidth() < (wi.pageImageDpi / 30)) || (wi.box.getHeight() < (wi.pageImageDpi / 20))) {
+			if ((wi.box.getWidth() < (wi.pageImageDpi / 50)) || (wi.box.getHeight() < (wi.pageImageDpi / 25))) {
+				if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" ==> punctuation mark (size), ignored");
 				continue;
 			}
 			
-			//	ignore punctuation marks
-			if (Gamta.isPunctuation(wi.str)) {
-				if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" ==> punctuation mark, ignored");
+			//	ignore punctuation marks TODO use normalized check !!!
+			if (Gamta.isPunctuation(Gamta.normalize(wi.str))) {
+				if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" ==> punctuation mark (OCR), ignored");
 				continue;
 			}
 			
@@ -490,44 +613,220 @@ public class WordImageAnalysis {
 			wordString = wordString.trim();
 			if (wordString.length() == 0)
 				continue;
+//			
+//			//	get plain or italics super-rendering
+//			WordImageMatch wim = getPlainOrItalicsMatch(wi, wordImageCache);
+//			if (wim == null)
+//				continue;
+//			
+//			//	store rendering and adjust word attributes if required
+//			renderedMatchesByWords.put(wi.word.getLocalID(), wim);
+//			if (!Gamta.isNumber(wi.str) && (wim.rendered.isItalics != wi.word.hasAttribute(ImWord.ITALICS_ATTRIBUTE))) {
+//				if (wim.rendered.isItalics)
+//					wi.word.setAttribute(ImWord.ITALICS_ATTRIBUTE);
+//				else wi.word.removeAttribute(ImWord.ITALICS_ATTRIBUTE);
+//				wordImages[w] = new WordImage(wi.img, wi.word, wi.baseline, wi.pageImageDpi);
+//				if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" ==> italics property adjusted");
+//			}
+//			wi.word.setFontSize(wim.rendered.fontSize);
+//			if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" ==> font size set to " + wim.rendered.fontSize);
 			
 			//	get plain or italics super-rendering
-			WordImageMatch wim = getPlainOrItalicsMatch(wi, wordImageCache);
-			if (wim == null)
+			float italicsScore = getItalicsScore(wi, wordImageCache, renderedMatchesByWords);
+			if (italicsScore < 0)
 				continue;
 			
 			//	store rendering and adjust word attributes if required
-			renderedMatchesByWords.put(wi.word.getLocalID(), wim);
-			if (!Gamta.isNumber(wi.str) && (wim.rendered.isItalics != wi.word.hasAttribute(ImWord.ITALICS_ATTRIBUTE))) {
-				if (wim.rendered.isItalics)
-					wi.word.setAttribute(ImWord.ITALICS_ATTRIBUTE);
-				else wi.word.removeAttribute(ImWord.ITALICS_ATTRIBUTE);
+			wi.word.setAttribute((ImWord.ITALICS_ATTRIBUTE + "Score"), ("" + italicsScore));
+			if (!Gamta.isNumber(wi.str) && ((0.5 <= italicsScore) != wi.word.hasAttribute(ImWord.ITALICS_ATTRIBUTE))) {
+				if (italicsScore < 0.5)
+					wi.word.removeAttribute(ImWord.ITALICS_ATTRIBUTE);
+				else wi.word.setAttribute(ImWord.ITALICS_ATTRIBUTE);
 				wordImages[w] = new WordImage(wi.img, wi.word, wi.baseline, wi.pageImageDpi);
 				if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" ==> italics property adjusted");
 			}
-			wi.word.setFontSize(wim.rendered.fontSize);
-			if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" ==> font size set to " + wim.rendered.fontSize);
+			
+			//	TODO compute font size as function of line height instead
+			WordImageMatch wim = ((WordImageMatch) renderedMatchesByWords.get(wi.word.getLocalID()));
+//			wi.word.setFontSize(wim.rendered.fontSize);
+			if (DEBUG_COMPUTE_FONT_METRICS) {
+				System.out.println(" ==> rendered font size is " + wim.rendered.fontSize);
+				float lineHeightFontSizeRaw = ((wi.word.bounds.getHeight() * 72.0f) / wi.pageImageDpi);
+				int lineHeightFontSize = Math.round(lineHeightFontSizeRaw);
+				System.out.println(" ==> line height font size is " + lineHeightFontSize + " (" + lineHeightFontSizeRaw + ")");
+			}
 		}
 	}
 	
-	private static WordImageMatch getPlainOrItalicsMatch(WordImage wi, Map wordImageCache) {
+//	private static WordImageMatch getPlainOrItalicsMatch(WordImage wi, Map wordImageCache) {
+	private static float getItalicsScore(WordImage wi, Map wordImageCache, Map renderedMatchesByWords) {
 		
 		//	render word string to word bounds (always try plain and italics)
 		WordImage prwi = renderWordImage(wi.word, wi.baseline, Font.PLAIN, 10 /* start with highly usual font size */, wi.pageImageDpi, wordImageCache);
 		WordImage irwi = renderWordImage(wi.word, wi.baseline, Font.ITALIC, 10 /* start with highly usual font size */, wi.pageImageDpi, wordImageCache);
 		
+		//	also shear word image to left by about 14.5° (to get potential italics upright)
+		BufferedImage swbi = new BufferedImage(
+				(wi.img.getWidth() + (wi.img.getHeight() / 3)),
+				wi.img.getHeight(),
+				wi.img.getType()
+			);
+		Graphics2D swg = swbi.createGraphics();
+		swg.setColor(Color.WHITE);
+		swg.fillRect(0, 0, swbi.getWidth(), swbi.getHeight());
+		swg.shear(Math.sin((Math.PI * 14.5) / 180), 0);
+		swg.drawImage(wi.img, 0, 0, null);
+		WordImage swi = new WordImage(swbi, wi.word, wi.baseline, wi.pageImageDpi);
+		float pcs = getColOccupationContrastScore(wi);
+		float scs = getColOccupationContrastScore(swi);
+		float ccs = (scs / (pcs + scs)); // combined and normalized score
+		if (DEBUG_COMPUTE_FONT_METRICS) {
+			System.out.println(" - column occupation contrast score is " + pcs + " plain, " + scs + " sheared --> " + ccs);
+			System.out.println("   aggregate column occupation contrast score is  " + ccs);
+		}
+		
 		//	create overlay (code copied from char decoder, for starters)
 		try {
 			WordImageMatch pwim = matchWordImages(wi, prwi, true, true, true);
-			if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" - plain simiparity is " + pwim.sim + ", " + pwim.matched + " matched, " + pwim.scannedOnly + " only in scan, " + pwim.renderedOnly + " only in rendered");
+			if (DEBUG_COMPUTE_FONT_METRICS)
+				System.out.println(" - plain simiparity is " + pwim.sim + ", " + pwim.matched + " matched, " + pwim.scannedOnly + " only in scan, " + pwim.renderedOnly + " only in rendered");
 			WordImageMatch iwim = matchWordImages(wi, irwi, true, true, true);
-			if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" - italic simiparity is " + iwim.sim + ", " + iwim.matched + " matched, " + iwim.scannedOnly + " only in scan, " + iwim.renderedOnly + " only in rendered");
-			return ((pwim.sim < iwim.sim) ? iwim : pwim);
+			if (DEBUG_COMPUTE_FONT_METRICS)
+				System.out.println(" - italic simiparity is " + iwim.sim + ", " + iwim.matched + " matched, " + iwim.scannedOnly + " only in scan, " + iwim.renderedOnly + " only in rendered");
+			WordImageMatch swim = matchWordImages(swi, prwi, true, true, true);
+			if (DEBUG_COMPUTE_FONT_METRICS)
+				System.out.println(" - sheared simiparity is " + swim.sim + ", " + swim.matched + " matched, " + swim.scannedOnly + " only in scan, " + swim.renderedOnly + " only in rendered");
+			float pirs = (iwim.sim / (pwim.sim + iwim.sim)); // combined and normalized score
+			float psrs = (swim.sim / (pwim.sim + swim.sim)); // combined and normalized score
+			if (DEBUG_COMPUTE_FONT_METRICS)
+				System.out.println("   aggregate rendering similarity score is " + pirs + " for italics, " + psrs + " for shearing");
+			float pre = (1 - pwim.sim); // remaining error
+			float ire = (1 - iwim.sim); // remaining error
+			float sre = (1 - swim.sim); // remaining error
+			float pire = (ire / (pre + ire)); // combined and normalized remaining error
+			float psre = (sre / (pre + sre)); // combined and normalized remaining error
+			float pies = (1 - pire); // combined and normalized score
+			float pses = (1 - psre); // combined and normalized score
+			if (DEBUG_COMPUTE_FONT_METRICS)
+				System.out.println("   aggregate rendering error score is " + pies + " for italics, " + pses + " for shearing");
+			float pirw = ((pwim.sim + iwim.sim) / 2);
+			float psrw = ((pwim.sim + swim.sim) / 2);
+			float pias = ((pirs * pirw) + (ccs * (1 - pirw)));
+			float psas = ((psrs * psrw) + (ccs * (1 - psrw)));
+			if (DEBUG_COMPUTE_FONT_METRICS)
+				System.out.println("   aggregate score is " + pias + " with italics, " + psas + " with shearing");
+//			if (DEBUG_COMPUTE_FONT_METRICS && (((ccs < 0.5) != (pirs < 0.5)) || ((ccs < 0.5) != (psrs < 0.5))))
+//				displayWordMatches(pwim, iwim, swim, "Ambiguous italics check");
+//			return ((pwim.sim < iwim.sim) ? iwim : pwim);
+			float as = ((pias + psas) / 2);
+			renderedMatchesByWords.put(wi.word.getLocalID(), ((as < 0.5) ? pwim : iwim));
+			return as;
 		}
 		catch (Exception e) {
 			e.printStackTrace(System.out);
-			return null;
+			return -1;
 		}
+	}
+	
+	private static float getColOccupationContrastScore(WordImage wi) {
+		float diffSquareSum = 0;
+		for (int c = 0; c < wi.colBrightnessHist.length; c++) {
+			int diff = ((c == 0) ? wi.colBrightnessHist[c] : (wi.colBrightnessHist[c] - wi.colBrightnessHist[c-1]));
+			diffSquareSum += (diff * diff);
+		}
+		return (diffSquareSum / wi.colBrightnessHist.length);
+	}
+	
+	private static void displayWordMatches(WordImageMatch pwim, WordImageMatch iwim, WordImageMatch swim, String message) {
+		BufferedImage pmi = getWordMatchImage(pwim);
+		BufferedImage imi = getWordMatchImage(iwim);
+		BufferedImage smi = getWordMatchImage(swim);
+		BufferedImage mi = new BufferedImage(Math.max(pmi.getWidth(), Math.max(imi.getWidth(), smi.getWidth())), (pmi.getHeight() + 2 + imi.getHeight() + 2 + smi.getHeight()), BufferedImage.TYPE_INT_ARGB);
+		Graphics mig = mi.createGraphics();
+		mig.drawImage(pmi, 0, 0, null);
+		mig.drawImage(imi, 0, (pmi.getHeight() + 2), null);
+		mig.drawImage(smi, 0, (pmi.getHeight() + 2 + imi.getHeight() + 2), null);
+		JOptionPane.showMessageDialog(null, (message + ": '" + pwim.rendered.str + "'\nplain similarity is " + pwim.sim + "\n" + pwim.matched + "-" + pwim.scannedOnly + "-" + pwim.renderedOnly + "\nitalics similarity is " + iwim.sim + "\n" + iwim.matched + "-" + iwim.scannedOnly + "-" + iwim.renderedOnly), "Comparison Image", JOptionPane.PLAIN_MESSAGE, new ImageIcon(mi));
+	}
+	private static final int wordImageMargin = 10;
+	private static BufferedImage getWordMatchImage(WordImageMatch wim) {
+		BufferedImage bi = new BufferedImage(
+				(wim.scanned.img.getWidth() + wordImageMargin + wim.rendered.img.getWidth() + wordImageMargin + wim.matchData.length),
+				(Math.max(wim.scanned.img.getHeight(), wim.rendered.img.getHeight()) + wordImageMargin + Math.max(wim.scanned.img.getHeight(), wim.rendered.img.getHeight())),
+				BufferedImage.TYPE_INT_RGB
+			);
+		Graphics g = bi.getGraphics();
+		g.setColor(Color.WHITE);
+		g.fillRect(0, 0, bi.getWidth(), bi.getHeight());
+		g.drawImage(wim.scanned.img, 0, 0, null);
+		g.drawImage(wim.rendered.img, (wim.scanned.img.getWidth() + wordImageMargin), 0, null);
+		g.setColor(Color.MAGENTA);
+		if (0 < wim.scanned.baseline)
+			g.drawLine(0, (wim.scanned.baseline - wim.scanned.word.bounds.top), wim.scanned.img.getWidth(), (wim.scanned.baseline - wim.scanned.word.bounds.top));
+		if (0 < wim.rendered.baseline)
+			g.drawLine((wim.scanned.img.getWidth() + wordImageMargin), wim.rendered.baseline, ((wim.scanned.img.getWidth() + wordImageMargin) + wim.rendered.img.getWidth()), wim.rendered.baseline);
+		
+		for (int x = 0; x < wim.matchData.length; x++) {
+			for (int y = 0; y < wim.matchData[x].length; y++) {
+				Color c = null;
+				if (wim.matchData[x][y] == WordImageAnalysis.WORD_IMAGE_MATCH_MATCHED)
+					c = Color.BLACK;
+				else if (wim.matchData[x][y] == WordImageAnalysis.WORD_IMAGE_MATCH_SCANNED_ONLY)
+					c = Color.GREEN;
+				else if (wim.matchData[x][y] == WordImageAnalysis.WORD_IMAGE_MATCH_RENDERED_ONLY)
+					c = Color.RED;
+				if (c != null)
+					bi.setRGB(
+							(wim.scanned.img.getWidth() + wordImageMargin + wim.rendered.img.getWidth() + wordImageMargin + x),
+							y,
+							c.getRGB()
+						);
+			}
+			
+			for (int c = 0; c < wim.scanned.colBrightnessHist.length; c++) {
+				int y = bi.getHeight();
+				for (int h = 0; h < wim.scanned.colBrightnessHist[c]; h++)
+					bi.setRGB(
+							c,
+							(--y),
+							Color.BLACK.getRGB()
+						);
+			}
+			
+			for (int c = 0; c < wim.rendered.colBrightnessHist.length; c++) {
+				int y = bi.getHeight();
+				for (int r = 0; r < wim.rendered.colBrightnessHist[c]; r++)
+					bi.setRGB(
+							(wim.scanned.img.getWidth() + wordImageMargin + c),
+							(--y),
+							Color.BLACK.getRGB()
+						);
+			}
+//			
+//			for (int c = 0; c < wim.matchedHist.length; c++) {
+//				int y = bi.getHeight();
+//				for (int r = 0; r < wim.renderedOnlyHist[c]; r++)
+//					bi.setRGB(
+//							(wim.base.scanned.img.getWidth() + wordImageMargin + wim.base.rendered.img.getWidth() + wordImageMargin + c),
+//							(--y),
+//							Color.RED.getRGB()
+//						);
+//				for (int s = 0; s < wim.scannedOnlyHist[c]; s++)
+//					bi.setRGB(
+//							(wim.base.scanned.img.getWidth() + wordImageMargin + wim.base.rendered.img.getWidth() + wordImageMargin + c),
+//							(--y),
+//							Color.GREEN.getRGB()
+//						);
+//				for (int m = 0; m < wim.matchedHist[c]; m++)
+//					bi.setRGB(
+//							(wim.base.scanned.img.getWidth() + wordImageMargin + wim.base.rendered.img.getWidth() + wordImageMargin + c),
+//							(--y),
+//							Color.BLACK.getRGB()
+//						);
+//			}
+		}
+		
+		return bi;
 	}
 	
 	private static void assessFontSize(ImWord[] words) {
@@ -653,7 +952,7 @@ public class WordImageAnalysis {
 		pm.setStep("Found bold word '" + wi.str + "' on page " + wi.word.pageId + " at " + wi.word.bounds);
 	}
 	
-	private static final boolean DEBUG_COMPUTE_FONT_METRICS = false;
+	private static final boolean DEBUG_COMPUTE_FONT_METRICS = true;
 	
 	private static class FontSizeWeightRelation {
 		int fontSize;
@@ -1118,10 +1417,16 @@ public class WordImageAnalysis {
 					}
 			}
 			
-			//	compute baseline if possible
-			int wordBaseline = ((regionLine == null) ? -1 : Integer.parseInt((String) regionLine.getAttribute(ImWord.BASELINE_ATTRIBUTE, "-1")));
+			//	compute baseline if possible (and adjust relative to scan cut-out)
+//			int wordBaseline = ((regionLine == null) ? -1 : Integer.parseInt((String) regionLine.getAttribute(ImWord.BASELINE_ATTRIBUTE, "-1")));
+			int wordBaseline = -1;
+			if ((wordBaseline == -1) && (regionLine != null))
+				wordBaseline = Integer.parseInt((String) regionLine.getAttribute(ImWord.BASELINE_ATTRIBUTE, "-1"));
+			if (wordBaseline == -1)
+				wordBaseline = Integer.parseInt((String) regionWords[w].getAttribute(ImWord.BASELINE_ATTRIBUTE, "-1"));
 			if (wordBaseline < regionWords[w].centerY)
 				wordBaseline = -1;
+			//else wordBaseline -= wiMinY;
 			
 			//	wrap and store word image
 			wordImages.add(new WordImage(wordImage, regionWords[w], wordBaseline, pageImage.currentDpi));
@@ -1199,27 +1504,35 @@ public class WordImageAnalysis {
 		//	test if word string has descent
 		boolean wordHasDescent;
 		
+		//	TODO remove italics flag (seems to cause problems in FreeSerif)
+		boolean isItalics = false; //((fontStyle & Font.ITALIC) != 0);
+//		fontName = "Serif";
+		
 		//	adjust font size
 		int fontSize;
 		Font renderingFont;
 		if (isFlatString(wordString)) {
 			fontSize = estimatedFontSize;
-			renderingFont = new Font(fontName, fontStyle, Math.round(((float) (fontSize * pageImageDpi)) / 72));
+//			renderingFont = new Font(fontName, fontStyle, Math.round(((float) (fontSize * pageImageDpi)) / 72));
+			renderingFont = new Font(fontName, (fontStyle - (isItalics ? Font.ITALIC : 0)), Math.round(((float) (fontSize * pageImageDpi)) / 72));
 			wordHasDescent = false;
 		}
 		else {
 			fontSize = estimatedFontSize;
-			renderingFont = new Font(fontName, fontStyle, Math.round(((float) (fontSize * pageImageDpi)) / 72));
+//			renderingFont = new Font(fontName, fontStyle, Math.round(((float) (fontSize * pageImageDpi)) / 72));
+			renderingFont = new Font(fontName, (fontStyle - (isItalics ? Font.ITALIC : 0)), Math.round(((float) (fontSize * pageImageDpi)) / 72));
 			TextLayout wtl = new TextLayout(wordString, renderingFont, fontRenderContext);
 			wordHasDescent = ((Math.abs(wtl.getBounds().getY()) * 10) < (Math.abs(wtl.getBounds().getHeight()) * 9));
 			while ((wtl.getBounds().getHeight() < (((wordHasDescent || (wordBaseline < 1)) ? wordBounds.bottom : (wordBaseline + 1)) - wordBounds.top)) || ((0 < wordBaseline) && (Math.abs(wtl.getBounds().getY()) < ((wordBaseline + 1) - wordBounds.top)))) {
 				fontSize++;
-				renderingFont = new Font(fontName, fontStyle, Math.round(((float) (fontSize * pageImageDpi)) / 72));
+//				renderingFont = new Font(fontName, fontStyle, Math.round(((float) (fontSize * pageImageDpi)) / 72));
+				renderingFont = new Font(fontName, (fontStyle - (isItalics ? Font.ITALIC : 0)), Math.round(((float) (fontSize * pageImageDpi)) / 72));
 				wtl = new TextLayout(wordString, renderingFont, fontRenderContext);
 			}
 			while (((((wordHasDescent || (wordBaseline < 1)) ? wordBounds.bottom : (wordBaseline + 1)) - wordBounds.top) < wtl.getBounds().getHeight()) || ((0 < wordBaseline) && (((wordBaseline + 1) - wordBounds.top) < Math.abs(wtl.getBounds().getY()))))  {
 				fontSize--;
-				renderingFont = new Font(fontName, fontStyle, Math.round(((float) (fontSize * pageImageDpi)) / 72));
+//				renderingFont = new Font(fontName, fontStyle, Math.round(((float) (fontSize * pageImageDpi)) / 72));
+				renderingFont = new Font(fontName, (fontStyle - (isItalics ? Font.ITALIC : 0)), Math.round(((float) (fontSize * pageImageDpi)) / 72));
 				wtl = new TextLayout(wordString, renderingFont, fontRenderContext);
 			}
 			estimatedFontSize = fontSize;
@@ -1237,6 +1550,7 @@ public class WordImageAnalysis {
 		//	render word string TODO use binary black & white index color model
 		BufferedImage renderedWordImage = new BufferedImage((wordBounds.right - wordBounds.left + (renderingSafetyMarginX * 2)), (wordBounds.bottom - wordBounds.top + (renderingSafetyMarginY * 2)), BufferedImage.TYPE_BYTE_GRAY);
 		Graphics2D graphics = renderedWordImage.createGraphics();
+		graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 		graphics.setColor(Color.WHITE);
 		graphics.fillRect(0, 0, renderedWordImage.getWidth(), renderedWordImage.getHeight());
 		
@@ -1252,6 +1566,12 @@ public class WordImageAnalysis {
 		graphics.translate(-wtl.getBounds().getMinX(), 0);
 		if (hScale != 1)
 			graphics.scale(hScale, 1);
+		if (isItalics) /* simulates italics by shearing output to italic angle, to avoid FreeSerif-Italic problems */ {
+			float italicAngle = renderingFont.deriveFont(Font.ITALIC).getItalicAngle();
+			System.out.println("Italics angle is " + italicAngle);
+			graphics.shear(-italicAngle, 0);
+			graphics.translate((italicAngle * wordBounds.getHeight()), 0);
+		}
 		graphics.drawString(wordString, 0, ((wordBaseline < 1) ? ((wordBounds.bottom - wordBounds.top) - (wordHasDescent ? Math.round(wlm.getDescent()) : 0)) : (wordBaseline - wordBounds.top + 1)));
 		graphics.dispose();
 		

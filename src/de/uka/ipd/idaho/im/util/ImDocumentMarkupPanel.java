@@ -120,6 +120,7 @@ import de.uka.ipd.idaho.gamta.util.swing.ProgressMonitorWindow;
 import de.uka.ipd.idaho.im.ImAnnotation;
 import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.ImDocument.ImDocumentListener;
+import de.uka.ipd.idaho.im.ImFont;
 import de.uka.ipd.idaho.im.ImLayoutObject;
 import de.uka.ipd.idaho.im.ImObject;
 import de.uka.ipd.idaho.im.ImPage;
@@ -442,12 +443,31 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			}
 			
 			//	handle any pending two-click action first
-			if ((pendingTwoClickAction != null) && (selectionStartWord != null)) {
+//			if ((pendingTwoClickAction != null) && (selectionStartWord != null)) {
+//				boolean handleAtomicAction = (pendingTwoClickAction.isAtomicAction() && !isAtomicActionRunning());
+//				try {
+//					if (handleAtomicAction) // might have been started from built-in click listener in selection action
+//						beginAtomicAction(pendingTwoClickAction.label);
+//					pendingTwoClickAction.performAction(selectionStartWord);
+//				}
+//				finally {
+//					if (handleAtomicAction)
+//						endAtomicAction();
+//				}
+//				cleanupSelection();
+//				repaint();
+//				this.updateCursor(me, ipmp);
+//				return;
+//			}
+			if (pendingTwoClickAction != null) {
 				boolean handleAtomicAction = (pendingTwoClickAction.isAtomicAction() && !isAtomicActionRunning());
 				try {
 					if (handleAtomicAction) // might have been started from built-in click listener in selection action
 						beginAtomicAction(pendingTwoClickAction.label);
-					pendingTwoClickAction.performAction(selectionStartWord);
+					if (selectionStartWord != null)
+						pendingTwoClickAction.performAction(selectionStartWord);
+					else if (selectionStartPoint != null)
+						pendingTwoClickAction.performAction(ipmp.page, selectionStartPoint);
 				}
 				finally {
 					if (handleAtomicAction)
@@ -524,8 +544,11 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				}
 				actions = getActions(selectionStartWord, selectionEndWord);
 			}
-			else if (selectionStartPoint != null)
+			else if (selectionStartPoint != null) {
+				this.ensurePointInPageBounds(selectionStartPoint, ipmp.page);
+				this.ensurePointInPageBounds(selectionEndPoint, ipmp.page);
 				actions = getActions(ipmp.page, selectionStartPoint, selectionEndPoint);
+			}
 			else actions = null;
 			if ((actions == null) || (actions.length == 0)) {
 				cleanupSelection();
@@ -568,7 +591,16 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			});
 			pm.show(ImDocumentMarkupPanel.this, me.getX(), me.getY());
 		}
-		
+		private void ensurePointInPageBounds(Point point, ImPage page) {
+			if (point.x < page.bounds.left)
+				point.x = page.bounds.left;
+			else if (page.bounds.right < point.x)
+				point.x = page.bounds.right;
+			if (point.y < page.bounds.top)
+				point.y = page.bounds.top;
+			else if (page.bounds.bottom < point.y)
+				point.y = page.bounds.bottom;
+		}
 		private void fillContextMenu(JPopupMenu pm, JMenuItem[] mis, boolean[] isAdvancedSelectionAction) {
 			int windowHeight = Integer.MAX_VALUE;
 			Window topWindow = DialogFactory.getTopWindow();
@@ -767,8 +799,11 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	
 	private class ImDocumentChangeTracker implements ImDocumentListener {
 		public void typeChanged(ImObject object, String oldType) {
-			if ((idvc != null) && immediatelyUpdateIdvc)
-				idvc.updateControls();
+			if (idvc != null) {
+				if (immediatelyUpdateIdvc)
+					idvc.updateControls();
+				else idvcDocModCount++;
+			}
 			if (object instanceof ImLayoutObject) {
 				if (pagePanels[((ImLayoutObject) object).pageId] != null)
 					pagePanels[((ImLayoutObject) object).pageId].docModCount++;
@@ -828,29 +863,44 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		public void supplementChanged(String supplementId, ImSupplement oldValue) {
 			//	there are no visible changes from supplement modifications
 		}
+		public void fontChanged(String fontName, ImFont oldValue) {
+			//	there are no visible changes from supplement modifications
+		}
 		public void regionAdded(ImRegion region) {
-			if ((idvc != null) && immediatelyUpdateIdvc)
-				idvc.updateControls();
+			if (idvc != null) {
+				if (immediatelyUpdateIdvc)
+					idvc.updateControls();
+				else idvcDocModCount++;
+			}
 			if (pagePanels[region.pageId] != null)
 				pagePanels[region.pageId].docModCount++;
 		}
 		public void regionRemoved(ImRegion region) {
-			if ((idvc != null) && immediatelyUpdateIdvc)
-				idvc.updateControls();
+			if (idvc != null) {
+				if (immediatelyUpdateIdvc)
+					idvc.updateControls();
+				else idvcDocModCount++;
+			}
 			if (pagePanels[region.pageId] != null)
 				pagePanels[region.pageId].docModCount++;
 		}
 		public void annotationAdded(ImAnnotation annotation) {
-			if ((idvc != null) && immediatelyUpdateIdvc)
-				idvc.updateControls();
+			if (idvc != null) {
+				if (immediatelyUpdateIdvc)
+					idvc.updateControls();
+				else idvcDocModCount++;
+			}
 			for (int p = annotation.getFirstWord().pageId; p <= annotation.getLastWord().pageId; p++) {
 				if (pagePanels[p] != null)
 					pagePanels[p].docModCount++;
 			}
 		}
 		public void annotationRemoved(ImAnnotation annotation) {
-			if ((idvc != null) && immediatelyUpdateIdvc)
-				idvc.updateControls();
+			if (idvc != null) {
+				if (immediatelyUpdateIdvc)
+					idvc.updateControls();
+				else idvcDocModCount++;
+			}
 			for (int p = annotation.getFirstWord().pageId; p <= annotation.getLastWord().pageId; p++) {
 				if (pagePanels[p] != null)
 					pagePanels[p].docModCount++;
@@ -2063,7 +2113,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	private static IndexColorModel createPageImageColorModel() {
 		int[] cmap = new int[256];
 		for (int c = 0; c < cmap.length; c++)
-			cmap[c] = ((c <= 252) ? (0xff000000 | (c << 16) | (c << 8) | c) : 0x00ffffff);
+			cmap[c] = ((c <= 252) ? (0xFF000000 | (c << 16) | (c << 8) | c) : 0x00FFFFFF);
 		byte[][] cMapComps = getComponentArrays(cmap);
 		return new IndexColorModel(8, cmap.length, cMapComps[0], cMapComps[1], cMapComps[2], cMapComps[3]);
 	}
@@ -2281,6 +2331,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 						}
 						public void attributeChanged(ImObject object, String attributeName, Object oldValue) {}
 						public void supplementChanged(String supplementId, ImSupplement oldValue) {}
+						public void fontChanged(String fontName, ImFont oldValue) {}
 						public void regionAdded(ImRegion region) {
 							regionCss.add(region.getType());
 						}
@@ -2295,9 +2346,6 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 						}
 					};
 					document.addDocumentListener(idl);
-					
-					//	deactivate immediate control panel updates
-					immediatelyUpdateIdvc = false;
 					
 					//	apply image markup tool
 					imt.process(document, annot, ImDocumentMarkupPanel.this, pm);
@@ -2317,9 +2365,6 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				
 				//	clean up
 				finally {
-					
-					//	re-activate control panel updates
-					immediatelyUpdateIdvc = true;
 					
 					//	stop listening
 					if (idl != null)
@@ -2341,7 +2386,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 						public void run() {
 							validate();
 							repaint();
-							validateControlPanel();
+//							validateControlPanel();
 						}
 					});
 				}
@@ -2353,14 +2398,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		if (pmw != null)
 			pmw.popUp(true);
 	}
-//	
-//	/**
-//	 * Start an atomic action, consisting of one or more edits to the Image
-//	 * Markup document being edited in the panel. This default implementation
-//	 * does nothing; sub classes are welcome to overwrite it as needed.
-//	 * @param label the label of the action
-//	 */
-//	public void beginAtomicAction(String label) {}
+	
 	/**
 	 * Start an atomic action, consisting of one or more edits to the Image
 	 * Markup document being edited in the panel. This default implementation
@@ -2397,16 +2435,11 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	public final void startAtomicAction(long id, String label, ImageMarkupTool imt, ImAnnotation annot, ProgressMonitor pm) {
 		this.atomicActionId = id;
 		this.atomicActionImt = imt;
+		this.immediatelyUpdateIdvc = false;
 		for (Iterator aalit = this.atomicActionListeners.iterator(); aalit.hasNext();)
 			((AtomicActionListener) aalit.next()).atomicActionStarted(id, label, imt, annot, pm);
 	}
 	
-//	/**
-//	 * End an atomic action, consisting of one or more edits to the Image
-//	 * Markup document being edited in the panel. This default implementation
-//	 * does nothing; sub classes are welcome to overwrite it as needed.
-//	 */
-//	public void endAtomicAction() {}
 	/**
 	 * End an atomic action, consisting of one or more edits to the Image
 	 * Markup document being edited in the panel. This default implementation
@@ -2428,8 +2461,20 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			((AtomicActionListener) aalit.next()).atomicActionFinishing(id, pm);
 		this.atomicActionId = 0;
 		this.atomicActionImt = null;
+		this.immediatelyUpdateIdvc = true;
 		for (Iterator aalit = this.atomicActionListeners.iterator(); aalit.hasNext();)
 			((AtomicActionListener) aalit.next()).atomicActionFinished(id, pm);
+		
+		/* we need to do repainting on Swing EDT, as otherwise we
+		 * might incur a deadlock between this thread and EDT on
+		 * synchronized parts of UI or data structures */
+		if (SwingUtilities.isEventDispatchThread())
+			this.validateControlPanel();
+		else SwingUtilities.invokeLater(new Runnable() {
+			public void run() {
+				validateControlPanel();
+			}
+		});
 	}
 	
 	/**
@@ -4159,6 +4204,13 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			//	get page image and compute zoom
 			float zoom = (((float) renderingDpi) / this.pageImageDpi);
 			
+			//	get display extension graphics
+			DisplayExtensionGraphics[] degs = this.getDisplayExtensionGraphics();
+			
+			//	draw below-image outlines and fillings of text extension objects
+			if (graphics instanceof Graphics2D)
+				this.paintDisplayExtensionGraphics(((Graphics2D) graphics), zoom, degs, DisplayExtensionGraphics.ORDER_BEFORE_PAGE_IMAGE);
+			
 			//	paint main page image underneath markup highlights to keep latter showing for text on non-white background
 			BufferedImage spi = this.getScaledPageImage();
 			graphics.drawImage(spi, this.getLeftOffset(), this.getTopOffset(), spi.getWidth(), spi.getHeight(), this);
@@ -4208,31 +4260,35 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 					}
 				}
 			}
-			if ((pendingTwoClickAction != null) && (pendingTwoClickAction.getFirstWord().pageId == this.page.pageId)) {
-				ImWord tcaStartWord = pendingTwoClickAction.getFirstWord();
+//			if ((pendingTwoClickAction != null) && (pendingTwoClickAction.getFirstWord().pageId == this.page.pageId)) {
+//				ImWord tcaStartWord = pendingTwoClickAction.getFirstWord();
+//				graphics.setColor(new Color((255 - ((255 - selectionHighlightColor.getRed()) / 2)), (255 - ((255 - selectionHighlightColor.getGreen()) / 2)), (255 - ((255 - selectionHighlightColor.getBlue()) / 2)))); // cut distance to white in half for each component color
+//				BoundingBox imwHighlight = new BoundingBox(tcaStartWord.bounds.left - annotationHighlightMargin, tcaStartWord.bounds.right + annotationHighlightMargin, tcaStartWord.bounds.top - annotationHighlightMargin, tcaStartWord.bounds.bottom + annotationHighlightMargin);
+//				this.fillBox(graphics, imwHighlight, zoom, this.getLeftOffset(), this.getTopOffset());
+//			}
+			if ((pendingTwoClickAction != null) && (pendingTwoClickAction.getFirstRegion().pageId == this.page.pageId)) {
+				ImRegion tcaStartRegion = pendingTwoClickAction.getFirstRegion();
 				graphics.setColor(new Color((255 - ((255 - selectionHighlightColor.getRed()) / 2)), (255 - ((255 - selectionHighlightColor.getGreen()) / 2)), (255 - ((255 - selectionHighlightColor.getBlue()) / 2)))); // cut distance to white in half for each component color
-				BoundingBox imwHighlight = new BoundingBox(tcaStartWord.bounds.left - annotationHighlightMargin, tcaStartWord.bounds.right + annotationHighlightMargin, tcaStartWord.bounds.top - annotationHighlightMargin, tcaStartWord.bounds.bottom + annotationHighlightMargin);
-				this.fillBox(graphics, imwHighlight, zoom, this.getLeftOffset(), this.getTopOffset());
+				BoundingBox tcaStartHighlight = new BoundingBox(tcaStartRegion.bounds.left - annotationHighlightMargin, tcaStartRegion.bounds.right + annotationHighlightMargin, tcaStartRegion.bounds.top - annotationHighlightMargin, tcaStartRegion.bounds.bottom + annotationHighlightMargin);
+				this.fillBox(graphics, tcaStartHighlight, zoom, this.getLeftOffset(), this.getTopOffset());
 			}
 			graphics.setColor(preSelectionColor);
 			
-			//	get display extension graphics
-			DisplayExtensionGraphics[] degs = this.getDisplayExtensionGraphics();
-			
-			//	draw below-text outlines and fillings of text extension objects
+			//	draw below-object outlines and fillings of text extension objects
 			if (graphics instanceof Graphics2D) {
-				AffineTransform preDegTransform = ((Graphics2D) graphics).getTransform();
-				((Graphics2D) graphics).translate(this.getLeftOffset(), this.getTopOffset());
-				((Graphics2D) graphics).scale(zoom, zoom);
-				for (int g = 0; g < degs.length; g++) {
-					if (!degs[g].isActive())
-						continue;
-					if (!degs[g].fillOverText())
-						degs[g].fill((Graphics2D) graphics);
-					if (!degs[g].outlineOverText())
-						degs[g].outline((Graphics2D) graphics);
-				}
-				((Graphics2D) graphics).setTransform(preDegTransform);
+//				AffineTransform preDegTransform = ((Graphics2D) graphics).getTransform();
+//				((Graphics2D) graphics).translate(this.getLeftOffset(), this.getTopOffset());
+//				((Graphics2D) graphics).scale(zoom, zoom);
+//				for (int g = 0; g < degs.length; g++) {
+//					if (!degs[g].isActive())
+//						continue;
+//					if (!degs[g].fillOverText())
+//						degs[g].fill((Graphics2D) graphics);
+//					if (!degs[g].outlineOverText())
+//						degs[g].outline((Graphics2D) graphics);
+//				}
+//				((Graphics2D) graphics).setTransform(preDegTransform);
+				this.paintDisplayExtensionGraphics(((Graphics2D) graphics), zoom, degs, DisplayExtensionGraphics.ORDER_BEFORE_PAGE_OBJECTS);
 			}
 			
 			//	paint background / highlight objects
@@ -4252,6 +4308,10 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				}
 			}
 			
+			//	draw below-text outlines and fillings of text extension objects
+			if (graphics instanceof Graphics2D)
+				this.paintDisplayExtensionGraphics(((Graphics2D) graphics), zoom, degs, DisplayExtensionGraphics.ORDER_BEFORE_PAGE_TEXT);
+			
 			//	draw text strings on top of markup if activated
 			if (areTextStringsPainted()) {
 				TextStringImage[] tsis = this.getTextStringImagesOCR();
@@ -4268,18 +4328,19 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			
 			//	draw above-text outlines and fillings of text extension objects
 			if (graphics instanceof Graphics2D) {
-				AffineTransform preDegTransform = ((Graphics2D) graphics).getTransform();
-				((Graphics2D) graphics).translate(this.getLeftOffset(), this.getTopOffset());
-				((Graphics2D) graphics).scale(zoom, zoom);
-				for (int g = 0; g < degs.length; g++) {
-					if (!degs[g].isActive())
-						continue;
-					if (degs[g].fillOverText())
-						degs[g].fill((Graphics2D) graphics);
-					if (degs[g].outlineOverText())
-						degs[g].outline((Graphics2D) graphics);
-				}
-				((Graphics2D) graphics).setTransform(preDegTransform);
+//				AffineTransform preDegTransform = ((Graphics2D) graphics).getTransform();
+//				((Graphics2D) graphics).translate(this.getLeftOffset(), this.getTopOffset());
+//				((Graphics2D) graphics).scale(zoom, zoom);
+//				for (int g = 0; g < degs.length; g++) {
+//					if (!degs[g].isActive())
+//						continue;
+//					if (degs[g].fillOverText())
+//						degs[g].fill((Graphics2D) graphics);
+//					if (degs[g].outlineOverText())
+//						degs[g].outline((Graphics2D) graphics);
+//				}
+//				((Graphics2D) graphics).setTransform(preDegTransform);
+				this.paintDisplayExtensionGraphics(((Graphics2D) graphics), zoom, degs, DisplayExtensionGraphics.ORDER_AFTER_PAGE_TEXT);
 			}
 			
 			
@@ -4339,6 +4400,22 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 //		}
 		private void fillBox(Graphics graphics, BoundingBox box, float zoom, int leftOffset, int topOffset) {
 			graphics.fillRect((leftOffset + Math.round(zoom * box.left)), (topOffset + Math.round(zoom * box.top)), Math.round((zoom * (box.right - box.left)) - 1), Math.round((zoom * (box.bottom - box.top)) - 1));
+		}
+		private void paintDisplayExtensionGraphics(Graphics2D graphics, float zoom, DisplayExtensionGraphics[] degs, byte dueOrderPosition) {
+			
+			//	draw below-text outlines and fillings of text extension objects
+			AffineTransform preDegTransform = graphics.getTransform();
+			graphics.translate(this.getLeftOffset(), this.getTopOffset());
+			graphics.scale(zoom, zoom);
+			for (int g = 0; g < degs.length; g++) {
+				if (!degs[g].isActive())
+					continue;
+				if (degs[g].getFillOrderPosition() == dueOrderPosition)
+					degs[g].fill(graphics);
+				if (degs[g].getOutlineOrderPosition() == dueOrderPosition)
+					degs[g].outline(graphics);
+			}
+			graphics.setTransform(preDegTransform);
 		}
 		
 		private Point[] getConnectorLineSequence(BoundingBox from, BoundingBox to) {
@@ -4431,11 +4508,19 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	
 	/**
 	 * Refresh any display control panel retrieved from the
-	 * <code>getControlPanel()</code> method.
+	 * <code>getControlPanel()</code> method. Client code that starts an atomic
+	 * action before modifying the document should call this method after the
+	 * atomic action has been finished.
 	 */
 	public void validateControlPanel() {
-		if (this.idvc != null)
-			this.idvc.updateControls();
+//		if (this.idvc != null)
+//			this.idvc.updateControls();
+		if (this.idvc == null)
+			return;
+		if (this.validIdvcDocModCount == this.idvcDocModCount)
+			return;
+		this.idvc.updateControls();
+		this.validIdvcDocModCount = this.idvcDocModCount;
 	}
 	
 	/**
@@ -4450,6 +4535,8 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	}
 	private ImDocumentViewControl idvc = null;
 	private boolean immediatelyUpdateIdvc = true;
+	private int idvcDocModCount = 0;
+	private int validIdvcDocModCount = 0;
 	
 	/**
 	 * Configuration widget for image viewer panel.
@@ -4927,6 +5014,19 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 * @author sautter
 	 */
 	public static abstract class DisplayExtensionGraphics {
+		
+		/** ordering constant indicating outlining or filling of a display extension graphics should happen before rendering the background page image (which is translucent in white areas) */
+		public static final byte ORDER_BEFORE_PAGE_IMAGE = 0;
+		
+		/** ordering constant indicating outlining or filling of a display extension graphics should happen right before rendering  objects like bounding boxes */
+		public static final byte ORDER_BEFORE_PAGE_OBJECTS = 1;
+		
+		/** ordering constant indicating outlining or filling of a display extension graphics should happen before rendering the page text */
+		public static final byte ORDER_BEFORE_PAGE_TEXT = 2;
+		
+		/** ordering constant indicating outlining or filling of a display extension graphics should happen after rendering the page text */
+		public static final byte ORDER_AFTER_PAGE_TEXT = 3;
+		
 		private static final Stroke DEFAULT_STROKE = new BasicStroke(1, BasicStroke.CAP_SQUARE, BasicStroke.JOIN_BEVEL);
 		
 		/** the parent display extension */
@@ -5002,31 +5102,58 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		 */
 		public abstract boolean isActive();
 		
+//		/**
+//		 * Indicate whether or not the shapes belonging to this display extension
+//		 * graphics should have their filling (if any) rendered on top of the
+//		 * document text. This default implementation returns false, indicating
+//		 * that document text should be on top of any filling. Sub classes may
+//		 * overwrite this method as needed, but should make sure to not completely
+//		 * obfuscate the document text, e.g. by using a transparent fill color.
+//		 * @return true if shape fillings should be rendered over document text
+//		 */
+//		public boolean fillOverText() {
+//			return false;
+//		}
 		/**
-		 * Indicate whether or not the shapes belonging to this display extension
-		 * graphics should have their filling (if any) rendered on top of the
-		 * document text. This default implementation returns false, indicating
-		 * that document text should be on top of any filling. Sub classes may
-		 * overwrite this method as needed, but should make sure to not completely
-		 * obfuscate the document text, e.g. by using a transparent fill color.
-		 * @return true if shape fillings should be rendered over document text
+		 * Indicate when the shapes belonging to this display extension
+		 * graphics should have their filling (if any) rendered. This default
+		 * implementation indicates rendering right before the page background
+		 * objects like bounding boxes, etc., so that the latter and the
+		 * document text should be on top of any filling. Sub classes may
+		 * overwrite this method as needed, but should make sure to not
+		 * completely obfuscate the document text, e.g. by using a transparent
+		 * fill color.
+		 * @return the order position of the fill operation
 		 */
-		public boolean fillOverText() {
-			return false;
+		public byte getFillOrderPosition() {
+			return ORDER_BEFORE_PAGE_OBJECTS;
 		}
 		
+//		/**
+//		 * Indicate whether or not the shapes belonging to this display extension
+//		 * graphics should have their outlines (if any) rendered on top of the
+//		 * document text. This default implementation returns true, indicating
+//		 * that the outlines should be rendered on top of any document text. Sub
+//		 * classes may overwrite this method as needed, but should make sure to
+//		 * not have the document text completely obfuscate the outline, e.g. by
+//		 * using a very bright line color or broad line stroke.
+//		 * @return true if shape outlines should be rendered over document text
+//		 */
+//		public boolean outlineOverText() {
+//			return true;
+//		}
 		/**
-		 * Indicate whether or not the shapes belonging to this display extension
-		 * graphics should have their outlines (if any) rendered on top of the
-		 * document text. This default implementation returns true, indicating
-		 * that the outlines should be rendered on top of any document text. Sub
-		 * classes may overwrite this method as needed, but should make sure to
-		 * not have the document text completely obfuscate the outline, e.g. by
+		 * Indicate when the shapes belonging to this display extension 
+		 * graphics should have their outlines (if any) rendered. This default
+		 * implementation indicates rendering after the document text, so that
+		 * the outlines are rendered on top of any document text. Sub classes
+		 * may overwrite this method as needed, but should make sure to not
+		 * have the document text completely obfuscate the outline, e.g. by
 		 * using a very bright line color or broad line stroke.
-		 * @return true if shape outlines should be rendered over document text
+		 * @return the order position of the outline operation
 		 */
-		public boolean outlineOverText() {
-			return true;
+		public byte getOutlineOrderPosition() {
+			return ORDER_AFTER_PAGE_TEXT;
 		}
 		
 		/**
@@ -5514,21 +5641,38 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		public JMenuItem getMenuItem(ImDocumentMarkupPanel invoker) {
 			return super.getMenuItem(invoker);
 		}
+//		
+//		/**
+//		 * Retrieve the word this two-click action was created upon, aka the
+//		 * first word to be combined with a second word on the second click.
+//		 * @return the word this two-click action was created upon
+//		 */
+//		public abstract ImWord getFirstWord();
 		
 		/**
-		 * Retrieve the word this two-click action was created upon, aka the
-		 * first word to be combined with a second word on the second click.
-		 * @return the word this two-click action was created upon
+		 * Retrieve the region this two-click action was created upon, aka the
+		 * first region to be combined with a second region on the second click.
+		 * @return the region this two-click action was created upon
 		 */
-		public abstract ImWord getFirstWord();
+		public abstract ImRegion getFirstRegion();
 		
 		/**
-		 * Perform the action. The argument word is the word on which the second
-		 * click occurred.
+		 * Perform the action. The argument word is the word the second click
+		 * occurred on.
 		 * @param secondWord the second word
 		 * @return true if the document was changed by the method, false otherwise
 		 */
 		public abstract boolean performAction(ImWord secondWord);
+		
+		/**
+		 * Perform the action. The argument page is the page the second click
+		 * occurred on, the argument point representing the location of the
+		 * click (in unscaled page coordinates).
+		 * @param secondPage the second page
+		 * @param secondPoint the second point
+		 * @return true if the document was changed by the method, false otherwise
+		 */
+		public abstract boolean performAction(ImPage secondPage, Point secondPoint);
 		
 		/**
 		 * Retrieve a label to display when the action is active, awaiting the

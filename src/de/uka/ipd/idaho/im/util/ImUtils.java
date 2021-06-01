@@ -34,6 +34,8 @@ import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Toolkit;
 import java.awt.datatransfer.Transferable;
+import java.awt.event.ItemEvent;
+import java.awt.event.ItemListener;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -55,6 +57,7 @@ import javax.swing.JPanel;
 
 import de.uka.ipd.idaho.gamta.AnnotationUtils;
 import de.uka.ipd.idaho.gamta.Gamta;
+import de.uka.ipd.idaho.gamta.util.CountingSet;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
 import de.uka.ipd.idaho.gamta.util.swing.DialogFactory;
@@ -123,7 +126,6 @@ public class ImUtils implements ImagingConstants {
 		}
 	};
 	
-	
 	/** Counterpart of <code>leftRightTopDownOrder</code> for words written in
 	 * top-down direction */
 	public static Comparator topDownRightLeftOrder = new Comparator() {
@@ -131,6 +133,16 @@ public class ImUtils implements ImagingConstants {
 			ImWord w1 = ((ImWord) obj1);
 			ImWord w2 = ((ImWord) obj2);
 			return ((w1.centerX == w2.centerX) ? (w1.centerY - w2.centerY) : (w2.centerX - w1.centerX));
+		}
+	};
+	
+	/** Counterpart of <code>leftRightTopDownOrder</code> for words written in
+	 * right-left direction and upside down */
+	public static Comparator rightLeftBottomUpOrder = new Comparator() {
+		public int compare(Object obj1, Object obj2) {
+			ImWord w1 = ((ImWord) obj1);
+			ImWord w2 = ((ImWord) obj2);
+			return ((w1.centerY == w2.centerY) ? (w2.centerX - w1.centerX) : (w2.centerY - w1.centerY));
 		}
 	};
 	
@@ -297,6 +309,32 @@ public class ImUtils implements ImagingConstants {
 	}
 	
 	/**
+	 * Sorts an array of top-down words in right-left-bottom-up order, in two
+	 * steps. This facilitates use of this topological order without the need
+	 * to define it in a single <code>Comparator</code>, which is not generally
+	 * possible in all cases, thus violating the contracts of <code>Arrays.sort()</code>.
+	 * @param words the array of words to sort
+	 */
+	public static void sortRightLeftBottomUp(ImWord[] words) {
+		
+		//	sort bottom-up first
+		Arrays.sort(words, Collections.reverseOrder(topDownOrder));
+		
+		//	sort individual lines right to left
+		int lineStart = 0;
+		for (int w = 1; w < words.length; w++)
+			
+			//	this word starts a new line, sort previous one
+			if ((words[w].centerY < words[lineStart].bounds.top) && (words[lineStart].centerY > words[w].bounds.bottom)) {
+				Arrays.sort(words, lineStart, w, Collections.reverseOrder(leftRightOrder));
+				lineStart = w;
+			}
+		
+		//	sort last line
+		Arrays.sort(words, lineStart, words.length, Collections.reverseOrder(leftRightOrder));
+	}
+	
+	/**
 	 * Sorts a list of words in left-right-top-down order, in two steps. This
 	 * facilitates use of this topological order without the need to define it
 	 * in a single <code>Comparator</code>, which is not generally possible in
@@ -327,10 +365,10 @@ public class ImUtils implements ImagingConstants {
 	 */
 	public static String promptForObjectType(String title, String text, String[] existingTypes, String existingType, boolean allowInput) {
 		StringSelectorPanel ssp = new StringSelectorPanel(title);
-		ssp.addSelector(text, existingTypes, existingType, allowInput);
+		StringSelectorLine ssl = ssp.addSelector(text, existingTypes, existingType, allowInput);
 		if (ssp.prompt(DialogFactory.getTopWindow()) != JOptionPane.OK_OPTION)
 			return null;
-		return ssp.typeOrNameAt(0, true);
+		return ssl.getSelectedTypeOrName(true);
 	}
 	
 	/**
@@ -348,12 +386,20 @@ public class ImUtils implements ImagingConstants {
 	 */
 	public static StringPair promptForObjectTypeChange(String title, String textOld, String textNew, String[] existingTypes, String existingType, boolean allowInput) {
 		StringSelectorPanel ssp = new StringSelectorPanel(title);
-		ssp.addSelector(textOld, existingTypes, existingType, false);
-		ssp.addSelector(textNew, existingTypes, existingType, true);
+		final StringSelectorLine sslOld = ssp.addSelector(textOld, existingTypes, existingType, false);
+		final StringSelectorLine sslNew = ssp.addSelector(textNew, existingTypes, existingType, true);
+		sslOld.selector.addItemListener(new ItemListener() {
+			public void itemStateChanged(ItemEvent ie) {
+				String oldType = sslOld.getSelectedString();
+				sslNew.selector.setSelectedItem(oldType);
+			}
+		});
 		if (ssp.prompt(DialogFactory.getTopWindow()) != JOptionPane.OK_OPTION)
 			return null;
-		String typeOld = ssp.typeOrNameAt(0, false);
-		String typeNew = ssp.typeOrNameAt(1, true);
+//		String typeOld = ssp.typeOrNameAt(0, false);
+//		String typeNew = ssp.typeOrNameAt(1, true);
+		String typeOld = sslOld.getSelectedTypeOrName(false);
+		String typeNew = sslNew.getSelectedTypeOrName(true);
 		if ((typeOld == null) || (typeNew == null) || typeOld.equals(typeNew))
 			return null;
 		return new StringPair(typeOld, typeNew);
@@ -612,6 +658,39 @@ public class ImUtils implements ImagingConstants {
 	 * successor of the last word is set to the first successor of any word
 	 * from the array that is not contained in the array proper.
 	 * @param words the words to make a text stream
+	 * @param textDirection the text direction to sort the words in
+	 */
+	public static void orderStream(ImWord[] words, String textDirection) {
+		
+		//	sort words (if sorting makes sense)
+		if (words.length < 2) {}
+		else if ((textDirection == null) || ImWord.TEXT_DIRECTION_LEFT_RIGHT.equals(textDirection))
+			orderStream(words, ImUtils.leftRightTopDownOrder);
+		else if (ImWord.TEXT_DIRECTION_BOTTOM_UP.equals(textDirection))
+			orderStream(words, ImUtils.bottomUpLeftRightOrder);
+		else if (ImWord.TEXT_DIRECTION_TOP_DOWN.equals(textDirection))
+			orderStream(words, ImUtils.topDownRightLeftOrder);
+		else if (ImWord.TEXT_DIRECTION_RIGHT_LEFT_UPSIDE_DOWN.equals(textDirection))
+			orderStream(words, ImUtils.rightLeftBottomUpOrder);
+		else throw new IllegalArgumentException("Inavlid text direction '" + textDirection + "'");
+		
+		//	set text direction attributes
+		for (int w = 0; w < words.length; w++) {
+			if ((textDirection == null) || ImWord.TEXT_DIRECTION_LEFT_RIGHT.equals(textDirection))
+				words[w].removeAttribute(ImWord.TEXT_DIRECTION_ATTRIBUTE);
+			else words[w].setAttribute(ImWord.TEXT_DIRECTION_ATTRIBUTE, textDirection);
+		}
+	}
+	
+	/**
+	 * Order a series of words as a separate logical text stream. The words in
+	 * the argument array need not belong to an individual logical text stream,
+	 * nor need they be single chunks of the logical text streams involved. The
+	 * predecessor of the first word is set to the the last predecessor of any
+	 * word from the array that is not contained in the array proper, the
+	 * successor of the last word is set to the first successor of any word
+	 * from the array that is not contained in the array proper.
+	 * @param words the words to make a text stream
 	 * @param wordOrder the word order to apply
 	 */
 	public static void orderStream(ImWord[] words, Comparator wordOrder) {
@@ -620,6 +699,54 @@ public class ImUtils implements ImagingConstants {
 		if (words.length < 2)
 			return;
 		
+		//	index words from array
+		HashSet wordIDs = new HashSet();
+		CountingSet textStreamIdCounts = new CountingSet();
+		for (int w = 0; w < words.length; w++) {
+			wordIDs.add(words[w].getLocalID());
+			textStreamIdCounts.add(words[w].getTextStreamId());
+		}
+		
+		//	collect predecessors and successors (in text stream order, preserving external ordering)
+		Arrays.sort(words, textStreamOrder);
+//		ArrayList predecessors = new ArrayList();
+//		ArrayList successors = new ArrayList();
+		HashMap predecessorsByTextStreamId = new HashMap();
+		HashMap successorsByTextStreamId = new HashMap();
+		for (int w = 0; w < words.length; w++) {
+			ImWord pWord = words[w].getPreviousWord();
+			if ((pWord != null) && !wordIDs.contains(pWord.getLocalID())) {
+				System.out.println("External predecessor '" + pWord.getString() + "' (page " + pWord.pageId + " at " + pWord.bounds + ") from '" + words[w].getString() + "' (page " + words[w].pageId + " at " + words[w].bounds + ")");
+//				predecessors.add(pWord);
+				predecessorsByTextStreamId.put(pWord.getTextStreamId(), pWord); // we want the LAST predecessor from each text stream
+			}
+			ImWord nWord = words[w].getNextWord();
+			if ((nWord != null) && !wordIDs.contains(nWord.getLocalID())) {
+				System.out.println("External successor '" + nWord.getString() + "' (page " + nWord.pageId + " at " + nWord.bounds + ") from '" + words[w].getString() + "' (page " + words[w].pageId + " at " + words[w].bounds + ")");
+//				successors.add(nWord);
+				if (!successorsByTextStreamId.containsKey(nWord.getTextStreamId()))
+					successorsByTextStreamId.put(nWord.getTextStreamId(), nWord); // we want the FIRST successor from each text stream
+			}
+		}
+		
+		//	cut (connected sequences of) argument words out of surrounding text streams
+		for (int w = 0; w < words.length; w++) {
+			ImWord pWord = words[w].getPreviousWord();
+			if ((pWord != null) && wordIDs.contains(pWord.getLocalID()))
+				continue;
+			for (int lw = w; lw < words.length; lw++) {
+				ImWord nWord = words[lw].getNextWord();
+				if ((nWord != null) && wordIDs.contains(nWord.getLocalID()))
+					continue;
+				if (pWord != null)
+					pWord.setNextWord(nWord);
+				else if (nWord != null)
+					nWord.setPreviousWord(pWord);
+				w = lw; // w loop increment moves to next word
+				break;
+			}
+		}
+		
 		//	order words (use dedicated sort method for left-right-top-down)
 		if (wordOrder == leftRightTopDownOrder)
 			sortLeftRightTopDown(words);
@@ -627,38 +754,9 @@ public class ImUtils implements ImagingConstants {
 			sortBottomUpLeftRight(words);
 		else if (wordOrder == topDownRightLeftOrder)
 			sortTopDownRightLeft(words);
+		else if (wordOrder == rightLeftBottomUpOrder)
+			sortRightLeftBottomUp(words);
 		else Arrays.sort(words, wordOrder);
-		
-		//	index words from array
-		HashSet wordIDs = new HashSet();
-		for (int w = 0; w < words.length; w++)
-			wordIDs.add(words[w].getLocalID());
-		
-		//	find predecessor and successor
-		ArrayList predecessors = new ArrayList();
-		ArrayList successors = new ArrayList();
-		for (int w = 0; w < words.length; w++) {
-			ImWord prev = words[w].getPreviousWord();
-			if ((prev != null) && !wordIDs.contains(prev.getLocalID())) {
-//				System.out.println("External predecessor '" + prev.getString() + "' (page " + prev.pageId + " at " + prev.bounds + ") from '" + words[w].getString() + "' (page " + words[w].pageId + " at " + words[w].bounds + ")");
-				predecessors.add(prev);
-			}
-			ImWord next = words[w].getNextWord();
-			if ((next != null) && !wordIDs.contains(next.getLocalID())) {
-//				System.out.println("External successor '" + next.getString() + "' (page " + next.pageId + " at " + next.bounds + ") from '" + words[w].getString() + "' (page " + words[w].pageId + " at " + words[w].bounds + ")");
-				successors.add(next);
-			}
-		}
-		
-		/* TODO prevent word ordering exceptions:
-		 * - sort argument words in text stream order
-		 * - cut (connected sequences of) argument words out of surrounding text streams ...
-		 * - ... and collect external predecessors and successors in the process
-		 * - sort argument words in argument order
-		 * - cut up (connected sequences of) argument words ...
-		 * - chain argument words in resulting order
-		 * - connect first and last argument word to (last) external predecessor and (first) external successor
-		 */
 		
 		//	chain words together
 		for (int w = 1; w < words.length; w++) {
@@ -683,23 +781,57 @@ public class ImUtils implements ImagingConstants {
 			words[w].setNextWord(null);
 			words[w].setPreviousWord(words[w-1]);
 		}
+//		
+//		//	connect first and last word
+//		if (predecessors.size() != 0) {
+//			Collections.sort(predecessors, Collections.reverseOrder(wordOrder));
+//			ImWord prev = (ImWord) predecessors.get(0);
+//			if (words[0].getPreviousWord() != prev) {
+////				System.out.println("Setting external predecessor '" + prev.getString() + "' (page " + prev.pageId + " at " + prev.bounds + ") for '" + words[0].getString() + "' (page " + words[0].pageId + " at " + words[0].bounds + ")");
+//				words[0].setPreviousWord(prev);
+//			}
+//		}
+//		if (successors.size() != 0) {
+//			Collections.sort(successors, wordOrder);
+//			ImWord next = ((ImWord) successors.get(0));
+//			if (words[words.length-1].getNextWord() != next) {
+////				System.out.println("Setting external successor '" + next.getString() + "' (page " + next.pageId + " at " + next.bounds + ") for '" + words[words.length-1].getString() + "' (page " + words[words.length-1].pageId + " at " + words[words.length-1].bounds + ")");
+//				words[words.length-1].setNextWord(next);
+//			}
+//		}
 		
-		//	connect first and last word
-		Collections.sort(predecessors, Collections.reverseOrder(wordOrder));
-		if (predecessors.size() != 0) {
-			ImWord prev = (ImWord) predecessors.get(0);
-			if (words[0].getPreviousWord() != prev) {
-//				System.out.println("Setting external predecessor '" + prev.getString() + "' (page " + prev.pageId + " at " + prev.bounds + ") for '" + words[0].getString() + "' (page " + words[0].pageId + " at " + words[0].bounds + ")");
-				words[0].setPreviousWord(prev);
+		//	anything to connect to?
+		if (predecessorsByTextStreamId.isEmpty() && successorsByTextStreamId.isEmpty())
+			return;
+		
+		//	get predecessor and successor for most frequent text stream ID
+		ImWord predecessor = null;
+		ImWord successor = null;
+		while (textStreamIdCounts.size() != 0) {
+			String textStreamId = ((String) textStreamIdCounts.max());
+			ImWord pWord = ((ImWord) predecessorsByTextStreamId.get(textStreamId));
+			if ((pWord != null) && (pWord.getNextWord() != null)) {
+				predecessor = pWord;
+				successor = pWord.getNextWord();
+				break;
 			}
+			ImWord sWord = ((ImWord) successorsByTextStreamId.get(textStreamId));
+			if ((sWord != null) && (sWord.getPreviousWord() != null)) {
+				predecessor = sWord.getPreviousWord();
+				successor = sWord;
+				break;
+			}
+			textStreamIdCounts.removeAll(textStreamId);
 		}
-		Collections.sort(successors, wordOrder);
-		if (successors.size() != 0) {
-			ImWord next = ((ImWord) successors.get(0));
-			if (words[words.length-1].getNextWord() != next) {
-//				System.out.println("Setting external successor '" + next.getString() + "' (page " + next.pageId + " at " + next.bounds + ") for '" + words[words.length-1].getString() + "' (page " + words[words.length-1].pageId + " at " + words[words.length-1].bounds + ")");
-				words[words.length-1].setNextWord(next);
-			}
+		
+		//	chain text streams
+		if ((predecessor != null) && (words[0].getPreviousWord() != predecessor)) {
+			System.out.println("Setting external predecessor '" + predecessor.getString() + "' (page " + predecessor.pageId + " at " + predecessor.bounds + ") for '" + words[0].getString() + "' (page " + words[0].pageId + " at " + words[0].bounds + ")");
+			words[0].setPreviousWord(predecessor);
+		}
+		if ((successor != null) && (words[words.length-1].getNextWord() != successor)) {
+			System.out.println("Setting external successor '" + successor.getString() + "' (page " + successor.pageId + " at " + successor.bounds + ") for '" + words[words.length-1].getString() + "' (page " + words[words.length-1].pageId + " at " + words[words.length-1].bounds + ")");
+			words[words.length-1].setNextWord(successor);
 		}
 	}
 	
@@ -881,7 +1013,21 @@ public class ImUtils implements ImagingConstants {
 	 * @return the concatenated text;
 	 */
 	public static String getString(ImWord firstWord, ImWord lastWord, boolean ignoreLineBreaks) {
-		return getString(firstWord, lastWord, ignoreLineBreaks, -1);
+		return getString(firstWord, lastWord, null, ignoreLineBreaks, -1);
+	}
+	
+	/**
+	 * Concatenate the text of a part of a logical text stream, from one word
+	 * up to another one. The two argument words have to belong to the same
+	 * logical text stream for this method to behave in any meaningful way.
+	 * @param firstWord the word to start from
+	 * @param lastWord the word to stop at
+	 * @param textDirection the text direction of the argument words
+	 * @param ignoreLineBreaks represent line breaks as simple spaces?
+	 * @return the concatenated text;
+	 */
+	public static String getString(ImWord firstWord, ImWord lastWord, String textDirection, boolean ignoreLineBreaks) {
+		return getString(firstWord, lastWord, textDirection, ignoreLineBreaks, -1);
 	}
 	
 	/**
@@ -895,14 +1041,46 @@ public class ImUtils implements ImagingConstants {
 	 * @return the concatenated text;
 	 */
 	public static String getString(ImWord firstWord, ImWord lastWord, boolean ignoreLineBreaks, int minSpaceWidth) {
+		return getString(firstWord, lastWord, null, ignoreLineBreaks, minSpaceWidth);
+	}
+	
+	/**
+	 * Concatenate the text of a part of a logical text stream, from one word
+	 * up to another one. The two argument words have to belong to the same
+	 * logical text stream for this method to behave in any meaningful way.
+	 * @param firstWord the word to start from
+	 * @param lastWord the word to stop at
+	 * @param textDirection the text direction of the argument words
+	 * @param ignoreLineBreaks represent line breaks as simple spaces?
+	 * @param minSpaceWidth minimum distance between words to consider a space
+	 * @return the concatenated text;
+	 */
+	public static String getString(ImWord firstWord, ImWord lastWord, String textDirection, boolean ignoreLineBreaks, int minSpaceWidth) {
+		if (textDirection == null) {
+			CountingSet textDirections = new CountingSet();
+			for (ImWord imw = firstWord; imw != null; imw = imw.getNextWord()) {
+				textDirections.add(imw.getAttribute(ImWord.TEXT_DIRECTION_ATTRIBUTE, ImWord.TEXT_DIRECTION_LEFT_RIGHT));
+				if (imw == lastWord)
+					break;
+			}
+			textDirection = ((String) textDirections.max());
+		}
 		StringBuffer sb = new StringBuffer();
 		for (ImWord imw = firstWord; imw != null; imw = imw.getNextWord()) {
 			sb.append(imw.getString());
 			if (imw == lastWord)
 				break;
-			handleNextWordRelation(imw, sb, ignoreLineBreaks, minSpaceWidth);
+			handleNextWordRelation(imw, sb, textDirection, ignoreLineBreaks, minSpaceWidth);
 		}
 		return sb.toString();
+/* TODO when getting string for connected ImWords (relationship "continue"):
+- check words for overlap if accent char adjacent to gap ...
+- ... and use combined char if overlap near letter width (should be OK with equidistant split)
+==> also do that when generating tokens in XML wrapper
+==> also use that when merging words if combined character present in font ...
+==> ... or maybe even extend font if char codes available (combine char images, generate transcript, etc., and adjust word char codes)
+==> also try and do that proactively in PdfParser word merging (maybe even across fonts, especially if accent in other font than surrounding words)
+ */		
 	}
 	
 	/**
@@ -917,8 +1095,9 @@ public class ImUtils implements ImagingConstants {
 	 * @return the concatenated text;
 	 */
 	public static String getString(ImWord[] words, boolean ignoreLineBreaks) {
-		return getString(words, null, ignoreLineBreaks, -1);
+		return getString(words, null, null, ignoreLineBreaks, -1);
 	}
+	
 	/**
 	 * Concatenate the text of a sequence of words, regardless of what logical
 	 * text stream they belong to, and regardless of whether or not they form
@@ -927,12 +1106,12 @@ public class ImUtils implements ImagingConstants {
 	 * same logical text stream, in which case their defined relationship comes
 	 * to bear.
 	 * @param words the words to concatenate
+	 * @param textDirection the text direction of the argument words
 	 * @param ignoreLineBreaks represent line breaks as simple spaces?
-	 * @param minSpaceWidth minimum distance between words to consider a space
 	 * @return the concatenated text;
 	 */
-	public static String getString(ImWord[] words, boolean ignoreLineBreaks, int minSpaceWidth) {
-		return getString(words, null, ignoreLineBreaks, minSpaceWidth);
+	public static String getString(ImWord[] words, String textDirection, boolean ignoreLineBreaks) {
+		return getString(words, null, textDirection, ignoreLineBreaks, -1);
 	}
 	
 	/**
@@ -949,7 +1128,40 @@ public class ImUtils implements ImagingConstants {
 	 * @return the concatenated text;
 	 */
 	public static String getString(ImWord[] words, Comparator wordOrder, boolean ignoreLineBreaks) {
-		return getString(words, wordOrder, ignoreLineBreaks, -1);
+		return getString(words, wordOrder, null, ignoreLineBreaks, -1);
+	}
+	
+	/**
+	 * Concatenate the text of a sequence of words, regardless of what logical
+	 * text stream they belong to, and regardless of whether or not they form
+	 * a coherent sequence in their respective logical text stream. Adjacent
+	 * words are treated as separate unless they are directly adjacent in the
+	 * same logical text stream, in which case their defined relationship comes
+	 * to bear.
+	 * @param words the words to concatenate
+	 * @param ignoreLineBreaks represent line breaks as simple spaces?
+	 * @param minSpaceWidth minimum distance between words to consider a space
+	 * @return the concatenated text;
+	 */
+	public static String getString(ImWord[] words, boolean ignoreLineBreaks, int minSpaceWidth) {
+		return getString(words, null, null, ignoreLineBreaks, minSpaceWidth);
+	}
+	
+	/**
+	 * Concatenate the text of a sequence of words, regardless of what logical
+	 * text stream they belong to, and regardless of whether or not they form
+	 * a coherent sequence in their respective logical text stream. Adjacent
+	 * words are treated as separate unless they are directly adjacent in the
+	 * same logical text stream, in which case their defined relationship comes
+	 * to bear.
+	 * @param words the words to concatenate
+	 * @param textDirection the text direction of the argument words
+	 * @param ignoreLineBreaks represent line breaks as simple spaces?
+	 * @param minSpaceWidth minimum distance between words to consider a space
+	 * @return the concatenated text;
+	 */
+	public static String getString(ImWord[] words, String textDirection, boolean ignoreLineBreaks, int minSpaceWidth) {
+		return getString(words, null, textDirection, ignoreLineBreaks, minSpaceWidth);
 	}
 	
 	/**
@@ -967,6 +1179,24 @@ public class ImUtils implements ImagingConstants {
 	 * @return the concatenated text;
 	 */
 	public static String getString(ImWord[] words, Comparator wordOrder, boolean ignoreLineBreaks, int minSpaceWidth) {
+		return getString(words, wordOrder, null, ignoreLineBreaks, minSpaceWidth);
+	}
+	
+	private static String getString(ImWord[] words, Comparator wordOrder, String textDirection, boolean ignoreLineBreaks, int minSpaceWidth) {
+		if (textDirection == null) {
+			if (wordOrder == leftRightTopDownOrder)
+				textDirection = ImWord.TEXT_DIRECTION_LEFT_RIGHT;
+			else if (wordOrder == bottomUpLeftRightOrder)
+				textDirection = ImWord.TEXT_DIRECTION_BOTTOM_UP;
+			else if (wordOrder == topDownRightLeftOrder)
+				textDirection = ImWord.TEXT_DIRECTION_TOP_DOWN;
+		}
+		if (textDirection == null) {
+			CountingSet textDirections = new CountingSet();
+			for (int w = 0; w < words.length; w++)
+				textDirections.add(words[w].getAttribute(ImWord.TEXT_DIRECTION_ATTRIBUTE, ImWord.TEXT_DIRECTION_LEFT_RIGHT));
+			textDirection = ((String) textDirections.max());
+		}
 		if (wordOrder == leftRightTopDownOrder)
 			sortLeftRightTopDown(words);
 		else if (wordOrder == bottomUpLeftRightOrder)
@@ -982,15 +1212,23 @@ public class ImUtils implements ImagingConstants {
 				break;
 			if (words[w].getNextWord() != words[w+1])
 				sb.append(" ");
-			else handleNextWordRelation(words[w], sb, ignoreLineBreaks, minSpaceWidth);
+			else handleNextWordRelation(words[w], sb, textDirection, ignoreLineBreaks, minSpaceWidth);
 		}
 		return sb.toString();
+/* TODO when getting string for connected ImWords (relationship "continue"):
+- check words for overlap if accent char adjacent to gap ...
+- ... and use combined char if overlap near letter width (should be OK with equidistant split)
+==> also do that when generating tokens in XML wrapper
+==> also use that when merging words if combined character present in font ...
+==> ... or maybe even extend font if char codes available (combine char images, generate transcript, etc., and adjust word char codes)
+==> also try and do that proactively in PdfParser word merging (maybe even across fonts, especially if accent in other font than surrounding words)
+ */		
 	}
 	
-	private static void handleNextWordRelation(ImWord imw, StringBuffer sb, boolean ignoreLineBreaks, int minSpaceWidth) {
+	private static void handleNextWordRelation(ImWord imw, StringBuffer sb, String textDirection, boolean ignoreLineBreaks, int minSpaceWidth) {
 		if (imw.getNextRelation() == ImWord.NEXT_RELATION_SEPARATE) {
 			ImWord nextImw = imw.getNextWord();
-			if ((nextImw != null) && isSpace(imw, nextImw, minSpaceWidth) && Gamta.insertSpace(imw.getString(), nextImw.getString()))
+			if ((nextImw != null) && isSpace(imw, nextImw, textDirection, minSpaceWidth) && Gamta.insertSpace(imw.getString(), nextImw.getString()))
 				sb.append(" ");
 		}
 		else if (imw.getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END)
@@ -999,23 +1237,42 @@ public class ImUtils implements ImagingConstants {
 			sb.deleteCharAt(sb.length()-1);
 	}
 	
-	private static boolean isSpace(ImWord word1, ImWord word2, int minSpaceWidth) {
-//		if (word1.bounds.bottom < word2.centerY)
-//			return true; // line offset
-//		if (word2.bounds.bottom < word1.centerY)
-//			return true; // line offset
-//		if (word2.centerY < word1.bounds.top)
-//			return true; // line offset
-//		if (word1.centerY < word2.bounds.top)
-//			return true; // line offset
+	private static boolean isSpace(ImWord word1, ImWord word2, String textDirection, int minSpaceWidth) {
 		if (areTextFlowBreak(word1, word2))
 			return true;
-		if (word2.bounds.left < word1.centerX)
-			return true; // second word to the left ... WTF
-		int wordDist = (word2.bounds.left - word1.bounds.right);
+//		//	TODOne observe text direction !!!
+//		if (word2.bounds.left < word1.centerX)
+//			return true; // second word to the left ... WTF
+//		int wordDist = (word2.bounds.left - word1.bounds.right);
+//		int wordHeight = ((word1.bounds.getHeight() + word2.bounds.getHeight()) / 2);
+		int wordDist;
+		int wordHeight;
+		if (ImWord.TEXT_DIRECTION_BOTTOM_UP.equals(textDirection)) {
+			if (word2.bounds.bottom > word1.centerY)
+				return true; // second word to the left ... WTF
+			wordDist = (word1.bounds.top - word2.bounds.bottom);
+			wordHeight = ((word1.bounds.getWidth() + word2.bounds.getWidth()) / 2);
+		}
+		else if (ImWord.TEXT_DIRECTION_TOP_DOWN.equals(textDirection)) {
+			if (word2.bounds.top < word1.centerY)
+				return true; // second word to the left ... WTF
+			wordDist = (word2.bounds.top - word1.bounds.bottom);
+			wordHeight = ((word1.bounds.getWidth() + word2.bounds.getWidth()) / 2);
+		}
+		else if (ImWord.TEXT_DIRECTION_RIGHT_LEFT_UPSIDE_DOWN.equals(textDirection)) {
+			if (word2.bounds.right > word1.centerX)
+				return true; // second word to the left ... WTF
+			wordDist = (word1.bounds.left - word2.bounds.right);
+			wordHeight = ((word1.bounds.getHeight() + word2.bounds.getHeight()) / 2);
+		}
+		else {
+			if (word2.bounds.left < word1.centerX)
+				return true; // second word to the left ... WTF
+			wordDist = (word2.bounds.left - word1.bounds.right);
+			wordHeight = ((word1.bounds.getHeight() + word2.bounds.getHeight()) / 2);
+		}
 		if (minSpaceWidth != -1) // we have an external threshold, no need for estimating
 			return (minSpaceWidth <= wordDist);
-		int wordHeight = ((word1.bounds.getHeight() + word2.bounds.getHeight()) / 2);
 //		return (wordHeight <= (wordDist * 5)); // should be OK as an estimate, and with some safety margin, at least for born-digital text (0.25 is smallest defaulting space width)
 		return ((wordHeight * 3) <= (wordDist * 20)); // 15% should be OK as an estimate lower bound, and with some safety margin, at least for born-digital text (0.25 is smallest defaulting space width)
 	}
@@ -1101,15 +1358,64 @@ public class ImUtils implements ImagingConstants {
 	public static boolean areTextFlowBreak(ImWord word1, ImWord word2) {
 		if (word1.pageId != word2.pageId)
 			return true; // different pages
-		if (word1.bounds.bottom <= word2.bounds.top)
-			return true; // complete vertical offset, second word below first (e.g. line break)
-		if (word2.bounds.bottom <= word1.bounds.top)
-			return true; // complete vertical offset, first word below second (e.g. column break)
-		if ((word1.centerY <= word2.bounds.top) && (word1.bounds.bottom <= word2.centerY))
-			return true; // vertical offset with no center inside other word, second word below first (too much offset for tailing subscript)
-		if ((word2.centerY <= word1.bounds.top) && (word2.bounds.bottom <= word1.centerY))
-			return true; // vertical offset with no center inside other word, first word below second (too much offset for tailing superscript)
-		return false;
+//		//	TODOne observe text direction !!!
+//		if (word1.bounds.bottom <= word2.bounds.top)
+//			return true; // complete vertical offset, second word below first (e.g. line break)
+//		if (word2.bounds.bottom <= word1.bounds.top)
+//			return true; // complete vertical offset, first word below second (e.g. column break)
+//		if ((word1.centerY <= word2.bounds.top) && (word1.bounds.bottom <= word2.centerY))
+//			return true; // vertical offset with no center inside other word, second word below first (too much offset for tailing subscript)
+//		if ((word2.centerY <= word1.bounds.top) && (word2.bounds.bottom <= word1.centerY))
+//			return true; // vertical offset with no center inside other word, first word below second (too much offset for tailing superscript)
+//		return false;
+		String textDirection1 = ((String) word1.getAttribute(ImWord.TEXT_DIRECTION_ATTRIBUTE, ImWord.TEXT_DIRECTION_LEFT_RIGHT));
+		String textDirection2 = ((String) word2.getAttribute(ImWord.TEXT_DIRECTION_ATTRIBUTE, ImWord.TEXT_DIRECTION_LEFT_RIGHT));
+		if (!textDirection1.equals(textDirection2))
+			return true; // shift of text orientation
+		if (ImWord.TEXT_DIRECTION_BOTTOM_UP.equals(textDirection1)) {
+			if (word1.bounds.right <= word2.bounds.left)
+				return true; // complete vertical offset, second word below first (e.g. line break)
+			if (word2.bounds.right <= word1.bounds.left)
+				return true; // complete vertical offset, first word below second (e.g. column break)
+			if ((word1.centerX <= word2.bounds.left) && (word1.bounds.right <= word2.centerX))
+				return true; // vertical offset with no center inside other word, second word below first (too much offset for tailing subscript)
+			if ((word2.centerX <= word1.bounds.left) && (word2.bounds.right <= word1.centerX))
+				return true; // vertical offset with no center inside other word, first word below second (too much offset for tailing superscript)
+			return false;
+		}
+		else if (ImWord.TEXT_DIRECTION_TOP_DOWN.equals(textDirection1)) {
+			if (word1.bounds.right <= word2.bounds.left)
+				return true; // complete vertical offset, second word above first (e.g. line break)
+			if (word2.bounds.right <= word1.bounds.left)
+				return true; // complete vertical offset, first word above second (e.g. column break)
+			if ((word1.centerX <= word2.bounds.left) && (word1.bounds.right <= word2.centerX))
+				return true; // vertical offset with no center inside other word, second word above first (too much offset for tailing subscript)
+			if ((word2.centerX <= word1.bounds.left) && (word2.bounds.right <= word1.centerX))
+				return true; // vertical offset with no center inside other word, first word above second (too much offset for tailing superscript)
+			return false;
+		}
+		else if (ImWord.TEXT_DIRECTION_RIGHT_LEFT_UPSIDE_DOWN.equals(textDirection1)) {
+			if (word1.bounds.bottom <= word2.bounds.top)
+				return true; // complete vertical offset, second word above first (e.g. line break)
+			if (word2.bounds.bottom <= word1.bounds.top)
+				return true; // complete vertical offset, first word above second (e.g. column break)
+			if ((word1.centerY <= word2.bounds.top) && (word1.bounds.bottom <= word2.centerY))
+				return true; // vertical offset with no center inside other word, second word above first (too much offset for tailing subscript)
+			if ((word2.centerY <= word1.bounds.top) && (word2.bounds.bottom <= word1.centerY))
+				return true; // vertical offset with no center inside other word, first word above second (too much offset for tailing superscript)
+			return false;
+		}
+		else {
+			if (word1.bounds.bottom <= word2.bounds.top)
+				return true; // complete vertical offset, second word below first (e.g. line break)
+			if (word2.bounds.bottom <= word1.bounds.top)
+				return true; // complete vertical offset, first word below second (e.g. column break)
+			if ((word1.centerY <= word2.bounds.top) && (word1.bounds.bottom <= word2.centerY))
+				return true; // vertical offset with no center inside other word, second word below first (too much offset for tailing subscript)
+			if ((word2.centerY <= word1.bounds.top) && (word2.bounds.bottom <= word1.centerY))
+				return true; // vertical offset with no center inside other word, first word below second (too much offset for tailing superscript)
+			return false;
+		}
 	}
 	
 	/**
@@ -1231,7 +1537,7 @@ public class ImUtils implements ImagingConstants {
 	public static ImAnnotation[] findCaptions(ImRegion target, boolean above, boolean below, boolean beside, boolean inside, boolean matchTargetType) {
 		
 		//	quick check alignment switches
-		if (!above && !below)
+		if (!above && !below && !beside && !inside)
 			return new ImAnnotation[0];
 		
 		//	get page (might be null for regions not added to document)
@@ -1524,6 +1830,84 @@ public class ImUtils implements ImagingConstants {
 		int captionOnLeftDist = Math.abs(targetBox.left - captionBox.right);
 		int captionOnRightDist = Math.abs(captionBox.left - targetBox.right);
 		return (Math.min(captionOnLeftDist, captionOnRightDist) <= dpi);
+	}
+	
+	/**
+	 * Link a caption to its target region. In particular, this method sets the
+	 * <code>targetBox</code> and <code>targetPageId</code> attributes of the
+	 * argument caption.
+	 * @param caption the caption to link
+	 * @param target the target region to link the caption to
+	 */
+	public static void linkCaptionTarget(ImAnnotation caption, ImRegion target) {
+		caption.setAttribute(CAPTION_TARGET_BOX_ATTRIBUTE, target.bounds.toString());
+		caption.setAttribute(CAPTION_TARGET_PAGE_ID_ATTRIBUTE, ("" + target.pageId));
+	}
+	
+	/**
+	 * Retrieve the target region linked to a caption. If no target region is
+	 * found in the linked page for the exact links bounding box, this method
+	 * resorts to fuzzy matching.
+	 * @param caption the caption whose target to retrieve
+	 * @return the caption target region
+	 */
+	public static ImRegion getCaptionTarget(ImAnnotation caption) {
+		return getCaptionTarget(caption, null);
+	}
+	
+	/**
+	 * Retrieve the target region linked to a caption. If no target region is
+	 * found in the linked page for the exact links bounding box, this method
+	 * resorts to fuzzy matching.
+	 * @param caption the caption whose target to retrieve
+	 * @param targetType the type of the caption target
+	 * @return the caption target region
+	 */
+	public static ImRegion getCaptionTarget(ImAnnotation caption, String targetType) {
+		ImDocument ctDoc = caption.getDocument();
+		if (ctDoc == null)
+			return null;
+		BoundingBox ctBox;
+		int ctPageId;
+		try {
+			String ctBoxStr = ((String) caption.getAttribute(CAPTION_TARGET_BOX_ATTRIBUTE));
+			if (ctBoxStr == null)
+				return null;
+			ctBox = BoundingBox.parse(ctBoxStr);
+			String ctPageIdStr = ((String) caption.getAttribute(CAPTION_TARGET_PAGE_ID_ATTRIBUTE));
+			if (ctPageIdStr == null)
+				return null;
+			ctPageId = Integer.parseInt(ctPageIdStr);
+		}
+		catch (IllegalArgumentException iae) {
+			iae.printStackTrace(System.out);
+			return null;
+		}
+		ImPage ctPage = ctDoc.getPage(ctPageId);
+		if (ctPage == null)
+			return null;
+		ImRegion[] ctRegions = ctPage.getRegionsIncluding(targetType, ctBox, true);
+		float bestMatchScore = 0;
+		ImRegion bestMatchRegion = null;
+		for (int r = 0; r < ctRegions.length; r++) {
+			if (targetType != null) {} // we've already done the type filtering
+			else if (ImRegion.IMAGE_TYPE.equals(ctRegions[r].getType())) {}
+			else if (ImRegion.GRAPHICS_TYPE.equals(ctRegions[r].getType())) {}
+			else if (ImRegion.TABLE_TYPE.equals(ctRegions[r].getType())) {}
+			else continue; // not a suitable type for a caption target TODO amend list of suitable types as need arises
+			if (ctBox.equals(ctRegions[r].bounds))
+				return ctRegions[r]; // exact match, we're done here
+			BoundingBox overlapBox = ctBox.intersect(ctRegions[r].bounds);
+			if (overlapBox == null)
+				continue;
+			float overlap = overlapBox.getArea();
+			float matchScore = ((overlap * overlap) / ctRegions[r].bounds.getArea()); // factors in both size and fraction overlapping with target box
+			if (bestMatchScore < matchScore) {
+				bestMatchScore = matchScore;
+				bestMatchRegion = ctRegions[r];
+			}
+		}
+		return bestMatchRegion;
 	}
 	
 	/**
@@ -2261,6 +2645,9 @@ public class ImUtils implements ImagingConstants {
 	 */
 	public static ImRegion[][] getTableCells(ImRegion table, Set ignoreWords, ImRegion[] rows, ImRegion[] cols, boolean cleanUpSpurious) {
 		
+		//	get text direction
+		String textDirection = ((String) table.getAttribute(ImRegion.TEXT_DIRECTION_ATTRIBUTE, ImRegion.TEXT_DIRECTION_LEFT_RIGHT));
+		
 		//	get rows and columns if not given
 		if (rows == null) {
 			rows = getTableRows(table, ignoreWords);
@@ -2274,8 +2661,10 @@ public class ImUtils implements ImagingConstants {
 		}
 		
 		//	sort rows and columns
-		Arrays.sort(rows, topDownOrder);
-		Arrays.sort(cols, leftRightOrder);
+//		Arrays.sort(rows, topDownOrder);
+//		Arrays.sort(cols, leftRightOrder);
+		Arrays.sort(rows, getTableRowOrder(textDirection));
+		Arrays.sort(cols, getTableColumnOrder(textDirection));
 		
 		//	get page
 		ImPage page = table.getPage();
@@ -2293,15 +2682,21 @@ public class ImUtils implements ImagingConstants {
 		for (int r = 0; r < rows.length; r++)
 			for (int c = 0; c < cols.length; c++) {
 				
-				//	create cell bounds
-				BoundingBox cellBounds = new BoundingBox(cols[c].bounds.left, cols[c].bounds.right, rows[r].bounds.top, rows[r].bounds.bottom);
+				//	create cell bounds TODOne observe text orientation
+//				BoundingBox cellBounds = new BoundingBox(cols[c].bounds.left, cols[c].bounds.right, rows[r].bounds.top, rows[r].bounds.bottom);
+				BoundingBox cellBounds;// = new BoundingBox(cols[c].bounds.left, cols[c].bounds.right, rows[r].bounds.top, rows[r].bounds.bottom);
+				if (ImRegion.TEXT_DIRECTION_BOTTOM_UP.equals(textDirection))
+					cellBounds = new BoundingBox(rows[r].bounds.left, rows[r].bounds.right, cols[c].bounds.top, cols[c].bounds.bottom);
+				else if (ImRegion.TEXT_DIRECTION_TOP_DOWN.equals(textDirection))
+					cellBounds = new BoundingBox(rows[r].bounds.left, rows[r].bounds.right, cols[c].bounds.top, cols[c].bounds.bottom);
+				else cellBounds = new BoundingBox(cols[c].bounds.left, cols[c].bounds.right, rows[r].bounds.top, rows[r].bounds.bottom);
 				
 				//	get cell words
 				ImWord[] cellWords = page.getWordsInside(cellBounds);
 				if (ignoreWords != null)
 					cellWords = filterWords(cellWords, ignoreWords);
 //				
-//				//	shrink cell bounds to words
+//				//	shrink cell bounds to words TODOne omit this
 //				if (cellWords.length != 0) {
 //					int cbLeft = cellBounds.right;
 //					int cbRight = cellBounds.left;
@@ -2351,6 +2746,22 @@ public class ImUtils implements ImagingConstants {
 		return cells;
 	}
 	
+	private static Comparator getTableRowOrder(String textDirection) {
+		if (ImRegion.TEXT_DIRECTION_BOTTOM_UP.equals(textDirection))
+			return leftRightOrder;
+		else if (ImRegion.TEXT_DIRECTION_TOP_DOWN.equals(textDirection))
+			return Collections.reverseOrder(leftRightOrder);
+		else return topDownOrder;
+	}
+	
+	private static Comparator getTableColumnOrder(String textDirection) {
+		if (ImRegion.TEXT_DIRECTION_BOTTOM_UP.equals(textDirection))
+			return Collections.reverseOrder(topDownOrder);
+		else if (ImRegion.TEXT_DIRECTION_TOP_DOWN.equals(textDirection))
+			return topDownOrder;
+		else return leftRightOrder;
+	}
+	
 	/**
 	 * Order the words in a table. This method first makes the words from each
 	 * cell into a separate logical stream, then concatenates these streams
@@ -2382,27 +2793,41 @@ public class ImUtils implements ImagingConstants {
 				int lrWords = 0;
 				int buWords = 0;
 				int tdWords = 0;
+				int udWords = 0;
 				for (int w = 0; w < cellWords.length; w++) {
 					String wordDirection = ((String) (cellWords[w].getAttribute(ImWord.TEXT_DIRECTION_ATTRIBUTE, ImWord.TEXT_DIRECTION_LEFT_RIGHT)));
 					if (ImWord.TEXT_DIRECTION_BOTTOM_UP.equals(wordDirection))
 						buWords++;
 					else if (ImWord.TEXT_DIRECTION_TOP_DOWN.equals(wordDirection))
 						tdWords++;
+					else if (ImWord.TEXT_DIRECTION_RIGHT_LEFT_UPSIDE_DOWN.equals(wordDirection))
+						udWords++;
 					else lrWords++;
 				}
 				
 				//	cut out cell words to avoid order mix-up errors (cut annotations as well, must not cross cell boundaries anyway)
+//				System.out.println("Ordering words in " + cells[r][c].bounds + ": " + Arrays.toString(cellWords));
 				makeStream(cellWords, null, null, true);
 				
 				//	order cell words dependent on direction
-				if ((lrWords < buWords) && (tdWords < buWords))
+				if ((lrWords < buWords) && (tdWords < buWords) && (udWords < buWords))
 					orderStream(cellWords, bottomUpLeftRightOrder);
-				else if ((lrWords < tdWords) && (buWords < tdWords))
+				else if ((lrWords < tdWords) && (buWords < tdWords) && (udWords < tdWords))
 					orderStream(cellWords, topDownRightLeftOrder);
+				else if ((lrWords < udWords) && (buWords < udWords) && (tdWords < udWords))
+					orderStream(cellWords, rightLeftBottomUpOrder);
 				else orderStream(cellWords, leftRightTopDownOrder);
+//				System.out.println(" ==> " + Arrays.toString(cellWords));
+				
+				//	remove cell internal paragraph breaks
+				for (int w = 0; w < (cellWords.length - 1); w++) {
+					if (cellWords[w].getNextRelation() == ImWord.NEXT_RELATION_PARAGRAPH_END)
+						cellWords[w].setNextRelation(ImWord.NEXT_RELATION_SEPARATE);
+				}
 				
 				//	attach cell word stream
 				Arrays.sort(cellWords, textStreamOrder);
+//				System.out.println(" ==> " + Arrays.toString(cellWords));
 				if (lastCellEnd != null)
 					cellWords[0].setPreviousWord(lastCellEnd);
 				lastCellEnd = cellWords[cellWords.length-1];
@@ -2419,65 +2844,8 @@ public class ImUtils implements ImagingConstants {
 	 * @return true if the rows of the argument tables are compatible
 	 */
 	public static boolean areTableRowsCompatible(ImRegion table1, ImRegion table2) {
-//		return areTableRowsCompatible(table1, table2, false);
 		return areTableRowsCompatible(table1, table2, true);
 	}
-//	
-//	/**
-//	 * Test if the rows of two tables are compatible. In particular, this means
-//	 * that (a) the tables have the same number of rows, and (b) the rows have
-//	 * the same leading labels. In addition, both tables have to be attached to
-//	 * their pages.
-//	 * @param table1 the first table
-//	 * @param table2 the second table
-//	 * @param fuzzyLabels allow some degree of mismatch in row labels?
-//	 * @return true if the rows of the argument tables are compatible
-//	 */
-//	public static boolean areTableRowsCompatible(ImRegion table1, ImRegion table2, boolean fuzzyLabels) {
-//		if ((table1.getPage() == null) || (table2.getPage() == null))
-//			return false;
-//		
-//		//	get cells
-//		ImRegion[][] cells1 = getTableCells(table1, null, null);
-//		if (cells1 == null)
-//			return false;
-//		ImRegion[][] cells2 = getTableCells(table2, null, null);
-//		if (cells2 == null)
-//			return false;
-//		
-//		//	do we have the same number of rows?
-//		if (cells1.length != cells2.length)
-//			return false;
-//		
-//		//	compare row labels (safe for header row)
-//		int labelMatchCount = 0;
-//		int labelMismatchCount = 0;
-//		for (int r = 1; r < cells1.length; r++) {
-//			ImWord[] words1 = cells1[r][0].getWords();
-//			ImWord[] words2 = cells2[r][0].getWords();
-//			if (words1.length != words2.length) {
-//				if (fuzzyLabels) {
-//					labelMismatchCount++;
-//					continue;
-//				}
-//				else return false;
-//			}
-//			if (words1.length == 0)
-//				continue;
-//			Arrays.sort(words1, textStreamOrder);
-//			String label1 = getString(words1[0], words1[words1.length-1], true);
-//			Arrays.sort(words2, textStreamOrder);
-//			String label2 = getString(words2[0], words2[words2.length-1], true);
-//			if (label1.equals(label2))
-//				labelMatchCount++;
-//			else if (fuzzyLabels)
-//				labelMismatchCount++;
-//			else return false;
-//		}
-//		
-//		//	(majority of) row labels match
-//		return ((labelMatchCount == 0) ? (labelMismatchCount == 0) : (labelMatchCount > labelMismatchCount));
-//	}
 	
 	/**
 	 * Test if the rows of two tables are compatible. In particular, this means
@@ -2510,8 +2878,8 @@ public class ImUtils implements ImagingConstants {
 			return true;
 		
 		//	get and compare row labels
-		String[] labels1 = ImUtils.getTableRowLabels(cells1);
-		String[] labels2 = ImUtils.getTableRowLabels(cells2);
+		String[] labels1 = ImUtils.getTableRowLabels(cells1, table1.getPage());
+		String[] labels2 = ImUtils.getTableRowLabels(cells2, table2.getPage());
 		if ((labels1 == null) || (labels2 == null) || (labels1.length != labels2.length))
 			return false;
 		for (int l = 1; l < labels1.length; l++) {
@@ -2541,17 +2909,20 @@ public class ImUtils implements ImagingConstants {
 			return null;
 		
 		//	return row labels
-		return getTableRowLabels(cells);
+		return getTableRowLabels(cells, table.getPage());
 	}
 	
-	private static String[] getTableRowLabels(ImRegion[][] cells) {
+	private static String[] getTableRowLabels(ImRegion[][] cells, ImPage page) {
 		String[] rowLabels = new String[cells.length];
 		for (int r = 0; r < cells.length; r++) {
 			if ((r != 0) && (cells[r][0] == cells[r-1][0])) {
 				rowLabels[r] = rowLabels[r-1];
 				continue;
 			}
-			ImWord[] words = cells[r][0].getWords();
+			ImWord[] words;
+			if (cells[r][0].getPage() == null)
+				words = page.getWordsInside(cells[r][0].bounds);
+			else words = cells[r][0].getWords();
 			if (words.length == 0)
 				rowLabels[r] = "";
 			else {
@@ -2597,67 +2968,8 @@ public class ImUtils implements ImagingConstants {
 	 * @return true if the columns of the argument tables are compatible
 	 */
 	public static boolean areTableColumnsCompatible(ImRegion table1, ImRegion table2) {
-//		return areTableColumnsCompatible(table1, table2, false);
 		return areTableColumnsCompatible(table1, table2, true);
 	}
-//	
-//	/**
-//	 * Test if the columns of two tables are compatible. In particular, this
-//	 * means that (a) the tables have the same number of columns, and (b) the
-//	 * columns have the same headers. In addition, both tables have to be
-//	 * attached to their pages. If <code>fuzzyHeaders</code> is
-//	 * <code>true</code>, the majority of the column headers has to match
-//	 * instead of all of them.
-//	 * @param table1 the first table
-//	 * @param table2 the second table
-//	 * @param fuzzyHeaders allow some degree of mismatch in column headers?
-//	 * @return true if the columns of the argument tables are compatible
-//	 */
-//	public static boolean areTableColumnsCompatible(ImRegion table1, ImRegion table2, boolean fuzzyHeaders) {
-//		if ((table1.getPage() == null) || (table2.getPage() == null))
-//			return false;
-//		
-//		//	get cells
-//		ImRegion[][] cells1 = getTableCells(table1, null, null);
-//		if (cells1 == null)
-//			return false;
-//		ImRegion[][] cells2 = getTableCells(table2, null, null);
-//		if (cells2 == null)
-//			return false;
-//		
-//		//	do we have the same number of columns
-//		if (cells1[0].length != cells2[0].length)
-//			return false;
-//		
-//		//	compare column headers (safe for label column)
-//		int headerMatchCount = 0;
-//		int headerMismatchCount = 0;
-//		for (int c = 1; c < cells1[0].length; c++) {
-//			ImWord[] words1 = cells1[0][c].getWords();
-//			ImWord[] words2 = cells2[0][c].getWords();
-//			if (words1.length != words2.length) {
-//				if (fuzzyHeaders) {
-//					headerMismatchCount++;
-//					continue;
-//				}
-//				else return false;
-//			}
-//			if (words1.length == 0)
-//				continue;
-//			Arrays.sort(words1, textStreamOrder);
-//			String header1 = getString(words1[0], words1[words1.length-1], true);
-//			Arrays.sort(words2, textStreamOrder);
-//			String header2 = getString(words2[0], words2[words2.length-1], true);
-//			if (header1.equals(header2))
-//				headerMatchCount++;
-//			else if (fuzzyHeaders)
-//				headerMismatchCount++;
-//			else return false;
-//		}
-//		
-//		//	(majority of) column headers match
-//		return ((headerMatchCount == 0) ? (headerMismatchCount == 0) : (headerMatchCount > headerMismatchCount));
-//	}
 	
 	/**
 	 * Test if the columns of two tables are compatible. In particular, this
@@ -2690,8 +3002,8 @@ public class ImUtils implements ImagingConstants {
 			return true;
 		
 		//	get and compare column headers
-		String[] labels1 = ImUtils.getTableColumnHeaders(cells1);
-		String[] labels2 = ImUtils.getTableColumnHeaders(cells2);
+		String[] labels1 = ImUtils.getTableColumnHeaders(cells1, table1.getPage());
+		String[] labels2 = ImUtils.getTableColumnHeaders(cells2, table2.getPage());
 		if ((labels1 == null) || (labels2 == null) || (labels1.length != labels2.length))
 			return false;
 		for (int l = 1; l < labels1.length; l++) {
@@ -2721,17 +3033,20 @@ public class ImUtils implements ImagingConstants {
 			return null;
 		
 		//	return column headers
-		return getTableColumnHeaders(cells);
+		return getTableColumnHeaders(cells, table.getPage());
 	}
 	
-	private static String[] getTableColumnHeaders(ImRegion[][] cells) {
+	private static String[] getTableColumnHeaders(ImRegion[][] cells, ImPage page) {
 		String[] colHeaders = new String[cells[0].length];
 		for (int c = 0; c < cells[0].length; c++) {
 			if ((c != 0) && (cells[0][c] == cells[0][c-1])) {
 				colHeaders[c] = colHeaders[c-1];
 				continue;
 			}
-			ImWord[] words = cells[0][c].getWords();
+			ImWord[] words;
+			if (cells[0][c].getPage() == null)
+				words = page.getWordsInside(cells[0][c].bounds);
+			else words = cells[0][c].getWords();
 			if (words.length == 0)
 				colHeaders[c] = "";
 			else {
@@ -2777,6 +3092,31 @@ public class ImUtils implements ImagingConstants {
 	 * @return the region representing the table with the argument ID
 	 */
 	public static ImRegion getTableForId(ImDocument doc, String id) {
+//		if (id == null)
+//			return null;
+//		if (!id.matches("[0-9]+\\.\\[[0-9]+\\,[0-9]+\\,[0-9]+\\,[0-9]+\\]"))
+//			return null;
+//		ImPage page = doc.getPage(Integer.parseInt(id.substring(0, id.indexOf('.'))));
+//		if (page == null)
+//			return null;
+//		ImRegion[] pageTables = page.getRegions(ImRegion.TABLE_TYPE);
+//		for (int t = 0; t < pageTables.length; t++) {
+//			if (id.endsWith("." + pageTables[t].bounds))
+//				return pageTables[t];
+//		}
+//		return null;
+		return getRegionForId(doc, ImRegion.TABLE_TYPE, id);
+	}
+	
+	/**
+	 * Retrieve a region from an Image Markup document by its type and ID. The
+	 * ID has the form '&lt;pageId&gt;.&lt;boundingBox&gt;'.
+	 * @param doc the document to retrieve the region from
+	 * @param type the region type
+	 * @param id the region ID
+	 * @return the region with the argument ID
+	 */
+	public static ImRegion getRegionForId(ImDocument doc, String type, String id) {
 		if (id == null)
 			return null;
 		if (!id.matches("[0-9]+\\.\\[[0-9]+\\,[0-9]+\\,[0-9]+\\,[0-9]+\\]"))
@@ -2784,10 +3124,10 @@ public class ImUtils implements ImagingConstants {
 		ImPage page = doc.getPage(Integer.parseInt(id.substring(0, id.indexOf('.'))));
 		if (page == null)
 			return null;
-		ImRegion[] pageTables = page.getRegions(ImRegion.TABLE_TYPE);
-		for (int t = 0; t < pageTables.length; t++) {
-			if (id.endsWith("." + pageTables[t].bounds))
-				return pageTables[t];
+		ImRegion[] pageRegions = page.getRegions(type);
+		for (int r = 0; r < pageRegions.length; r++) {
+			if (id.endsWith("." + pageRegions[r].bounds))
+				return pageRegions[r];
 		}
 		return null;
 	}
@@ -2894,9 +3234,9 @@ public class ImUtils implements ImagingConstants {
 		
 		//	get rows and columns
 		ImRegion[] rows = getRegionsInside(table.getPage(), table.bounds, ImRegion.TABLE_ROW_TYPE, false);
-		Arrays.sort(rows, topDownOrder);
+		//Arrays.sort(rows, topDownOrder);
 		ImRegion[] cols = getRegionsInside(table.getPage(), table.bounds, ImRegion.TABLE_COL_TYPE, false);
-		Arrays.sort(cols, leftRightOrder);
+		//Arrays.sort(cols, leftRightOrder);
 		
 		//	get cells and backing page
 		ImRegion[][] cells = getTableCells(table, null, rows, cols, false);
@@ -2984,9 +3324,9 @@ public class ImUtils implements ImagingConstants {
 				
 				//	get columns and rows of current table
 				ImRegion[] rows = getRegionsInside(page, tables[ty][tx].bounds, ImRegion.TABLE_ROW_TYPE, false);
-				Arrays.sort(rows, topDownOrder);
+				//Arrays.sort(rows, topDownOrder);
 				ImRegion[] cols = getRegionsInside(page, tables[ty][tx].bounds, ImRegion.TABLE_COL_TYPE, false);
-				Arrays.sort(cols, leftRightOrder);
+				//Arrays.sort(cols, leftRightOrder);
 				
 				//	initialize data on first table in grid row 
 				if (rowData == null) {

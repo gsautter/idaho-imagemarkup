@@ -226,7 +226,10 @@ public class PdfImageDecoder {
 				command.add("-negate");
 			else if (!decodeInverted && "DeviceN".equals(colorSpace) && "DeviceCMYK".equals(altColorSpace))
 				command.add("-negate");
-			//	TODO figure out if we have to negate if only decodeInverted is set ...
+			//	TODOne figure out if we have to negate if only decodeInverted is set ...
+			//	==> turns out we do ...
+			else if (decodeInverted)
+				command.add("-negate");
 			command.add("png:-");
 			System.out.println("PdfImageDecoder: command is " + command);
 //			Process imProcess = Runtime.getRuntime().exec(((String[]) command.toArray(new String[command.size()])), environment, imPath.getAbsoluteFile());

@@ -31,6 +31,8 @@ import de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImageInputStream;
+import de.uka.ipd.idaho.im.util.ImObjectTransformer;
+import de.uka.ipd.idaho.im.util.ImObjectTransformer.AttributeTransformer;
 
 /**
  * A layout related object in an image markup document. If a layout object is
@@ -42,6 +44,88 @@ import de.uka.ipd.idaho.gamta.util.imaging.PageImageInputStream;
  */
 public abstract class ImLayoutObject extends AbstractAttributed implements ImObject {
 	
+	/**
+	 * Carrier class of helper methods for local UID and UUID computation.
+	 * 
+	 * @author sautter
+	 */
+	public static class LayoutObjectUuidHelper extends UuidHelper {
+		
+		/**
+		 * Combine an object type with the page extent and top-left and
+		 * bottom-right corner into a local object UID.
+		 * @param type the object type
+		 * @param pageId the page ID
+		 * @param bounds the bounding box of the object
+		 * @return the local UID of the object described by the arguments
+		 */
+		public static String getLocalUID(String type, int pageId, BoundingBox bounds) {
+			return getLocalUID(type, pageId, -1, bounds.left, bounds.top, bounds.right, bounds.bottom);
+		}
+	}
+	
+	/** the text direction indicating a layout object oriented left to right */
+	public static final String TEXT_DIRECTION_LEFT_RIGHT = "lr";
+	
+	/** the text direction indicating a layout object oriented bottom up */
+	public static final String TEXT_DIRECTION_BOTTOM_UP = "bu";
+	
+	/** the text direction indicating a layout object oriented top down */
+	public static final String TEXT_DIRECTION_TOP_DOWN = "td";
+	
+	/** the text direction indicating a layout object oriented right to left and upside-down */
+	public static final String TEXT_DIRECTION_RIGHT_LEFT_UPSIDE_DOWN = "ud";
+	
+	/** the name of the attribute holding the text direction a layout object is
+	 * oriented in, namely 'textDirection'. Its associated values are 'lr' for
+	 * left-to-right (the default, can be omitted), 'bu' for bottom-up, 'td'
+	 * for top-down, or 'ud' for upside-down (and thus also right-to-left).
+	 * Other values may be added over time to represent non-Cartesian text
+	 * orientations. */
+	public static final String TEXT_DIRECTION_ATTRIBUTE = "textDirection";
+	
+	static String transformTextDirection(Object value, ImObjectTransformer transformer) {
+		if (TEXT_DIRECTION_LEFT_RIGHT.equals(value) || (value == null) /* the default, need to transform it back */) {
+			if (transformer.turnDegrees == 90)
+				return TEXT_DIRECTION_TOP_DOWN;
+			else if (transformer.turnDegrees == -90)
+				return TEXT_DIRECTION_BOTTOM_UP;
+			else return null;//TEXT_DIRECTION_LEFT_RIGHT;
+		}
+		else if (TEXT_DIRECTION_BOTTOM_UP.equals(value)) {
+			if (transformer.turnDegrees == 90)
+				return null;//TEXT_DIRECTION_LEFT_RIGHT;
+			else if (transformer.turnDegrees == -90)
+				return TEXT_DIRECTION_RIGHT_LEFT_UPSIDE_DOWN;
+			else return TEXT_DIRECTION_BOTTOM_UP;
+		}
+		else if (TEXT_DIRECTION_TOP_DOWN.equals(value)) {
+			if (transformer.turnDegrees == 90)
+				return TEXT_DIRECTION_RIGHT_LEFT_UPSIDE_DOWN;
+			else if (transformer.turnDegrees == -90)
+				return null;//TEXT_DIRECTION_LEFT_RIGHT;
+			else return TEXT_DIRECTION_TOP_DOWN;
+		}
+		else if (TEXT_DIRECTION_RIGHT_LEFT_UPSIDE_DOWN.equals(value)) {
+			if (transformer.turnDegrees == 90)
+				return TEXT_DIRECTION_BOTTOM_UP;
+			else if (transformer.turnDegrees == -90)
+				return TEXT_DIRECTION_TOP_DOWN;
+			else return TEXT_DIRECTION_RIGHT_LEFT_UPSIDE_DOWN;
+		}
+		else return null;
+	}
+	static {
+		ImObjectTransformer.addGlobalAttributeTransformer(new AttributeTransformer() {
+			public boolean canTransformAttribute(String name) {
+				return TEXT_DIRECTION_ATTRIBUTE.equals(name);
+			}
+			public Object transformAttributeValue(ImObject object, String name, Object value, ImObjectTransformer transformer) {
+				return transformTextDirection(value, transformer);
+			}
+		});
+	}
+	
 	private ImDocument doc;
 	
 	private String type = "object";
@@ -51,6 +135,9 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 	
 	/** the ID of the page the object lies on */
 	public final int pageId;
+	
+	private String luid = null;
+	private String uuid = null;
 	
 	/** Constructor
 	 * @param doc the document the layout object belongs to
@@ -87,9 +174,12 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 	public void setType(String type) {
 		String oldType = this.type;
 		this.type = type;
+		String oldLuid = this.luid;
+		this.luid = null;
+		this.uuid = null;
 		if (this.getPage() != null) {
 			this.getPage().layoutObjectTypeChanged(this, oldType);
-			this.doc.notifyTypeChanged(this, oldType);
+			this.doc.notifyTypeChanged(this, oldType, oldLuid);
 		}
 	}
 	
@@ -98,6 +188,24 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 	 */
 	public String getLocalID() {
 		return (this.type + "@" + this.pageId + "." + this.bounds.toString());
+	}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.im.ImObject#getLocalUID()
+	 */
+	public String getLocalUID() {
+		if (this.luid == null)
+			this.luid = LayoutObjectUuidHelper.getLocalUID(this.getType(), this.pageId, this.bounds);
+		return this.luid;
+	}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.im.ImObject#getUUID()
+	 */
+	public String getUUID() {
+		if (this.uuid == null)
+			this.uuid = UuidHelper.getUUID(this);
+		return this.uuid;
 	}
 	
 	/* (non-Javadoc)

@@ -33,7 +33,9 @@ import java.awt.image.BufferedImage;
 import java.util.Iterator;
 import java.util.TreeMap;
 
+import de.uka.ipd.idaho.easyIO.util.RandomByteSource;
 import de.uka.ipd.idaho.gamta.Attributed;
+import de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed;
 
 /**
  * A font in an Image Markup document that originates from a born-digital
@@ -41,7 +43,7 @@ import de.uka.ipd.idaho.gamta.Attributed;
  * 
  * @author sautter
  */
-public class ImFont implements ImObject {
+public class ImFont extends AbstractAttributed implements ImObject {
 	
 	/** the name of the attribute holding the font name */
 	public static final String NAME_ATTRIBUTE = "name";
@@ -64,6 +66,15 @@ public class ImFont implements ImObject {
 	/** the name of the attribute indicating if the font is monospaced */
 	public static final String MONOSPACED_ATTRIBUTE = "monospaced";
 	
+	/** the character form indicating a sans-serif (gothic) font */
+	public static final byte CHAR_FORM_SANS_SERIF = ((byte) 'G');
+	
+	/** the character form indicating a serif (roman) font */
+	public static final byte CHAR_FORM_SERIF = ((byte) 'S');
+	
+	/** the character form indicating a monospaced font */
+	public static final byte CHAR_FORM_MONOSPACED = ((byte) 'M');
+	
 	/** the name of the attribute to a word storing the font specific char codes the word was composed from */
 	public static final String CHARACTER_CODE_STRING_ATTRIBUTE = "fontCharCodes";
 	
@@ -72,10 +83,12 @@ public class ImFont implements ImObject {
 	/** the name of the font */
 	public final String name;
 	
+	private String luid = null;
+	private String uuid = null;
+	
 	private boolean bold;
 	private boolean italics;
-	private boolean serif;
-	private boolean monospaced;
+	private byte charForm;
 	
 	private TreeMap characters = new TreeMap();
 	
@@ -107,12 +120,22 @@ public class ImFont implements ImObject {
 	 * @param monospaced is the font monospaced or not?
 	 */
 	public ImFont(ImDocument doc, String name, boolean bold, boolean italics, boolean serif, boolean monospaced) {
+		this(doc, name, bold, italics, ((monospaced ? CHAR_FORM_MONOSPACED : (serif ? CHAR_FORM_SERIF : CHAR_FORM_SANS_SERIF))));
+	}
+	
+	/** Constructor
+	 * @param doc the Image Markup document the font belongs to
+	 * @param name the font name
+	 * @param bold is the font bold?
+	 * @param italics is the font in italics?
+	 * @param charForm the char type (serif, sans-serif, or monospaced)
+	 */
+	public ImFont(ImDocument doc, String name, boolean bold, boolean italics, byte charForm) {
 		this.doc = doc;
 		this.name = name;
 		this.bold = bold;
 		this.italics = italics;
-		this.serif = serif;
-		this.monospaced = monospaced;
+		this.charForm = charForm;
 	}
 	
 	/* (non-Javadoc)
@@ -127,6 +150,7 @@ public class ImFont implements ImObject {
 			this.setSerif(true);
 		else if (MONOSPACED_ATTRIBUTE.equals(name))
 			this.setMonospaced(true);
+		else super.setAttribute(name);
 	}
 	
 	/* (non-Javadoc)
@@ -165,7 +189,12 @@ public class ImFont implements ImObject {
 			this.addCharacter(charId, null, ((BufferedImage) value));
 			return oCharImage;
 		}
-		else return null;
+		else {
+			Object oldValue = super.setAttribute(name, value);
+			if (this.doc != null)
+				this.doc.notifyAttributeChanged(this, name, oldValue);
+			return oldValue;
+		}
 	}
 	
 	/* (non-Javadoc)
@@ -198,22 +227,24 @@ public class ImFont implements ImObject {
 			int charId = Integer.parseInt(name.substring((CHARACTER_IMAGE_ATTRIBUTE + "-").length()));
 			return this.getImage(charId);
 		}
-		else return def;
+		else return super.getAttribute(name, def);
 	}
 	
 	/* (non-Javadoc)
 	 * @see de.uka.ipd.idaho.gamta.Attributed#hasAttribute(java.lang.String)
 	 */
 	public boolean hasAttribute(String name) {
-		return (BOLD_ATTRIBUTE.equals(name) || ITALICS_ATTRIBUTE.equals(name) || SERIF_ATTRIBUTE.equals(name));
-	}
-	
-	/* (non-Javadoc)
-	 * @see de.uka.ipd.idaho.gamta.Attributed#getAttributeNames()
-	 */
-	public String[] getAttributeNames() {
-		String[] ans = {BOLD_ATTRIBUTE, ITALICS_ATTRIBUTE, SERIF_ATTRIBUTE, MONOSPACED_ATTRIBUTE};
-		return ans;
+		if (BOLD_ATTRIBUTE.equals(name) && this.bold)
+			return true;
+		else if (ITALICS_ATTRIBUTE.equals(name) && this.italics)
+			return true;
+		else if (SERIF_ATTRIBUTE.equals(name) && this.isSerif())
+			return true;
+		else if (MONOSPACED_ATTRIBUTE.equals(name) && this.isMonospaced())
+			return true;
+//		else if (TYPE_ATTRIBUTE.equals(name))
+//			return true;
+		else return super.hasAttribute(name);
 	}
 	
 	/* (non-Javadoc)
@@ -240,7 +271,12 @@ public class ImFont implements ImObject {
 			this.setMonospaced(false);
 			return new Boolean(wasMonospaced);
 		}
-		else return null;
+		else {
+			Object oldValue = super.removeAttribute(name);
+			if (this.doc != null)
+				this.doc.notifyAttributeChanged(this, name, oldValue);
+			return oldValue;
+		}
 	}
 	
 	/* (non-Javadoc)
@@ -268,31 +304,63 @@ public class ImFont implements ImObject {
 	}
 	
 	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.im.ImObject#getLocalUID()
+	 */
+	public String getLocalUID() {
+		if (this.luid == null) {
+			String name = this.name;
+			while (name.length() < 10)
+				name = (name + name);
+			this.luid = (UuidHelper.asHex(this.name.hashCode(), 4) +
+					UuidHelper.asHex(-1, 2) +
+					String.valueOf(RandomByteSource.getHexCode(name.substring(0, 4).getBytes())) +
+					String.valueOf(RandomByteSource.getHexCode(name.substring(name.length() - 6).getBytes())) // PDF fonts tend to have these suffixes of 6 random letters
+				);
+		}
+		return this.luid;
+	}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.im.ImObject#getUUID()
+	 */
+	public String getUUID() {
+		if ((this.uuid == null) && (this.doc != null))
+			this.uuid = UuidHelper.getUUID(this, this.doc.docId);
+		return this.uuid;
+	}
+	
+	/* (non-Javadoc)
 	 * @see de.uka.ipd.idaho.im.ImObject#getDocument()
 	 */
 	public ImDocument getDocument() {
 		return this.doc;
+	}
+	void setDocument(ImDocument doc) {
+		if (this.doc == doc)
+			return;
+		this.doc = doc;
+		this.uuid = null;
 	}
 	
 	/* (non-Javadoc)
 	 * @see de.uka.ipd.idaho.im.ImObject#getDocumentProperty(java.lang.String)
 	 */
 	public String getDocumentProperty(String propertyName) {
-		return this.doc.getDocumentProperty(propertyName);
+		return ((this.doc == null) ? null : this.doc.getDocumentProperty(propertyName));
 	}
 	
 	/* (non-Javadoc)
 	 * @see de.uka.ipd.idaho.im.ImObject#getDocumentProperty(java.lang.String, java.lang.String)
 	 */
 	public String getDocumentProperty(String propertyName, String defaultValue) {
-		return this.doc.getDocumentProperty(propertyName, defaultValue);
+		return ((this.doc == null) ? null : this.doc.getDocumentProperty(propertyName, defaultValue));
 	}
 	
 	/* (non-Javadoc)
 	 * @see de.uka.ipd.idaho.im.ImObject#getDocumentPropertyNames()
 	 */
 	public String[] getDocumentPropertyNames() {
-		return this.doc.getDocumentPropertyNames();
+		return ((this.doc == null) ? null : this.doc.getDocumentPropertyNames());
 	}
 	
 	/**
@@ -311,7 +379,8 @@ public class ImFont implements ImObject {
 		if (this.bold == bold)
 			return;
 		this.bold = bold;
-		this.doc.notifyAttributeChanged(this, BOLD_ATTRIBUTE, (this.bold ? null : "true"));
+		if (this.doc != null)
+			this.doc.notifyAttributeChanged(this, BOLD_ATTRIBUTE, (this.bold ? null : "true"));
 	}
 	
 	/**
@@ -330,7 +399,8 @@ public class ImFont implements ImObject {
 		if (this.italics == italics)
 			return;
 		this.italics = italics;
-		this.doc.notifyAttributeChanged(this, ITALICS_ATTRIBUTE, (this.italics ? null : "true"));
+		if (this.doc != null)
+			this.doc.notifyAttributeChanged(this, ITALICS_ATTRIBUTE, (this.italics ? null : "true"));
 	}
 	
 	/**
@@ -338,7 +408,7 @@ public class ImFont implements ImObject {
 	 * @return true if the font is serif, false otherwise
 	 */
 	public boolean isSerif() {
-		return this.serif;
+		return (this.charForm == CHAR_FORM_SERIF);
 	}
 	
 	/**
@@ -346,10 +416,20 @@ public class ImFont implements ImObject {
 	 * @param serif is the font serif?
 	 */
 	public void setSerif(boolean serif) {
-		if (this.serif == serif)
+		if (serif == this.isSerif())
 			return;
-		this.serif = serif;
-		this.doc.notifyAttributeChanged(this, SERIF_ATTRIBUTE, (this.serif ? null : "true"));
+		if (serif) {
+			if (this.isMonospaced() && (this.doc != null))
+				this.doc.notifyAttributeChanged(this, MONOSPACED_ATTRIBUTE, "true");
+			this.charForm = CHAR_FORM_SERIF;
+			if (this.doc != null)
+				this.doc.notifyAttributeChanged(this, SERIF_ATTRIBUTE, null);
+		}
+		else {
+			this.charForm = CHAR_FORM_SANS_SERIF;
+			if (this.doc != null)
+				this.doc.notifyAttributeChanged(this, SERIF_ATTRIBUTE, "true");
+		}
 	}
 	
 	/**
@@ -357,7 +437,7 @@ public class ImFont implements ImObject {
 	 * @return true if the font is monospaced, false otherwise
 	 */
 	public boolean isMonospaced() {
-		return this.monospaced;
+		return (this.charForm == CHAR_FORM_MONOSPACED);
 	}
 	
 	/**
@@ -366,10 +446,20 @@ public class ImFont implements ImObject {
 	 * @param monospaced is the font monospaced?
 	 */
 	public void setMonospaced(boolean monospaced) {
-		if (this.monospaced == monospaced)
+		if (monospaced == this.isMonospaced())
 			return;
-		this.monospaced = monospaced;
-		this.doc.notifyAttributeChanged(this, MONOSPACED_ATTRIBUTE, (this.monospaced ? null : "true"));
+		if (monospaced) {
+			if (this.isSerif() && (this.doc != null))
+				this.doc.notifyAttributeChanged(this, SERIF_ATTRIBUTE, "true");
+			this.charForm = CHAR_FORM_MONOSPACED;
+			if (this.doc != null)
+				this.doc.notifyAttributeChanged(this, MONOSPACED_ATTRIBUTE, null);
+		}
+		else {
+			this.charForm = CHAR_FORM_SANS_SERIF;
+			if (this.doc != null)
+				this.doc.notifyAttributeChanged(this, MONOSPACED_ATTRIBUTE, "true");
+		}
 	}
 	
 	/**
@@ -409,11 +499,33 @@ public class ImFont implements ImObject {
 	 * character was added or modified as a result of the call to this method.
 	 * @param charId the font-local ID of the character
 	 * @param charStr the Unicode representation of the character
-	 * @param charImageHex the character image as extracted from the source
+	 * @param charImageHex the HEX representation of the character image
 	 * @return true if the font was modified, false otherwise
 	 */
 	public boolean addCharacter(int charId, String charStr, String charImageHex) {
-		return this.addCharacter(charId, charStr, decodeCharacterImage(charImageHex));
+		return this.addCharacter(charId, charStr, decodeCharacterImage(charImageHex, 32));
+	}
+	
+	/**
+	 * Add a character to the font. The character string is supposed to hold a
+	 * Unicode representation of the character, preferably one consisting of
+	 * individual letters, digits, symbols, or punctuation marks, rather than
+	 * ligature characters or the like. The argument character image is the
+	 * glyph corresponding to the character in the source document, if any is
+	 * explicitly given there; it allows for users to double-check and modify
+	 * the transcription of glyphs to Unicode characters. The character image
+	 * string is parsed as a hex encoding of a black-and-white bitmap with the
+	 * argument height.
+	 * The returned boolean indicates if the font was modified, i.e., if a
+	 * character was added or modified as a result of the call to this method.
+	 * @param charId the font-local ID of the character
+	 * @param charStr the Unicode representation of the character
+	 * @param charImageHex the HEX representation of the character image
+	 * @param charImageHeight the height of the character image
+	 * @return true if the font was modified, false otherwise
+	 */
+	public boolean addCharacter(int charId, String charStr, String charImageHex, int charImageHeight) {
+		return this.addCharacter(charId, charStr, decodeCharacterImage(charImageHex, charImageHeight));
 	}
 	
 	/**
@@ -434,6 +546,8 @@ public class ImFont implements ImObject {
 	 * @return true if the font was modified, false otherwise
 	 */
 	public boolean addCharacter(int charId, String charStr, BufferedImage charImage) {
+		if ((charStr == null) && (charImage == null))
+			return false;
 		ImCharacter chr = ((ImCharacter) this.characters.get(new Integer(charId)));
 		if (chr == null) {
 			chr = new ImCharacter(charId, charStr, charImage);
@@ -445,15 +559,35 @@ public class ImFont implements ImObject {
 			modified = true;
 			String oCharStr = chr.str;
 			chr.str = charStr;
-			this.doc.notifyAttributeChanged(this, (CHARACTER_STRING_ATTRIBUTE + "-" + charId), oCharStr);
+			if (this.doc != null)
+				this.doc.notifyAttributeChanged(this, (CHARACTER_STRING_ATTRIBUTE + "-" + charId), oCharStr);
 		}
 		if ((charImage != null) && !characterImagesEqual(charImage, chr.image)) {
 			modified = true;
 			BufferedImage oCharImage = chr.image;
 			chr.image = charImage;
-			this.doc.notifyAttributeChanged(this, (CHARACTER_IMAGE_ATTRIBUTE + "-" + charId), oCharImage);
+			if (this.doc != null)
+				this.doc.notifyAttributeChanged(this, (CHARACTER_IMAGE_ATTRIBUTE + "-" + charId), oCharImage);
 		}
 		return modified;
+	}
+	
+	/**
+	 * Add a character to the font. The returned boolean indicates if the font
+	 * was modified, i.e., if a character with the argument ID was present
+	 * before the call to this method.
+	 * @param charId the font-local ID of the character to remove
+	 * @return true if the font was modified, false otherwise
+	 */
+	public boolean removeCharacter(int charId) {
+		ImCharacter chr = ((ImCharacter) this.characters.remove(new Integer(charId)));
+		if (chr == null)
+			return false;
+		if ((chr.str != null) && (this.doc != null))
+			this.doc.notifyAttributeChanged(this, (CHARACTER_STRING_ATTRIBUTE + "-" + charId), chr.str);
+		if ((chr.image != null) && (this.doc != null))
+			this.doc.notifyAttributeChanged(this, (CHARACTER_IMAGE_ATTRIBUTE + "-" + charId), chr.image);
+		return true;
 	}
 	
 	/**
@@ -513,20 +647,26 @@ public class ImFont implements ImObject {
 	private static final int whiteRgb = Color.WHITE.getRGB();
 	private static final int blackRgb = Color.BLACK.getRGB();
 	
-	private static BufferedImage decodeCharacterImage(String charImageHex) {
+	private static BufferedImage decodeCharacterImage(String charImageHex, int height) {
 		if (charImageHex == null)
 			return null;
-		int charImageWidth = (charImageHex.length() / 8);
+		int charImageSize = (charImageHex.length() * 4 /* number of pixels per HEX digit */);
+		int charImageWidth = (charImageSize / height);
 		if (charImageWidth == 0)
 			return null;
 		
-		BufferedImage charImage = new BufferedImage(charImageWidth, 32, BufferedImage.TYPE_BYTE_BINARY);
+		BufferedImage charImage = new BufferedImage(charImageWidth, height, BufferedImage.TYPE_BYTE_BINARY);
 		int x = 0;
 		int y = 0;
 		int hex;
 		int hexMask;
 		for (int h = 0; h < charImageHex.length(); h++) {
-			hex = Integer.parseInt(charImageHex.substring(h, (h+1)), 16);
+			try {
+				hex = Integer.parseInt(charImageHex.substring(h, (h+1)), 16);
+			}
+			catch (NumberFormatException nfe) {
+				return null; // whatever input we got here ...
+			}
 			hexMask = 8;
 			while (hexMask != 0) {
 				charImage.setRGB(x++, y, (((hex & hexMask) == 0) ? whiteRgb : blackRgb));
@@ -550,7 +690,7 @@ public class ImFont implements ImObject {
 		StringBuffer charImageHex = new StringBuffer();
 		for (int y = 0; y < charImage.getHeight(); y++)
 			for (int x = 0; x < charImage.getWidth(); x++) {
-				if (charImage.getRGB(x, y) != whiteRgb)
+				if (charImage.getRGB(x, y) != whiteRgb) // TODO make this image type dependent !!!
 					hex += 1;
 				if (hexBits == 3) {
 					charImageHex.append(Integer.toString(hex, 16).toUpperCase());
@@ -590,16 +730,142 @@ public class ImFont implements ImObject {
 	 * @return the scaled character image
 	 */
 	public static BufferedImage scaleCharImage(BufferedImage charImage) {
-		if ((charImage == null) || (charImage.getHeight() == 32))
+		return scaleCharImage(charImage, 32);
+	}
+	
+	/**
+	 * Scale a character image to a specific number of pixels high and
+	 * proportional width. If the argument image already has the argument
+	 * height, it is simply returned. In any case, the type of the returned
+	 * image is the same as that of the argument image.
+	 * @param charImage the character image to scale
+	 * @param height the height to scale to
+	 * @return the scaled character image
+	 */
+	public static BufferedImage scaleCharImage(BufferedImage charImage, int height) {
+		return scaleCharImage(charImage, height, true);
+	}
+	
+	private static BufferedImage scaleCharImage(BufferedImage charImage, int height, boolean allowStepping) {
+		if ((charImage == null) || (charImage.getHeight() == height))
 			return charImage;
-		BufferedImage sCharImage = new BufferedImage(Math.max(1, ((charImage.getWidth() * 32) / charImage.getHeight())), 32, charImage.getType());
+		
+		/* TODOne Prevent thin lines in char images from disappearing altogether on scale-down:
+		 * - round down on thick side on size reduction ...
+		 * - ... always going black if third (or even fourth) of to-aggregate pixels are set
+		 * - scale rendered char images to closest multiple of target size ...
+		 * - ... and then scale down to height 64 or 32 in single go
+		 * ==> makes smaller char images somewhat heavier ...
+		 * ==> ... but makes sure actual char remains discernable from reduced image
+		 */
+//		if (allowStepping) /* scaling to height 128 or 64 before going to actual target height seems to benefit survival of thin lines */ {
+//			if (false) {}
+//			else if ((charImage.getHeight() > 128) && (height < 128)/* && (height != 96)*/ && (height != 64))
+//				charImage = scaleCharImage(charImage, 128, false);
+//			else if (charImage.getHeight() == 128) { /* no stepping down to 64 from 128, deteriorates image */ }
+////			else if ((charImage.getHeight() > 96) && (height < 96) && (height != 64))
+////				charImage = scaleCharImage(charImage, 96, false);
+////			else if (charImage.getHeight() == 96) { /* no stepping down to 64 from 96, deteriorates image */ }
+//			else if ((charImage.getHeight() > 64) && (height < 64))
+//				charImage = scaleCharImage(charImage, 64, false);
+//		}
+		
+		/* TODOne Turns out, stepped scale-down alone also deteriorates char images ...
+		 * ... but differently than direct scale-down
+		 * ==> combine scale-down methods ...
+		 * ==> ... and or-combine results
+		 * 
+		 * ==> Seems to do the trick, erring on thick side for very thin strokes just as desired
+		 */
+		BufferedImage i128charImage = null;
+		BufferedImage i64charImage = null;
+		if (allowStepping) /* scaling to height 128 or 64 before going to actual target height seems to benefit survival of other thin lines than direct way ==> combine paths */ {
+			if ((charImage.getHeight() > 128) && (height < 128) && (height != 64)) {
+				i128charImage = scaleCharImage(charImage, 128, false);
+				i128charImage = scaleCharImage(i128charImage, height, false);
+			}
+			if ((charImage.getHeight() > 64) && (height < 64)) {
+				i64charImage = scaleCharImage(charImage, 64, false);
+				i64charImage = scaleCharImage(i64charImage, height, false);
+			}
+		}
+		
+		//	perform normal scale-down
+		BufferedImage sCharImage = new BufferedImage(Math.max(1, ((charImage.getWidth() * height) / charImage.getHeight())), height, charImage.getType());
+//		BufferedImage sCharImage = new BufferedImage(Math.max(1, ((charImage.getWidth() * height) / charImage.getHeight())), height, BufferedImage.TYPE_BYTE_GRAY); ==> GRAYSCALE DOESN'T SEEM TO MAKE A DIFFERENCE
 		Graphics2D sCiGr = sCharImage.createGraphics();
+//		sCiGr.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON); ==> ANTI-ALIASING DOESN'T SEEM TO MAKE A DIFFERENCE
 		sCiGr.setColor(Color.WHITE);
 		sCiGr.fillRect(0, 0, sCharImage.getWidth(), sCharImage.getHeight());
-		sCiGr.scale((32.0 / charImage.getHeight()), (32.0 / charImage.getHeight()));
+		sCiGr.scale((((double) height) / charImage.getHeight()), (((double) height) / charImage.getHeight()));
 		sCiGr.drawImage(charImage, 0, 0, null);
 		sCiGr.dispose();
+		
+		//	combine with result of stepped scale-down via 128 pixels of height ...
+		if (i128charImage != null) {
+			for (int x = 0; x < sCharImage.getWidth(); x++)
+				for (int y = 0; y < sCharImage.getHeight(); y++) {
+					if (sCharImage.getRGB(x, y) != whiteRgb)
+						continue; // already set
+					if (i128charImage.getRGB(x, y) != whiteRgb)
+						sCharImage.setRGB(x, y, i128charImage.getRGB(x, y));
+//						sCharImage.setRGB(x, y, Color.RED.getRGB());
+				}
+		}
+		
+		//	... as well as result of stepped scale-down via 64 pixels of height ...
+		if (i64charImage != null) {
+			for (int x = 0; x < sCharImage.getWidth(); x++)
+				for (int y = 0; y < sCharImage.getHeight(); y++) {
+					if (sCharImage.getRGB(x, y) != whiteRgb)
+						continue; // already set
+					if (i64charImage.getRGB(x, y) != whiteRgb)
+						sCharImage.setRGB(x, y, i64charImage.getRGB(x, y));
+//						sCharImage.setRGB(x, y, Color.GREEN.getRGB());
+				}
+		}
 //		JOptionPane.showMessageDialog(null, new JLabel(new ImageIcon(charImage)), ("Scaled " + charImage.getWidth() + "x" + charImage.getHeight() + " to " + sCharImage.getWidth() + "x" + sCharImage.getHeight()), JOptionPane.PLAIN_MESSAGE, new ImageIcon(sCharImage));
 		return sCharImage;
 	}
+//	
+//	public static void main(String[] args) throws Exception {
+//		//ItalicsLowerZ.retainDiagonalStroke.png
+//		BufferedImage bi = ImageIO.read(new File("E:/Testdaten/PdfExtract/Fonts/ItalicsLowerZ.retainDiagonalStroke.png"));
+//		ImageDisplayDialog idd = new ImageDisplayDialog("ItalicsLowerZ.retainDiagonalStroke.png");
+//		idd.addImage(bi, "Original (Type " + bi.getType() + ")");
+//		BufferedImage s32Bi = scaleCharImage(bi, 32);
+//		idd.addImage(s32Bi, "Scale 32 (Type " + s32Bi.getType() + ")");
+//		BufferedImage s64Bi = scaleCharImage(bi, 64);
+//		idd.addImage(s64Bi, "Scale 64 (Type " + s64Bi.getType() + ")");
+//		BufferedImage s64s32Bi = scaleCharImage(s64Bi, 32);
+//		idd.addImage(s64s32Bi, "Scale 64-32 (Type " + s64s32Bi.getType() + ")");
+////		BufferedImage s96Bi = scaleCharImage(bi, 96);
+////		idd.addImage(s96Bi, "Scale 96 (Type " + s96Bi.getType() + ")");
+////		BufferedImage s96s32Bi = scaleCharImage(s96Bi, 32);
+////		idd.addImage(s96s32Bi, "Scale 96-32 (Type " + s96s32Bi.getType() + ")");
+//		BufferedImage s128Bi = scaleCharImage(bi, 128);
+//		idd.addImage(s128Bi, "Scale 128 (Type " + s128Bi.getType() + ")");
+//		BufferedImage s128s32Bi = scaleCharImage(s128Bi, 32);
+//		idd.addImage(s128s32Bi, "Scale 128-32 (Type " + s128s32Bi.getType() + ")");
+//		BufferedImage s128s64Bi = scaleCharImage(s128Bi, 64);
+//		idd.addImage(s128s64Bi, "Scale 128-64 (Type " + s128s64Bi.getType() + ")");
+//		BufferedImage s128s64s32Bi = scaleCharImage(s128s64Bi, 32);
+//		idd.addImage(s128s64s32Bi, "Scale 128-64-32 (Type " + s128s64s32Bi.getType() + ")");
+//		BufferedImage s256Bi = scaleCharImage(bi, 256);
+//		idd.addImage(s256Bi, "Scale 256 (Type " + s256Bi.getType() + ")");
+//		BufferedImage s256s32Bi = scaleCharImage(s256Bi, 32);
+//		idd.addImage(s256s32Bi, "Scale 256-32 (Type " + s256s32Bi.getType() + ")");
+//		BufferedImage s256s64Bi = scaleCharImage(s256Bi, 64);
+//		idd.addImage(s256s64Bi, "Scale 256-64 (Type " + s256s64Bi.getType() + ")");
+//		BufferedImage s256s64s32Bi = scaleCharImage(s256s64Bi, 32);
+//		idd.addImage(s256s64s32Bi, "Scale 256-64-32 (Type " + s256s64s32Bi.getType() + ")");
+//		BufferedImage s256s128Bi = scaleCharImage(s256Bi, 128);
+//		idd.addImage(s256s128Bi, "Scale 256-128 (Type " + s256s128Bi.getType() + ")");
+//		BufferedImage s256s128s32Bi = scaleCharImage(s256s128Bi, 32);
+//		idd.addImage(s256s128s32Bi, "Scale 256-128-32 (Type " + s256s128s32Bi.getType() + ")");
+//		
+//		idd.setSize(400, 400);
+//		idd.setLocationRelativeTo(null);
+//		idd.setVisible(true);
+//	}
 }

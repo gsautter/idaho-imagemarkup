@@ -546,14 +546,25 @@ public class ImDocumentIO implements ImagingConstants {
 					String fontStyle = charData.getValue(ImFont.STYLE_ATTRIBUTE, "");
 					font.setBold(fontStyle.indexOf("B") != -1);
 					font.setItalics(fontStyle.indexOf("I") != -1);
-					font.setSerif(fontStyle.indexOf("S") != -1);
-					font.setMonospaced(fontStyle.indexOf("M") != -1);
+//					font.setSerif(fontStyle.indexOf("S") != -1);
+//					font.setMonospaced(fontStyle.indexOf("M") != -1);
+					if (fontStyle.indexOf("M") != -1)
+						font.setMonospaced(true);
+					else if (fontStyle.indexOf("S") != -1)
+						font.setSerif(true);
 					doc.addFont(font);
 				}
 				int charId = Integer.parseInt(charData.getValue(ImFont.CHARACTER_ID_ATTRIBUTE, "-1"), 16);
 				String charStr = charData.getValue(ImFont.CHARACTER_STRING_ATTRIBUTE);
-				String charImageHex = charData.getValue(ImFont.CHARACTER_IMAGE_ATTRIBUTE);
-				font.addCharacter(charId, charStr, charImageHex);
+				if ((charId == 0) && (charStr.length() == 0)) {
+					String fontAttriutes = charData.getValue(ImFont.CHARACTER_IMAGE_ATTRIBUTE);
+					if (fontAttriutes != null)
+						setAttributes(font, fontAttriutes);
+				}
+				else if (charId > 0) {
+					String charImageHex = charData.getValue(ImFont.CHARACTER_IMAGE_ATTRIBUTE);
+					font.addCharacter(charId, charStr, charImageHex);
+				}
 			}
 		} catch (IOException ioe) { /* we might not have fonts ... */ }
 		
@@ -718,9 +729,6 @@ public class ImDocumentIO implements ImagingConstants {
 						}
 					};
 				else supplement = new ImSupplement(doc, sid, st, smt) {
-//					public String getId() {
-//						return sid;
-//					}
 					public InputStream getInputStream() throws IOException {
 						return doc.getInputStream(sfn);
 					}
@@ -795,8 +803,6 @@ public class ImDocumentIO implements ImagingConstants {
 		}
 		ImSupplement addSupplement(ImSupplement ims, boolean isExternal) {
 			if (isExternal) {
-//				String smt = ims.getMimeType();
-//				String sfn = (ims.getId() + "." + smt.substring(smt.lastIndexOf('/') + "/".length()));
 				String sfn = ims.getFileName();
 				this.dirtySupplementNames.add(sfn); // mark supplement as dirty
 			}
@@ -1259,6 +1265,17 @@ public class ImDocumentIO implements ImagingConstants {
 				fontStyle += "S";
 			if (fonts[f].isMonospaced())
 				fontStyle += "M";
+			//	TODOne activate this soon as update with respective loading code spreads
+			String fontAttributes = getAttributesString(fonts[f]);
+			if (fontAttributes.length() != 0) {
+				StringTupel fontData = new StringTupel();
+				fontData.setValue(ImFont.NAME_ATTRIBUTE, fonts[f].name);
+				fontData.setValue(ImFont.STYLE_ATTRIBUTE, fontStyle);
+				fontData.setValue(ImFont.CHARACTER_ID_ATTRIBUTE, "00");
+				fontData.setValue(ImFont.CHARACTER_STRING_ATTRIBUTE, "");
+				fontData.setValue(ImFont.CHARACTER_IMAGE_ATTRIBUTE, fontAttributes);
+				writeValues(keys, fontData, bw);
+			}
 			int[] charIDs = fonts[f].getCharacterIDs(); // no need to sort here, those IDs come sorted
 			for (int c = 0; c < charIDs.length; c++) {
 				StringTupel charData = new StringTupel();
@@ -1442,32 +1459,32 @@ public class ImDocumentIO implements ImagingConstants {
 		}
 	};
 	
-	private static void writeKeys(StringVector keys, BufferedWriter zbw) throws IOException {
+	private static void writeKeys(StringVector keys, BufferedWriter bw) throws IOException {
 		for (int k = 0; k < keys.size(); k++) {
 			if (k != 0)
-				zbw.write(',');
-			zbw.write('"');
-			zbw.write(keys.get(k));
-			zbw.write('"');
+				bw.write(',');
+			bw.write('"');
+			bw.write(keys.get(k));
+			bw.write('"');
 		}
-		zbw.newLine();
+		bw.newLine();
 	}
 	
-	private static void writeValues(StringVector keys, StringTupel st, BufferedWriter zbw) throws IOException {
+	private static void writeValues(StringVector keys, StringTupel st, BufferedWriter bw) throws IOException {
 		for (int k = 0; k < keys.size(); k++) {
 			if (k != 0)
-				zbw.write(',');
-			zbw.write('"');
+				bw.write(',');
+			bw.write('"');
 			String value = st.getValue(keys.get(k), "");
 			for (int c = 0; c < value.length(); c++) {
 				char ch = value.charAt(c);
 				if (ch == '"')
-					zbw.write('"');
-				zbw.write(ch);
+					bw.write('"');
+				bw.write(ch);
 			}
-			zbw.write('"');
+			bw.write('"');
 		}
-		zbw.newLine();
+		bw.newLine();
 	}
 	
 	private static BufferedWriter getWriter(ImDocumentData data, String entryName, boolean writeDirectly) throws IOException {
