@@ -999,10 +999,10 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		 */
 		public static class Path {
 			
-			/** the bounding box of the sub path (in page image resolution) */
+			/** the bounding box of the path (in page image resolution) */
 			public final BoundingBox bounds;
 			
-			/** the bounding box of the sub path (in page image resolution) */
+			/** the bounding box of the visible portion of the path (in page image resolution) */
 			public final BoundingBox clipBounds;
 			
 			/** the page internal position at which the path is rendered */
@@ -1017,6 +1017,7 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			private float dashPatternPhase = Float.NaN;
 			
 			private Color fillColor = null;
+			private boolean fillEvenOdd = false;
 			
 			private ArrayList subPaths = new ArrayList();
 			
@@ -1043,8 +1044,9 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 			 * @param dashPattern the dash pattern to use for stroking (if the path is stroked)
 			 * @param dashPatternPhase the phase of the dash pattern to use for stroking (if the path is stroked)
 			 * @param fillColor the color to use for filling sub path (if the path is filled)
+			 * @param fillEvenOdd fill using the even-odd rule? (if the path is filled)
 			 */
-			public Path(BoundingBox bounds, BoundingBox clipBounds, int renderOrderNumber, Color strokeColor, float lineWidth, byte lineCapStyle, byte lineJointStyle, float miterLimit, List dashPattern, float dashPatternPhase, Color fillColor) {
+			public Path(BoundingBox bounds, BoundingBox clipBounds, int renderOrderNumber, Color strokeColor, float lineWidth, byte lineCapStyle, byte lineJointStyle, float miterLimit, List dashPattern, float dashPatternPhase, Color fillColor, boolean fillEvenOdd) {
 				this(bounds, clipBounds, renderOrderNumber);
 				this.strokeColor = strokeColor;
 				this.lineWidth = lineWidth;
@@ -1054,6 +1056,7 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 				this.dashPattern = dashPattern;
 				this.dashPatternPhase = dashPatternPhase;
 				this.fillColor = fillColor;
+				this.fillEvenOdd = fillEvenOdd;
 			}
 			
 			/**
@@ -1125,6 +1128,15 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 				if (this.fillColor != null)
 					return true;
 				return ((this.strokeColor != null) && (this.lineWidth >= minAreaLineWidth));
+			}
+			
+			/**
+			 * Fill this path using the even-odd rule? This method returning
+			 * false indicates to use the zero-winding-number rule instead.
+			 * @return true to indicate using the even-odd rule for filling
+			 */
+			public boolean isFilledEvenOdd() {
+				return this.fillEvenOdd;
 			}
 			
 			/**
@@ -1224,6 +1236,11 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 					out.write("\"fillColor\": \"".getBytes("UTF-8"));
 					out.write(encodeColor(this.fillColor).getBytes("UTF-8"));
 					out.write("\",".getBytes("UTF-8"));
+					if (this.fillEvenOdd) {
+						out.write("\"fillEvenOdd\": ".getBytes("UTF-8"));
+						out.write("true".getBytes("UTF-8"));
+						out.write((int) ',');
+					}
 				}
 				
 				out.write("\"subPaths\": [".getBytes("UTF-8"));
@@ -1276,8 +1293,11 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 					path.dashPatternPhase = dashPatternPhase.floatValue();
 				
 				String fillColor = JsonParser.getString(data, "fillColor");
-				if (fillColor != null)
+				if (fillColor != null) {
 					path.fillColor = decodeColor(fillColor);
+					Boolean fillEvenOdd = JsonParser.getBoolean(data, "fillEvenOdd");
+					path.fillEvenOdd = ((fillEvenOdd != null) && fillEvenOdd.booleanValue());
+				}
 				
 				List subPaths = JsonParser.getArray(data, "subPaths");
 				if (subPaths != null)
@@ -1673,7 +1693,7 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 							BoundingBox tPathClipBounds = transformer.transformBounds(paths[p].clipBounds);
 							BasicStroke pathStroke = paths[p].getStroke();
 							if (pathStroke == null)
-								this.tPaths[p] = new Path(tPathBounds, tPathClipBounds, paths[p].renderOrderNumber, paths[p].getStrokeColor(), 1, ((byte) 0), ((byte) 0), 0, null, 0, paths[p].getFillColor());
+								this.tPaths[p] = new Path(tPathBounds, tPathClipBounds, paths[p].renderOrderNumber, paths[p].getStrokeColor(), 1, ((byte) 0), ((byte) 0), 0, null, 0, paths[p].getFillColor(), paths[p].isFilledEvenOdd());
 							else {
 								ArrayList pathDashPattern = null;
 								if (pathStroke.getDashArray() != null) {
@@ -1682,7 +1702,7 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 									for (int s = 0; s < strokeDashPattern.length; s++)
 										pathDashPattern.add(new Float(strokeDashPattern[s]));
 								}
-								this.tPaths[p] = new Path(tPathBounds, tPathClipBounds, paths[p].renderOrderNumber, paths[p].getStrokeColor(), pathStroke.getLineWidth(), ((byte) pathStroke.getEndCap()), ((byte) pathStroke.getLineJoin()), pathStroke.getMiterLimit(), pathDashPattern, pathStroke.getDashPhase(), paths[p].getFillColor());
+								this.tPaths[p] = new Path(tPathBounds, tPathClipBounds, paths[p].renderOrderNumber, paths[p].getStrokeColor(), pathStroke.getLineWidth(), ((byte) pathStroke.getEndCap()), ((byte) pathStroke.getLineJoin()), pathStroke.getMiterLimit(), pathDashPattern, pathStroke.getDashPhase(), paths[p].getFillColor(), paths[p].isFilledEvenOdd());
 							}
 							SubPath[] subPaths = paths[p].getSubPaths();
 							for (int sp = 0; sp < subPaths.length; sp++) {

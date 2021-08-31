@@ -52,6 +52,7 @@ public class ImageDisplayDialog extends JPanel {
 	private JDialog dialog;
 	private JTabbedPane tabs = new JTabbedPane();
 	private Color background;
+	private boolean unshown = true;
 	public ImageDisplayDialog(String title) {
 		this(title, null);
 	}
@@ -88,8 +89,10 @@ public class ImageDisplayDialog extends JPanel {
 	}
 	public void setVisible(boolean visible) {
 		super.setVisible(visible);
-		if (this.tabs.getTabCount() != 0)
+		if (this.unshown && (this.tabs.getTabCount() != 0)) /* jump to first only before opening _first_ */ {
 			this.tabs.setSelectedIndex(0);
+			this.unshown = false;
+		}
 		this.dialog.setVisible(visible);
 	}
 	public void setSize(int width, int height) {

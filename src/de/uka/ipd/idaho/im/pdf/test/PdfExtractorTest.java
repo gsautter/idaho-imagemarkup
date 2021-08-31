@@ -1069,6 +1069,18 @@ public class PdfExtractorTest implements ImagingConstants {
 //		pdfName = "MONTE-1943-Tingideos_americanos_OCR.pdf"; // TODOne check page image enhancement ==> text only exists as born-digital, scan in four parts ...
 //		pdfName = "MONTE-1943-Tingideos_americanos_Image_OCR.resaved.pdf"; // TODOne check decoding ==> page background in images, text only born-digital ... tough one
 		pdfName = "MONTE-1942-Apontamentos_sobre_Tingitideos.pdf";
+//		pdfName = "Range Management Handbook of Kenya.pdf"; // check decoding this one ==> DjVu compressed, fonts contain vectorized char images, hence many duplicate chars, incurring excess of 255 chars
+		pdfName = "Range Management Handbook of Kenya.pdf"; // TODO find way of handling fonts with more than 255 chars ==>
+//		pdfName = "PalaeogeogrPalaeocl.535.e109364.pdf"; // TODOne check decoding this one ==> zero-height bounding box of horizontal line graphics due to rounding error, fixed via adding plausibility check for narror and low bounding boxes
+//		pdfName = "Rio.6.e58030.pdf"; // TODOne check decoding this one ==> odd char rendering hints in one font ,,, and strange page backgrounds on many pages
+//		pdfName = "Rio.6.e58030.pdf"; // TODOne figure out strange page backgrounds (pages 0, ...) ==> implemented pattern color spaces
+//		pdfName = "Rio.6.e58030.pdf"; // TODOne figure out disfigured 'fi' and 'fl' glyphs (page title on pages 2, 4, 6, ...) ==> figured out and implemented private subroutine handling in Type1C CID fonts
+//		pdfName = "InsectsOfGuamI.172.30-38.pdf"; // TODOne check out decoding this one (OCRed) ==> added global objects stream to JBIG2 decoder
+//		pdfName = "data.32AE38DDC6A78D3A12FA56E393FD3C93.cached.pdf"; // TODOne check this one out, choked on server ==> tons of fonts, with tons of redundant characters each ... for whatever reason ...
+//		pdfName = "InsectaMundi.0292.1-46.pdf"; // TODOne check out figures (pages 26-47), came up black on server ==> come up just fine ...
+//		pdfName = "Geodiversitas.39.4.729-740.pdf"; // TODOne check dedoding this ==> added catch for completely clipped figures
+//		pdfName = "Geodiversitas.39.3.503-531.pdf"; // TODOne check dedoding this ==> works just fine with above catch
+		pdfName = "data.4AED0409B1C01BEF87635A6A5D21A591.cached.pdf"; // TODO check font decoding error ==> 
 		
 		//	TODOne EJT test files for suggestions
 //		pdfName = "EJT/EJT-2_Krapp.pdf"; // TODOne check how fonts decode ==> UC mapping comprehensive and faithful
@@ -1124,7 +1136,6 @@ public class PdfExtractorTest implements ImagingConstants {
 		
 		//	use for ad-hoc decoding
 //		pdfName = "Molnar1991hybrid.pdf";
-//		pdfName = "zt03790p356.pdf";
 		
 		//	for embedded OCR adjustment tests TODO finish this crap !!!
 //		pdfName = "Carr1999TyrannosauridaeABBYY.pdf"; // almost too good
@@ -1187,7 +1198,7 @@ public class PdfExtractorTest implements ImagingConstants {
 		int scaleFactor = 1;
 		if (pageIDs.isEmpty())
 			pageIDs = null;
-		aimAtPage = 0; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
+		aimAtPage = -1; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
 		if (pageIDs != null)
 			aimAtPage = -1;
 		//	TODO try pages 12, 13, 16, 17, and 21 of Prasse 1979
@@ -1288,14 +1299,14 @@ public class PdfExtractorTest implements ImagingConstants {
 //			flags |= PdfExtractor.ENHANCE_SCANS_CORRECT_ROTATION;
 			flags |= PdfExtractor.ENHANCE_SCANS_CORRECT_SKEW;
 			System.out.println("Flags are " + flags + " (" + Integer.toString(flags, 2) + ")");
-			doc = pdfExtractor.loadImagePdf(doc, null, bytes, flags, scaleFactor, null);
-//			doc = pdfExtractor.loadImagePdf(doc, null, bytes, true, true, scaleFactor, null);
-//			doc = pdfExtractor.loadImagePdfBlocks(doc, null, bytes, scaleFactor, null);
+//			doc = pdfExtractor.loadImagePdf(doc, null, bytes, flags, scaleFactor, pdm);
+//			doc = pdfExtractor.loadImagePdf(doc, null, bytes, true, true, scaleFactor, pdm);
+//			doc = pdfExtractor.loadImagePdfBlocks(doc, null, bytes, scaleFactor, pdm);
 //			doc = pdfExtractor.loadImagePdfPages(doc, null, bytes, flags, scaleFactor, null, pdm);
 //			doc = pdfExtractor.loadTextPdf(doc, null, bytes, PdfFontDecoder.UNICODE, pageIDs, pdm);
 //			doc = pdfExtractor.loadTextPdf(doc, null, bytes, PdfFontDecoder.LATIN_FULL, pageIDs, pdm);
 //			doc = pdfExtractor.loadTextPdf(doc, null, bytes, PdfFontDecoder.LATIN, pageIDs, pdm);
-//			doc = pdfExtractor.loadTextPdf(doc, null, bytes, PdfFontDecoder.FontDecoderCharset.union(PdfFontDecoder.VERIFY_MAPPED, PdfFontDecoder.LATIN), pageIDs, pdm);
+			doc = pdfExtractor.loadTextPdf(doc, null, bytes, PdfFontDecoder.FontDecoderCharset.union(PdfFontDecoder.VERIFY_MAPPED, PdfFontDecoder.LATIN), pageIDs, pdm);
 //			doc = pdfExtractor.loadTextPdf(doc, null, bytes, PdfFontDecoder.FontDecoderCharset.union(PdfFontDecoder.DECODE_UNMAPPED, PdfFontDecoder.LATIN_FULL), pageIDs, pdm);
 //			doc = pdfExtractor.loadTextPdf(doc, null, bytes, PdfFontDecoder.RENDER_ONLY, pageIDs, pdm);
 //			doc = pdfExtractor.loadTextPdf(doc, null, bytes, PdfFontDecoder.NO_DECODING, pageIDs, pdm);

@@ -165,6 +165,7 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 	 * @see de.uka.ipd.idaho.im.ImObject#getType()
 	 */
 	public String getType() {
+		if (ImDocument.TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 		return this.type;
 	}
 	
@@ -172,6 +173,7 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 	 * @see de.uka.ipd.idaho.im.ImObject#setType(java.lang.String)
 	 */
 	public void setType(String type) {
+		if (ImDocument.TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 		String oldType = this.type;
 		this.type = type;
 		String oldLuid = this.luid;
@@ -187,6 +189,7 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 	 * @see de.uka.ipd.idaho.im.ImObject#getLocalID()
 	 */
 	public String getLocalID() {
+		if (ImDocument.TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 		return (this.type + "@" + this.pageId + "." + this.bounds.toString());
 	}
 	
@@ -194,6 +197,7 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 	 * @see de.uka.ipd.idaho.im.ImObject#getLocalUID()
 	 */
 	public String getLocalUID() {
+		if (ImDocument.TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 		if (this.luid == null)
 			this.luid = LayoutObjectUuidHelper.getLocalUID(this.getType(), this.pageId, this.bounds);
 		return this.luid;
@@ -203,6 +207,7 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 	 * @see de.uka.ipd.idaho.im.ImObject#getUUID()
 	 */
 	public String getUUID() {
+		if (ImDocument.TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 		if (this.uuid == null)
 			this.uuid = UuidHelper.getUUID(this);
 		return this.uuid;
@@ -212,6 +217,7 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 	 * @see de.uka.ipd.idaho.im.ImObject#getDocument()
 	 */
 	public ImDocument getDocument() {
+		if (ImDocument.TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 		return this.doc;
 	}
 	
@@ -290,6 +296,7 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 	 * @see de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed#getAttribute(java.lang.String, java.lang.Object)
 	 */
 	public Object getAttribute(String name, Object def) {
+		if (ImDocument.TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 		if (DOCUMENT_ID_ATTRIBUTE.equals(name))
 			return this.getDocument().docId;
 		if (PAGE_ID_ATTRIBUTE.equals(name))
@@ -303,6 +310,7 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 	 * @see de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed#getAttribute(java.lang.String)
 	 */
 	public Object getAttribute(String name) {
+		if (ImDocument.TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 		if (DOCUMENT_ID_ATTRIBUTE.equals(name))
 			return this.getDocument().docId;
 		if (PAGE_ID_ATTRIBUTE.equals(name))
@@ -316,6 +324,7 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 	 * @see de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed#hasAttribute(java.lang.String)
 	 */
 	public boolean hasAttribute(String name) {
+		if (ImDocument.TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 		if (DOCUMENT_ID_ATTRIBUTE.equals(name))
 			return true;
 		if (PAGE_ID_ATTRIBUTE.equals(name))
@@ -333,6 +342,14 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 		if ((this.getPage() != null) && ((oldValue == null) ? (value != null) : !oldValue.equals(value)))
 			this.doc.notifyAttributeChanged(this, name, oldValue);
 		return oldValue;
+	}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed#getAttributeNames()
+	 */
+	public String[] getAttributeNames() {
+		if (ImDocument.TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
+		return super.getAttributeNames();
 	}
 	
 	/* (non-Javadoc)

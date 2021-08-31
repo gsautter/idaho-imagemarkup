@@ -3091,7 +3091,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 								path.append(subPath, false);
 							}
 							if (pp.fillColor != null) {
-								piGr.setColor(pp.fillColor);
+								piGr.setColor(pp.fillColor); // TODO track remaining source of MAGENTA fallback !!!
 								piGr.fill(path);
 								if (PdfExtractorTest.aimAtPage != -1)
 									System.out.println(" - filled in " + pp.fillColor + " with a=" + pp.fillColor.getAlpha());
@@ -3280,6 +3280,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				
 				//	get page content area layout hint (defaulting to whole page bounds), as well as number of columns
 				BoundingBox contentArea = docLayout.getBoxProperty("contentArea", pages[p].bounds, imageDPIs[p]);
+				if (PdfExtractorTest.aimAtPage != -1)
+					System.out.println(" - content area is " + contentArea + " [from " + docLayout.getStringProperty("contentArea", null) + "]");
 				int columnCount = docLayout.getIntProperty("columnCount", -1);
 				
 				//	we've had a block flip, extend content area to square to prevent content cutoff
@@ -3345,6 +3347,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					BoundingBox fbb = pageFigures[f].getBounds();
 					if (pageFigures[f].getClipBounds() != null)
 						fbb = fbb.intersect(pageFigures[f].getClipBounds());
+					if (fbb == null)
+						continue; // no intersection between bounding box and clipping area
 					if ((pFlipContentBox[p] == null) && !contentArea.includes(fbb, true))
 						continue; // unless we have flipped content, omit figures whose center is outside content bounds
 					pContentLeft = Math.min(pContentLeft, fbb.left);
@@ -3358,8 +3362,15 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					if (pageGraphics[g].hasAttribute(Graphics.PAGE_DECORATION_ATTRIBUTE))
 						continue;
 					BoundingBox gbb = pageGraphics[g].getBounds();
-					if (pageGraphics[g].getClipBounds() != null)
+					if (PdfExtractorTest.aimAtPage != -1)
+						System.out.println(" - graphics bounding box is " + gbb);
+					if (pageGraphics[g].getClipBounds() != null) {
+						if (PdfExtractorTest.aimAtPage != -1)
+							System.out.println(" - graphics clip area is " + pageGraphics[g].getClipBounds());
 						gbb = gbb.intersect(pageGraphics[g].getClipBounds());
+						if (PdfExtractorTest.aimAtPage != -1)
+							System.out.println(" - graphics visible area is " + gbb);
+					}
 					if ((pFlipContentBox[p] == null) && !contentArea.includes(gbb, true))
 						continue; // unless we have flipped content, omit graphics whose center is outside content bounds
 					pContentLeft = Math.min(pContentLeft, gbb.left);
@@ -6688,7 +6699,32 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			
 			//	compute bounds in page resolution
 			BoundingBox pathClusterBox = getBoundingBox(pPathCluster.bounds, pData.pdfPageContentBox, magnification, pData.rotate);
+			if (PdfExtractorTest.aimAtPage != -1)
+				spm.setInfo("     - bounding box is " + pathClusterBox + " from " + pPathCluster.bounds);
 			BoundingBox pathClusterClipBox = getBoundingBox(pPathCluster.visibleBounds, pData.pdfPageContentBox, magnification, pData.rotate);
+			if (PdfExtractorTest.aimAtPage != -1)
+				spm.setInfo("     - clip area is " + pathClusterClipBox + " from " + pPathCluster.visibleBounds);
+			if ((pathClusterClipBox != null) && !pathClusterBox.overlaps(pathClusterClipBox) && pPathCluster.bounds.intersects(pPathCluster.visibleBounds)) {
+				if ((pathClusterBox.getWidth() < 2) && (pathClusterClipBox.getWidth() < 2) && ((pathClusterBox.right == pathClusterClipBox.left) || (pathClusterClipBox.left == pathClusterBox.right))) {
+					if (PdfExtractorTest.aimAtPage != -1)
+						spm.setInfo("     ==> clip area adjacent to left or right");
+					pathClusterClipBox = new BoundingBox(pathClusterBox.left, pathClusterBox.right, pathClusterClipBox.top, pathClusterClipBox.bottom);
+					if (PdfExtractorTest.aimAtPage != -1)
+						spm.setInfo("     ==> clip area corrected to " + pathClusterClipBox + " from " + pPathCluster.visibleBounds);
+				}
+				else if ((pathClusterBox.getHeight() < 2) && (pathClusterClipBox.getHeight() < 2) && ((pathClusterBox.bottom == pathClusterClipBox.top) || (pathClusterClipBox.top == pathClusterBox.top))) {
+					if (PdfExtractorTest.aimAtPage != -1)
+						spm.setInfo("     ==> clip area adjacent to top or bottom");
+					pathClusterClipBox = new BoundingBox(pathClusterClipBox.left, pathClusterClipBox.right, pathClusterBox.top, pathClusterBox.bottom);
+					if (PdfExtractorTest.aimAtPage != -1)
+						spm.setInfo("     ==> clip area corrected to " + pathClusterClipBox + " from " + pPathCluster.visibleBounds);
+				}
+				else {
+					if (PdfExtractorTest.aimAtPage != -1)
+						spm.setInfo("     ==> completely clipped");
+					continue;
+				}
+			}
 			
 			//	add supplement to document
 			Graphics graphics;
@@ -6705,7 +6741,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				PPath pPath = ((PPath) pPathCluster.paths.get(p));
 				BoundingBox pathBounds = getBoundingBox(pPath.getBounds(), pData.pdfPageContentBox, magnification, pData.rotate);
 				BoundingBox pathClipBounds = ((pPath.clipPaths == null) ? null : getBoundingBox(pPath.visibleBounds, pData.pdfPageContentBox, magnification, pData.rotate));
-				Graphics.Path path = new Graphics.Path(pathBounds, pathClipBounds, pPath.renderOrderNumber, pPath.strokeColor, pPath.lineWidth, pPath.lineCapStyle, pPath.lineJointStyle, pPath.miterLimit, pPath.dashPattern, pPath.dashPatternPhase, pPath.fillColor);
+				Graphics.Path path = new Graphics.Path(pathBounds, pathClipBounds, pPath.renderOrderNumber, pPath.strokeColor, pPath.lineWidth, pPath.lineCapStyle, pPath.lineJointStyle, pPath.miterLimit, pPath.dashPattern, pPath.dashPatternPhase, pPath.fillColor, pPath.fillEvenOdd);
 				graphics.addPath(path);
 				
 				//	add individual sub paths
@@ -6789,24 +6825,28 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					gr.scale(magnification, magnification);
 					gr.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 					for (int p = 0; p < paths.length; p++) {
-//						if (p != 0) {
-//							BufferedImage pPathClusterStepImage = new BufferedImage(pPathClusterImage.getWidth(), pPathClusterImage.getHeight(), BufferedImage.TYPE_INT_ARGB);
-//							Graphics2D sGr = pPathClusterStepImage.createGraphics();
-//							sGr.drawImage(pPathClusterImage, 0, 0, null);
-//							sGr.dispose();
-//							gdd.addImage(pPathClusterStepImage, (pathClusterBox.toString() + "(" + p + ")"));
-//						}
 						Color preColor = gr.getColor();
 						Stroke preStroke = gr.getStroke();
+						Shape preClip = gr.getClip();
 						Color strokeColor = paths[p].getStrokeColor();
 						Stroke stroke = paths[p].getStroke();
 						Color fillColor = paths[p].getFillColor();
-						//	TODO_really? observe clipping ==> we're removing all sub paths outside clipping area in sanitization
+						//	TODOne observe clipping ==> we're removing all sub paths outside clipping area in sanitization ... but filling remains a problem at times !!!
 						Path2D path = new Path2D.Float();
+						path.setWindingRule(paths[p].isFilledEvenOdd() ? Path2D.WIND_EVEN_ODD : Path2D.WIND_NON_ZERO);
 						Graphics.SubPath[] subPaths = paths[p].getSubPaths();
 						for (int s = 0; s < subPaths.length; s++) {
 							Path2D subPath = subPaths[s].getPath();
 							path.append(subPath, false);
+						}
+						if (paths[p].clipBounds != null) {
+							Rectangle2D.Double clip = new Rectangle2D.Double(
+									((paths[p].clipBounds.left - graphics.getBounds().left) / magnification),
+									((paths[p].clipBounds.top - graphics.getBounds().top) / magnification),
+									(paths[p].clipBounds.getWidth() / magnification),
+									(paths[p].clipBounds.getHeight() / magnification)
+								);
+							gr.clip(clip);
 						}
 						if (fillColor != null) {
 //							gr.setColor(fillColor);
@@ -6823,6 +6863,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						}
 						gr.setColor(preColor);
 						gr.setStroke(preStroke);
+						gr.setClip(preClip);
 					}
 					gdd.addImage(pPathClusterImage, pathClusterBox.toString());
 				}
@@ -6832,14 +6873,25 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				for (int p = 0; p < paths.length; p++) {
 					Color preColor = agiGr.getColor();
 					Stroke preStroke = agiGr.getStroke();
+					Shape preClip = agiGr.getClip();
 					Color strokeColor = paths[p].getStrokeColor();
 					Stroke stroke = paths[p].getStroke();
 					Color fillColor = paths[p].getFillColor();
 					Path2D path = new Path2D.Float();
+					path.setWindingRule(paths[p].isFilledEvenOdd() ? Path2D.WIND_EVEN_ODD : Path2D.WIND_NON_ZERO);
 					Graphics.SubPath[] subPaths = paths[p].getSubPaths();
 					for (int s = 0; s < subPaths.length; s++) {
 						Path2D subPath = subPaths[s].getPath();
 						path.append(subPath, false);
+					}
+					if (paths[p].clipBounds != null) {
+						Rectangle2D.Double clip = new Rectangle2D.Double(
+								(paths[p].clipBounds.left / magnification),
+								(paths[p].clipBounds.top / magnification),
+								(paths[p].clipBounds.getWidth() / magnification),
+								(paths[p].clipBounds.getHeight() / magnification)
+							);
+						agiGr.clip(clip);
 					}
 					if (fillColor != null) {
 						agiGr.setColor(fillColor);
@@ -6856,6 +6908,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 //					}
 					agiGr.setColor(preColor);
 					agiGr.setStroke(preStroke);
+					agiGr.setClip(preClip);
 				}
 				agiGr.setTransform(preAt);
 			}
@@ -6871,7 +6924,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	}
 	
 	private static boolean canMergePathClusters(BoundingBox pPathClusterBox, BoundingBox cpPathClusterBox, int pageImageDpi) {
-
+		
 		//	we have an overlap
 		if (pPathClusterBox.overlaps(cpPathClusterBox))
 			return true;
@@ -13402,7 +13455,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 			if (PdfExtractorTest.aimAtPage != -1)
 				System.out.println(" ==> decoding JBIG2");
 			//	JPedal seems to be the one ...
-			bi = this.decodeJBig2(data);
+			bi = this.decodeJBig2(data, params, objects);
 			//	no need to check for inversion here, JBIG2 is fixed
 		}
 		else if ((filter != null) && "FlateDecode".equals(filter.toString())) {
@@ -13714,9 +13767,22 @@ Also, make sure to render OCR overlay to line height in display panel:
 		}
 	}
 	
-	private BufferedImage decodeJBig2(byte[] data) throws IOException {
+	private BufferedImage decodeJBig2(byte[] data, Map params, Map objects) throws IOException {
 		try {
 			JBIG2Decoder jbd = new JBIG2Decoder();
+			Object decodeParamsObj = PdfParser.dereference(params.get("DecodeParms"), objects);
+			if (PdfExtractorTest.aimAtPage != -1)
+				System.out.println(" ==> decode params are " + decodeParamsObj);
+			if (decodeParamsObj instanceof Map) {
+				Map decodeParams = ((Map) decodeParamsObj);
+				Object jbGlobalsObj = PdfParser.dereference(decodeParams.get("JBIG2Globals"), objects);
+				if (PdfExtractorTest.aimAtPage != -1)
+					System.out.println(" ==> global data is " + jbGlobalsObj);
+				if (jbGlobalsObj instanceof PStream) {
+					PStream jbGlobals = ((PStream) jbGlobalsObj);
+					jbd.setGlobalData(jbGlobals.bytes);
+				}
+			}
 			jbd.decodeJBIG2(data);
 			BufferedImage bi = jbd.getPageAsBufferedImage(0);
 			if (PdfExtractorTest.aimAtPage != -1)
@@ -14137,19 +14203,22 @@ Also, make sure to render OCR overlay to line height in display panel:
 		float fBottom = ((pageBounds.height - ((float) (bounds.getMinY() - ((2 * pageBounds.getMinY()) - pageBounds.getMaxY())))) * magnification);
 		int left = Math.round(fLeft);
 		int right = (left + Math.round(fRight - fLeft));
+		int top = Math.round(fTop);
+		int bottom = (top + Math.round(fBottom - fTop));
+//		System.out.println("Transformed " + bounds);
+//		System.out.println("  with " + pageBounds);
+//		System.out.println("  to [" + fLeft + "," + fRight + "," + fTop + "," + fBottom + "]");
+//		System.out.println("  to [" + left + "," + right + "," + top + "," + bottom + "]");
 		if (left == right) {
 			left = ((int) Math.floor(fLeft));
 			right = ((int) Math.ceil(fRight));
+//			System.out.println("  corrected to [" + left + "," + right + "," + top + "," + bottom + "]");
 		}
-		int top = Math.round(fTop);
-		int bottom = (top + Math.round(fBottom - fTop));
 		if (top == bottom) {
 			top = ((int) Math.floor(fTop));
 			bottom = ((int) Math.ceil(fBottom));
+//			System.out.println("  corrected to [" + left + "," + right + "," + top + "," + bottom + "]");
 		}
-//		System.out.println("Transformed " + bounds);
-//		System.out.println("  with " + pageBounds);
-//		System.out.println("  to " + new BoundingBox(left, right, top, bottom));
 		return new BoundingBox(left, right, top, bottom);
 	}
 	

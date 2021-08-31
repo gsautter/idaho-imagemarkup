@@ -2047,7 +2047,7 @@ public class PdfFont {
 				if (DEBUG_LOAD_FONTS)
 					System.out.println("   - range first char is " + rfc);
 				
-				Object lcObj = w.get(i++);
+				Object lcObj = PdfParser.dereference(w.get(i++), objects);
 				if (DEBUG_LOAD_FONTS)
 					System.out.println("   - range last char object is " + lcObj);
 				if ((lcObj instanceof Number) && (i < w.size())) {

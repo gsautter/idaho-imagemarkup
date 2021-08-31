@@ -3789,6 +3789,7 @@ public class PdfParser {
 			private Color sgsStrokeColor;
 			private PdfColorSpace sgsNonStrokeColorSpace;
 			private Color sgsNonStrokeColor;
+			private PStream sgsNonStrokePattern;
 			
 			private float sgsLineWidth;
 			private byte sgsLineCapStyle;
@@ -3827,6 +3828,7 @@ public class PdfParser {
 				this.sgsStrokeColor = pcrStrokeColor;
 				this.sgsNonStrokeColorSpace = pcrNonStrokeColorSpace;
 				this.sgsNonStrokeColor = pcrNonStrokeColor;
+				this.sgsNonStrokePattern = pcrNonStrokePattern;
 				
 				this.sgsLineWidth = pcrLineWidth;
 				this.sgsLineCapStyle = pcrLineCapStyle;
@@ -3866,6 +3868,7 @@ public class PdfParser {
 				pcrStrokeColor = this.sgsStrokeColor;
 				pcrNonStrokeColorSpace = this.sgsNonStrokeColorSpace;
 				pcrNonStrokeColor = this.sgsNonStrokeColor;
+				pcrNonStrokePattern = this.sgsNonStrokePattern;
 				
 				pcrLineWidth = this.sgsLineWidth;
 				pcrLineCapStyle = this.sgsLineCapStyle;
@@ -3905,6 +3908,7 @@ public class PdfParser {
 		private Color pcrStrokeColor = Color.BLACK;
 		private PdfColorSpace pcrNonStrokeColorSpace = PdfColorSpace.getColorSpace("DeviceGray");
 		private Color pcrNonStrokeColor = Color.BLACK;
+		private PStream pcrNonStrokePattern = null;
 		
 		private PPath pcrPath = null;
 		private float pcrLineWidth = 1.0f;
@@ -4184,7 +4188,6 @@ public class PdfParser {
 		}
 		
 		private void doS(LinkedList stack) {
-//			this.pcrPath.stroke(this.getClipPaths(), this.getStrokeColor(), this.pcrLineWidth, this.pcrLineCapStyle, this.pcrLineJointStyle, this.pcrMiterLimit, this.pcrDashPattern, this.pcrDashPatternPhase, this.pcrTransformationMatrices);
 			PPath[] clipPaths = this.getClipPaths();
 			this.pcrPath.stroke(clipPaths, this.getStrokeColor(), this.pcrLineWidth, this.pcrLineCapStyle, this.pcrLineJointStyle, this.pcrMiterLimit, this.pcrDashPattern, this.pcrDashPatternPhase, this.pcrTransformationMatrices);
 			int clipReason = this.getClipReason(this.pcrPath.getBounds(), clipPaths, this.getStrokeColor());
@@ -4209,39 +4212,92 @@ public class PdfParser {
 			this.doS(stack);
 		}
 		
-		private void dof(LinkedList stack) {
+		private void dof(LinkedList stack, ProgressMonitor pm) {
 			this.doh(stack);
-			this.doFillPath(stack, false);
+			this.doFillPath(stack, false, pm);
 		}
-		private void doF(LinkedList stack) {
-			this.dof(stack);
+		private void doF(LinkedList stack, ProgressMonitor pm) {
+			this.dof(stack, pm);
 		}
-		private void dofasterisk(LinkedList stack) {
+		private void dofasterisk(LinkedList stack, ProgressMonitor pm) {
 			this.doh(stack);
-			this.doFillPath(stack, true);
+			this.doFillPath(stack, true, pm);
 		}
-		private void doFillPath(LinkedList stack, boolean fillEvenOdd) {
-//			this.pcrPath.fill(this.getClipPaths(), this.getNonStrokeColor(), fillEvenOdd);
-			PPath[] clipPaths = this.getClipPaths();
-			this.pcrPath.fill(clipPaths, this.getNonStrokeColor(), fillEvenOdd);
-			int clipReason = this.getClipReason(this.pcrPath.getBounds(), clipPaths, this.getNonStrokeColor());
-			if ((this.paths != null) && (clipReason == -1))
-				this.paths.add(this.pcrPath);
-			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) {
-				System.out.println(this.indent + " --> path at RON " + this.pcrPath.renderOrderNumber + " filled inside " + this.pcrPath.getBounds());
-				if (clipPaths == null)
-					System.out.println(this.indent + " --> clip bounds not set");
-				else {
-					Rectangle2D clipBounds = clipPaths[0].getBounds();
-					for (int cp = 1; cp < clipPaths.length; cp++)
-						clipBounds = clipBounds.createIntersection(clipPaths[cp].getBounds());
-					System.out.println(this.indent + " --> clip bounds are " + clipBounds);
+		private void doFillPath(LinkedList stack, boolean fillEvenOdd, ProgressMonitor pm) {
+			if (this.pcrNonStrokePattern == null) {
+				PPath[] clipPaths = this.getClipPaths();
+				this.pcrPath.fill(clipPaths, this.getNonStrokeColor(), fillEvenOdd);
+				int clipReason = this.getClipReason(this.pcrPath.getBounds(), clipPaths, this.getNonStrokeColor());
+				if ((this.paths != null) && (clipReason == -1))
+					this.paths.add(this.pcrPath);
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) {
+					System.out.println(this.indent + " --> path at RON " + this.pcrPath.renderOrderNumber + " filled inside " + this.pcrPath.getBounds());
+					if (clipPaths == null)
+						System.out.println(this.indent + " --> clip bounds not set");
+					else {
+						Rectangle2D clipBounds = clipPaths[0].getBounds();
+						for (int cp = 1; cp < clipPaths.length; cp++)
+							clipBounds = clipBounds.createIntersection(clipPaths[cp].getBounds());
+						System.out.println(this.indent + " --> clip bounds are " + clipBounds);
+					}
+					System.out.println(this.indent + " --> soft mask stack is " + this.pcrSoftMaskStack);
+					System.out.println(this.indent + " --> non-stroking composite alpha is " + this.pcrNonStrokeCompositAlpha);
+					System.out.println(this.indent + " --> non-stroking overprint is " + this.pcrNonStrokeOverPrint);
 				}
-				System.out.println(this.indent + " --> soft mask stack is " + this.pcrSoftMaskStack);
-				System.out.println(this.indent + " --> non-stroking composite alpha is " + this.pcrNonStrokeCompositAlpha);
-				System.out.println(this.indent + " --> non-stroking overprint is " + this.pcrNonStrokeOverPrint);
+				this.pcrPath = null;
 			}
-			this.pcrPath = null;
+			else {
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+					System.out.println(this.indent + " --> path at RON " + this.pcrPath.renderOrderNumber + " filled with pattern");
+				this.doq(stack); // save graphics state
+				this.doW(stack); // add current path to clip path to clip pattern drawing
+				this.pcrPath = null; // nil out path, we're done with this one (W+n is typical clipping sequence)
+				PPath[] clipPaths = this.getClipPaths();
+				Rectangle2D clipBounds = clipPaths[0].getBounds();
+				for (int cp = 1; cp < clipPaths.length; cp++)
+					clipBounds = clipBounds.createIntersection(clipPaths[cp].getBounds());
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+					System.out.println(this.indent + "   - visible area is " + clipBounds);
+				if ((0 < clipBounds.getWidth()) && (0 < clipBounds.getHeight())) try {
+					float xStep = ((Number) this.pcrNonStrokePattern.params.get("XStep")).floatValue();
+					float yStep = ((Number) this.pcrNonStrokePattern.params.get("YStep")).floatValue();
+					float xStart = ((float) ((xStep < 0) ? clipBounds.getMaxX() : clipBounds.getMinX()));
+					float yStart = ((float) ((yStep < 0) ? clipBounds.getMaxY() : clipBounds.getMinY()));
+					if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+						System.out.println(this.indent + " === START PATTERN FILLING === ");
+					for (float x = xStart; ((xStep < 0) ? (clipBounds.getMinX() < x) : (x < clipBounds.getMaxX())); x += xStep) {
+						if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+							System.out.println(this.indent + " - drawing pattern column at " + x);
+						for (float y = yStart; ((yStep < 0) ? (clipBounds.getMinY() < y) : (y < clipBounds.getMaxY())); y += yStep) {
+							if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+								System.out.println(this.indent + " - drawing pattern at " + x + "/" + y);
+							this.doq(stack); // store graphics state for before translating to next pattern root point
+							//	TODO measure [0, 0, 1] and [1, 1, 1] to get an idea wher we are
+							//	TODO add transformation to get pattern in place
+							float[][] nTm = new float[3][3]; // TODO
+							nTm[2][2] = 1;
+							nTm[1][2] = y;
+							nTm[0][2] = x;
+							nTm[2][1] = 0;
+							nTm[1][1] = 1;
+							nTm[0][1] = 0;
+							nTm[2][0] = 0;
+							nTm[1][0] = 0;
+							nTm[0][0] = 1;
+							this.pcrTransformationMatrices.addFirst(nTm); // no need for recomputing fornt size and text direction, we merely translate, but don't scale or rotate
+							this.doDoForm(this.pcrNonStrokePattern, false, pm); // render whole thing (behaves like form)
+							this.doQ(stack); // restore graphics state to translate back
+						}
+					}
+					if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+						System.out.println(this.indent + " === PATTERN FILLING DONE === ");
+				}
+				catch (Exception e) {
+					System.out.println("Error filling with pattern color: " + e);
+					e.printStackTrace(System.out);
+				}
+				this.doQ(stack); // restore graphics state
+			}
 		}
 		
 		private void doB(LinkedList stack) {
@@ -4259,9 +4315,32 @@ public class PdfParser {
 			this.doBasterisk(stack);
 		}
 		private void doFillAndStrokePath(LinkedList stack, boolean fillEvenOdd) {
-//			this.pcrPath.fillAndStroke(this.getClipPaths(), this.getNonStrokeColor(), fillEvenOdd, this.getStrokeColor(), this.pcrLineWidth, this.pcrLineCapStyle, this.pcrLineJointStyle, this.pcrMiterLimit, this.pcrDashPattern, this.pcrDashPatternPhase, this.pcrTransformationMatrices);
 			PPath[] clipPaths = this.getClipPaths();
 			this.pcrPath.fillAndStroke(clipPaths, this.getNonStrokeColor(), fillEvenOdd, this.getStrokeColor(), this.pcrLineWidth, this.pcrLineCapStyle, this.pcrLineJointStyle, this.pcrMiterLimit, this.pcrDashPattern, this.pcrDashPatternPhase, this.pcrTransformationMatrices);
+			/*
+TODO Filling with patterns:
+- in page content renderer, keep corresponding pattern object (map) at least for non-stroking color
+  ==> also make sure to store with graphics state
+- make sure only either one not null at any time
+  ==> best make sure to always set both when setting colors
+- filling with pattern:
+  - add current path proper to clip path
+  - compute convex hull of current path
+  - null out current path (it's done with)
+  - store graphics state
+  - run over convex hull of current path in 2D nested for loop (with steps pattern XStep and YStep) bottom-left to top-right ...
+  - ... and execute pattern content for each position ...
+  - ... via recursive call to runPageContent(), just like for forms ...
+  - ... adjusting matrix and bounds just the same way
+    ==> still copy doDoForm() method, though, as there might be differences ...
+    ==> ... most likely to drawPatternTile() method or something
+  - use object or resource map defaulting to page wide one, but adding pattern resources
+    ==> somehow need to make sure to properly resolve that XObject wrapped global reference ...
+  - collect everything drawn this way in new path ...
+  - ... and store that path if not empty
+    ==> should eliminate that Rube-Goldberg-white page background
+  - restore graphics state
+			 */
 			int clipReason = this.getClipReason(this.pcrPath.getBounds(), clipPaths, this.getNonStrokeColor());
 			if ((this.paths != null) && (clipReason == -1))
 				this.paths.add(this.pcrPath);
@@ -4381,7 +4460,6 @@ public class PdfParser {
 				Object sMask = dereference(extGraphicsState.get("SMask"), this.objects);
 				System.out.println(this.indent + " --> SMask is " + sMask);
 				if (sMask instanceof Map) {
-//					this.doDoFigure(("GraphicsStateSMask" + gsKey), sMask);
 					Object smGroup = dereference(((Map) sMask).get("G"), this.objects);
 					System.out.println(this.indent + " --> Group is " + smGroup);
 					Object backgroundColor = dereference(((Map) sMask).get("BC"), this.objects);
@@ -4491,12 +4569,17 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 					ByteArrayOutputStream baos = new ByteArrayOutputStream();
 					decode(pStream.params.get("Filter"), pStream.bytes, pStream.params, baos, this.objects);
 					System.out.println(this.indent + new String(baos.toByteArray()));
+					this.pcrNonStrokeColor = null;
+					this.pcrNonStrokePattern = new PStream(pStream.params, baos.toByteArray());
 				}
 				catch (Exception e) {
+					System.out.println("Error setting pattern color: " + e);
 					e.printStackTrace(System.out);
+					this.pcrNonStrokeColor = Color.MAGENTA; // using fallback for now ...
+					this.pcrNonStrokePattern = null;
 				}
-				//	TODO treat this as repeated form-style Do command on filling
-				this.pcrNonStrokeColor = Color.MAGENTA; // using fallback for now ...
+//				//	TODOne treat this as repeated form-style Do command on filling
+//				this.pcrNonStrokeColor = Color.MAGENTA; // using fallback for now ...
 				//	do NOT factor in GS composite alpha here, as GS might change
 				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
 					System.out.println(this.indent + " --> non-stroking color " + this.pcrNonStrokeColor + ((this.pcrNonStrokeColor == null) ? "" : (" with alpha " + this.pcrNonStrokeColor.getAlpha())));
@@ -4516,6 +4599,8 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 		}
 		
 		private Color getNonStrokeColor() {
+			if (this.pcrNonStrokePattern != null)
+				return null; // we're in pattern mode ...
 			if (this.pcrNonStrokeCompositAlpha == 255)
 				return this.pcrNonStrokeColor;
 			return this.getCompositeAlphaColor(this.pcrNonStrokeColor, this.pcrNonStrokeCompositAlpha);
@@ -4849,11 +4934,11 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 			else if ("s".equals(tag))
 				this.dos(stack);
 			else if ("F".equals(tag))
-				this.doF(stack);
+				this.doF(stack, pm);
 			else if ("f".equals(tag))
-				this.dof(stack);
+				this.dof(stack, pm);
 			else if ("f*".equals(tag))
-				this.dofasterisk(stack);
+				this.dofasterisk(stack, pm);
 			else if ("B".equals(tag))
 				this.doB(stack);
 			else if ("B*".equals(tag))
@@ -5029,6 +5114,12 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 				System.out.println(this.indent + "Form content done");
 				System.out.println(this.indent + "Clipping path stack is " + this.pcrClippingPathStack);
 				System.out.println(this.indent + "Soft mask stack is " + this.pcrSoftMaskStack);
+				if (formWords != null)
+					System.out.println(this.indent + "Got " + formWords.size() + " words");
+				if (formFigures != null)
+					System.out.println(this.indent + "Got " + formFigures.size() + " figures");
+				if (formPaths != null)
+					System.out.println(this.indent + "Got " + formPaths.size() + " paths");
 			}
 			
 			//	transform and store form content, adjusting colors based on composite alpha values

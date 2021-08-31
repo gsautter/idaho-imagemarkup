@@ -851,6 +851,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				}
 			}
 			else if ((object instanceof ImPage) && ImPage.PAGE_IMAGE_ATTRIBUTE.equals(attributeName)) {
+//				pagePanels[((ImPage) object).pageId].scaledPageImageWeak = null;
 				pagePanels[((ImPage) object).pageId].scaledPageImage = null;
 				pagePanels[((ImPage) object).pageId].scaledPageImageDpi = -1;
 				pagePanels[((ImPage) object).pageId].backgroundObjects = null;
@@ -3456,6 +3457,20 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 //			this.pageMarginTop = ((this.pageHeight - this.page.bounds.getHeight()) / 2);
 			this.pageMarginTop = (((this.pageHeight - this.page.bounds.getHeight()) * 2) / 5); // use 40/60 split between top & bottom, as bottom margin often wider
 			this.pageImageDpi = this.page.getImageDPI();
+//			this.addComponentListener(new ComponentAdapter() {
+//				public void componentShown(ComponentEvent ce) {
+//					//	hold on to page image with strong reference as long as we're visible (we'll need it for rendering during that time)
+//					if (scaledPageImageWeak != null) {
+//						scaledPageImage = ((BufferedImage) scaledPageImageWeak.get());
+//						System.out.println("ImPageMarkupPanel: page image reference switched to strong");
+//					}
+//				}
+//				public void componentHidden(ComponentEvent ce) {
+//					//	reduce hold on page image to weak reference when we're becoming invisible (helps GC determine which page images to clean up first when in a pinch)
+//					scaledPageImage = null;
+//					System.out.println("ImPageMarkupPanel: page image reference switched to weak");
+//				}
+//			});
 			Border border = BorderFactory.createLineBorder(Color.DARK_GRAY, 1);
 			border = BorderFactory.createCompoundBorder(BorderFactory.createMatteBorder(0, 0, 1, 1, Color.GRAY), border);
 			border = BorderFactory.createCompoundBorder(BorderFactory.createMatteBorder(0, 0, 1, 1, Color.LIGHT_GRAY), border);
@@ -3478,6 +3493,8 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		}
 		
 		private BufferedImage getScaledPageImage() {
+//			if ((this.scaledPageImage == null) && (this.scaledPageImageWeak != null))
+//				this.scaledPageImage = ((BufferedImage) this.scaledPageImageWeak.get());
 			if ((this.scaledPageImage == null) || (this.scaledPageImageDpi != renderingDpi)) {
 				PageImage pi = this.page.getImage();
 				BufferedImage bi;
@@ -3520,6 +3537,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 					}
 				
 				//	activate scaled image
+//				this.scaledPageImageWeak = new WeakReference(pbi);
 				this.scaledPageImage = pbi;
 				this.scaledPageImageDpi = renderingDpi;
 				
@@ -3530,6 +3548,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			}
 			return this.scaledPageImage;
 		}
+//		private WeakReference scaledPageImageWeak = null; // ==> component listener doesn't seem to work properly, so no point in using this ...
 		private BufferedImage scaledPageImage = null;
 		private int scaledPageImageDpi = -1;
 		

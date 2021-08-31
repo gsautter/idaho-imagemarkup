@@ -474,6 +474,23 @@ public class ImDocumentStyle extends DocumentStyle {
 	}
 	
 	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.gamta.util.DocumentStyle#getPropertyData(java.lang.String)
+	 */
+	public String getPropertyData(String key) {
+		String data = super.getPropertyData(key);
+		if (data != null)
+			return data;
+		//	emulate Image Markup specific fallback for maximum page ID used in page feature anchor
+		if ((Anchor.ANCHOR_PREFIX + "." + PageFeatureAnchor.MAXIMUM_PAGES_AFTER_FIRST_PROPERTY).equals(key)) { /* prevent endless loop */ }
+		else if (key.startsWith(Anchor.ANCHOR_PREFIX + ".") && key.endsWith("." + PageFeatureAnchor.MAXIMUM_PAGES_AFTER_FIRST_PROPERTY)) {
+			data = this.getPropertyData(Anchor.ANCHOR_PREFIX + "." + PageFeatureAnchor.MAXIMUM_PAGES_AFTER_FIRST_PROPERTY);
+			if (data == null)
+				data = "0";
+		}
+		return data;
+	}
+	
+	/* (non-Javadoc)
 	 * @see de.uka.ipd.idaho.gamta.util.DocumentStyle#getPropertyData(java.lang.String, java.lang.Class)
 	 */
 	public String getPropertyData(String key, Class valueClass) {

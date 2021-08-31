@@ -396,7 +396,24 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	public final int centerY;
 	
 	private String string;
+	private String fontName = null;
 	private int fontSize = -1;
+	private String fontCharCodes = null;
+	
+	private static final int TEXT_DIR_LEFT_RIGHT = 0x00000000;
+	private static final int TEXT_DIR_TOP_DOWN = 0x00000001;
+	private static final int TEXT_DIR_BOTTOM_UP = 0x00000002;
+	private static final int TEXT_DIR_RIGHT_LEFT_UPSIDE_DOWN = 0x00000003;
+	private static final int TEXT_DIR_MASK = 0x00000003;
+	private static final String[] TEXT_DIRS = {
+		null, //TEXT_DIRECTION_LEFT_RIGHT, ==> default, not store explicitly in attributes, and code built that way
+		TEXT_DIRECTION_TOP_DOWN,
+		TEXT_DIRECTION_BOTTOM_UP,
+		TEXT_DIRECTION_RIGHT_LEFT_UPSIDE_DOWN,
+	};
+	private static final int FONT_PROP_BOLD = 0x00000004;
+	private static final int FONT_PROP_ITALICS = 0x00000008;
+	private int flags = 0; // could use byte, but due to memory alignment, we'd be using 4 bytes anyway
 	
 	private ImWord prevWord = null;
 	private ImWord nextWord = null;
@@ -535,8 +552,26 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	public void setString(String string) {
 		String oldString = this.string;
 		this.string = string;
-		if ((this.getPage() != null) && ((oldString == null) ? (this.string != null) : !oldString.equals(this.string)))
-			this.getDocument().notifyAttributeChanged(this, STRING_ATTRIBUTE, oldString);
+		this.notifyAttributeChanged(STRING_ATTRIBUTE, true, this.string, oldString);
+	}
+	
+	/**
+	 * Retrieves the font name of the word (if known), otherwise returns null.
+	 * @return the font name
+	 */
+	public String getFontName() {
+		return this.fontName;
+	}
+	
+	/**
+	 * Set the font name of the word. This method should rarely be used outside
+	 * of generating or loading an image markup document.
+	 * @param fontName the font name to set
+	 */
+	public void setFontName(String fontName) {
+		String oldFontName = this.fontName;
+		this.fontName = fontName;
+		this.notifyAttributeChanged(FONT_NAME_ATTRIBUTE, true, this.fontName, oldFontName);
 	}
 	
 	/**
@@ -553,10 +588,11 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	 * @param fontSize the font size to set
 	 */
 	public void setFontSize(int fontSize) {
+		if (fontSize == this.fontSize)
+			return;
 		int oldFontSize = this.fontSize;
 		this.fontSize = fontSize;
-		if ((this.getPage() != null) && (oldFontSize != this.fontSize))
-			this.getDocument().notifyAttributeChanged(this, FONT_SIZE_ATTRIBUTE, ("" + oldFontSize));
+		this.notifyAttributeChanged(FONT_SIZE_ATTRIBUTE, false, Integer.toString(this.fontSize), Integer.toString(oldFontSize));
 	}
 	private void setFontSize(String fontSize) {
 		int fs = -1;
@@ -564,6 +600,29 @@ public class ImWord extends ImRegion implements ImAnnotation {
 			fs = Integer.parseInt(fontSize.trim());
 		} catch (NumberFormatException nfe) {}
 		this.setFontSize(fs);
+	}
+	
+	/**
+	 * Retrieves the font char codes of the word (if known), otherwise returns
+	 * null. This string holds, in HEX representation, the font based codes of
+	 * the individual characters the word string consists of, usually two, but
+	 * in rare cases three HEX digits per character. The number of digits can
+	 * be retrieved from the font the word is written in.
+	 * @return the font char codes
+	 */
+	public String getFontCharCodes() {
+		return this.fontCharCodes;
+	}
+	
+	/**
+	 * Set the font char codes of the word. This method should rarely be used
+	 * outside of generating or loading an image markup document.
+	 * @param fontCharCodes the font char codes to set
+	 */
+	public void setFontCharCodes(String fontCharCodes) {
+		String oldFontCharCodes = this.fontCharCodes;
+		this.fontCharCodes = fontCharCodes;
+		this.notifyAttributeChanged(ImFont.CHARACTER_CODE_STRING_ATTRIBUTE, true, this.fontCharCodes, oldFontCharCodes);
 	}
 	
 	/* (non-Javadoc)
@@ -620,50 +679,38 @@ public class ImWord extends ImRegion implements ImAnnotation {
 		}
 		else {
 			this.textStreamId = this.prevWord.textStreamId;
-//			if (this.pageId == this.prevWord.pageId)
-//				this.textStreamPos = (this.prevWord.textStreamPos + 1);
-//			else this.textStreamPos = 0;
 			this.textStreamPos = (this.prevWord.textStreamPos + 1);
 			this.textStreamType = this.prevWord.textStreamType;
 		}
 		
 		propagateTextStreamProperties(this.nextWord, this, (this.textStreamPos + 1), this.textStreamId, this.textStreamType);
-//		for (ImWord imw = this.nextWord; imw != null; imw = imw.nextWord) {
-////			if ((imw.pageId != this.pageId) && imw.textStreamId.equals(this.textStreamId))
-////				break;
-//			if (imw == this)
-//				break; // cycle breaker safety
-////			if (imw.pageId == this.pageId)
-////				imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
-//			imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
-//			imw.textStreamId = this.textStreamId;
-//			imw.textStreamType = this.textStreamType;
-//		}
 		
 		if (prevOldNext != null) {
 			prevOldNext.textStreamId = prevOldNext.getLocalID();
 			prevOldNext.textStreamPos = 0;
 			propagateTextStreamProperties(prevOldNext.nextWord, prevOldNext, (prevOldNext.textStreamPos + 1), prevOldNext.textStreamId, prevOldNext.textStreamType);
 			for (ImWord imw = prevOldNext.nextWord; imw != null; imw = imw.nextWord) {
-//				if ((imw.pageId != prevOldNext.pageId) && imw.textStreamId.equals(prevOldNext.textStreamId))
-//					break;
 				if (imw == prevOldNext)
 					break; // cycle breaker safety
-//				if (imw.pageId == prevOldNext.pageId)
-//					imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
 				imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
 				imw.textStreamId = prevOldNext.textStreamId;
 				imw.textStreamType = prevOldNext.textStreamType;
 			}
 		}
 		
-		if (this.getPage() != null) {
-			if ((oldType != null) && !oldType.equals(this.textStreamType))
-				this.getDocument().notifyAttributeChanged(this, TEXT_STREAM_TYPE_ATTRIBUTE, oldType);
-			this.getDocument().notifyAttributeChanged(this, PREVIOUS_WORD_ATTRIBUTE, oldPrev);
+		//	TODO centralize attribute notification
+//		if (this.getPage() != null) {
+//			if ((oldType != null) && !oldType.equals(this.textStreamType))
+//				this.getDocument().notifyAttributeChanged(this, TEXT_STREAM_TYPE_ATTRIBUTE, oldType);
+			this.notifyAttributeChanged(TEXT_STREAM_TYPE_ATTRIBUTE, true, this.textStreamType, oldType);
+			
+//			this.getDocument().notifyAttributeChanged(this, PREVIOUS_WORD_ATTRIBUTE, oldPrev);
+			this.notifyAttributeChanged(PREVIOUS_WORD_ATTRIBUTE, false, this.prevWord, oldPrev);
+			
 			if (prevOldNext != null)
-				this.getDocument().notifyAttributeChanged(prevOldNext, PREVIOUS_WORD_ATTRIBUTE, this.prevWord);
-		}
+//				this.getDocument().notifyAttributeChanged(prevOldNext, PREVIOUS_WORD_ATTRIBUTE, this.prevWord);
+				prevOldNext.notifyAttributeChanged(PREVIOUS_WORD_ATTRIBUTE, true, prevOldNext.prevWord, this.prevWord);
+//		}
 	}
 	
 	/**
@@ -705,62 +752,35 @@ public class ImWord extends ImRegion implements ImAnnotation {
 			nextOldPrev.nextWord = null;
 			invalidatePageTextStreamEnds(nextOldPrev);
 		}
-		if (this.nextWord != null) {
-//			if (this.nextWord.pageId == this.pageId)
-//				this.nextWord.textStreamPos = (this.textStreamPos + 1);
-//			else this.nextWord.textStreamPos = 0;
-//			this.nextWord.textStreamPos = (this.textStreamPos + 1);
-//			this.nextWord.textStreamId = this.textStreamId;
-//			this.nextWord.textStreamType = this.textStreamType;
-//			this.propagateTextStreamProperties(this.nextWord.nextWord, this, (this.nextWord.textStreamPos + 1), this.nextWord.textStreamId, this.nextWord.textStreamType);
+		if (this.nextWord != null)
 			propagateTextStreamProperties(this.nextWord, this, (this.textStreamPos + 1), this.textStreamId, this.textStreamType);
-//			for (ImWord imw = this.nextWord.nextWord; imw != null; imw = imw.nextWord) {
-////				if ((imw.pageId != this.nextWord.pageId) && imw.textStreamId.equals(this.nextWord.textStreamId))
-////					break;
-//				if (imw == this)
-//					break; // cycle breaker safety
-////				if (imw.pageId == this.nextWord.pageId)
-////					imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
-//				imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
-//				imw.textStreamId = this.nextWord.textStreamId;
-//				imw.textStreamType = this.nextWord.textStreamType;
-//			}
-		}
 		
 		if (oldNext != null) {
 			oldNext.textStreamId = oldNext.getLocalID();
 			oldNext.textStreamPos = 0;
 			propagateTextStreamProperties(oldNext.nextWord, oldNext, (oldNext.textStreamPos + 1), oldNext.textStreamId, oldNext.textStreamType);
-//			for (ImWord imw = oldNext.nextWord; imw != null; imw = imw.nextWord) {
-////				if ((imw.pageId != oldNext.pageId) && imw.textStreamId.equals(oldNext.textStreamId))
-////					break;
-//				if (imw == oldNext)
-//					break; // cycle breaker safety
-////				if (imw.pageId == oldNext.pageId)
-////					imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
-//				imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
-//				imw.textStreamId = oldNext.textStreamId;
-//				imw.textStreamType = oldNext.textStreamType;
-//			}
 		}
 		
-		if (this.getPage() != null) {
-			if ((nextOldType != null) && !nextOldType.equals(this.textStreamType))
-				this.getDocument().notifyAttributeChanged(nextWord, TEXT_STREAM_TYPE_ATTRIBUTE, nextOldType);
-			this.getDocument().notifyAttributeChanged(this, NEXT_WORD_ATTRIBUTE, oldNext);
+		//	TODO centralize attribute notification
+//		if (this.getPage() != null) {
+//			if ((nextOldType != null) && !nextOldType.equals(this.textStreamType))
+//				this.getDocument().notifyAttributeChanged(nextWord, TEXT_STREAM_TYPE_ATTRIBUTE, nextOldType);
+			if (nextWord != null)
+				nextWord.notifyAttributeChanged(TEXT_STREAM_TYPE_ATTRIBUTE, true, nextWord.textStreamType, nextOldType);
+			
+//			this.getDocument().notifyAttributeChanged(this, NEXT_WORD_ATTRIBUTE, oldNext);
+			this.notifyAttributeChanged(NEXT_WORD_ATTRIBUTE, false, this.nextWord, oldNext);
+			
 			if (nextOldPrev != null)
-				this.getDocument().notifyAttributeChanged(nextOldPrev, NEXT_WORD_ATTRIBUTE, this.nextWord);
-		}
+//				this.getDocument().notifyAttributeChanged(nextOldPrev, NEXT_WORD_ATTRIBUTE, this.nextWord);
+				nextOldPrev.notifyAttributeChanged(NEXT_WORD_ATTRIBUTE, true, nextOldPrev.nextWord, this.nextWord);
+//		}
 	}
 	
 	private static void propagateTextStreamProperties(ImWord fromWord, ImWord stopWord, int textStreamPos, String textStreamId, String textStreamType) {
 		for (ImWord imw = fromWord; imw != null; imw = imw.nextWord) {
-//			if ((imw.pageId != stopWord.pageId) && imw.textStreamId.equals(stopWord.textStreamId))
-//				break;
 			if (imw == stopWord)
 				break; // cycle breaker safety
-//			if (imw.pageId == stopWord.pageId)
-//				imw.textStreamPos = (imw.prevWord.textStreamPos + 1);
 			imw.textStreamPos = textStreamPos++;
 			imw.textStreamId = textStreamId;
 			imw.textStreamType = textStreamType;
@@ -812,8 +832,7 @@ public class ImWord extends ImRegion implements ImAnnotation {
 		if ((NEXT_RELATION_CONTINUE == nextRelation) || (NEXT_RELATION_HYPHENATED == nextRelation) || (NEXT_RELATION_PARAGRAPH_END == nextRelation))
 			this.nextRelation = nextRelation;
 		else this.nextRelation = NEXT_RELATION_SEPARATE;
-		if (this.getPage() != null)
-			this.getDocument().notifyAttributeChanged(this, NEXT_RELATION_ATTRIBUTE, oldNextRelation);
+		this.notifyAttributeChanged(NEXT_RELATION_ATTRIBUTE, false, Character.toString(this.nextRelation), Character.toString(oldNextRelation));
 	}
 	
 	/* (non-Javadoc)
@@ -821,10 +840,42 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	 */
 	public String[] getAttributeNames() {
 		String[] ans = super.getAttributeNames();
-		if (this.fontSize != -1) {
-			String[] eAns = new String[ans.length + 1];
+//		if (this.fontSize != -1) {
+//			String[] eAns = new String[ans.length + 1];
+//			System.arraycopy(ans, 0, eAns, 0, ans.length);
+//			eAns[ans.length] = FONT_SIZE_ATTRIBUTE;
+//			Arrays.sort(eAns);
+//			ans = eAns;
+//		}
+		int addAns = 0;
+		if (this.fontName != null)
+			addAns++;
+		if (this.fontSize != -1)
+			addAns++;
+		if (this.fontCharCodes != null)
+			addAns++;
+		if ((this.flags & TEXT_DIR_MASK) != 0)
+			addAns++;
+		if ((this.flags & FONT_PROP_BOLD) != 0)
+			addAns++;
+		if ((this.flags & FONT_PROP_ITALICS) != 0)
+			addAns++;
+		if (addAns != 0) {
+			String[] eAns = new String[ans.length + addAns];
 			System.arraycopy(ans, 0, eAns, 0, ans.length);
-			eAns[ans.length] = FONT_SIZE_ATTRIBUTE;
+			addAns = ans.length;
+			if (this.fontName != null)
+				eAns[addAns++] = FONT_NAME_ATTRIBUTE;
+			if (this.fontSize != -1)
+				eAns[addAns++] = FONT_SIZE_ATTRIBUTE;
+			if (this.fontCharCodes != null)
+				eAns[addAns++] = ImFont.CHARACTER_CODE_STRING_ATTRIBUTE;
+			if ((this.flags & TEXT_DIR_MASK) != 0)
+				eAns[addAns++] = TEXT_DIRECTION_ATTRIBUTE;
+			if ((this.flags & FONT_PROP_BOLD) != 0)
+				eAns[addAns++] = BOLD_ATTRIBUTE;
+			if ((this.flags & FONT_PROP_ITALICS) != 0)
+				eAns[addAns++] = ITALICS_ATTRIBUTE;
 			Arrays.sort(eAns);
 			ans = eAns;
 		}
@@ -856,8 +907,20 @@ public class ImWord extends ImRegion implements ImAnnotation {
 			return ("" + this.getPreviousRelation());
 		else if (TEXT_STREAM_TYPE_ATTRIBUTE.equals(name))
 			return this.textStreamType;
+		else if (FONT_NAME_ATTRIBUTE.equals(name))
+			return ((this.fontName == null) ? def : this.fontName);
 		else if (FONT_SIZE_ATTRIBUTE.equals(name))
 			return ((this.fontSize == -1) ? def : ("" + this.fontSize));
+		else if (ImFont.CHARACTER_CODE_STRING_ATTRIBUTE.equals(name))
+			return ((this.fontCharCodes == null) ? def : this.fontCharCodes);
+		else if (TEXT_DIRECTION_ATTRIBUTE.equals(name)) {
+			int textDir = (this.flags & TEXT_DIR_MASK);
+			return ((textDir == TEXT_DIR_LEFT_RIGHT) ? def : TEXT_DIRS[textDir]);
+		}
+		else if (BOLD_ATTRIBUTE.equals(name))
+			return (((this.flags & FONT_PROP_BOLD) == 0) ? def : "true");
+		else if (ITALICS_ATTRIBUTE.equals(name))
+			return (((this.flags & FONT_PROP_ITALICS) == 0) ? def : "true");
 		else return super.getAttribute(name, def);
 	}
 	
@@ -879,8 +942,18 @@ public class ImWord extends ImRegion implements ImAnnotation {
 			return true;
 		else if (TEXT_STREAM_TYPE_ATTRIBUTE.equals(name))
 			return true;
+		else if (FONT_NAME_ATTRIBUTE.equals(name))
+			return (this.fontName != null);
 		else if (FONT_SIZE_ATTRIBUTE.equals(name))
 			return (this.fontSize != -1);
+		else if (ImFont.CHARACTER_CODE_STRING_ATTRIBUTE.equals(name))
+			return (this.fontCharCodes != null);
+		else if (TEXT_DIRECTION_ATTRIBUTE.equals(name))
+			return ((this.flags & TEXT_DIR_MASK) != TEXT_DIR_LEFT_RIGHT);
+		else if (BOLD_ATTRIBUTE.equals(name))
+			return ((this.flags & FONT_PROP_BOLD) != 0);
+		else if (ITALICS_ATTRIBUTE.equals(name))
+			return ((this.flags & FONT_PROP_ITALICS) != 0);
 		else return super.hasAttribute(name);
 	}
 	
@@ -926,12 +999,59 @@ public class ImWord extends ImRegion implements ImAnnotation {
 		}
 		else if (NEXT_WORD_ATTRIBUTE.equals(name))
 			return this.nextWord;
+		else if (FONT_NAME_ATTRIBUTE.equals(name)) {
+			String oldFontName = this.fontName;
+			this.setFontName((value == null) ? null : value.toString());
+			return oldFontName;
+		}
 		else if (FONT_SIZE_ATTRIBUTE.equals(name)) {
 			String oldFontSize = ((this.fontSize == -1) ? null : ("" + this.fontSize));
 			this.setFontSize((value == null) ? null : value.toString());
 			return oldFontSize;
 		}
+		else if (ImFont.CHARACTER_CODE_STRING_ATTRIBUTE.equals(name)) {
+			String oldFontCharCodes = this.fontCharCodes;
+			this.setFontCharCodes((value == null) ? null : value.toString());
+			return oldFontCharCodes;
+		}
+		else if (TEXT_DIRECTION_ATTRIBUTE.equals(name)) {
+			String oldTextDirection = TEXT_DIRS[this.flags & TEXT_DIR_MASK];
+			this.flags &= ~TEXT_DIR_MASK; // erase text direction using bitwise inverse of mask
+			if (TEXT_DIRECTION_TOP_DOWN.equals(value))
+				this.flags |= TEXT_DIR_TOP_DOWN;
+			else if (TEXT_DIRECTION_BOTTOM_UP.equals(value))
+				this.flags |= TEXT_DIR_BOTTOM_UP;
+			else if (TEXT_DIRECTION_RIGHT_LEFT_UPSIDE_DOWN.equals(value))
+				this.flags |= TEXT_DIR_RIGHT_LEFT_UPSIDE_DOWN;
+			else this.flags |= TEXT_DIR_LEFT_RIGHT; // for completeness ... this thing is 0
+			this.notifyAttributeChanged(TEXT_DIRECTION_ATTRIBUTE, true, TEXT_DIRS[this.flags & TEXT_DIR_MASK], oldTextDirection);
+			return oldTextDirection;
+		}
+		else if (BOLD_ATTRIBUTE.equals(name)) {
+			String oldBold = Boolean.toString((this.flags & FONT_PROP_BOLD) != 0);
+			if ((value == null) || "false".equalsIgnoreCase(value.toString()))
+				this.flags &= ~FONT_PROP_BOLD; // erase bold flag using bitwise inverse
+			else this.flags |= FONT_PROP_BOLD;
+			this.notifyAttributeChanged(BOLD_ATTRIBUTE, true, Boolean.toString((this.flags & FONT_PROP_BOLD) != 0), oldBold);
+			return oldBold;
+		}
+		else if (ITALICS_ATTRIBUTE.equals(name)) {
+			String oldItalics = Boolean.toString((this.flags & FONT_PROP_ITALICS) != 0);
+			if ((value == null) || "false".equalsIgnoreCase(value.toString()))
+				this.flags &= ~FONT_PROP_ITALICS; // erase bold flag using bitwise inverse
+			else this.flags |= FONT_PROP_ITALICS;
+			this.notifyAttributeChanged(ITALICS_ATTRIBUTE, true, Boolean.toString((this.flags & FONT_PROP_ITALICS) != 0), oldItalics);
+			return oldItalics;
+		}
 		else return super.setAttribute(name, value);
+	}
+	
+	private void notifyAttributeChanged(String name, boolean checkForChange, Object newValue, Object oldValue) {
+		if (this.getPage() == null)
+			return; // we're detached
+		if (checkForChange && ((oldValue == null) ? (newValue == null) : oldValue.equals(newValue)))
+			return; // no actual change happened
+		this.getDocument().notifyAttributeChanged(this, name, oldValue);
 	}
 	
 	/**
@@ -1001,8 +1121,7 @@ public class ImWord extends ImRegion implements ImAnnotation {
 				imw.textStreamType = textStreamType;
 			for (ImWord imw = this.nextWord; imw != null; imw = imw.nextWord)
 				imw.textStreamType = textStreamType;
-			if (this.getPage() != null)
-				this.getDocument().notifyAttributeChanged(this, TEXT_STREAM_TYPE_ATTRIBUTE, oldTextStreamType);
+			this.notifyAttributeChanged(TEXT_STREAM_TYPE_ATTRIBUTE, false, this.textStreamType, oldTextStreamType);
 		}
 		
 		return oldTextStreamType;

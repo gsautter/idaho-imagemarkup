@@ -165,7 +165,6 @@ public class ImRegion extends ImLayoutObject {
 	 * @return an array holding the regions nested in this region
 	 */
 	public ImRegion[] getRegions() {
-//		return this.getRegions(null);
 		return this.getRegions(null, false);
 	}
 	
@@ -181,17 +180,6 @@ public class ImRegion extends ImLayoutObject {
 	 */
 	public ImRegion[] getRegions(String type) {
 		return this.getRegions(type, false);
-//		if (this.page == null)
-//			return new ImRegion[0];
-//		ImRegion[] regions = this.page.getRegionsInside(this.bounds, false);
-//		if (type == null)
-//			return regions;
-//		ArrayList regionList = new ArrayList();
-//		for (int r = 0; r < regions.length; r++) {
-//			if (type.equals(regions[r].getType()))
-//				regionList.add(regions[r]);
-//		}
-//		return ((ImRegion[]) regionList.toArray(new ImRegion[regionList.size()]));
 	}
 	
 	/**
@@ -229,15 +217,6 @@ public class ImRegion extends ImLayoutObject {
 		if (this.page == null)
 			return new ImRegion[0];
 		return this.page.getRegionsInside(type, this.bounds, fuzzy);
-//		ImRegion[] regions = this.page.getRegionsInside(this.bounds, false);
-//		if (type == null)
-//			return regions;
-//		ArrayList regionList = new ArrayList();
-//		for (int r = 0; r < regions.length; r++) {
-//			if (type.equals(regions[r].getType()))
-//				regionList.add(regions[r]);
-//		}
-//		return ((ImRegion[]) regionList.toArray(new ImRegion[regionList.size()]));
 	}
 	
 	/**
@@ -249,6 +228,8 @@ public class ImRegion extends ImLayoutObject {
 	public String[] getRegionTypes() {
 		if (this.page == null)
 			return new String[0];
+		ImDocument doc = this.getDocument();
+		if (ImDocument.TRACK_INSTANCES && (doc != null)) doc.accessed();
 		ImRegion[] regions = this.page.getRegionsInside(this.bounds, false);
 		TreeSet regionTypes = new TreeSet();
 		for (int r = 0; r < regions.length; r++)

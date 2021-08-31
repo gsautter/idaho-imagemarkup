@@ -1150,7 +1150,7 @@ public class PdfFontDecoder {
 						}
 						if (DEBUG_TYPE1_LOADING) System.out.println(indent + "     - resulting relative movement is " + rx + "/" + ry);
 						Number[] rLineToArgs = {new Integer(rx), new Integer(ry)};
-						content.add(new OpType1(5, "rlineto", rLineToArgs, true));
+						content.add(new OpType1(5, "rlineto", rLineToArgs, true, indent));
 						
 						//	ignore 3 subroutine 0 args
 						Number absEndY = ((Number) stack.removeLast());
@@ -1274,7 +1274,7 @@ public class PdfFontDecoder {
 				
 				//	store other operator (actual rendering operators)
 				else {
-					content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()])), true));
+					content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()])), true, indent));
 					if (DEBUG_TYPE1_LOADING) System.out.println(indent + "     Stored for rendering " + opStr + " (" + op + "): " + stack);
 					stack.clear();
 //					while (stack.size() != 0)
@@ -1392,6 +1392,10 @@ public class PdfFontDecoder {
 		
 		//	read global subroutines (if any)
 		ArrayList gSubrIndex = new ArrayList() {
+			public boolean add(Object e) {
+				if (DEBUG_TYPE1C_LOADING) System.out.println("GlobalSubrIndex: " + this.size() + " set to " + ((e instanceof byte[]) ? Arrays.toString((byte[]) e) : e));
+				return super.add(e);
+			}
 			public Object get(int index) {
 				int bias;
 				if (this.size() < 1240)
@@ -1431,6 +1435,42 @@ public class PdfFontDecoder {
 			}
 		}
 		
+		//	read FD array in CID mode
+		ArrayList fdArray = new ArrayList() {
+			public boolean add(Object e) {
+				if (e instanceof byte[]) {
+					byte[] fDictData = ((byte[]) e);
+					HashMap fDict = new HashMap() {
+						public Object put(Object key, Object value) {
+							if (DEBUG_TYPE1C_LOADING) {
+								System.out.print("FDict: " + key + " set to " + value);
+								if (value instanceof Number[]) {
+									Number[] nums = ((Number[]) value);
+									for (int n = 0; n < nums.length; n++)
+										System.out.print(" " + nums[n]);
+								}
+								System.out.println();
+							}
+							return super.put(key, value);
+						}
+					};
+					readFontType1cDict(fDictData, 0, fDictData.length, ("FDict[" + this.size() + "]"), null, null, fDict, type1cTopDictOpResolver, null);
+					e = fDict;
+				}
+				if (DEBUG_TYPE1C_LOADING) System.out.println("FDArray: " + this.size() + " set to " + ((e instanceof byte[]) ? Arrays.toString((byte[]) e) : e));
+				return super.add(e);
+			}
+		};
+		int fdaEnd = 0;
+		if ((unresolvedCodes == null) && topDict.containsKey("FDArray")) {
+			Number[] fdaos = ((Number[]) topDict.get("FDArray"));
+			if (fdaos.length != 0) {
+				int fdao = fdaos[0].intValue();
+				fdaEnd = readFontType1cIndex(data, fdao, "FDArray", null, null, new HashMap(), type1cGlyphProgOpResolver, fdArray);
+			}
+		}
+		
+		//	read private dictionary and subroutines in SID mode
 		HashMap pDict = new HashMap() {
 			public Object put(Object key, Object value) {
 				if (DEBUG_TYPE1C_LOADING) {
@@ -1445,40 +1485,141 @@ public class PdfFontDecoder {
 				return super.put(key, value);
 			}
 		};
+		ArrayList subrIndex = new ArrayList() {
+			public boolean add(Object e) {
+				if (DEBUG_TYPE1C_LOADING) System.out.println("SubrIndex: " + this.size() + " set to " + ((e instanceof byte[]) ? Arrays.toString((byte[]) e) : e));
+				return super.add(e);
+			}
+			public Object get(int index) {
+				int bias;
+				if (this.size() < 1240)
+					bias = 107;
+				else if (this.size() < 33900)
+					bias = 1131;
+				else bias = 32768;
+				if ((0 <= (index + bias)) && ((index + bias) < this.size()))
+					return super.get(index + bias);
+				else return null;
+			}
+		};
 		int pEnd = 0;
-		ArrayList subrIndex = new ArrayList();
 		if (topDict.containsKey("Private")) {
 			Number[] pos = ((Number[]) topDict.get("Private"));
 			if (pos.length == 2) try {
 				int ps = pos[0].intValue();
 				int po = pos[1].intValue();
-				ArrayList pDictContent = new ArrayList();
+				ArrayList pDictContent = new ArrayList() {
+					public boolean add(Object e) {
+						if (DEBUG_TYPE1C_LOADING) System.out.println("PrivateIndex: " + this.size() + " set to " + ((e instanceof byte[]) ? Arrays.toString((byte[]) e) : e));
+						return super.add(e);
+					}
+				};
 				pEnd = readFontType1cDict(data, po, (po + ps), "Private", null, null, pDict, type1cPrivateOpResolver, pDictContent);
 				
 				//	read char string subroutines
 				Number[] sros = ((Number[]) pDict.get("Subrs"));
 				if ((sros != null) && (sros.length != 0)) {
 					int sro = sros[sros.length-1].intValue();
-					subrIndex = new ArrayList() {
-						public Object get(int index) {
-							int bias;
-							if (this.size() < 1240)
-								bias = 107;
-							else if (this.size() < 33900)
-								bias = 1131;
-							else bias = 32768;
-							if ((0 <= (index + bias)) && ((index + bias) < this.size()))
-								return super.get(index + bias);
-							else return null;
-						}
-					};
-					pEnd = readFontType1cIndex(data, (po + sro), "Subrs", null, null, new HashMap(), type1cGlyphProgOpResolver, subrIndex);
+//					subrIndex = new ArrayList() {
+//						public Object get(int index) {
+//							int bias;
+//							if (this.size() < 1240)
+//								bias = 107;
+//							else if (this.size() < 33900)
+//								bias = 1131;
+//							else bias = 32768;
+//							if ((0 <= (index + bias)) && ((index + bias) < this.size()))
+//								return super.get(index + bias);
+//							else return null;
+//						}
+//					};
+					pEnd = readFontType1cIndex(data, (po + sro), "Subrs[0]", null, null, new HashMap(), type1cGlyphProgOpResolver, subrIndex);
 					if (DEBUG_TYPE1C_LOADING) System.out.println("Got " + subrIndex.size() + " char string subroutines");
 				}
 			}
 			catch (RuntimeException re) {
 				System.out.println("Error reading private dictionary: " + re.getMessage());
 				re.printStackTrace(System.out);
+			}
+		}
+		
+		//	read private dictionaries and subroutines in CID mode
+		//	TODO make this work for multiple entries ...
+		//	TODO ... especially in rendering
+		else if ((unresolvedCodes == null) && (fdArray.size() == 1) && (fdArray.get(0) instanceof HashMap)) {
+			HashMap fDict = ((HashMap) fdArray.get(0));
+			if (fDict.containsKey("Private")) {
+				Number[] pos = ((Number[]) fDict.get("Private"));
+				if (pos.length == 2) try {
+					int ps = pos[0].intValue();
+					int po = pos[1].intValue();
+					ArrayList pDictContent = new ArrayList() {
+						public boolean add(Object e) {
+							if (DEBUG_TYPE1C_LOADING) System.out.println("PrivateIndex: " + this.size() + " set to " + ((e instanceof byte[]) ? Arrays.toString((byte[]) e) : e));
+							return super.add(e);
+						}
+					};
+					pEnd = readFontType1cDict(data, po, (po + ps), "Private[0]", null, null, pDict, type1cPrivateOpResolver, pDictContent);
+					
+					//	read char string subroutines
+					Number[] sros = ((Number[]) pDict.get("Subrs"));
+					if ((sros != null) && (sros.length != 0)) {
+						int sro = sros[sros.length-1].intValue();
+//						subrIndex = new ArrayList() {
+//							public Object get(int index) {
+//								int bias;
+//								if (this.size() < 1240)
+//									bias = 107;
+//								else if (this.size() < 33900)
+//									bias = 1131;
+//								else bias = 32768;
+//								if ((0 <= (index + bias)) && ((index + bias) < this.size()))
+//									return super.get(index + bias);
+//								else return null;
+//							}
+//						};
+						pEnd = readFontType1cIndex(data, (po + sro), "Subrs[0]", null, null, new HashMap(), type1cGlyphProgOpResolver, subrIndex);
+						if (DEBUG_TYPE1C_LOADING) System.out.println("Got " + subrIndex.size() + " char string subroutines");
+					}
+				}
+				catch (RuntimeException re) {
+					System.out.println("Error reading private dictionary: " + re.getMessage());
+					re.printStackTrace(System.out);
+				}
+			}
+		}
+		
+		//	read FD selector in CID mode
+		ArrayList fdSelect = new ArrayList() {
+			public void add(int i, Object e) {
+				if (DEBUG_TYPE1C_LOADING) System.out.println("FDSelect: " + this.size() + " set to " + ((e instanceof byte[]) ? Arrays.toString((byte[]) e) : e));
+				super.add(i, e);
+			}
+		};
+		if ((unresolvedCodes == null) && topDict.containsKey("FDSelect")) {
+			Number[] fdsos = ((Number[]) topDict.get("FDSelect"));
+			if (fdsos.length != 0) {
+				int fdso = fdsos[0].intValue();
+				int format = data[fdso++];
+				if (DEBUG_TYPE1C_LOADING) System.out.println("FDSelect: format is " + format);
+				if (format == 0) {
+					Number[] ccs = ((Number[]) topDict.get("CIDCount"));
+					int charCount = (((ccs != null) && (ccs.length != 0)) ? ccs[0].intValue() : 0);
+					for (int c = 0; c < Math.min(charCount, fdArray.size()); c++)
+						fdSelect.add(c, fdArray.get(convertUnsigned(data[fdso++])));
+				}
+				if (format == 3) {
+					int ranges = ((convertUnsigned(data[fdso++]) << 8) + convertUnsigned(data[fdso++]));
+					if (DEBUG_TYPE1C_LOADING) System.out.println("FDSelect: ranges is " + ranges);
+					for (int r = 0; r < ranges; r++) {
+						int rFirst = ((convertUnsigned(data[fdso++]) << 8) + convertUnsigned(data[fdso++]));
+						int rFdIndex = convertUnsigned(data[fdso++]);
+						int rNext = ((convertUnsigned(data[fdso]) << 8) + convertUnsigned(data[fdso + 1]));
+						if (DEBUG_TYPE1C_LOADING) System.out.println("FDSelect range " + r + " is [" + rFirst + "," + rNext + ") = " + rFdIndex);
+						for (int c = rFirst; c < rNext; c++)
+							fdSelect.add(c, fdArray.get(rFdIndex));
+					}
+				}
 			}
 		}
 		
@@ -1497,7 +1638,20 @@ public class PdfFontDecoder {
 				return super.put(key, value);
 			}
 		};
-		ArrayList csIndexContent = new ArrayList();
+		ArrayList csIndexContent = new ArrayList() {
+			public boolean add(Object e) {
+				if (DEBUG_TYPE1C_LOADING) {
+					System.out.println("CharStringIndexContent: " + this.size() + " set to " + e);
+//					if (value instanceof Number[]) {
+//						Number[] nums = ((Number[]) value);
+//						for (int n = 0; n < nums.length; n++)
+//							System.out.print(" " + nums[n]);
+//					}
+//					System.out.println();
+				}
+				return super.add(e);
+			}
+		};
 		int csEnd = 0;
 		if (topDict.containsKey("CharStrings")) {
 			Number[] csos = ((Number[]) topDict.get("CharStrings"));
@@ -1541,7 +1695,7 @@ public class PdfFontDecoder {
 			if (DEBUG_TYPE1C_LOADING) System.out.println("Defaulted to ISOAdobe char set");
 		}
 		
-		i = Math.max(Math.max(i, pEnd), Math.max(csEnd, cEnd));
+		i = Math.max(Math.max(Math.max(i, pEnd), Math.max(csEnd, cEnd)), fdaEnd);
 		if (DEBUG_TYPE1C_LOADING) {
 			System.out.println("GOT TO " + i + " of " + data.length + " bytes");
 			System.out.println("Got " + csContent.size() + " char IDs, " + csIndexContent.size() + " char progs");
@@ -3324,7 +3478,7 @@ public class PdfFontDecoder {
 		int i = start;
 		if (DEBUG_TYPE1C_LOADING) System.out.println("Doing " + name + " index:");
 		int count = (256 * convertUnsigned(data[i++]) + convertUnsigned(data[i++]));
-		System.out.println(" - count is " + count);
+		if (DEBUG_TYPE1C_LOADING) System.out.println(" - count is " + count);
 		if (dictEntries != null) {
 			Number[] cnt = {new Integer(count)};
 			dictEntries.put("Count", cnt);
@@ -3332,19 +3486,19 @@ public class PdfFontDecoder {
 		if (count == 0)
 			return i;
 		int offSize = convertUnsigned(data[i++]);
-		System.out.println(" - offset size is " + offSize);
+		if (DEBUG_TYPE1C_LOADING) System.out.println(" - offset size is " + offSize);
 		int[] offsets = new int[count+1];
 		for (int c = 0; c <= count; c++) {
 			offsets[c] = 0;
 			for (int b = 0; b < offSize; b++)
 				offsets[c] = ((offsets[c] * 256) + convertUnsigned(data[i++]));
-//			if (DEBUG_TYPE1C_LOADING) System.out.println(" - offset[" + c + "] is " + offsets[c]);
+			if (DEBUG_TYPE1C_LOADING) System.out.println(" - offset[" + c + "] is " + offsets[c]);
 		}
 		for (int c = 0; c < count; c++) {
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
 			for (int b = offsets[c]; b < offsets[c+1]; b++)
 				baos.write(convertUnsigned(data[i++]));
-			if ((dictOpResolver == type1cGlyphProgOpResolver) && (subrIndex == null) && (content != null)) {
+			if ((dictOpResolver == type1cGlyphProgOpResolver) && (gSubrIndex == null) && (content != null)) {
 				content.add(baos.toByteArray());
 				if (dictEntries != null)
 					dictEntries.put(Integer.valueOf(c), baos.toByteArray());
@@ -3357,16 +3511,16 @@ public class PdfFontDecoder {
 			}
 			else if (content != null)
 				content.add(new String(baos.toByteArray()));
-//			else System.out.println(" - entry[" + c + "]: " + new String(baos.toByteArray()));
+			else if (DEBUG_TYPE1C_LOADING) System.out.println(" - entry[" + c + "]: " + new String(baos.toByteArray()));
 		}
 		return i;
 	}
 	
 	private static int readFontType1cDict(byte[] data, int start, int end, String name, ArrayList subrIndex, ArrayList gSubrIndex, HashMap dictEntries, HashMap opResolver, ArrayList content) {
-		return readFontType1cDict(data, start, end, name, subrIndex, gSubrIndex, new LinkedList(), false, new HashSet(), new HashMap(), dictEntries, opResolver, content);
+		return readFontType1cDict(data, start, end, name, subrIndex, gSubrIndex, new LinkedList(), false, "", new HashSet(), new HashMap(), dictEntries, opResolver, content);
 	}
 	
-	private static int readFontType1cDict(byte[] data, int start, int end, String name, ArrayList subrIndex, ArrayList gSubrIndex, LinkedList stack, boolean inSubr, HashSet hints, HashMap storage, HashMap dictEntries, HashMap opResolver, ArrayList content) {
+	private static int readFontType1cDict(byte[] data, int start, int end, String name, ArrayList subrIndex, ArrayList gSubrIndex, LinkedList stack, boolean inSubr, String indent, HashSet hints, HashMap storage, HashMap dictEntries, HashMap opResolver, ArrayList content) {
 //		System.out.println("Doing " + name + " dict (from " + start + " of " + end + "):");
 //		System.out.println("                        " + Arrays.toString(Arrays.copyOfRange(data, start, end)));
 		int i = start;
@@ -3529,7 +3683,7 @@ public class PdfFontDecoder {
 						if ((content.size() != 0) && (2 <= stack.size())) {
 							OpType1 pervOp = ((OpType1) content.get(content.size()-1));
 							if ((content.size() != 0) && ((pervOp.op == 1) || (pervOp.op == 18))) {
-								content.add(new OpType1(23, "vstemhm", ((Number[]) stack.toArray(new Number[stack.size()])), false));
+								content.add(new OpType1(23, "vstemhm", ((Number[]) stack.toArray(new Number[stack.size()])), false, indent));
 								if ((stack.size() % 2) != 0)
 									stack.removeFirst(); // width is dealt with later
 								int x = ((Number) stack.removeFirst()).intValue();
@@ -3552,38 +3706,52 @@ public class PdfFontDecoder {
 							h++;
 						}
 						stack.addLast(new Integer(hintmask));
-						content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()])), false));
+						content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()])), false, indent));
 						stack.clear();
 //						System.out.println("Skipped " + h + " hint mask bytes: " + hintmask + " (" + Integer.toString(hintmask, 16).toUpperCase() + ", for " + hints.size() + " hints: " + hints.toString() + ")");
 					}
 					
 					//	hstem & hstemhm (hints are number pairs !!, hstem3 doesn't seem to exist in Type1C, but we catch it anyway)
 					else if ((op == 1) || (op == 18) || (op == 1002)) {
-						content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()])), false));
-						if ((stack.size() % 2) != 0)
-							stack.removeFirst(); // width is dealt with later
-						int y = ((Number) stack.removeFirst()).intValue();
-						int dy = ((Number) stack.removeFirst()).intValue();
-						hints.add("H " + y + "-" + (y + dy));
-						while (stack.size() != 0) {
-							y = (y + dy + ((Number) stack.removeFirst()).intValue());
-							dy = ((Number) stack.removeFirst()).intValue();
+						content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()])), false, indent));
+						try {
+							if ((stack.size() % 2) != 0)
+								stack.removeFirst(); // width is dealt with later
+							int y = ((Number) stack.removeFirst()).intValue();
+							int dy = ((Number) stack.removeFirst()).intValue();
 							hints.add("H " + y + "-" + (y + dy));
+							while (stack.size() != 0) {
+								y = (y + dy + ((Number) stack.removeFirst()).intValue());
+								dy = ((Number) stack.removeFirst()).intValue();
+								hints.add("H " + y + "-" + (y + dy));
+							}
+						}
+						catch (RuntimeException re) {
+							System.out.println(indent + "Ignoring ill-parameterized hstem hint: " + re.getMessage());
+							re.printStackTrace(System.out);
+							stack.clear();
 						}
 					}
 					
 					//	vstem & vstemhm (hints are number pairs !!, vstem3 doesn't seem to exist in Type1C, but we catch it anyway)
 					else if ((op == 3) || (op == 23) || (op == 1001)) {
-						content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()])), false));
-						if ((stack.size() % 2) != 0)
-							stack.removeFirst(); // width is dealt with later
-						int x = ((Number) stack.removeFirst()).intValue();
-						int dx = ((Number) stack.removeFirst()).intValue();
-						hints.add("V " + x + "-" + (x + dx));
-						while (stack.size() != 0) {
-							x = (x + dx + ((Number) stack.removeFirst()).intValue());
-							dx = ((Number) stack.removeFirst()).intValue();
+						content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()])), false, indent));
+						try {
+							if ((stack.size() % 2) != 0)
+								stack.removeFirst(); // width is dealt with later
+							int x = ((Number) stack.removeFirst()).intValue();
+							int dx = ((Number) stack.removeFirst()).intValue();
 							hints.add("V " + x + "-" + (x + dx));
+							while (stack.size() != 0) {
+								x = (x + dx + ((Number) stack.removeFirst()).intValue());
+								dx = ((Number) stack.removeFirst()).intValue();
+								hints.add("V " + x + "-" + (x + dx));
+							}
+						}
+						catch (RuntimeException re) {
+							System.out.println(indent + "Ignoring ill-parameterized vstem hint: " + re.getMessage());
+							re.printStackTrace(System.out);
+							stack.clear();
 						}
 					}
 					
@@ -3770,19 +3938,26 @@ public class PdfFontDecoder {
 					//	inline subroutine calls right here
 					else if ((op == 10) && (subrIndex != null)) {
 						int subrNr = ((Number) stack.removeLast()).intValue();
-						byte[] subrData = ((byte[]) subrIndex.get(subrNr));
-						if (subrData == null) {
-							if (DEBUG_TYPE1C_LOADING) System.out.println("Ignoring attempt to call invalid subroutine " + subrNr);
+						byte[] subrData = null;
+						try {
+							subrData = ((byte[]) subrIndex.get(subrNr));
+							if (DEBUG_TYPE1C_LOADING && (subrData == null)) System.out.println(indent + "Ignoring attempt to call invalid subroutine " + subrNr);
 						}
-						else {
+						catch (RuntimeException re) {
+							re.printStackTrace(System.out);
+							if (DEBUG_TYPE1C_LOADING) System.out.println(indent + "Ignoring attempt to call invalid subroutine " + subrNr);
+//							subrData = ((byte[]) gSubrIndex.get(subrNr));
+//							if (DEBUG_TYPE1C_LOADING && (subrData == null)) System.out.println("Ignoring attempt to call invalid subroutine " + subrNr);
+						}
+						if (subrData != null) {
 //							LinkedList preCallStack = new LinkedList(stack);
 							//	TODO catch errors like in Type1
 							if (DEBUG_TYPE1C_LOADING) {
-								System.out.println("Calling subroutine " + subrNr + ": " + Arrays.toString(subrData));
-								System.out.println("  stack is         " + stack);
+								System.out.println(indent + "Calling subroutine " + subrNr + ": " + Arrays.toString(subrData));
+								System.out.println(indent + "  stack is         " + stack);
 							}
-							readFontType1cDict(subrData, 0, subrData.length, (name + "->" + subrNr), subrIndex, gSubrIndex, stack, true, hints, storage, dictEntries, opResolver, content);
-							if (DEBUG_TYPE1C_LOADING) System.out.println("  result stack is " + stack);
+							readFontType1cDict(subrData, 0, subrData.length, (name + "->" + subrNr), subrIndex, gSubrIndex, stack, true, (indent + "  "), hints, storage, dictEntries, opResolver, content);
+							if (DEBUG_TYPE1C_LOADING) System.out.println(indent + "  result stack is " + stack);
 							if ((stack.size() != 0) && "ENDCHAR".equals(stack.getLast()))
 								break;
 						}
@@ -3793,17 +3968,17 @@ public class PdfFontDecoder {
 						int gSubrNr = ((Number) stack.removeLast()).intValue();
 						byte[] gSubrData = ((byte[]) gSubrIndex.get(gSubrNr));
 						if (gSubrData == null) {
-							if (DEBUG_TYPE1C_LOADING) System.out.println("Ignoring attempt to call invalid global subroutine " + gSubrNr);
+							if (DEBUG_TYPE1C_LOADING) System.out.println(indent + "Ignoring attempt to call invalid global subroutine " + gSubrNr);
 						}
 						else {
 //							LinkedList preCallStack = new LinkedList(stack);
 							//	TODO catch errors like in Type1
 							if (DEBUG_TYPE1C_LOADING) {
-								System.out.println("Calling global subroutine " + gSubrNr + ": " + Arrays.toString(gSubrData));
-								System.out.println("  stack is                " + stack);
+								System.out.println(indent + "Calling global subroutine " + gSubrNr + ": " + Arrays.toString(gSubrData));
+								System.out.println(indent + "  stack is                " + stack);
 							}
-							readFontType1cDict(gSubrData, 0, gSubrData.length, (name + "->" + gSubrNr), subrIndex, gSubrIndex, stack, true, hints, storage, dictEntries, opResolver, content);
-							if (DEBUG_TYPE1C_LOADING) System.out.println("  result stack is " + stack);
+							readFontType1cDict(gSubrData, 0, gSubrData.length, (name + "->" + gSubrNr), subrIndex, gSubrIndex, stack, true, (indent + "  "), hints, storage, dictEntries, opResolver, content);
+							if (DEBUG_TYPE1C_LOADING) System.out.println(indent + "  result stack is " + stack);
 							if ((stack.size() != 0) && "ENDCHAR".equals(stack.getLast()))
 								break;
 						}
@@ -3820,13 +3995,13 @@ public class PdfFontDecoder {
 						stack.clear();
 						stack.addLast("ENDCHAR"); // add mark to propagate endchar from subroutine
 						if ((content.size() == 0) || (((OpType1) content.get(content.size()-1)).op != 9))
-							content.add(new OpType1(9, "closepath", new Number[0], false));
+							content.add(new OpType1(9, "closepath", new Number[0], false, indent));
 						break;
 					}
 					
 					//	store rendering operators (they are all stack clearing)
 					else {
-						content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()])), false));
+						content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()])), false, indent));
 						stack.clear();
 					}
 					
@@ -3868,7 +4043,7 @@ public class PdfFontDecoder {
 				if (opStr != null)
 					dictEntries.put(opStr, ((Number[]) stack.toArray(new Number[stack.size()])));
 				if (content != null)
-					content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()])), false));
+					content.add(new OpType1(op, opStr, ((Number[]) stack.toArray(new Number[stack.size()])), false, indent));
 //				while (stack.size() != 0)
 //					System.out.print(" " + ((Number) stack.removeFirst()));
 //				if (DEBUG_TYPE1C_LOADING) System.out.println();
@@ -3896,11 +4071,13 @@ public class PdfFontDecoder {
 		final String name;
 		final Number[] args;
 		final boolean fixedArgs;
-		OpType1(int op, String name, Number[] args, boolean fixedArgs) {
+		OpType1(int op, String name, Number[] args, boolean fixedArgs, String indent) {
 			this.op = op;
 			this.name = name;
 			this.args = args;
 			this.fixedArgs = fixedArgs;
+			if (DEBUG_TYPE1C_LOADING || DEBUG_TYPE1_LOADING)
+				System.out.println(indent + "OpType1-" + op + ": '" + name + "' " + Arrays.toString(args));
 		}
 	}
 	

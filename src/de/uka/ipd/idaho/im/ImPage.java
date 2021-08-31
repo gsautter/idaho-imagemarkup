@@ -339,10 +339,6 @@ public class ImPage extends ImRegion {
 			return (((ImRegion) obj2).bounds.getArea() - ((ImRegion) obj1).bounds.getArea());
 		}
 	};
-//	
-//	private static final int getSize(BoundingBox bb) {
-//		return ((bb.right - bb.left) * (bb.bottom - bb.top));
-//	}
 	
 	/* TODO keep regions sorted according to document reading order contract
 	 * This might not even be possible with wildly intersecting and overlapping
@@ -364,7 +360,7 @@ public class ImPage extends ImRegion {
 	private ImPageWordList words = new ImPageWordList();
 	private Comparator wordOrder;
 	private HashMap wordsByBounds = new HashMap();
-	private WordIndex wordsByPoints;
+	private WordIndex wordsByPoints = null;
 	private ImWord[] textStreamHeads = null;
 	private ImWord[] textStreamTails = null;
 	
@@ -382,7 +378,7 @@ public class ImPage extends ImRegion {
 	public ImPage(ImDocument doc, int pageId, BoundingBox bounds) {
 		super(doc, pageId, bounds, PAGE_TYPE);
 		this.wordOrder = ImWord.getComparator(doc.orientation);
-		this.wordsByPoints = new WordIndex((this.bounds.right - this.bounds.left), (this.bounds.bottom - this.bounds.top));
+//		this.wordsByPoints = new WordIndex((this.bounds.right - this.bounds.left), (this.bounds.bottom - this.bounds.top));
 		this.regionOrder = sizeRegionOrder;
 		doc.addPage(this);
 	}
@@ -429,7 +425,8 @@ public class ImPage extends ImRegion {
 		synchronized (this.words) {
 			this.words.clear();
 			this.wordsByBounds.clear();
-			this.wordsByPoints.clear();
+			if (this.wordsByPoints != null)
+				this.wordsByPoints.clear();
 		}
 	}
 	
@@ -528,7 +525,8 @@ public class ImPage extends ImRegion {
 		synchronized (this.words) {
 			this.words.addWord(word);
 			this.wordsByBounds.put(word.bounds.toString(), word);
-			this.wordsByPoints.addWord(word);
+			if (this.wordsByPoints != null)
+				this.wordsByPoints.addWord(word);
 		}
 		word.setPage(this);
 		this.getDocument().notifyRegionAdded(word);
@@ -571,7 +569,8 @@ public class ImPage extends ImRegion {
 		
 		//	remove word
 		synchronized (this.words) {
-			this.wordsByPoints.removeWord(word);
+			if (this.wordsByPoints != null)
+				this.wordsByPoints.removeWord(word);
 			this.wordsByBounds.remove(word.bounds.toString());
 			this.words.removeWord(word);
 		}
@@ -611,7 +610,24 @@ public class ImPage extends ImRegion {
 	 * @return the word at the argument point
 	 */
 	public ImWord getWordAt(int x, int y) {
+		synchronized (this.words) {
+			if (this.wordsByPoints == null) /* need to check synchronously, as otherwise half empty index might get used */ {
+				this.wordsByPoints = new WordIndex((this.bounds.right - this.bounds.left), (this.bounds.bottom - this.bounds.top));
+				for (int w = 0; w < this.words.size(); w++)
+					this.wordsByPoints.addWord(this.words.getWord(w));
+			}
+		}
 		return this.wordsByPoints.getWordAt(x, y);
+		/*
+TODO Try switching point access support for IM words in page to single array:
+- sort strictly top-down for top, bottom-up for bottom
+- binary search clicked Y coordinate in said array ...
+- ... and then scan backward and forward from that position ...
+- ... until match found for X coordinate or Y coordinate no longer covered
+==> uses only single array (way fewer objects, and only one empty tail) ...
+==> ... and only one reference per word
+==> should be similarly fast, as tiles also need linear scan
+		 */
 	}
 	
 	/**
@@ -818,6 +834,8 @@ public class ImPage extends ImRegion {
 	 *            the argument box
 	 */
 	public ImRegion[] getRegionsIncluding(String type, BoundingBox box, boolean fuzzy) {
+		ImDocument doc = this.getDocument();
+		if (ImDocument.TRACK_INSTANCES && (doc != null)) doc.accessed();
 		ImRegionCollectorList rs = new ImRegionCollectorList();
 		ImPageRegionList imrs = this.getRegionList(type, false);
 		if (imrs == null)
@@ -860,6 +878,8 @@ public class ImPage extends ImRegion {
 	 * @return an array holding the regions that lie inside the argument box
 	 */
 	public ImRegion[] getRegionsInside(String type, BoundingBox box, boolean fuzzy) {
+		ImDocument doc = this.getDocument();
+		if (ImDocument.TRACK_INSTANCES && (doc != null)) doc.accessed();
 		ImRegionCollectorList rs = new ImRegionCollectorList();
 		ImPageRegionList imrs = this.getRegionList(type, false);
 		if (imrs == null)
@@ -911,6 +931,8 @@ public class ImPage extends ImRegion {
 	 * @return an array holding the regions representing the layout of the page
 	 */
 	public ImRegion[] getRegions(String type) {
+		ImDocument doc = this.getDocument();
+		if (ImDocument.TRACK_INSTANCES && (doc != null)) doc.accessed();
 		if (type == null)
 			return this.regions.toRegionArray();
 		else if (WORD_ANNOTATION_TYPE.equals(type))
@@ -925,6 +947,8 @@ public class ImPage extends ImRegion {
 	 * @return an array holding the region types
 	 */
 	public String[] getRegionTypes() {
+		ImDocument doc = this.getDocument();
+		if (ImDocument.TRACK_INSTANCES && (doc != null)) doc.accessed();
 		return ((String[]) this.regionsByType.keySet().toArray(new String[this.regionsByType.size()]));
 	}
 	
@@ -933,13 +957,9 @@ public class ImPage extends ImRegion {
 	 * @return an array holding the supplements
 	 */
 	public ImSupplement[] getSupplements() {
+		ImDocument doc = this.getDocument();
+		if (ImDocument.TRACK_INSTANCES && (doc != null)) doc.accessed();
 		ImSupplement[] docSupplements = this.getDocument().getSupplements();
-//		ArrayList pageSupplements = new ArrayList();
-//		for (int s = 0; s < docSupplements.length; s++) {
-//			if (("" + this.pageId).equals(docSupplements[s].getAttribute(PAGE_ID_ATTRIBUTE, "").toString()))
-//				pageSupplements.add(docSupplements[s]);
-//		}
-//		return ((ImSupplement[]) pageSupplements.toArray(new ImSupplement[pageSupplements.size()]));
 		int retained = 0;
 		for (int s = 0; s < docSupplements.length; s++) {
 			if (("" + this.pageId).equals(docSupplements[s].getAttribute(PAGE_ID_ATTRIBUTE, "").toString()))

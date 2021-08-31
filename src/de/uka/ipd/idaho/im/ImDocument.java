@@ -29,6 +29,7 @@ package de.uka.ipd.idaho.im;
 
 import java.awt.ComponentOrientation;
 import java.io.IOException;
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -94,6 +95,107 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * - maybe implement all of this right with event notification of this class
 	 */
 	
+	//	TODO remove this after server clean !!!
+	static final boolean TRACK_INSTANCES = false;
+	final AccessHistory accessHistory = (TRACK_INSTANCES ? new AccessHistory(this) : null);
+	private static class AccessHistory {
+		final ImDocument doc;
+		final long created;
+		final StackTraceElement[] createStack;
+		long lastAccessed;
+//		StackTraceElement[] lastAccessStack; ==> causes too much debris
+		final int staleAge = (1000 * 60 * 10);
+		private final boolean untracked;
+		private boolean printed = false;
+		AccessHistory(ImDocument doc) {
+			this.doc = doc;
+			this.created = System.currentTimeMillis();
+			this.createStack = Thread.currentThread().getStackTrace();
+			this.lastAccessed = this.created;
+//			this.lastAccessStack = this.createStack;
+			boolean untracked = false;
+			for (int e = 0; e < this.createStack.length; e++) {
+				String ses = this.createStack[e].toString();
+				if (ses.indexOf(".main(") != -1) {
+					untracked = true; // no tracking in slaves
+					break;
+				}
+			}
+			this.untracked = untracked;
+			if (this.untracked)
+				return;
+			synchronized (accessHistories) {
+				accessHistories.add(new WeakReference(this));
+			}
+		}
+		void accessed() {
+			if (this.untracked)
+				return;
+			this.lastAccessed = System.currentTimeMillis();
+//			this.lastAccessStack = Thread.currentThread().getStackTrace();
+			this.printed = false;
+		}
+		boolean printData(long time, boolean newOnly) {
+			if (this.printed && newOnly)
+				return false;
+			System.err.println("Stale ImDocument (" + (time - this.created) + "ms ago, last accessed " + (time - this.lastAccessed) + "ms ago)");
+			for (int e = 0; e < this.createStack.length; e++)
+				System.err.println("CR\tat " + this.createStack[e].toString());
+//			StackTraceElement[] las = this.lastAccessStack; // let's be super safe here
+//			for (int e = 0; e < las.length; e++)
+//				System.err.println("LA\tat " + las[e].toString());
+			this.printed = true;
+			return true;
+		}
+	}
+	private static ArrayList accessHistories = (TRACK_INSTANCES ? new ArrayList() : null);
+	static {
+		if (TRACK_INSTANCES) {
+			Thread deadInstanceChecker = new Thread("ImDocumentGuard") {
+				public void run() {
+					int reclaimed = 0;
+					WeakReference gcDetector = new WeakReference(new Object());
+					while (true) {
+						try {
+							sleep(1000 * 60 * 2);
+						} catch (InterruptedException ie) {}
+						int stale = 0;
+						if (accessHistories.size() != 0) try {
+							long time = System.currentTimeMillis();
+							boolean noGc;
+							if (gcDetector.get() == null) {
+								gcDetector = new WeakReference(new Object());
+								noGc = false;
+							}
+							else noGc = true;
+							for (int h = 0; h < accessHistories.size(); h++)
+								synchronized (accessHistories) {
+									WeakReference ahr = ((WeakReference) accessHistories.get(h));
+									AccessHistory ah = ((AccessHistory) ahr.get());
+									if (ah == null) /* cleared out by GC as supposed to */ {
+										accessHistories.remove(h--);
+										reclaimed++;
+									}
+									else if ((ah.lastAccessed + ah.staleAge) < time) {
+										if (ah.printData(time, noGc))
+											stale++;
+									}
+								}
+							System.err.println("ImDocumentGuard: " + accessHistories.size() + " extant, " + reclaimed + " reclaimed, " + stale + (noGc ? " newly gone" : "") + " stale");
+						}
+						catch (Exception e) {
+							System.err.println("ImDocumentGuard: error checking instances: " + e.getMessage());
+						}
+					}
+				}
+			};
+			deadInstanceChecker.start();
+		}
+	}
+	void accessed() {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
+	}
+	
 	/** The name of the document attribute to store any non-default
 	 * <code>de.uka.ipd.idaho.gamte.Tokenizer</code> in that should be used for
 	 * text handling and extraction purposes. If this attribute is not set at
@@ -127,14 +229,17 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			this.createOrderNumber = createOrderNumber;
 		}
 		String getId() {
+			if (TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 			if (this.id == null)
 				this.id = (this.type + ":" + this.firstWord.getLocalID() + "-" + this.lastWord.getLocalID());
 			return this.id;
 		}
 		public String getType() {
+			if (TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 			return this.type;
 		}
 		public void setType(String type) {
+			if (TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 			String oldType = this.type;
 			this.type = type;
 			String oldId = this.id;
@@ -149,24 +254,29 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			}
 		}
 		public String getLocalID() {
+			if (TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 			if (this.lid == null)
 				this.lid = (this.type + "@" + this.firstWord.getLocalID() + "-" + this.lastWord.getLocalID());
 			return this.lid;
 		}
 		public String getLocalUID() {
+			if (TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 			if (this.luid == null)
 				this.luid = AnnotationUuidHelper.getLocalUID(this);
 			return this.luid;
 		}
 		public String getUUID() {
+			if (TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 			if (this.uuid == null)
 				this.uuid = AnnotationUuidHelper.getUUID(this);
 			return this.uuid;
 		}
 		public ImDocument getDocument() {
+			if (TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 			return this.doc;
 		}
 		public ImWord getFirstWord() {
+			if (TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 			return this.firstWord;
 		}
 		public void setFirstWord(ImWord firstWord) {
@@ -184,6 +294,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			}
 		}
 		public ImWord getLastWord() {
+			if (TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 			return this.lastWord;
 		}
 		public void setLastWord(ImWord lastWord) {
@@ -222,6 +333,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			}
 		}
 		public Object getAttribute(String name) {
+			if (TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 			if (FIRST_WORD_ATTRIBUTE.equals(name))
 				return this.firstWord;
 			if (LAST_WORD_ATTRIBUTE.equals(name))
@@ -229,6 +341,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			return super.getAttribute(name);
 		}
 		public Object getAttribute(String name, Object def) {
+			if (TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 			if (FIRST_WORD_ATTRIBUTE.equals(name))
 				return ((this.firstWord == null) ? def : this.firstWord);
 			if (LAST_WORD_ATTRIBUTE.equals(name))
@@ -236,6 +349,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			return super.getAttribute(name, def);
 		}
 		public boolean hasAttribute(String name) {
+			if (TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 			if (FIRST_WORD_ATTRIBUTE.equals(name))
 				return (this.firstWord != null);
 			if (LAST_WORD_ATTRIBUTE.equals(name))
@@ -257,6 +371,10 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			if (this.doc != null)
 				this.doc.notifyAttributeChanged(this, name, oldValue);
 			return oldValue;
+		}
+		public String[] getAttributeNames() {
+			if (TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
+			return super.getAttributeNames();
 		}
 		public String getDocumentProperty(String propertyName) {
 			return this.getDocument().getDocumentProperty(propertyName);
@@ -280,6 +398,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 		private int cleanEndWordModCount = 0;
 		private int cleanTextStreamModCount = 0;
 		void addAnnot(ImDocumentAnnotation annot) {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			if (annot == null)
 				return;
 			if (this.contained.contains(annot))
@@ -311,6 +430,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			return this.annots[index];
 		}
 		void removeAnnot(ImDocumentAnnotation annot) {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			if (annot == null)
 				return;
 			if (this.contained.remove(annot)) {
@@ -350,6 +470,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			this.cleanTextStreamModCount = textStreamModCount;
 		}
 		private void ensureClean() {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			if (this.removed.isEmpty())
 				return;
 			int removed = 0;
@@ -1696,6 +1817,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * @return an array holding the annotation types
 	 */
 	public String[] getAnnotationTypes() {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		return ((String[]) this.annotationsByType.keySet().toArray(new String[this.annotationsByType.size()]));
 	}
 	
@@ -1707,6 +1829,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * @return the word at the specified position
 	 */
 	public ImWord getWord(int pageId, BoundingBox bounds) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		ImPage page = this.getPage(pageId);
 		return ((page == null) ? null : page.getWord(bounds));
 	}
@@ -1719,6 +1842,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * @return the word at the specified position
 	 */
 	public ImWord getWord(int pageId, String bounds) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		ImPage page = this.getPage(pageId);
 		return ((page == null) ? null : page.getWord(bounds));
 	}
@@ -1731,6 +1855,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * @return the word with the specified local ID
 	 */
 	public ImWord getWord(String localId) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		if ((localId == null) || (localId.indexOf('.') == -1))
 			return null;
 		ImPage page = ((ImPage) this.pagesById.get(new Integer(localId.substring(0, localId.indexOf('.')))));
@@ -1744,6 +1869,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * @return the object with the specified local UID
 	 */
 	public ImObject getObjectByLocalUID(String localUid) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		if (docLocalUID.equals(localUid))
 			return this;
 		else return ((ImObject) this.objectsByLocalUID.get(localUid));
@@ -1756,6 +1882,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * @return the object with the specified UUID
 	 */
 	public ImObject getObjectByUUID(String uuid) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		String luid = RandomByteSource.getHexXor(uuid, this.docId);
 		return this.getObjectByLocalUID(luid);
 	}
@@ -1790,6 +1917,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	}
 	
 	private void ensureTextStreamEnds() {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		if ((this.textStreamHeads != null) && (this.textStreamTails != null))
 			return;
 		ArrayList tshs = new ArrayList(8);
@@ -1840,6 +1968,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	private ArrayList listeners = null;
 	
 	void notifyTypeChanged(ImObject object, String oldType, String oldLuid) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		synchronized (this.objectsByLocalUID) {
 			if (oldLuid != null)
 				this.objectsByLocalUID.remove(oldLuid);
@@ -1852,6 +1981,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	}
 	
 	void notifyAttributeChanged(ImObject object, String attributeName, Object oldValue) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		if (object instanceof ImWord) {
 			if (ImWord.NEXT_WORD_ATTRIBUTE.equals(attributeName))
 				this.textStreamModCount++;
@@ -1865,6 +1995,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	}
 	
 	private void notifySupplementChanged(String supplementId, ImSupplement oldValue) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		if (this.listeners == null)
 			return;
 		for (int l = 0; l < this.listeners.size(); l++)
@@ -1872,6 +2003,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	}
 	
 	private void notifyFontChanged(String fontName, ImFont oldValue) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		if (this.listeners == null)
 			return;
 		for (int l = 0; l < this.listeners.size(); l++)
@@ -1879,6 +2011,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	}
 	
 	void notifyRegionAdded(ImRegion region) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		if (region instanceof ImWord)
 			this.textStreamModCount++;
 		synchronized (this.objectsByLocalUID) {
@@ -1891,6 +2024,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	}
 	
 	void notifyRegionRemoved(ImRegion region) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		if (region instanceof ImWord)
 			this.textStreamModCount++;
 		synchronized (this.objectsByLocalUID) {
@@ -1903,6 +2037,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	}
 	
 	private void notifyAnnotationAdded(ImAnnotation annotation) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		if (this.listeners == null)
 			return;
 		for (int l = 0; l < this.listeners.size(); l++)
@@ -1910,6 +2045,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	}
 	
 	private void notifyAnnotationRemoved(ImAnnotation annotation) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		if (this.listeners == null)
 			return;
 		for (int l = 0; l < this.listeners.size(); l++)

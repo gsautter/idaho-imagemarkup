@@ -285,7 +285,7 @@ public class ImDocumentIO implements ImagingConstants {
 		
 		//	check progress monitor
 		if (pm == null)
-			pm = ProgressMonitor.dummy;
+			pm = ProgressMonitor.quiet;
 		
 		//	make reading observable if we know how many bytes to expect
 		if (inLength != -1) {
@@ -509,7 +509,7 @@ public class ImDocumentIO implements ImagingConstants {
 		
 		//	check progress monitor
 		if (pm == null)
-			pm = ProgressMonitor.dummy;
+			pm = ProgressMonitor.quiet;
 		
 		//	read document meta data
 		pm.setStep("Reading document data");
@@ -527,6 +527,9 @@ public class ImDocumentIO implements ImagingConstants {
 		setAttributes(doc, docData.getValue(ImObject.ATTRIBUTES_STRING_ATTRIBUTE));
 		
 		//	read fonts (if any)
+		//	TODOnot only add supplement proxy holding plain data, and parse on demand
+		//	==> we need the fonts proper because they have UUIDs, which need to resolve ...
+		//	==> ... and holding string data in Map actually needs more memory than glyph bitmap proper
 		pm.setStep("Reading font data");
 		pm.setBaseProgress(55);
 		pm.setMaxProgress(60);
@@ -542,12 +545,10 @@ public class ImDocumentIO implements ImagingConstants {
 					continue;
 				if ((font == null) || !font.name.equals(fontName)) {
 					pm.setInfo("Adding font " + fontName);
-					font = new ImFont(doc, fontName);
+					font = new ImFont(doc, fontName, false, false, false, false);
 					String fontStyle = charData.getValue(ImFont.STYLE_ATTRIBUTE, "");
 					font.setBold(fontStyle.indexOf("B") != -1);
 					font.setItalics(fontStyle.indexOf("I") != -1);
-//					font.setSerif(fontStyle.indexOf("S") != -1);
-//					font.setMonospaced(fontStyle.indexOf("M") != -1);
 					if (fontStyle.indexOf("M") != -1)
 						font.setMonospaced(true);
 					else if (fontStyle.indexOf("S") != -1)
@@ -687,6 +688,9 @@ public class ImDocumentIO implements ImagingConstants {
 		}
 		
 		//	read meta data of supplements (if any)
+		//	TODOnot only add supplement proxy holding plain data, and parse on demand
+		//	==> we need the supplements proper because they have UUIDs, which need to resolve ...
+		//	==> ... and holding string data in Map actually needs more memory than parsed supplement proper
 		pm.setStep("Reading supplement data");
 		pm.setBaseProgress(90);
 		pm.setMaxProgress(95);
@@ -1117,7 +1121,7 @@ public class ImDocumentIO implements ImagingConstants {
 		
 		//	check progress monitor
 		if (pm == null)
-			pm = ProgressMonitor.dummy;
+			pm = ProgressMonitor.quiet;
 		
 		//	check memory (estimate 100 bytes per word, 1000 words per page, should be on the safe side)
 		boolean lowMemory = (Runtime.getRuntime().freeMemory() < (100 * 1000 * doc.getPageCount()));
@@ -1265,7 +1269,6 @@ public class ImDocumentIO implements ImagingConstants {
 				fontStyle += "S";
 			if (fonts[f].isMonospaced())
 				fontStyle += "M";
-			//	TODOne activate this soon as update with respective loading code spreads
 			String fontAttributes = getAttributesString(fonts[f]);
 			if (fontAttributes.length() != 0) {
 				StringTupel fontData = new StringTupel();

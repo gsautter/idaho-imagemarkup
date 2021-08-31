@@ -33,6 +33,7 @@ import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.OutputStreamWriter;
 import java.lang.ref.SoftReference;
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -94,11 +95,108 @@ import de.uka.ipd.idaho.im.util.ImUtils;
  * @author sautter
  */
 public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, ImagingConstants, TableConstants {
-	
 	static final String GRID_LEFT_COL_ATTRIBUTE = "gridcol";
 	static final String GRID_TOP_ROW_ATTRIBUTE = "gridrow";
 	static final String GRID_COL_COUNT_ATTRIBUTE = "gridcols";
 	static final String GRID_ROW_COUNT_ATTRIBUTE = "gridrows";
+	
+	//	TODO remove this after server clean !!!
+	static final boolean TRACK_INSTANCES = false;
+	final AccessHistory accessHistory = (TRACK_INSTANCES ? new AccessHistory(this) : null);
+	private static class AccessHistory {
+		final ImDocumentRoot doc;
+		final long created;
+		final StackTraceElement[] createStack;
+		long lastAccessed;
+//		StackTraceElement[] lastAccessStack; ==> causes too much debris
+		final int staleAge = (1000 * 60 * 10);
+		private final boolean untracked;
+		private boolean printed = false;
+		AccessHistory(ImDocumentRoot doc) {
+			this.doc = doc;
+			this.created = System.currentTimeMillis();
+			this.createStack = Thread.currentThread().getStackTrace();
+			this.lastAccessed = this.created;
+//			this.lastAccessStack = this.createStack;
+			boolean untracked = false;
+			for (int e = 0; e < this.createStack.length; e++) {
+				String ses = this.createStack[e].toString();
+				if (ses.indexOf(".main(") != -1) {
+					untracked = true; // no tracking in slaves
+					break;
+				}
+			}
+			this.untracked = untracked;
+			if (this.untracked)
+				return;
+			synchronized (accessHistories) {
+				accessHistories.add(new WeakReference(this));
+			}
+		}
+		void accessed() {
+			if (this.untracked)
+				return;
+			this.lastAccessed = System.currentTimeMillis();
+//			this.lastAccessStack = Thread.currentThread().getStackTrace();
+			this.printed = false;
+		}
+		boolean printData(long time, boolean newOnly) {
+			if (this.printed && newOnly)
+				return false;
+			System.err.println("Stale ImDocumentRoot (" + (time - this.created) + "ms ago, last accessed " + (time - this.lastAccessed) + "ms ago)");
+			for (int e = 0; e < this.createStack.length; e++)
+				System.err.println("CR\tat " + this.createStack[e].toString());
+//			StackTraceElement[] las = this.lastAccessStack; // let's be super safe here
+//			for (int e = 0; e < las.length; e++)
+//				System.err.println("LA\tat " + las[e].toString());
+			this.printed = true;
+			return true;
+		}
+	}
+	private static ArrayList accessHistories = (TRACK_INSTANCES ? new ArrayList() : null);
+	static {
+		if (TRACK_INSTANCES) {
+			Thread deadInstanceChecker = new Thread("ImDocumentRootGuard") {
+				public void run() {
+					int reclaimed = 0;
+					WeakReference gcDetector = new WeakReference(new Object());
+					while (true) {
+						try {
+							sleep(1000 * 60 * 2);
+						} catch (InterruptedException ie) {}
+						int stale = 0;
+						if (accessHistories.size() != 0) try {
+							long time = System.currentTimeMillis();
+							boolean noGc;
+							if (gcDetector.get() == null) {
+								gcDetector = new WeakReference(new Object());
+								noGc = false;
+							}
+							else noGc = true;
+							for (int h = 0; h < accessHistories.size(); h++)
+								synchronized (accessHistories) {
+									WeakReference ahr = ((WeakReference) accessHistories.get(h));
+									AccessHistory ah = ((AccessHistory) ahr.get());
+									if (ah == null) /* cleared out by GC as supposed to */ {
+										accessHistories.remove(h--);
+										reclaimed++;
+									}
+									else if ((ah.lastAccessed + ah.staleAge) < time) {
+										if (ah.printData(time, noGc))
+											stale++;
+									}
+								}
+							System.err.println("ImDocumentRootGuard: " + accessHistories.size() + " extant, " + reclaimed + " reclaimed, " + stale + (noGc ? " newly gone" : "") + " stale");
+						}
+						catch (Exception e) {
+							System.err.println("ImDocumentRootGuard: error checking instances: " + e.getMessage());
+						}
+					}
+				}
+			};
+			deadInstanceChecker.start();
+		}
+	}
 	
 	private class ImAnnotationBase {
 		
@@ -316,6 +414,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			this.pAttributes = new ParagraphAnnotationAttributes();
 		}
 		Attributed getAttributed() {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			if (this.aData != null)
 				return this.aData;
 			else if (this.rData != null)
@@ -325,6 +424,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			else return this.pAttributes;
 		}
 		ImWord firstWord() {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			if (this.aData != null)
 				return this.aData.getFirstWord();
 			else if (this.rData != null)
@@ -334,6 +434,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			else return this.pFirstWord;
 		}
 		ImWord lastWord() {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			if (this.aData != null)
 				return this.aData.getLastWord();
 			else if (this.rData != null)
@@ -343,6 +444,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			else return this.pLastWord;
 		}
 		String getType() {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			if (this.aData != null)
 				return this.aData.getType();
 			else if (this.rData != null) {
@@ -358,6 +460,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			else return ImagingConstants.PARAGRAPH_TYPE;
 		}
 		String setType(String type) {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			String oldType = this.getType();
 			if (this.aData != null)
 				this.aData.setType(type);
@@ -372,6 +475,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			return oldType;
 		}
 		BoundingBox getBoundingBox() {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			if (this.boundingBox == null)
 				this.boundingBox = this.buildBoundingBox();
 			return ((this.boundingBox == NULL_BOUNDING_BOX) ? null : this.boundingBox);
@@ -418,6 +522,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			return ((aggregateImWordBounds == null) ? NULL_BOUNDING_BOX : aggregateImWordBounds);
 		}
 		int getStartIndex() {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			int startIndex = getTokenIndexOf(this.firstWord());
 //			if (startIndex < 0)
 //				System.out.println("Strange start index for " + this.firstWord() + " in " + this.getType() + ": " + startIndex);
@@ -425,34 +530,44 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 //			return getTokenIndexOf(this.firstWord());
 		}
 		int getEndIndex() {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			return (getTokenIndexOf(this.lastWord()) + 1);
 		}
 		int size() {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			return (this.getEndIndex() - this.getStartIndex());
 		}
 		int getStartOffset() {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			return getTokenFor(this.firstWord()).getStartOffset();
 		}
 		int getEndOffset() {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			return getTokenFor(this.lastWord()).getEndOffset();
 		}
 		ImToken tokenAt(int index) {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			return imTokenAtIndex(this.getStartIndex() + index);
 		}
 		String valueAt(int index) {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 //			System.out.println("ImAnnotationView: getting value at " + index + " with own start index " + this.getStartIndex());
 			return ImDocumentRoot.this.valueAt(this.getStartIndex() + index);
 		}
 		String getWhitespaceAfter(int index) {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			return ImDocumentRoot.this.getWhitespaceAfter(this.getStartIndex() + index);
 		}
 		char charAt(int index) {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			return ImDocumentRoot.this.charAt(this.getStartOffset() + index);
 		}
 		CharSequence subSequence(int start, int end) {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			return ImDocumentRoot.this.subSequence((this.getStartOffset() + start), (this.getStartOffset() + end));
 		}
 		String getId() {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			if (useRandomAnnotationIDs) {
 				if (this.randomId == null)
 					this.randomId = Gamta.getAnnotationID();
@@ -575,6 +690,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 			return (AnnotationUtils.produceStartTag(this, true) + AnnotationUtils.escapeForXml(TokenSequenceUtils.concatTokens(this, true, true)) + AnnotationUtils.produceEndTag(this));
 		}
 		public QueriableAnnotation getDocument() {
+			if (TRACK_INSTANCES) accessHistory.accessed();
 			return ImDocumentRoot.this.getDocument();
 		}
 		
@@ -2369,6 +2485,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		return this.doGetAnnotations(type, null, (endIndex - 1), (startIndex + 1), false);
 	}
 	ImAnnotationView doGetAnnotation(ImAnnotationBase source, String id, boolean mutableAnnotation) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		ImAnnotationBase imab = ((ImAnnotationBase) this.annotationBasesByUUIDs.get(id));
 		if (imab == null)
 			return null;
@@ -2390,6 +2507,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	private static final QueriableAnnotation[] emptyQueriableAnnotations = {};
 	private static final MutableAnnotation[] emptyMutableAnnotations = {};
 	private QueriableAnnotation[] doGetAnnotations(ImAnnotationList annotationList, ImAnnotationBase source, boolean mutableAnnotationArray) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		if ((annotationList == null) || annotationList.isEmpty())
 			return (mutableAnnotationArray ? emptyMutableAnnotations : emptyQueriableAnnotations);
 		else {
@@ -2417,6 +2535,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		else return this.doGetAnnotations(((ImAnnotationList) this.annotationsByType.get(type)), source, maxStartIndex, minEndIndex, mutableAnnotationArray);
 	}
 	private QueriableAnnotation[] doGetAnnotations(ImAnnotationList annotationList, ImAnnotationBase source, int maxStartIndex, int minEndIndex, boolean mutableAnnotationArray) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		if ((annotationList == null) || annotationList.isEmpty())
 			return (mutableAnnotationArray ? emptyMutableAnnotations : emptyQueriableAnnotations);
 		else {
@@ -2437,6 +2556,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		}
 	}
 	public String[] getAnnotationTypes() {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		return ((String[]) this.annotationsByType.keySet().toArray(new String[this.annotationsByType.size()]));
 	}
 	public String getAnnotationNestingOrder() {
@@ -2457,6 +2577,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	}
 //	private MutableAnnotation doAddAnnotation(String type, int startIndex, int size, ImAnnotationBase sourceBase) {
 	private ImMutableAnnotationView doAddAnnotation(String type, int startIndex, int endIndex, ImAnnotationBase sourceBase) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 //		if (size < 1)
 //			return null;
 		if (endIndex <= startIndex)
@@ -2465,7 +2586,7 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 		//	get first and last tokens
 		ImToken firstToken = this.imTokenAtIndex(startIndex + ((sourceBase == null) ? 0 : sourceBase.getStartIndex()));
 //		ImToken lastToken = this.imTokenAtIndex(startIndex + ((sourceBase == null) ? 0 : sourceBase.getStartIndex()) + size - 1);
-		ImToken lastToken = this.imTokenAtIndex(endIndex + ((sourceBase == null) ? 0 : sourceBase.getStartIndex()) + 1);
+		ImToken lastToken = this.imTokenAtIndex(endIndex + ((sourceBase == null) ? 0 : sourceBase.getStartIndex()) - 1);
 		
 		//	get first and last words
 		ImWord firstWord = ((ImWord) firstToken.imWords.get(0));
@@ -2979,61 +3100,76 @@ public class ImDocumentRoot extends ImTokenSequence implements DocumentRoot, Ima
 	public void removeAnnotationListener(AnnotationListener al) {/* no use listening on a short-lived wrapper */}
 
 	public boolean hasAttribute(String name) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		if (DocumentRoot.DOCUMENT_ID_ATTRIBUTE.equals(name))
 			return true;
 		else return this.doc.hasAttribute(name);
 	}
 	public Object getAttribute(String name) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		if (DocumentRoot.DOCUMENT_ID_ATTRIBUTE.equals(name))
 			return this.doc.docId;
 		else return this.doc.getAttribute(name);
 	}
 	public Object getAttribute(String name, Object def) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		if (DocumentRoot.DOCUMENT_ID_ATTRIBUTE.equals(name))
 			return this.doc.docId;
 		else return this.doc.getAttribute(name, def);
 	}
 	public String[] getAttributeNames() {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		TreeSet ans = new TreeSet(Arrays.asList(this.doc.getAttributeNames()));
 		ans.add(DocumentRoot.DOCUMENT_ID_ATTRIBUTE);
 		return ((String[]) ans.toArray(new String[ans.size()]));
 	}
 	public void setAttribute(String name) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		this.doc.setAttribute(name);
 	}
 	public Object setAttribute(String name, Object value) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		return this.doc.setAttribute(name, value);
 	}
 	public void copyAttributes(Attributed source) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		this.doc.copyAttributes(source);
 	}
 	public Object removeAttribute(String name) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		return this.doc.removeAttribute(name);
 	}
 	public void clearAttributes() {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		this.doc.clearAttributes();
 	}
 	
 	public String getDocumentProperty(String propertyName) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		if (DocumentRoot.DOCUMENT_ID_ATTRIBUTE.equals(propertyName))
 			return this.doc.docId;
 		else return this.doc.getDocumentProperty(propertyName);
 	}
 	public String getDocumentProperty(String propertyName, String defaultValue) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		if (DocumentRoot.DOCUMENT_ID_ATTRIBUTE.equals(propertyName))
 			return this.doc.docId;
 		else return this.doc.getDocumentProperty(propertyName, defaultValue);
 	}
 	public String[] getDocumentPropertyNames() {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		return this.doc.getDocumentPropertyNames();
 	}
 	public String setDocumentProperty(String propertyName, String value) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		return this.doc.setDocumentProperty(propertyName, value);
 	}
 	public String removeDocumentProperty(String propertyName) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		return this.doc.removeDocumentProperty(propertyName);
 	}
 	public void clearDocumentProperties() {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		this.doc.clearDocumentProperties();
 	}
 	
