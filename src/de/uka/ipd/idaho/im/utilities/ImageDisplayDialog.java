@@ -84,6 +84,10 @@ public class ImageDisplayDialog extends JPanel {
 		JScrollPane imageBox = new JScrollPane(imageTray);
 		imageBox.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_ALWAYS);
 		imageBox.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
+		if (title == null)
+			title = "<null>";
+		else if (128 < title.length())
+			title = (title.substring(0, 124) + " ...");
 		this.tabs.addTab(title, imageBox);
 		this.tabs.setSelectedComponent(imageBox);
 	}

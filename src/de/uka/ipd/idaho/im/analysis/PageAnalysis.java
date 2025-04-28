@@ -27,6 +27,7 @@
  */
 package de.uka.ipd.idaho.im.analysis;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -42,10 +43,12 @@ import de.uka.ipd.idaho.gamta.util.CountingSet;
 import de.uka.ipd.idaho.gamta.util.DocumentStyle;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
+import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.ImLayoutObject;
 import de.uka.ipd.idaho.im.ImPage;
 import de.uka.ipd.idaho.im.ImRegion;
 import de.uka.ipd.idaho.im.ImWord;
+import de.uka.ipd.idaho.im.util.ImDocumentIO;
 import de.uka.ipd.idaho.im.util.ImDocumentStyle;
 import de.uka.ipd.idaho.im.util.ImUtils;
 import de.uka.ipd.idaho.im.util.LinePattern;
@@ -676,6 +679,25 @@ public class PageAnalysis implements ImagingConstants {
 		return true;
 	}
 	
+	//	TODO test structure detection in Phytochemistry bibliographies
+	public static void main(String[] args) throws Exception {
+		File dataFolder = new File("E:/Testdaten/PdfExtract");
+		ImDocument doc = ImDocumentIO.loadDocument(new File(dataFolder, "Phytochemistry.170.112215.pdf.imf")); // pages 6, 7
+		for (int p = 6; p <= 7; p++) {
+			ImPage page = doc.getPage(p);
+			ImRegion[] blocks = page.getRegions(ImRegion.BLOCK_ANNOTATION_TYPE);
+			System.out.println("Got " + blocks.length + " blocks in page " + page.pageId);
+			for (int b = 0; b < blocks.length; b++) {
+				System.out.println("Doing " + blocks[b].getLocalID());
+				BlockMetrics bm = computeBlockMetrics(blocks[b]);
+				BlockLayout bl = bm.analyze();
+				System.out.println(" - alignment: " + bl.alignment);
+				System.out.println(" - paragraphb start line position: " + bl.paragraphStartLinePos);
+				System.out.println(" - paragraph distance: " + bl.paragraphDistance);
+			}
+		}
+	}
+	
 	/**
 	 * Compute layout metrics for a block of text.
 	 * @param block the block to compute layout metrics for
@@ -951,7 +973,8 @@ public class PageAnalysis implements ImagingConstants {
 		int minSignificantVerticalDist = layout.getIntProperty("minSignificantVerticalDist", ((pageImageDpi + (minLineDistGapForDistSplitDenom / 2)) / minLineDistGapForDistSplitDenom), pageImageDpi);
 		float normSpaceWidth = layout.getFloatProperty("normSpaceWidth", 0.33f); // pretty conservative figure assuming wide spacing on short line check
 		LinePattern[] splitLinePatterns = getSplitLinePatters(layout);
-		BlockLayout blockLayout = blockMetrics.analyze(minSignificantHorizontalDist, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, splitLinePatterns);
+		int shortLineSplitCounterIndications = BlockMetrics.readShortLineSplitCounterIndications(layout);
+		BlockLayout blockLayout = blockMetrics.analyze(minSignificantHorizontalDist, shortLineSplitCounterIndications, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, splitLinePatterns);
 		return blockLayout.writeParagraphStructure();
 	}
 	
@@ -1500,7 +1523,33 @@ public class PageAnalysis implements ImagingConstants {
 		 * @return the resulting block layout
 		 */
 		public BlockLayout analyze(int minSignificantHorizontalDist, float minLeftAccPointSupport, float minCenterRightAccPointSupport, int minSignificantVerticalDist, float normSpaceWidth, LinePattern[] splitLinePatterns) {
-			return this.doAnalyze(null, -1, minSignificantHorizontalDist, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, splitLinePatterns);
+			return this.doAnalyze(null, -1, minSignificantHorizontalDist, 0x00000000, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, splitLinePatterns);
+		}
+		
+		/**
+		 * Analyze the (paragraph) layout of the block. Use custom parameter
+		 * values for the analysis.
+		 * @param minSignificantHorizontalDist the minimum distance between two
+		 *        accumulation points of some horizontal measure to consider them
+		 *        actually intended different rather than noise
+		 * @param shortLineSplitCounterIndications a bit vector indicating which
+		 *        combinations of text alignment and indentation to <b>not</b>
+		 *        use sort line splitting for
+		 * @param minLeftAccPointSupport the minimum support for a left alignment
+		 *        accumulation point; should be somewhat below the one for center
+		 *        and right alignment due to differences for indent/outdent in
+		 *        text aligned to left block edge
+		 * @param minCenterRightAccPointSupport the minimum support for a center
+		 *        or right alignment accumulation point
+		 * @param minSignificantVerticalDist the minimum distance between two
+		 *        accumulation points of some horizontal measure to consider them
+		 *        actually intended different rather than noise
+		 * @param normSpaceWidth width of a non-stretched space as a fraction of
+		 *        the line height
+		 * @return the resulting block layout
+		 */
+		public BlockLayout analyze(int minSignificantHorizontalDist, int shortLineSplitCounterIndications, float minLeftAccPointSupport, float minCenterRightAccPointSupport, int minSignificantVerticalDist, float normSpaceWidth, LinePattern[] splitLinePatterns) {
+			return this.doAnalyze(null, -1, minSignificantHorizontalDist, shortLineSplitCounterIndications, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, splitLinePatterns);
 		}
 		
 		/**
@@ -1517,7 +1566,7 @@ public class PageAnalysis implements ImagingConstants {
 		 * @param minLeftAccPointSupport the minimum support for a left alignment
 		 *        accumulation point; should be somewhat below the one for center
 		 *        and right alignment due to differences for indent/outdent in
-		 *        text aligned to left block edge
+		 *        text aligned to left block edge in left-to-right scripts
 		 * @param minCenterRightAccPointSupport the minimum support for a center
 		 *        or right alignment accumulation point
 		 * @param minSignificantVerticalDist the minimum distance between two
@@ -1528,7 +1577,7 @@ public class PageAnalysis implements ImagingConstants {
 		 * @return the analysis result
 		 */
 		public BlockLayout analyzeContinuingFrom(BlockMetrics predecessorBlockMetrics, int blockMargin, int minSignificantHorizontalDist, float minLeftAccPointSupport, float minCenterRightAccPointSupport, int minSignificantVerticalDist, float normSpaceWidth, LinePattern[] splitLinePatterns) {
-			return this.doAnalyze(predecessorBlockMetrics, blockMargin, minSignificantHorizontalDist, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, splitLinePatterns);
+			return this.doAnalyze(predecessorBlockMetrics, blockMargin, minSignificantHorizontalDist, 0x00000000, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, splitLinePatterns);
 			
 			//	TODO fix cross-page and cross-column paragraph continuation detection
 			//	TODO TEST Zootaxa/zootaxa.4319.3.7.pdf.imf (page broken reference on Pages 9/10)
@@ -1538,7 +1587,45 @@ public class PageAnalysis implements ImagingConstants {
 			//	TODO TEST bibliography (pages 84-87) in 10.5281zenodo.1481114_vanTol_Guenther_2018.pdf
 		}
 		
-		//	the tamplate based version (still falling back on the defaults if template is null, though)
+		/**
+		 * Analyze the (paragraph) layout of the block, virtually merging it up
+		 * with a predecessor block from a preceding page or column. This method
+		 * produces an analysis result as if the two blocks were one, and not
+		 * split up due to page layout constraints. Use custom parameter values
+		 * for the analysis.
+		 * @param predecessorBlockMetrics the block to continue from
+		 * @param blockMargin the space to assume between the two blocks
+		 * @param minSignificantHorizontalDist the minimum distance between two
+		 *        accumulation points of some horizontal measure to consider them
+		 *        actually intended different rather than noise
+		 * @param shortLineSplitCounterIndications a bit vector indicating which
+		 *        combinations of text alignment and indentation to <b>not</b>
+		 *        use sort line splitting for
+		 * @param minLeftAccPointSupport the minimum support for a left alignment
+		 *        accumulation point; should be somewhat below the one for center
+		 *        and right alignment due to differences for indent/outdent in
+		 *        text aligned to left block edge in left-to-right scripts
+		 * @param minCenterRightAccPointSupport the minimum support for a center
+		 *        or right alignment accumulation point
+		 * @param minSignificantVerticalDist the minimum distance between two
+		 *        accumulation points of some horizontal measure to consider them
+		 *        actually intended different rather than noise
+		 * @param normSpaceWidth width of a non-stretched space as a fraction of
+		 *        the line height
+		 * @return the analysis result
+		 */
+		public BlockLayout analyzeContinuingFrom(BlockMetrics predecessorBlockMetrics, int blockMargin, int minSignificantHorizontalDist, int shortLineSplitCounterIndications, float minLeftAccPointSupport, float minCenterRightAccPointSupport, int minSignificantVerticalDist, float normSpaceWidth, LinePattern[] splitLinePatterns) {
+			return this.doAnalyze(predecessorBlockMetrics, blockMargin, minSignificantHorizontalDist, shortLineSplitCounterIndications, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, splitLinePatterns);
+			
+			//	TODO fix cross-page and cross-column paragraph continuation detection
+			//	TODO TEST Zootaxa/zootaxa.4319.3.7.pdf.imf (page broken reference on Pages 9/10)
+			
+			//	TODO improve short line split in justified blocks (has to kick in earlier)
+			//	TODO check line distance split with overall narrow line margins (maybe safety margins are too high)
+			//	TODO TEST bibliography (pages 84-87) in 10.5281zenodo.1481114_vanTol_Guenther_2018.pdf
+		}
+		
+		//	the template based version (still falling back on the defaults if template is null, though)
 		private BlockLayout doAnalyze(BlockMetrics predecessorBlockMetrics, int blockMargin, ImDocumentStyle layout) {
 			if (layout == null)
 				return this.doAnalyze(predecessorBlockMetrics, blockMargin);
@@ -1550,7 +1637,8 @@ public class PageAnalysis implements ImagingConstants {
 			int minSignificantVerticalDist = layout.getIntProperty("minSignificantVerticalDist", ((this.pageImageDpi + (minLineDistGapForDistSplitDenom / 2)) / minLineDistGapForDistSplitDenom), this.pageImageDpi);
 			float normSpaceWidth = layout.getFloatProperty("normSpaceWidth", 0.33f); // pretty conservative figure assuming wide spacing on short line check
 			LinePattern[] splitLinePatterns = getSplitLinePatters(layout);
-			return this.doAnalyze(predecessorBlockMetrics, blockMargin, minSignificantHorizontalDist, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, splitLinePatterns);
+			int shortLineSplitCounterIndications = readShortLineSplitCounterIndications(layout);
+			return this.doAnalyze(predecessorBlockMetrics, blockMargin, minSignificantHorizontalDist, shortLineSplitCounterIndications, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, splitLinePatterns);
 		}
 		
 		//	the defaulting version
@@ -1562,10 +1650,10 @@ public class PageAnalysis implements ImagingConstants {
 			int minLineDistGapForDistSplitDenom = 50; // makes the tolerance about half a millimeter
 			int minSignificantVerticalDist = ((this.pageImageDpi + (minLineDistGapForDistSplitDenom / 2)) / minLineDistGapForDistSplitDenom);
 			float normSpaceWidth = 0.33f; // pretty conservative figure assuming wide spacing on short line check
-			return this.doAnalyze(predecessorBlockMetrics, blockMargin, minSignificantHorizontalDist, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, new LinePattern[0]);
+			return this.doAnalyze(predecessorBlockMetrics, blockMargin, minSignificantHorizontalDist, 0x00000000, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, new LinePattern[0]);
 		}
 		
-		private BlockLayout doAnalyze(BlockMetrics predecessorBlockMetrics, int blockMargin, int minSignificantHorizontalDist, float minLeftAccPointSupport, float minCenterRightAccPointSupport, int minSignificantVerticalDist, float normSpaceWidth, LinePattern[] splitLinePatterns) {
+		private BlockLayout doAnalyze(BlockMetrics predecessorBlockMetrics, int blockMargin, int minSignificantHorizontalDist, int shortLineSplitCounterIndications, float minLeftAccPointSupport, float minCenterRightAccPointSupport, int minSignificantVerticalDist, float normSpaceWidth, LinePattern[] splitLinePatterns) {
 			
 			//	compute parameters
 			LineMetrics[] lines;
@@ -1597,7 +1685,7 @@ public class PageAnalysis implements ImagingConstants {
 			}
 			
 			//	perform actual analysis
-			BlockLayout blockLayout = doAnalyze(lines, aboveLineGaps, this.pageImageDpi, colWidth, blockWidth, minSignificantHorizontalDist, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, splitLinePatterns);
+			BlockLayout blockLayout = doAnalyze(lines, aboveLineGaps, this.pageImageDpi, colWidth, blockWidth, minSignificantHorizontalDist, shortLineSplitCounterIndications, minLeftAccPointSupport, minCenterRightAccPointSupport, minSignificantVerticalDist, normSpaceWidth, splitLinePatterns);
 			
 			//	create final result
 			if (predecessorBlockMetrics == null)
@@ -1618,9 +1706,111 @@ public class PageAnalysis implements ImagingConstants {
 			}
 		}
 		
+		private static final int NO_SHORT_LINE_SPLIT_INDENT_JUSTIFIED = 0x00000001;
+		private static final int NO_SHORT_LINE_SPLIT_OUTDENT_JUSTIFIED = 0x00000002;
+		private static final int NO_SHORT_LINE_SPLIT_HEADINGS_JUSTIFIED = 0x00000004;
+		private static final int NO_SHORT_LINE_SPLIT_GAP_JUSTIFIED = 0x00000008;
+		private static final int NO_SHORT_LINE_SPLIT_INDENT_LEFT = 0x00000010;
+		private static final int NO_SHORT_LINE_SPLIT_OUTDENT_LEFT = 0x00000020;
+		private static final int NO_SHORT_LINE_SPLIT_HEADINGS_LEFT = 0x00000040;
+		private static final int NO_SHORT_LINE_SPLIT_GAP_LEFT = 0x00000080;
+		private static final int NO_SHORT_LINE_SPLIT_INDENT_RIGHT = 0x00000100;
+		private static final int NO_SHORT_LINE_SPLIT_OUTDENT_RIGHT = 0x00000200;
+		private static final int NO_SHORT_LINE_SPLIT_HEADINGS_RIGHT = 0x00000400;
+		private static final int NO_SHORT_LINE_SPLIT_GAP_RIGHT = 0x00000800;
+		private static final int NO_SHORT_LINE_SPLIT_INDENT_CENTERED = 0x00001000;
+		private static final int NO_SHORT_LINE_SPLIT_OUTDENT_CENTERED = 0x00002000;
+		private static final int NO_SHORT_LINE_SPLIT_HEADINGS_CENTERED = 0x00004000;
+		private static final int NO_SHORT_LINE_SPLIT_GAP_CENTERED = 0x00008000;
+		static int readShortLineSplitCounterIndications(ImDocumentStyle layout) {
+			int slsCis = 0;
+			
+			if (layout.getBooleanProperty("noShortLineSplitIndentJustified", false))
+				slsCis |= NO_SHORT_LINE_SPLIT_INDENT_JUSTIFIED;
+			if (layout.getBooleanProperty("noShortLineSplitOutdentJustified", false))
+				slsCis |= NO_SHORT_LINE_SPLIT_OUTDENT_JUSTIFIED;
+			if (layout.getBooleanProperty("noShortLineSplitHeadingsJustified", false))
+				slsCis |= NO_SHORT_LINE_SPLIT_HEADINGS_JUSTIFIED;
+			if (layout.getBooleanProperty("noShortLineSplitGapJustified", false))
+				slsCis |= NO_SHORT_LINE_SPLIT_GAP_JUSTIFIED;
+			
+			if (layout.getBooleanProperty("noShortLineSplitIndentLeft", false))
+				slsCis |= NO_SHORT_LINE_SPLIT_INDENT_LEFT;
+			if (layout.getBooleanProperty("noShortLineSplitOutdentLeft", false))
+				slsCis |= NO_SHORT_LINE_SPLIT_OUTDENT_LEFT;
+			if (layout.getBooleanProperty("noShortLineSplitHeadingsLeft", false))
+				slsCis |= NO_SHORT_LINE_SPLIT_HEADINGS_LEFT;
+			if (layout.getBooleanProperty("noShortLineSplitGapLeft", false))
+				slsCis |= NO_SHORT_LINE_SPLIT_GAP_LEFT;
+			
+			if (layout.getBooleanProperty("noShortLineSplitIndentRight", false))
+				slsCis |= NO_SHORT_LINE_SPLIT_INDENT_RIGHT;
+			if (layout.getBooleanProperty("noShortLineSplitOutdentRight", false))
+				slsCis |= NO_SHORT_LINE_SPLIT_OUTDENT_RIGHT;
+			if (layout.getBooleanProperty("noShortLineSplitHeadingsRight", false))
+				slsCis |= NO_SHORT_LINE_SPLIT_HEADINGS_RIGHT;
+			if (layout.getBooleanProperty("noShortLineSplitGapRight", false))
+				slsCis |= NO_SHORT_LINE_SPLIT_GAP_RIGHT;
+			
+			if (layout.getBooleanProperty("noShortLineSplitIndentCentered", false))
+				slsCis |= NO_SHORT_LINE_SPLIT_INDENT_CENTERED;
+			if (layout.getBooleanProperty("noShortLineSplitOutdentCentered", false))
+				slsCis |= NO_SHORT_LINE_SPLIT_OUTDENT_CENTERED;
+			if (layout.getBooleanProperty("noShortLineSplitHeadingsCentered", false))
+				slsCis |= NO_SHORT_LINE_SPLIT_HEADINGS_CENTERED;
+			if (layout.getBooleanProperty("noShortLineSplitGapCentered", false))
+				slsCis |= NO_SHORT_LINE_SPLIT_GAP_CENTERED;
+			
+			return slsCis;
+		}
+		
+		private static boolean hasShortLineSplitCounterIndication(int shortLineSplitCounterIndications, char alignment, char paragraphStartLinePos, String inLineHeadingStyle, int minParagraphDist) {
+			if (alignment == 'J') {
+				if ((paragraphStartLinePos == 'I') && ((shortLineSplitCounterIndications & NO_SHORT_LINE_SPLIT_INDENT_JUSTIFIED) != 0))
+					return true;
+				if ((paragraphStartLinePos == 'O') && ((shortLineSplitCounterIndications & NO_SHORT_LINE_SPLIT_OUTDENT_JUSTIFIED) != 0))
+					return true;
+				if ((inLineHeadingStyle != null) && ((shortLineSplitCounterIndications & NO_SHORT_LINE_SPLIT_HEADINGS_JUSTIFIED) != 0))
+					return true;
+				if ((0 < minParagraphDist) && ((shortLineSplitCounterIndications & NO_SHORT_LINE_SPLIT_GAP_JUSTIFIED) != 0))
+					return true;
+			}
+			else if (alignment == 'L') {
+				if ((paragraphStartLinePos == 'I') && ((shortLineSplitCounterIndications & NO_SHORT_LINE_SPLIT_INDENT_LEFT) != 0))
+					return true;
+				if ((paragraphStartLinePos == 'O') && ((shortLineSplitCounterIndications & NO_SHORT_LINE_SPLIT_OUTDENT_LEFT) != 0))
+					return true;
+				if ((inLineHeadingStyle != null) && ((shortLineSplitCounterIndications & NO_SHORT_LINE_SPLIT_HEADINGS_LEFT) != 0))
+					return true;
+				if ((0 < minParagraphDist) && ((shortLineSplitCounterIndications & NO_SHORT_LINE_SPLIT_GAP_LEFT) != 0))
+					return true;
+			}
+			else if (alignment == 'R') {
+				if ((paragraphStartLinePos == 'I') && ((shortLineSplitCounterIndications & NO_SHORT_LINE_SPLIT_INDENT_RIGHT) != 0))
+					return true;
+				if ((paragraphStartLinePos == 'O') && ((shortLineSplitCounterIndications & NO_SHORT_LINE_SPLIT_OUTDENT_RIGHT) != 0))
+					return true;
+				if ((inLineHeadingStyle != null) && ((shortLineSplitCounterIndications & NO_SHORT_LINE_SPLIT_HEADINGS_RIGHT) != 0))
+					return true;
+				if ((0 < minParagraphDist) && ((shortLineSplitCounterIndications & NO_SHORT_LINE_SPLIT_GAP_RIGHT) != 0))
+					return true;
+			}
+			else if (alignment == 'C') {
+				if ((paragraphStartLinePos == 'I') && ((shortLineSplitCounterIndications & NO_SHORT_LINE_SPLIT_INDENT_CENTERED) != 0))
+					return true;
+				if ((paragraphStartLinePos == 'O') && ((shortLineSplitCounterIndications & NO_SHORT_LINE_SPLIT_OUTDENT_CENTERED) != 0))
+					return true;
+				if ((inLineHeadingStyle != null) && ((shortLineSplitCounterIndications & NO_SHORT_LINE_SPLIT_HEADINGS_CENTERED) != 0))
+					return true;
+				if ((0 < minParagraphDist) && ((shortLineSplitCounterIndications & NO_SHORT_LINE_SPLIT_GAP_CENTERED) != 0))
+					return true;
+			}
+			return false;
+		}
+		
 		//	TODO use progress monitor instead of System.out
 		
-		private static BlockLayout doAnalyze(LineMetrics[] lines, int[] aboveLineGaps, int pageImageDpi, int colWidth, int blockWidth, int minSignificantHorizontalDist, float minLeftAccPointSupport, float minCenterRightAccPointSupport, int minSignificantVerticalDist, float normSpaceWidth, LinePattern[] splitLinePatterns) {
+		private static BlockLayout doAnalyze(LineMetrics[] lines, int[] aboveLineGaps, int pageImageDpi, int colWidth, int blockWidth, int minSignificantHorizontalDist, int shortLineSplitCounterIndications, float minLeftAccPointSupport, float minCenterRightAccPointSupport, int minSignificantVerticalDist, float normSpaceWidth, LinePattern[] splitLinePatterns) {
 			
 			//	analyze lines against column and block, as well as line distance
 			CountingSet colLeftLineDists = new CountingSet(new TreeMap());
@@ -1635,6 +1825,7 @@ public class PageAnalysis implements ImagingConstants {
 //			int blockRightLineDistSum = 0;
 			CountingSet blockEdgeDistDiscrepancies = new CountingSet(new TreeMap());
 //			int blockEdgeDistDiscrepancySum = 0;
+			CountingSet lineHeights = new CountingSet(new TreeMap());
 			int lineHeightSum = 0;
 			CountingSet lineGaps = new CountingSet(new TreeMap());
 			int lineGapSum = 0;
@@ -1652,6 +1843,8 @@ public class PageAnalysis implements ImagingConstants {
 			int wBlockRightWordWeight = 0;
 			int wColLeftWordWeight = 0;
 			int wColRightWordWeight = 0;
+			CountingSet blockSpaceWidths = new CountingSet(new TreeMap());
+			CountingSet lineSpaceWidthVariations = new CountingSet(new TreeMap());
 			for (int l = 0; l < lines.length; l++) {
 				colLeftLineDists.add(new Integer(lines[l].colLeftMargin));
 				colLeftLineDistSum += lines[l].colLeftMargin;
@@ -1669,6 +1862,7 @@ public class PageAnalysis implements ImagingConstants {
 					System.out.println(" - '" + lines[l].words[0] + "': " + lines[l].colLeftMargin + "/" + lines[l].colRightMargin + " in column, " + lines[l].blockLeftMargin + "/" + lines[l].blockRightMargin + " in block");
 					System.out.println("   start word(s) are " + lines[l].startWordBlockBounds.getWidth() + " long");
 				}
+				lineHeights.add(new Integer(lines[l].line.bounds.getHeight()));
 				lineHeightSum += lines[l].line.bounds.getHeight();
 				if (l != 0) {
 					lineGapSum += aboveLineGaps[l];
@@ -1708,7 +1902,60 @@ public class PageAnalysis implements ImagingConstants {
 							wColRightWordWeight += Math.round(Math.sqrt(x - colCenterX));
 					}
 				}
+				CountingSet lineSpaceWidths = new CountingSet(new TreeMap());
+				int lineMinSpaceWidth = lines[l].line.bounds.getWidth();
+				int lineMaxSpaceWidth = 0;
+				int lineMaxWordRight = lines[l].words[0].bounds.left;
+				for (int w = 1; w < lines[l].words.length; w++) {
+					if (!ImUtils.areSpaced(lines[l].words[w-1], lines[l].words[w], 0.2f))
+						continue;
+//					int spaceWidth = (lines[l].words[w].bounds.left - lines[l].words[w-1].bounds.right);
+					int prevWordRight = Math.max(lines[l].words[w-1].bounds.right, lineMaxWordRight); // prevent moving left and measuring from there (e.g. due to combining diacritic markers)
+					lineMaxWordRight = Math.max(lineMaxWordRight, prevWordRight); // remember maximum rightward progress
+					int spaceWidth = (lines[l].words[w].bounds.left - prevWordRight); // TODO observe text direction
+					if (spaceWidth < 1)
+						continue;
+					if ((spaceWidth * 12) < lines[l].line.bounds.getHeight()) // narrower than even 1/6 space
+						continue;
+					lineSpaceWidths.add(new Integer(spaceWidth));
+					lineMinSpaceWidth = Math.min(lineMinSpaceWidth, spaceWidth);
+					lineMaxSpaceWidth = Math.max(lineMaxSpaceWidth, spaceWidth);
+				}
+				if (DEBUG_BLOCK_LAYOUT)
+					System.out.println("   word gaps are " + lineSpaceWidths + " ==> " + getMedianAverage(lineSpaceWidths, 100) + " avg, " + getMedianAverage(lineSpaceWidths, 80) + " med-80-avg, " + getMedianAverage(lineSpaceWidths, 60) + " med-60-avg");
+				if (lineSpaceWidths.size() != 0) {
+					blockSpaceWidths.addAll(lineSpaceWidths);
+					lineSpaceWidthVariations.add(new Integer(lineMaxSpaceWidth - lineMinSpaceWidth));
+				}
 			}
+			if (DEBUG_BLOCK_LAYOUT) {
+				System.out.println("Block line heights are " + lineHeights);
+				System.out.println("Block word gaps are " + blockSpaceWidths);
+				System.out.println("Line word gaps vary by " + lineSpaceWidthVariations);
+			}
+			
+			//	check for word spacing consistency (justified text tends to stretch lines to fit right block edge)
+			boolean blockLinesStretched;
+			if (blockSpaceWidths.isEmpty() || (lines.length < 2)) // no use doing the hustle and dance for single line
+				blockLinesStretched = false;
+			else {
+				int avgBlockSpaceWidth = getMedianAverage(blockSpaceWidths, 60);
+				int avgLineSpaceVariation = getMedianAverage(lineSpaceWidthVariations, 60);
+				if (DEBUG_BLOCK_LAYOUT) {
+					System.out.println(" --> average word gap is " + avgBlockSpaceWidth);
+					System.out.println(" --> average word gap variation in lines is " + avgLineSpaceVariation);
+				}
+				int minBlockSpaceWidth = ((Integer) blockSpaceWidths.first()).intValue();
+				int maxBlockSpaceWidth = ((Integer) blockSpaceWidths.last()).intValue();
+//				blockLinesStretched = ((minBlockSpaceWidth < (avgBlockSpaceWidth - avgLineSpaceVariation)) || ((avgBlockSpaceWidth + avgLineSpaceVariation) < maxBlockSpaceWidth));
+				blockLinesStretched = ((avgLineSpaceVariation * 2) < (maxBlockSpaceWidth - minBlockSpaceWidth));
+				if (DEBUG_BLOCK_LAYOUT) {
+					System.out.println(" --> word gap range is [" + minBlockSpaceWidth + ", " + maxBlockSpaceWidth + "]");
+					System.out.println(" ==> block line stretch is " + blockLinesStretched);
+				}
+			}
+			
+			//	compute average margins
 			int avgColLeftLineMargin = ((colLeftLineDistSum + (lines.length / 2)) / lines.length);
 			int avgColRightLineMargin = ((colRightLineDistSum + (lines.length / 2)) / lines.length);
 //			int avgBlockLeftLineMargin = ((blockLeftLineDistSum + (lines.length / 2)) / lines.length);
@@ -1835,7 +2082,7 @@ public class PageAnalysis implements ImagingConstants {
 			 * - list paragraph (e.g. EJT dates in end matter) := left & !right & all lines short in column
 			 * - narrow justified paragraph (narrower-than-column section abstract) := left & right 
 			 */
-			if (DEBUG_BLOCK_LAYOUT) System.out.println("Layout analysis:");
+			if (DEBUG_BLOCK_LAYOUT) System.out.println("Layout analysis (" + lines.length + " lines in total, " + blockShortLineCount + " short lines):");
 			boolean leftAligned;
 			boolean rightAligned;
 			boolean centerAligned;
@@ -1867,23 +2114,62 @@ public class PageAnalysis implements ImagingConstants {
 					minBlockLeftAccPointCenter = Math.min(minBlockLeftAccPointCenter, blockLeftAccPoints[a].center);
 					maxBlockLeftAccPointCenter = Math.max(maxBlockLeftAccPointCenter, blockLeftAccPoints[a].center);
 				}
-				if (lines.length < 4)
+				int leftAlignedReason;
+				if (lines.length < 4) {
 					leftAligned = (((blockLeftAccPoints.length != 0) && (blockLeftAccPoints.length < 2)) && (Math.abs(maxBlockLeftAccPointCenter - minBlockLeftAccPointCenter) < pageImageDpi) && ((lines.length * 2) <= (blockLeftAccPointCountSum * 3)));
-				else if (lines.length < 10)
+					leftAlignedReason = 1;
+				}
+				else if (lines.length < 10) {
 					leftAligned = (((blockLeftAccPoints.length != 0) && (blockLeftAccPoints.length <= 2)) && (Math.abs(maxBlockLeftAccPointCenter - minBlockLeftAccPointCenter) < pageImageDpi) && ((lines.length * 2) < (blockLeftAccPointCountSum * 3)));
 //					leftAligned = (((blockLeftAccPoints.length != 0) && (blockLeftAccPoints.length <= 2)) && (Math.abs(maxBlockLeftAccPointCenter - minBlockLeftAccPointCenter) < Math.max(pageImageDpi, (blockWidth / 4))) && ((lines.length * 2) < (blockLeftAccPointCountSum * 3)));
-				else leftAligned = (((blockLeftAccPoints.length != 0) && (blockLeftAccPoints.length <= 3)) && (Math.abs(maxBlockLeftAccPointCenter - minBlockLeftAccPointCenter) < pageImageDpi) && (lines.length < (blockLeftAccPointCountSum * 2)));
+					leftAlignedReason = 2;
+				}
+				else {
+					//	TODO factor in homogeneous / non-homogeneous word gaps (see above)
+					leftAligned = (((blockLeftAccPoints.length != 0) && (blockLeftAccPoints.length <= 3)) && (Math.abs(maxBlockLeftAccPointCenter - minBlockLeftAccPointCenter) < pageImageDpi) && (lines.length < (blockLeftAccPointCountSum * 2)));
+					leftAlignedReason = 3;
+				}
 //				else leftAligned = (((blockLeftAccPoints.length != 0) && (blockLeftAccPoints.length <= 3)) && (Math.abs(maxBlockLeftAccPointCenter - minBlockLeftAccPointCenter) < Math.max(pageImageDpi, (blockWidth / 4))) && (lines.length < (blockLeftAccPointCountSum * 2)));
-				if (DEBUG_BLOCK_LAYOUT) System.out.println(" - left is " + leftAligned + " for " + Arrays.toString(blockLeftAccPoints));
-				if (blockRightAccPoints.length != 1)
+				if (DEBUG_BLOCK_LAYOUT) System.out.println(" - left is " + leftAligned + " for " + leftAlignedReason + ": " + Arrays.toString(blockLeftAccPoints));
+				int rightAlignedReason;
+				if (blockRightAccPoints.length != 1) {
 					rightAligned = false; // no clear accumulation point of line ends
-				else if (((lines.length * 8) < (blockRightAccPoints[0].count * 10)) && (blockRightAccPoints[0].getDiameter() < ((pageImageDpi + 13) / 25)))
-					rightAligned = true; // single accumulation point with >80% support and diameter below (DPI/50) 
-				else if (((lines.length - (blockShortLineCount + 1)) <= blockRightAccPoints[0].count) && (blockRightAccPoints[0].getDiameter() < ((pageImageDpi + 13) / 25)))
-					rightAligned = true; // single accumulation point with support of all non-short lines and diameter below (DPI/50) 
-				else rightAligned = (blockRightAccPoints[0].center < ((pageImageDpi + 13) / 25)); // single accumulation point below (DPI/25) off block edge
-				if (DEBUG_BLOCK_LAYOUT) System.out.println(" - right is " + rightAligned + " for " + Arrays.toString(blockRightAccPoints));
-				centerAligned = ((blockCenterAccPoints.length == 1) && ((lines.length * 2) < (blockCenterAccPoints[0].count * 3)));
+					rightAlignedReason = 1;
+				}
+				else if (((lines.length * 8) < (blockRightAccPoints[0].count * 10)) && (blockRightAccPoints[0].getDiameter() < ((pageImageDpi + 13) / 25))) {
+					rightAligned = true; // single accumulation point with >80% support and diameter below (DPI/50)
+					rightAlignedReason = 2;
+				}
+				else if (((lines.length - (blockShortLineCount + 1)) <= blockRightAccPoints[0].count) && (blockRightAccPoints[0].getDiameter() < ((pageImageDpi + 13) / 25))) {
+					rightAligned = true; // single accumulation point with support of all non-short lines and diameter below (DPI/50)
+					rightAlignedReason = 3;
+				}
+				else {
+//					rightAligned = (blockRightAccPoints[0].center < ((pageImageDpi + 13) / 25)); // single accumulation point below (DPI/25) off block edge
+//					rightAligned = (((lines.length - (blockShortLineCount + 1)) * 8) <= (blockRightAccPoints[0].count * 10) && (blockRightAccPoints[0].center < ((pageImageDpi + 13) / 25))); // single accumulation point with >80% support of non-short lines below (DPI/25) off block edge
+					/* no need to check for left alignment on top of stretched
+					 * lines here, as purely right aligned text will have far more
+					 * pronounced accumulation points that match the more strict
+					 * conditions above */
+					rightAligned = (blockLinesStretched && (blockRightAccPoints[0].center < ((pageImageDpi + 13) / 25))); // single accumulation point below (DPI/25) off block edge
+					rightAlignedReason = 4;
+				}
+				/*
+TODO Left-aligned vs. justified distinction:
+- however, consider annotated checklists, whose treatments often mostly consist of single line paragraphs, in principle nonetheless using justified layout (or consider every such block, like lists of collection codes or abbreviations)
+  ==> also count sentence-ending lines as well as sentence-ending short lines and the respective opposites ...
+  ==> ... especially non-sentence-ending lines right above sentence continuing lines ...
+  ==> ... and check right gaps of latter for accumulation points on their own ...
+  ==> ... which will have to (a) exist and (b) coincide with single overall right accumulation point
+    ==> accept support 1 for latter accumulation point, as block might only have single line telling difference
+- likely also consider born-digital vs. scanned in accumulation point tolerances ...
+- ... and be more strict in born-digital scenario ...
+- ... specifically requiring single right accumulation point to include 0 distance to block edge to prevent coincidental accumulation points from ends of single-line paragraphs from wreaking havoc
+  ==> will go wrong with early TeX documents where failure to hyphenate blows word through block edge ... not systematic problem, though, but rather for QC to catch
+				 */
+				
+				if (DEBUG_BLOCK_LAYOUT) System.out.println(" - right is " + rightAligned + " for " + rightAlignedReason + ": " + Arrays.toString(blockRightAccPoints));
+				centerAligned = ((blockCenterAccPoints.length == 1) && ((lines.length * 2) < (blockCenterAccPoints[0].count * 3))); // single center accumulation point with >67% support
 				if (DEBUG_BLOCK_LAYOUT) System.out.println(" - center is " + centerAligned + " for " + Arrays.toString(blockCenterAccPoints));
 				
 				//	no clear result for accumulation points, fall back to left and right distances (as for single line)
@@ -1949,7 +2235,7 @@ public class PageAnalysis implements ImagingConstants {
 			int paragraphStartLineCount = 0;
 			
 			//	apply line gap split if distribution has significant gap in middle
-			//	TODOne make damn sure not to apply this if average is all too low (with line gaps choked by superscripts and/or subscripts)
+			//	TODOne make damn sure not to apply this if average is all too low (with some line gaps choked by superscripts and/or subscripts)
 			//	TODOne TEST 'diagnosis' paragraph on page 2 of EJT/ejt-428_sendra_weber.pdf.imf
 			int minParagraphDist = -1;
 			if ((minSignificantVerticalDist < (minAboveAvgLineGap - maxBelowAvgLineGap)) && (((pageImageDpi + 13) / 25) < avgLineGap)) {
@@ -1960,11 +2246,14 @@ public class PageAnalysis implements ImagingConstants {
 			}
 			
 			//	analyze short line split (it might actually be wrong in small blocks like article titles)
-			if (DEBUG_BLOCK_LAYOUT) System.out.println("Analyzing short line split");
-			boolean[] isShortLineParagraphStart = getShortLineParagraphStarts(lines, colWidth, blockWidth, alignment, normSpaceWidth, minSignificantHorizontalDist);
+			boolean measureAgainstBlock = ((colShortLineCount * 8) < (blockShortLineCount * 10)); // got enough short lines in block to more accurately measure against latter
+			if (DEBUG_BLOCK_LAYOUT) System.out.println("Analyzing short line split (against " + (measureAgainstBlock ? "block" : "column") + ", " + colShortLineCount + " lines short in column, " + blockShortLineCount + " lines short in block)");
+			boolean[] isShortLineParagraphStart = getShortLineParagraphStarts(lines, colWidth, blockWidth, measureAgainstBlock, alignment, normSpaceWidth, minSignificantHorizontalDist);
 			boolean shortLineEndsParagraph;
 			
 			//	assess average space width in short lines and in non-short ones
+			int spaceWidthSum = 0;
+			int spaceCount = 0;
 			int shortLineSpaceWidthSum = 0;
 			int shortLineSpaceCount = 0;
 			int nonShortLineSpaceWidthSum = 0;
@@ -1979,6 +2268,8 @@ public class PageAnalysis implements ImagingConstants {
 						lineSpaceCount++;
 					}
 				}
+				spaceWidthSum += lineSpaceWidthSum;
+				spaceCount += lineSpaceCount;
 				if (isShortLineParagraphStart[l+1]) {
 					shortLineSpaceWidthSum += lineSpaceWidthSum;
 					shortLineSpaceCount += lineSpaceCount;
@@ -1988,6 +2279,8 @@ public class PageAnalysis implements ImagingConstants {
 					nonShortLineSpaceCount += lineSpaceCount;
 				}
 			}
+			float avgSpaceWidth = ((spaceCount == 0) ? (avgLineHeight / 3) /* ballpark figure space */ : (((float) spaceWidthSum) / spaceCount));
+			if (DEBUG_BLOCK_LAYOUT) System.out.println(" - average space is " + avgSpaceWidth + " (" + spaceWidthSum + "/" + spaceCount + ")");
 			float avgShortLineSpaceWidth = ((shortLineSpaceCount == 0) ? (avgLineHeight / 3) /* ballpark figure space */ : (((float) shortLineSpaceWidthSum) / shortLineSpaceCount));
 			if (DEBUG_BLOCK_LAYOUT) System.out.println(" - average space in short line is " + avgShortLineSpaceWidth + " (" + shortLineSpaceWidthSum + "/" + shortLineSpaceCount + ")");
 			float avgNonShortLineSpaceWidth = ((nonShortLineSpaceCount == 0) ? (avgLineHeight / 3) /* ballpark figure space */ : (((float) nonShortLineSpaceWidthSum) / nonShortLineSpaceCount));
@@ -2107,7 +2400,7 @@ public class PageAnalysis implements ImagingConstants {
 			//	determine left alignment of paragraph start lines (indent/outdent/neither)
 			char paragraphStartLinePos;
 			
-			//	in center alignment, we cannot use indent/outdent
+			//	in center alignment, cannot use indent/outdent
 			if (alignment == 'C')
 				paragraphStartLinePos = 'N';
 			
@@ -2412,19 +2705,19 @@ public class PageAnalysis implements ImagingConstants {
 					inLineHeadingTerminator = ((char) 0);
 					if (DEBUG_BLOCK_LAYOUT) {
 						System.out.println(" ==> in-line heading style is " + inLineHeadingStyle + ", failed to verify by any lines");
-						System.out.println(" ==> in-line heading terminator is " + inLineHeadingTerminator + ", failed to verify by any lines");
+						System.out.println(" ==> in-line heading terminator is " + ((inLineHeadingTerminator == 0) ? "null" : inLineHeadingTerminator) + ", failed to verify by any lines");
 					}
 				}
 				else if (DEBUG_BLOCK_LAYOUT) {
 					System.out.println(" ==> in-line heading style is " + inLineHeadingStyle + " (in " + inLineHeadingStyles.getCount(inLineHeadingStyle) + " lines), verified by " + inLineHeadingsVerified + " lines");
-					System.out.println(" ==> in-line heading terminator is " + inLineHeadingTerminator + " (in " + inLineHeadingTerminators.getCount("" + inLineHeadingTerminator) + " lines), verified by " + inLineHeadingsVerified + " lines");
+					System.out.println(" ==> in-line heading terminator is " +  ((inLineHeadingTerminator == 0) ? "null" : inLineHeadingTerminator) + " (in " + inLineHeadingTerminators.getCount("" + inLineHeadingTerminator) + " lines), verified by " + inLineHeadingsVerified + " lines");
 				}
 			}
 			
 			//	nothing found
 			else if (DEBUG_BLOCK_LAYOUT) {
 				System.out.println(" ==> in-line heading style is " + inLineHeadingStyle + ", no in-line headings found");
-				System.out.println(" ==> in-line heading terminator is " + inLineHeadingTerminator + ", no in-line headings found");
+				System.out.println(" ==> in-line heading terminator is " +  ((inLineHeadingTerminator == 0) ? "null" : inLineHeadingTerminator) + ", no in-line headings found");
 			}
 			
 			//	apply in-line heading split (if possible)
@@ -2452,9 +2745,48 @@ public class PageAnalysis implements ImagingConstants {
 				}
 			}
 			
+			//	check if short line split blocked by document style (based upon current layout)
+			if (shortLineEndsParagraph && hasShortLineSplitCounterIndication(shortLineSplitCounterIndications, alignment, paragraphStartLinePos, inLineHeadingStyle, minParagraphDist)) {
+				shortLineEndsParagraph = false;
+				for (int l = 0; l < isParagraphStartLine.length; l++)
+					if (isParagraphStartLine[l] && "S".equals(paragraphStartLineEvidence[l]) /* short line split is only indicator */) {
+						isParagraphStartLine[l] = false;
+						paragraphStartLineEvidence[l] = null;
+					}
+			}
+			
 			//	finally ...
 			return new BlockLayout(null, alignment, paragraphStartLinePos, shortLineEndsParagraph, uriLineSplitMode, inLineHeadingStyle, inLineHeadingTerminator, minParagraphDist, isParagraphStartLine, paragraphStartLineEvidence);
 		}
+		
+		private static int getMedianAverage(CountingSet intCounts, int medianPercent) {
+			int intCount = 0;
+			int intSum = 0;
+			int skipLow = ((intCounts.size() * (100 - medianPercent)) / (100 * 2));
+			int skipHigh = ((intCounts.size() * (100 - medianPercent)) / (100 * 2));
+			int include = (intCounts.size() - skipLow - skipHigh);
+			for (Iterator iit = intCounts.iterator(); iit.hasNext();) {
+				Integer i = ((Integer) iit.next());
+				int iCnt = intCounts.getCount(i);
+				if (iCnt <= skipLow) /* fully in low exclusion range */ {
+					skipLow -= iCnt;
+					continue;
+				}
+				else if (skipLow != 0) /* truncate part inside low exclusion range */ {
+					iCnt -= skipLow;
+					skipLow = 0;
+				}
+				if (include < iCnt) /* truncate part beyond inclusion range */
+					iCnt = include;
+				intCount += iCnt;
+				intSum += (iCnt * i.intValue());
+				include -= iCnt;
+				if (include == 0)
+					break;
+			}
+			return ((intCount == 0) ? -1 : ((intSum + (intCount / 2)) / intCount));
+		}
+		
 		
 		/**
 		 * Analyze the (paragraph) layout of the block. Use predetermined layout
@@ -2802,9 +3134,46 @@ public class PageAnalysis implements ImagingConstants {
 			return isParagraphStartLine;
 		}
 		
+		private static boolean[] getShortLineParagraphStarts(LineMetrics[] lines, int colWidth, int blockWidth, char alignment, float normSpaceWidth, int minSignificantHorizontalDist) {
+			
+			//	default to block width based behavior for centered and justified alignment
+			if ("CJ".indexOf(alignment) != -1)
+				return getShortLineParagraphStarts(lines, colWidth, blockWidth, false /* doesn't matter in these cases */, alignment, normSpaceWidth, minSignificantHorizontalDist);
+			
+			//	compute short line paragraph ends against column
+			boolean[] colIsShortLineParagraphStart = getShortLineParagraphStarts(lines, colWidth, blockWidth, false, alignment, normSpaceWidth, minSignificantHorizontalDist);
+			int colShortLineParagraphStarts = 0;
+			for (int l = 0; l < colIsShortLineParagraphStart.length; l++) {
+				if (colIsShortLineParagraphStart[l])
+					colShortLineParagraphStarts++;
+			}
+			if (DEBUG_BLOCK_LAYOUT) System.out.println(" - got " + colShortLineParagraphStarts + " (of " + lines.length + ") short lines in column");
+			
+			//	compute short line paragraph ends against block
+			boolean[] blockIsShortLineParagraphStart = getShortLineParagraphStarts(lines, colWidth, blockWidth, true, alignment, normSpaceWidth, minSignificantHorizontalDist);
+			int blockShortLineParagraphStarts = 0;
+			for (int l = 0; l < blockIsShortLineParagraphStart.length; l++) {
+				if (blockIsShortLineParagraphStart[l])
+					blockShortLineParagraphStarts++;
+			}
+			if (DEBUG_BLOCK_LAYOUT) System.out.println(" - got " + blockShortLineParagraphStarts + " (of " + lines.length + ") short lines in block");
+			
+			//	over 80% agreement both ways, should be safe to use more accurate block based measurements
+			if ((colShortLineParagraphStarts * 8) < (blockShortLineParagraphStarts * 10) && (((lines.length - colShortLineParagraphStarts) * 8) < ((lines.length - blockShortLineParagraphStarts) * 10))) {
+				System.out.println(" ==> using block based measurements");
+				return blockIsShortLineParagraphStart;
+			}
+			
+			//	use column based otherwise
+			else {
+				System.out.println(" ==> falling back to column based measurements");
+				return colIsShortLineParagraphStart;
+			}
+		}
+		
 		//	TODO use progress monitor instead of System.out
 		
-		private static boolean[] getShortLineParagraphStarts(LineMetrics[] lines, int colWidth, int blockWidth, char alignment, float normSpaceWidth, int minSignificantHorizontalDist) {
+		private static boolean[] getShortLineParagraphStarts(LineMetrics[] lines, int colWidth, int blockWidth, boolean measureAgainstBlock, char alignment, float normSpaceWidth, int minSignificantHorizontalDist) {
 			
 			//	measure lines
 			boolean[] isParagraphStartLine = new boolean[lines.length];
@@ -2817,7 +3186,7 @@ public class PageAnalysis implements ImagingConstants {
 				//	center alignment ==> consider both left and right margins
 				if (alignment == 'C') {
 					
-					//	block at least 80% of column width, measure by block (to catch narrow-ish section abstracts)
+					//	block at least 80% of column width, measure by block (to catch narrow-ish section abstracts, etc.)
 					if ((colWidth * 4) < (blockWidth * 5))
 						spaceLeftInPrevLine = (lines[l-1].blockLeftMargin + lines[l-1].blockRightMargin);
 					
@@ -2838,11 +3207,11 @@ public class PageAnalysis implements ImagingConstants {
 				
 				//	left alignment ==> consider right column anchored margin
 				else if (alignment == 'L')
-					spaceLeftInPrevLine = lines[l-1].colRightMargin;
+					spaceLeftInPrevLine = (measureAgainstBlock ? lines[l-1].blockRightMargin : lines[l-1].colRightMargin);
 				
 				//	right alignment ==> consider left column anchored margin
 				else if (alignment == 'R')
-					spaceLeftInPrevLine = lines[l-1].colLeftMargin;
+					spaceLeftInPrevLine = (measureAgainstBlock ? lines[l-1].blockLeftMargin : lines[l-1].colLeftMargin);
 				
 				//	just to satisfy compiler, as the above four options cover all the cases (we just want them all labeled)
 				else continue;
@@ -2851,7 +3220,8 @@ public class PageAnalysis implements ImagingConstants {
 				int extStartWordBlockWidth = (Math.round((lines[l].line.bounds.getHeight() * normSpaceWidth) /* ballpark figure space */ + lines[l].extStartWordBlockBounds.getWidth()));
 				if (extStartWordBlockWidth <= spaceLeftInPrevLine) {
 					isParagraphStartLine[l] = true;
-					if (DEBUG_BLOCK_LAYOUT) System.out.println(" - identified paragraph start line with short predecessor (extended start is " + extStartWordBlockWidth + ", predecessor vacant space is " + spaceLeftInPrevLine + "): " + ImUtils.getString(lines[l].words, true));
+					if (DEBUG_BLOCK_LAYOUT) System.out.println(" - identified paragraph start line with short predecessor (extended start is " + lines[l].extStartWordBlockBounds.getWidth() + "/" + extStartWordBlockWidth + ", height " + lines[l].line.bounds.getHeight() + ", predecessor vacant space is " + spaceLeftInPrevLine + "): " + ImUtils.getString(lines[l].words, true));
+					if (DEBUG_BLOCK_LAYOUT) System.out.println("   previous line is " + ImUtils.getString(lines[l-1].words, true));
 					continue;
 				}
 //				
@@ -3370,6 +3740,149 @@ public class PageAnalysis implements ImagingConstants {
 		 * - consistency of line gaps, i.e.:
 		 *   - consistency of gap above paragraph start lines only
 		 *   - consistency of gap above in-paragraph lines only
+		 */
+		
+		/* TODO for Phytochemistry and whatever other Elsevier journals:
+		 * - try and compute results both using the right block edge and the right column edge ...
+		 * - ... and then reconcile the results or do some kind of plausibility checks ...
+		 * - ... e.g. based upon consistency with indent/outdent on the left edge
+		 * ==> see how it turns out, might work, not sure
+		 * 
+		 * ==> TODO TEST: Phytochemistry.190.112843.pdf.imd, bibliography block at bottom right in page 10 [818,1484,1389,1981]
+Analyzing short line split (against block, 8 lines short in column, 8 lines short in block)
+ - identified paragraph start line with short predecessor (extended start is 52/57, height 14, predecessor vacant space is 59): Sleem, A.A., 2014. Citric acid effects on brain and liver oxidative stress in
+   previous line is Abdel-Salam, O.M., Youness, E.R., Mohammed, N.A., Morsy, S.M., Omara, E.A.,
+ - identified paragraph start line with short predecessor (extended start is 27/32, height 14, predecessor vacant space is 448): Ali, B.H., Blunden, G., Tanira, M.O., Nemmar, A., 2008. Some phytochemical,
+   previous line is 10.1089/jmf.2013.0065.
+ - identified paragraph start line with short predecessor (extended start is 87/92, height 14, predecessor vacant space is 430): Asamenew, G., Kim, H.-W., Lee, M.-K., Lee, S.-H., Kim, Y.J., Cha, Y.-S., Kim, J.-B., 2018.
+   previous line is 10.1016/j.fct.2007.09.085.
+ - identified paragraph start line with short predecessor (extended start is 55/60, height 14, predecessor vacant space is 578): Ashraf, K., Mujeeb, M., Ahmad, A., Ahmad, S., Ahmad, N., Amir, M., 2014.
+   previous line is 3188-z.
+ - identified paragraph start line with short predecessor (extended start is 75/80, height 14, predecessor vacant space is 256): Atanasov, A.G., Waltenberger, B., Pferschy-Wenzig, E.M., Linder, T., Wawrosch, C.,
+   previous line is https://doi.org/10.1080/00032719.2014.898154.
+ - identified paragraph start line with short predecessor (extended start is 98/103, height 14, predecessor vacant space is 245): Bailey-Shaw, Y.A., Williams, L.A., Junor, G.A., Green, C.E., Hibbert, S.L., Salmon, C.N.,
+   previous line is https://doi.org/10.1016/j.biotechadv.2015.08.001.
+ - identified paragraph start line with short predecessor (extended start is 144/149, height 16, predecessor vacant space is 539): Calder´on-Santiago, M., Fern´andez-Peralbo, M.A., Priego-Capote, F., Luque de Castro, M.
+   previous line is 4337.12224.
+		 * 
+		 * ==> TODO TEST; Phytochemistry.205.113454.pdf.imd, bibliography block on right in page 8 [818,1484,149,1927]
+Analyzing short line split (against block, 29 lines short in column, 27 lines short in block)
+ - identified paragraph start line with short predecessor (extended start is 93/98, height 15, predecessor vacant space is 404): Holopainen, J.K., Gershenzon, J., 2010. Multiple stress factors and the emission of plant
+   previous line is annurev-ento-120709-144753.
+ - identified paragraph start line with short predecessor (extended start is 55/60, height 15, predecessor vacant space is 365): Huang, X., Xiao, Y., Kollner ¨, T.G., Zhang, W., Wu, Junxiang, Wu, Juan, Guo, Y.,
+   previous line is org/10.1016/j.tplants.2010.01.006.
+ - identified paragraph start line with short predecessor (extended start is 55/60, height 16, predecessor vacant space is 397): Huang, X.-Z., Xiao, Y.-T., K¨ollner, T.G., Jing, W.-X., Kou, J.-F., Chen, J.-Y., Liu, D.-F.,
+   previous line is 10.1016/j.plaphy.2013.10.017.
+ - identified paragraph start line with short predecessor (extended start is 36/41, height 15, predecessor vacant space is 447): Isah, T., 2019. Stress and defense responses in plant secondary metabolites production.
+   previous line is org/10.1111/pce.13088.
+ - identified paragraph start line with short predecessor (extended start is 60/65, height 14, predecessor vacant space is 155): Karban, R., Carey, J.R., 1984. Induced resistance of cotton seedlings to mites. Science
+   previous line is Biol. Res. 52, 39. https://doi.org/10.1186/s40659-019-0246-3.
+ - identified paragraph start line with short predecessor (extended start is 60/65, height 14, predecessor vacant space is 187): Karban, R., Wetzel, W.C., Shiojiri, K., Ishizaki, S., Ramirez, S.R., Blande, J.D., 2014.
+   previous line is 225, 53–54. https://doi.org/10.1126/science.225.4657.53.
+ - identified paragraph start line with short predecessor (extended start is 95/100, height 15, predecessor vacant space is 340): Karunanithi, P.S., Zerbe, P., 2019. Terpene synthases as metabolic gatekeepers in the
+   previous line is sagebrush. New Phytol. 204, 380–385.
+ - identified paragraph start line with short predecessor (extended start is 50/55, height 14, predecessor vacant space is 114): Lange, M.B., Turner, G.W., 2013. Terpenoid biosynthesis in trichomes—current status
+   previous line is evolution of plant terpenoid chemical diversity. Front. Plant Sci. 10.
+ - identified paragraph start line with short predecessor (extended start is 69/74, height 16, predecessor vacant space is 429): Llandres, A.L., Almohamad, R., Br´evault, T., Renou, A., T´er´eta, I., Jean, J., Goebel, F.-R.,
+   previous line is j.1467-7652.2012.00737.x.
+ - identified paragraph start line with short predecessor (extended start is 74/79, height 15, predecessor vacant space is 85): Loughrin, J.H., Manukian, A., Heath, R.R., Tumlinson, J.H., 1995. Volatiles emitted by
+   previous line is integrated pest management in cotton. Pest Manag. Sci. 74, 2004–2012.
+ - identified paragraph start line with short predecessor (extended start is 74/79, height 14, predecessor vacant space is 515): Loughrin, J.H., Manukian, A.R.A., Heath, R.R., Turlings, T.C., Tumlinson, J.H., 1994.
+   previous line is 21, 1217–1227.
+ - identified paragraph start line with short predecessor (extended start is 57/62, height 14, predecessor vacant space is 280): Lucero, M., Estell, R., Tellez, M., Fredrickson, E., 2009. A retention index calculator
+   previous line is plant. Proc. Natl. Acad. Sci. 91, 11836–11840.
+ - identified paragraph start line with short predecessor (extended start is 85/90, height 15, predecessor vacant space is 293): Magalh˜aes, D.M., Borges, M., Laumann, R.A., Caulfield, J.C., Birkett, M.A., Blassioli-
+   previous line is 378–384. https://doi.org/10.1002/pca.1137.
+ - identified paragraph start line with short predecessor (extended start is 58/63, height 14, predecessor vacant space is 469): McCall, P.J., Turlings, T.C.J., Lewis, W.J., Tumlinson, J.H., 1993. Role of plant volatiles
+   previous line is s00425-020-03497-w.
+ - identified paragraph start line with short predecessor (extended start is 69/74, height 14, predecessor vacant space is 533): Minyard, J.P., Tumlinson, J.H., Hedin, P.A., Thompson, A.C., 1965. Isolation and
+   previous line is BF01048128.
+ - identified paragraph start line with short predecessor (extended start is 99/104, height 15, predecessor vacant space is 480): O’Callaghan, S., De Souza, D.P., Isaac, A., Wang, Q., Hodkinson, L., Olshansky, M.,
+   previous line is Chem. 13, 599–602.
+ - identified paragraph start line with short predecessor (extended start is 70/75, height 14, predecessor vacant space is 132): Oksanen, J., Blanchet, F.G., Friendly, M., Kindt, R., Legendre, P., McGlinn, D.,
+   previous line is BMC Bioinf. 13, 115. https://doi.org/10.1186/1471-2105-13-115.
+ - identified paragraph start line with short predecessor (extended start is 26/31, height 15, predecessor vacant space is 40): pp. 5–7.
+   previous line is Wagner, H., 2020. Vegan: Community Ecology Package. R Package Version 2,
+ - identified paragraph start line with short predecessor (extended start is 46/51, height 14, predecessor vacant space is 572): Opitz, S., Kunert, G., Gershenzon, J., 2008. Increased terpenoid accumulation in cotton
+   previous line is pp. 5–7.
+ - identified paragraph start line with short predecessor (extended start is 135/140, height 15, predecessor vacant space is 564): O’Reilly-Wapstra, J.M., Freeman, J.S., Davies, N.W., Vaillancourt, R.E., Fitzgerald, H.,
+   previous line is 508–522.
+ - identified paragraph start line with short predecessor (extended start is 38/43, height 16, predecessor vacant space is 576): Par´e, P.W., Tumlinson, J.H., 1997. De novo biosynthesis of volatiles induced by insect
+   previous line is 0350-6.
+ - identified paragraph start line with short predecessor (extended start is 78/83, height 14, predecessor vacant space is 187): Pichersky, E., Raguso, R.A., 2018. Why do plants produce so many terpenoid
+   previous line is herbivory in cotton plants. Plant Physiol. 114, 1161–1167.
+ - identified paragraph start line with short predecessor (extended start is 11/16, height 14, predecessor vacant space is 42): R Core Team, 2013. n.d. R: A Language and Environment for Statistical Computing. R
+   previous line is compounds? New Phytol. 220, 692–702. https://doi.org/10.1111/nph.14178.
+ - identified paragraph start line with short predecessor (extended start is 54/59, height 15, predecessor vacant space is 426): Renou, A., T´er´eta, I., Togola, M., 2011. Manual topping decreases bollworm infestations
+   previous line is http://www.R-project.org/.
+ - identified paragraph start line with short predecessor (extended start is 136/141, height 16, predecessor vacant space is 470): Reyes-Hern´andez, M., Angulo-P´erez, D., Quijano-Medina, T., Moreira, X., Parra-
+   previous line is j.cropro.2011.05.020.
+ - identified paragraph start line with short predecessor (extended start is 48/53, height 16, predecessor vacant space is 58): Tabla, V., V´asquez-Bolanos ˜, M., Abdala-Roberts, L., 2022. An experimental test of
+   previous line is Reyes-Hern´andez, M., Angulo-P´erez, D., Quijano-Medina, T., Moreira, X., Parra-
+ - identified paragraph start line with short predecessor (extended start is 41/46, height 15, predecessor vacant space is 567): R¨ose, U.S., Tumlinson, J.H., 2005. Systemic induction of volatile release in cotton: how
+   previous line is 09876-8.
+		 * 
+		 * ==> TODOne TEST: Phytochemistry.208.113587.pdf.imd, bibliography block at bottom left in page 10 [100,766,1400,1967]
+		 * ==> TODO TEST: Phytochemistry.208.113587.pdf.imd, bibliography block on right in page 10 [818,1484,148,1906]
+Analyzing short line split (against block, 21 lines short in column, 21 lines short in block)
+ - identified paragraph start line with short predecessor (extended start is 60/65, height 14, predecessor vacant space is 437): Harada, M., Asaba, K.N., Iwai, M., Kogure, N., Kitajima, M., Takayama, H., 2012.
+   previous line is 10.1021/acs.joc.5b02396.
+ - identified paragraph start line with sentence ending non-justified predecessor (start is 95, predecessor vacant space is 43): Asymmetric total synthesis of an iboga-type indole alkaloid, voacangalactone, newly
+ - identified paragraph start line with short predecessor (extended start is 73/78, height 14, predecessor vacant space is 478): Ishikawa, H., Colby, D.A., Seto, S., Va, P., Tam, A., Kakei, H., Rayl, T.J., Hwang, I.,
+   previous line is 10.1021/ol3027945.
+ - identified paragraph start line with short predecessor (extended start is 40/45, height 14, predecessor vacant space is 479): Kam, T.S., 1999. Alkaloids from Malaysian flora. In: Pelletier, S.W. (Ed.), Alkaloids:
+   previous line is 10.1021/ja809842b.
+ - identified paragraph start line with short predecessor (extended start is 40/45, height 15, predecessor vacant space is 235): Kam, T.S., Choo, Y.M., 2006. Bisindole alkaloids. In: Cordell, G.A. (Ed.), The Alkaloids,
+   previous line is 646–656. https://doi.org/10.1002/cbdv.200490056.
+ - identified paragraph start line with short predecessor (extended start is 40/45, height 14, predecessor vacant space is 246): Kam, T.S., Lim, K.H., 2008. Alkaloids of kopsia. In: Cordell, G.A. (Ed.), The Alkaloids:
+   previous line is vol. 63. Academic Press, Amsterdam, pp. 181–337.
+ - identified paragraph start line with sentence ending non-justified predecessor (start is 111, predecessor vacant space is 44): Leeuwenberg, A.J.M., 1991. A Revision of Tabernaemontana: the Old World Species.
+ - identified paragraph start line with sentence ending non-justified predecessor (start is 48, predecessor vacant space is 18): Royal Botanic Gardens, Kew, U.K.
+ - identified paragraph start line with short predecessor (extended start is 34/39, height 14, predecessor vacant space is 376): Lim, S.H., Low, Y.Y., Sinniah, S.K., Yong, K.T., Sim, K.S., Kam, T.S., 2014. Macroline,
+   previous line is Royal Botanic Gardens, Kew, U.K.
+ - identified paragraph start line with sentence ending non-justified predecessor (start is 122, predecessor vacant space is 67): Phytochemistry 98, 204–215. https://doi.org/10.1016/j.phytochem.2013.11.014.
+ - identified paragraph start line with sentence ending non-justified predecessor (start is 75, predecessor vacant space is 15): Marinho, F.F., Sim˜oes, A.O., Barcellos, T., Moura, S., 2016. Brazilian Tabernaemontana
+ - identified paragraph start line with sentence ending non-justified predecessor (start is 352, predecessor vacant space is 28): https://doi.org/10.1016/j.fitote.2016.09.002.
+ - identified paragraph start line with short predecessor (extended start is 83/88, height 15, predecessor vacant space is 288): Middleton, D.J., 2011. Apocynaceae (subfamilies: rauvolfioideae and apocynoideae). In:
+   previous line is https://doi.org/10.1016/j.fitote.2016.09.002.
+ - identified paragraph start line with short predecessor (extended start is 35/40, height 15, predecessor vacant space is 496): Nge, C.E., Chong, K.W., Thomas, N.F., Lim, S.H., Low, Y.Y., Kam, T.S., 2016a. Ibogan,
+   previous line is Kepong, Malaysia.
+ - identified paragraph start line with short predecessor (extended start is 35/40, height 15, predecessor vacant space is 75): Nge, C.E., Sim, K.S., Lim, S.H., Thomas, N.F., Low, Y.Y., Kam, T.S., 2016b. Hexacyclic,
+   previous line is (Lloydia) 79, 1388–1399. https://doi.org/10.1021/acs.jnatprod.6b00129.
+ - identified paragraph start line with short predecessor (extended start is 55/60, height 15, predecessor vacant space is 179): Santos, A.K.L., Magalh˜aes, T.S., Monte, F.J.Q., Carlos de Mattos, M., de Oliveira, M.C.F.,
+   previous line is 2709–2717. https://doi.org/10.1021/acs.jnatprod.6b00674.
+ - identified paragraph start line with sentence ending non-justified predecessor (start is 94, predecessor vacant space is 53): Antioxidant activity. Quim. Nova 32 (7), 1834–1838. https://doi.org/10.1590/
+ - identified paragraph start line with short predecessor (extended start is 63/68, height 14, predecessor vacant space is 414): Sharma, P., Cordell, G.A., 1988. Heyneanine hydroxyindolenine, a new indole alkaloid
+   previous line is S0100-40422009000700028.
+ - identified paragraph start line with short predecessor (extended start is 34/39, height 14, predecessor vacant space is 455): Sim, D.S.Y., Navanesan, S., Sim, K.S., Gurusamy, S., Lim, S.H., Low, Y.Y., Kam, T.S.,
+   previous line is 10.1021/np50057a012.
+ - identified paragraph start line with short predecessor (extended start is 34/39, height 14, predecessor vacant space is 165): Sim, D.S.Y., Teoh, W.Y., Sim, K.S., Lim, S.H., Thomas, N.F., Low, Y.Y., Kam, T.S., 2016.
+   previous line is (4), 850–858. https://doi.org/10.1021/acs.jnatprod.8b00919.
+ - identified paragraph start line with sentence ending non-justified predecessor (start is 146, predecessor vacant space is 26): jnatprod.5b01117.
+ - identified paragraph start line with short predecessor (extended start is 85/90, height 14, predecessor vacant space is 494): Spartan’14, 2014. Wavefunction, Inc, Irvine, CA.
+   previous line is jnatprod.5b01117.
+ - identified paragraph start line with short predecessor (extended start is 83/88, height 14, predecessor vacant space is 297): Takayama, H., Suda, S., Chen, I.S., Kitajima, M., Aimi, N., Sakai, S., 1994. Two new
+   previous line is Spartan’14, 2014. Wavefunction, Inc, Irvine, CA.
+ - identified paragraph start line with sentence ending non-justified predecessor (start is 55, predecessor vacant space is 34): Chem. Pharm. Bull. (Tokyo) 42 (2), 280–284. https://doi.org/10.1248/cpb.42.280.
+ - identified paragraph start line with short predecessor (extended start is 69/74, height 14, predecessor vacant space is 382): Wenkert, E., Cochran, D.W., Gottlieb, H.E., Hagaman, E.W., Filho, R.B., Matos, F.J.A.,
+   previous line is 10.1016/0378-8741(84)90046-1.
+ - identified paragraph start line with short predecessor (extended start is 93/98, height 14, predecessor vacant space is 488): Willoughby, P.H., Jansma, M.J., Hoye, T.R., 2014. A guide to small-molecule structure
+   previous line is hlca.19760590719.
+ - identified paragraph start line with short predecessor (extended start is 93/98, height 14, predecessor vacant space is 224): Willoughby, P.H., Jansma, M.J., Hoye, T.R., 2020. Addendum: a guide to small-molecule
+   previous line is 9, 643–660. https://doi.org/10.1038/nprot.2014.042.
+ - identified paragraph start line with short predecessor (extended start is 7/12, height 14, predecessor vacant space is 217): 1 13 structure assignment through computation of (H and C) NMR chemical shifts.Nat.
+   previous line is 1 13
+Willoughby, P.H., Jansma, M.J., Hoye, T.R., 2020. Addendum: a guide to small-molecule 1 13
+structure assignment through computation of (H and C) NMR chemical shifts.Nat. Protoc. 15, 2277. https://doi.org/10.1038/s41596-020-0293-9.   
+ - identified paragraph start line with short predecessor (extended start is 115/120, height 16, predecessor vacant space is 153): Z`eches-Hanrot, M., Nuzillard, J.M., Richard, B., Schaller, H., Hadi, H.A., S´evenet, T.,
+   previous line is Protoc. 15, 2277. https://doi.org/10.1038/s41596-020-0293-9.
+ - identified paragraph start line with short predecessor (extended start is 52/57, height 15, predecessor vacant space is 528): Zhang, D.B., Yu, D.G., Sun, M., Zhu, X.X., Yao, X.J., Zhou, S.Y., Chen, J.J., Gao, K., 2015.
+   previous line is (95)00152-W.
+		 * 
+		 * ==> TODO TEST: Phytochemistry.208.113609.pdf.imd, bibliography block at bottom right in page 5 [818,1483,1371,1981]
+		 * ==> TODO TEST: Phytochemistry.208.113609.pdf.imd, bibliography block at bottom right in page 5 [818,1483,1371,1981]
+		 * ==> TODO TEST: Phytochemistry.208.113609.pdf.imd, bibliography block on left in page 6 [100,766,170,1969]
+		 * ==> TODO TEST: Phytochemistry.208.113609.pdf.imd, bibliography block on right in page 6 [818,1484,169,1969]
 		 */
 		
 		/**

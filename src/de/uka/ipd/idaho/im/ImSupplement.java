@@ -117,13 +117,7 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 	 * @see de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed#getAttribute(java.lang.String)
 	 */
 	public Object getAttribute(String name) {
-		if (TYPE_ATTRIBUTE.equals(name))
-			return this.type;
-		else if (MIME_TYPE_ATTRIBUTE.equals(name))
-			return this.mimeType;
-		else if (ID_ATTRIBUTE.equals(name))
-			return this.getId();
-		else return super.getAttribute(name);
+		return this.getAttribute(name, null);
 	}
 	
 	/* (non-Javadoc)
@@ -423,7 +417,7 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		}
 		
 		/**
-		 * @return the resolution of the graphics
+		 * @return the resolution of the image
 		 */
 		public int getDpi() {
 			return this.dpi;
@@ -641,14 +635,14 @@ public abstract class ImSupplement extends AbstractAttributed implements ImObjec
 		}
 		
 		/**
-		 * @return the bounding box of the graphics (in page image resolution)
+		 * @return the bounding box of the image (in page image resolution)
 		 */
 		public BoundingBox getBounds() {
 			return this.bounds;
 		}
 		
 		/**
-		 * @return the bounding box of the visible portion of the graphics on the document page (in page image resolution)
+		 * @return the bounding box of the visible portion of the image on the document page (in page image resolution)
 		 */
 		public BoundingBox getClipBounds() {
 			return ((this.clipBounds == null) ? this.bounds : this.clipBounds);

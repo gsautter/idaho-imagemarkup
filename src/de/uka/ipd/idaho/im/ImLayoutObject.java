@@ -158,6 +158,8 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 		this.doc = doc;
 		this.pageId = pageId;
 		this.bounds = bounds;
+		if (this.bounds == null)
+			throw new IllegalArgumentException("Bounding box is must not be null.");
 		this.type = ((type == null) ? "object" : type);
 	}
 	
@@ -299,25 +301,18 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 		if (ImDocument.TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 		if (DOCUMENT_ID_ATTRIBUTE.equals(name))
 			return this.getDocument().docId;
-		if (PAGE_ID_ATTRIBUTE.equals(name))
-			return this.pageId;
-		if (BOUNDING_BOX_ATTRIBUTE.equals(name))
-			return this.bounds.toString();
-		return super.getAttribute(name, def);
+		else if (PAGE_ID_ATTRIBUTE.equals(name))
+			return ("" + this.pageId);
+		else if (BOUNDING_BOX_ATTRIBUTE.equals(name))
+			return this.bounds;
+		else return super.getAttribute(name, def);
 	}
 	
 	/* (non-Javadoc)
 	 * @see de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed#getAttribute(java.lang.String)
 	 */
 	public Object getAttribute(String name) {
-		if (ImDocument.TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
-		if (DOCUMENT_ID_ATTRIBUTE.equals(name))
-			return this.getDocument().docId;
-		if (PAGE_ID_ATTRIBUTE.equals(name))
-			return this.pageId;
-		if (BOUNDING_BOX_ATTRIBUTE.equals(name))
-			return this.bounds.toString();
-		return super.getAttribute(name);
+		return this.getAttribute(name, null);
 	}
 	
 	/* (non-Javadoc)
@@ -327,11 +322,11 @@ public abstract class ImLayoutObject extends AbstractAttributed implements ImObj
 		if (ImDocument.TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 		if (DOCUMENT_ID_ATTRIBUTE.equals(name))
 			return true;
-		if (PAGE_ID_ATTRIBUTE.equals(name))
+		else if (PAGE_ID_ATTRIBUTE.equals(name))
 			return true;
-		if (BOUNDING_BOX_ATTRIBUTE.equals(name))
+		else if (BOUNDING_BOX_ATTRIBUTE.equals(name))
 			return true;
-		return super.hasAttribute(name);
+		else return super.hasAttribute(name);
 	}
 	
 	/* (non-Javadoc)

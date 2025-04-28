@@ -60,9 +60,9 @@ import de.uka.ipd.idaho.im.util.ImObjectTransformer.AttributeTransformer;
 public class ImWord extends ImRegion implements ImAnnotation {
 	
 	private static final Comparator TOP_LEFT_ORDER = new Comparator() {
-		public int compare(Object o1, Object o2) {
-			ImWord w1 = ((ImWord) o1);
-			ImWord w2 = ((ImWord) o2);
+		public int compare(Object obj1, Object obj2) {
+			ImWord w1 = ((ImWord) obj1);
+			ImWord w2 = ((ImWord) obj2);
 			
 			//	quick check
 			if (w1 == w2)
@@ -83,9 +83,9 @@ public class ImWord extends ImRegion implements ImAnnotation {
 		}
 	};
 	private static final Comparator TOP_RIGHT_ORDER = new Comparator() {
-		public int compare(Object o1, Object o2) {
-			ImWord w1 = ((ImWord) o1);
-			ImWord w2 = ((ImWord) o2);
+		public int compare(Object obj1, Object obj2) {
+			ImWord w1 = ((ImWord) obj1);
+			ImWord w2 = ((ImWord) obj2);
 			
 			//	quick check
 			if (w1 == w2)
@@ -395,6 +395,8 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	/** the vertical center of the word's bounding box, to speed up inclusion tests */
 	public final int centerY;
 	
+	private int baseline = -1;
+	
 	private String string;
 	private String fontName = null;
 	private int fontSize = -1;
@@ -553,6 +555,45 @@ public class ImWord extends ImRegion implements ImAnnotation {
 		String oldString = this.string;
 		this.string = string;
 		this.notifyAttributeChanged(STRING_ATTRIBUTE, true, this.string, oldString);
+	}
+	
+	/**
+	 * Retrieve the baseline of the word. If the baseline property is not set,
+	 * this method approximates it to being 25% of the word height above the
+	 * bottom of the bounding box, also considering text direction.
+	 * @return the baseline
+	 */
+	public int getBaseline() {
+		if (this.baseline != -1)
+			return this.baseline;
+		int textDir = (this.flags & TEXT_DIR_MASK);
+		if (textDir == TEXT_DIR_LEFT_RIGHT)
+			return (this.bounds.bottom - ((this.bounds.getHeight() + 2) / 4));
+		else if (textDir == TEXT_DIR_BOTTOM_UP)
+			return (this.bounds.right - ((this.bounds.getWidth() + 2) / 4));
+		else if (textDir == TEXT_DIR_TOP_DOWN)
+			return (this.bounds.left + ((this.bounds.getWidth() + 2) / 4));
+		else return (this.bounds.top + ((this.bounds.getHeight() + 2) / 4));
+	}
+	
+	/**
+	 * Set the baseline of the word. This method should rarely be used outside
+	 * of generating or loading an image markup document.
+	 * @param baseline the baseline to set
+	 */
+	public void setBaseline(int baseline) {
+		if (baseline == this.baseline)
+			return;
+		int oldBaseline = this.baseline;
+		this.baseline = baseline;
+		this.notifyAttributeChanged(BASELINE_ATTRIBUTE, false, Integer.toString(this.baseline), Integer.toString(oldBaseline));
+	}
+	private void setBaseline(String baseline) {
+		int bl = -1;
+		if (baseline != null) try {
+			bl = Integer.parseInt(baseline.trim());
+		} catch (NumberFormatException nfe) {}
+		this.setBaseline(bl);
 	}
 	
 	/**
@@ -840,14 +881,9 @@ public class ImWord extends ImRegion implements ImAnnotation {
 	 */
 	public String[] getAttributeNames() {
 		String[] ans = super.getAttributeNames();
-//		if (this.fontSize != -1) {
-//			String[] eAns = new String[ans.length + 1];
-//			System.arraycopy(ans, 0, eAns, 0, ans.length);
-//			eAns[ans.length] = FONT_SIZE_ATTRIBUTE;
-//			Arrays.sort(eAns);
-//			ans = eAns;
-//		}
 		int addAns = 0;
+		if (this.baseline != -1)
+			addAns++;
 		if (this.fontName != null)
 			addAns++;
 		if (this.fontSize != -1)
@@ -864,6 +900,8 @@ public class ImWord extends ImRegion implements ImAnnotation {
 			String[] eAns = new String[ans.length + addAns];
 			System.arraycopy(ans, 0, eAns, 0, ans.length);
 			addAns = ans.length;
+			if (this.baseline != -1)
+				eAns[addAns++] = BASELINE_ATTRIBUTE;
 			if (this.fontName != null)
 				eAns[addAns++] = FONT_NAME_ATTRIBUTE;
 			if (this.fontSize != -1)
@@ -907,6 +945,8 @@ public class ImWord extends ImRegion implements ImAnnotation {
 			return ("" + this.getPreviousRelation());
 		else if (TEXT_STREAM_TYPE_ATTRIBUTE.equals(name))
 			return this.textStreamType;
+		else if (BASELINE_ATTRIBUTE.equals(name))
+			return ((this.baseline == -1) ? def : ("" + this.baseline));
 		else if (FONT_NAME_ATTRIBUTE.equals(name))
 			return ((this.fontName == null) ? def : this.fontName);
 		else if (FONT_SIZE_ATTRIBUTE.equals(name))
@@ -942,6 +982,8 @@ public class ImWord extends ImRegion implements ImAnnotation {
 			return true;
 		else if (TEXT_STREAM_TYPE_ATTRIBUTE.equals(name))
 			return true;
+		else if (BASELINE_ATTRIBUTE.equals(name))
+			return (this.baseline != -1);
 		else if (FONT_NAME_ATTRIBUTE.equals(name))
 			return (this.fontName != null);
 		else if (FONT_SIZE_ATTRIBUTE.equals(name))
@@ -999,6 +1041,11 @@ public class ImWord extends ImRegion implements ImAnnotation {
 		}
 		else if (NEXT_WORD_ATTRIBUTE.equals(name))
 			return this.nextWord;
+		else if (BASELINE_ATTRIBUTE.equals(name)) {
+			String oldBaseline = ((this.baseline == -1) ? null : ("" + this.baseline));
+			this.setBaseline((value == null) ? null : value.toString());
+			return oldBaseline;
+		}
 		else if (FONT_NAME_ATTRIBUTE.equals(name)) {
 			String oldFontName = this.fontName;
 			this.setFontName((value == null) ? null : value.toString());
@@ -1219,10 +1266,11 @@ public class ImWord extends ImRegion implements ImAnnotation {
 		
 		//	prepare font
 		Font preFont = renderer.getFont();
-		int wFontSize = -1;
-		try {
-			wFontSize = Integer.parseInt((String) word.getAttribute(ImWord.FONT_SIZE_ATTRIBUTE, "-1"));
-		} catch (NumberFormatException nfe) {}
+//		int wFontSize = -1;
+//		try {
+//			wFontSize = Integer.parseInt((String) word.getAttribute(ImWord.FONT_SIZE_ATTRIBUTE, "-1"));
+//		} catch (NumberFormatException nfe) {}
+		int wFontSize = word.getFontSize();
 		if (wFontSize < 1)
 			wFontSize = 10;
 		int fontSize = Math.round(((float) (wFontSize * renderingDpi)) / 72); // need to scale font size, as we're not scaling renderer proper

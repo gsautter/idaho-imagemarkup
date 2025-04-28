@@ -53,6 +53,7 @@ public class PdfImageDecoder {
 		String osName = System.getProperty("os.name");
 		if (osName.matches("Win.*"))
 			return "convert-windows.exe";
+//			return "magick.exe";
 		else if (osName.matches(".*Linux.*"))
 			return "convert-linux";
 //		else if (osName.matches("Mac.*"))
@@ -207,14 +208,12 @@ public class PdfImageDecoder {
 					command.add("-negate");
 				command.add("-profile");
 				command.add(this.imPath.getAbsolutePath() + "/ISOcoated_v2_300_eci.icc");
-//				command.add(this.imPath.getAbsolutePath() + "/USWebCoatedSWOP.icc");
 			}
 			else if ((colorSpace != null) && colorSpace.toUpperCase().startsWith("ICCB") && (altColorSpace != null) && altColorSpace.toUpperCase().endsWith("CMYK")) {
 				if (!decodeInverted)
 					command.add("-negate");
 				command.add("-profile");
 				command.add(this.imPath.getAbsolutePath() + "/ISOcoated_v2_300_eci.icc");
-//				command.add(this.imPath.getAbsolutePath() + "/USWebCoatedSWOP.icc");
 			}
 			else if (!decodeInverted && "SeparationBlack".equals(colorSpace) && ("DeviceRGB".equals(altColorSpace) || "DeviceGray".equals(altColorSpace)))
 				command.add("-negate");

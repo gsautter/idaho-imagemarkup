@@ -473,7 +473,8 @@ public class OcrEngine implements ImagingConstants {
 		BufferedImage blockTextImage = this.getOcrImage(block.bounds, pageImage);
 		
 		//	get tokenizer to check and split words with
-		Tokenizer tokenizer = ((Tokenizer) block.getDocument().getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER));
+//		Tokenizer tokenizer = ((Tokenizer) block.getDocument().getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER));
+		Tokenizer tokenizer = ((Tokenizer) block.getDocument().getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.getDefaultTokenizer()));
 		
 		//	do OCR
 		OcrWord[] blockWords = this.doBlockOcr(blockNr, blockTextImage, pageImage.currentDpi, pm, false, timeout, tokenizer);

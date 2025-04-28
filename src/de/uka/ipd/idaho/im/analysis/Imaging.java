@@ -54,6 +54,7 @@ import javax.imageio.ImageIO;
 
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
+import de.uka.ipd.idaho.im.pdf.PdfExtractor;
 import de.uka.ipd.idaho.im.utilities.ImageDisplayDialog;
 import de.uka.ipd.idaho.stringUtils.csvHandler.StringTupel;
 
@@ -92,14 +93,31 @@ public class Imaging {
 	 * @return the wrapped image
 	 */
 	public static AnalysisImage wrapImage(BufferedImage image, String cacheKey) {
+		return wrapImage(image, null, null, cacheKey);
+	}
+	
+	/**
+	 * Wrap an image for analysis. If the argument cache key is null, caching
+	 * is deactivated. The two additional images can both be null; they exist
+	 * to allow for bundling individual layers of an image with the overall
+	 * image, mainly to support scans whose text is in a separate mask.
+	 * @param image the image to wrap
+	 * @param backgroundImage the background part of an image originating from
+	 *            a pair of background and mask image
+	 * @param textImage the text mask part of an image originating from a pair
+	 *            of background and mask image
+	 * @param cacheKey a string ID to use for caching
+	 * @return the wrapped image
+	 */
+	public static AnalysisImage wrapImage(BufferedImage image, BufferedImage backgroundImage, BufferedImage textImage, String cacheKey) {
 		synchronized (analysisImageCache) {
-			AnalysisImage analysisImage = ((cacheKey == null) ? null : ((AnalysisImage) analysisImageCache.get(cacheKey)));
-			if (analysisImage == null) {
-				analysisImage = new AnalysisImage(image);
+			AnalysisImage ai = ((cacheKey == null) ? null : ((AnalysisImage) analysisImageCache.get(cacheKey)));
+			if (ai == null) {
+				ai = new AnalysisImage(image, backgroundImage, textImage);
 				if (cacheKey != null)
-					analysisImageCache.put(cacheKey, analysisImage);
+					analysisImageCache.put(cacheKey, ai);
 			}
-			return analysisImage;
+			return ai;
 		}
 	}
 	
@@ -124,23 +142,27 @@ public class Imaging {
 	 * @author sautter
 	 */
 	public static class AnalysisImage {
-		private BufferedImage image;
+		BufferedImage image;
+		BufferedImage backgroundImage;
+		BufferedImage textImage;
 		private byte[][] brightness;
 		private double rotatedBy = 0;
-		AnalysisImage(BufferedImage image) {
-			this.image = image;
+		AnalysisImage(BufferedImage image, BufferedImage backgroundImage, BufferedImage textImage) {
+			this(image, backgroundImage, textImage, null);
 		}
-		AnalysisImage(BufferedImage image, byte[][] brightnesses) {
+		AnalysisImage(BufferedImage image, BufferedImage backgroundImage, BufferedImage textImage, byte[][] brightnesses) {
 			this.image = image;
+			this.backgroundImage = backgroundImage;
+			this.textImage = textImage;
 			this.brightness = brightnesses;
 		}
 		public BufferedImage getImage() {
 			return this.image;
 		}
-		void setImage(BufferedImage image) {
+		void setImage(BufferedImage image, BufferedImage backgroundImage, BufferedImage textImage) {
 			this.image = image;
 			this.brightness = null;
-			this.fftCache.clear();
+//			this.fftCache.clear();
 		}
 		
 		/**
@@ -176,49 +198,51 @@ public class Imaging {
 			}
 			return this.brightness;
 		}
-		
-		/**
-		 * Retrieve the FFT of the wrapped image. Having the image repeated
-		 * computes the FFT of a plain parquetted with the argument image
-		 * instead.
-		 * @param tdim the size of the FFT
-		 * @param repeatImage repeat the image?
-		 * @return the FFT of the wrapped image, sized tdim x tdim
-		 */
-		public Complex[][] getFft(int tdim, boolean repeatImage) {
-			String fftKey = ("" + tdim + "-" + repeatImage);
-			Complex[][] fft = ((Complex[][]) this.fftCache.get(fftKey));
-			if (fft == null) {
-				fft = Imaging.getFft(image, tdim, tdim, repeatImage);
-				this.fftCache.put(fftKey, fft);
-			}
-			return fft;
-		}
-		private HashMap fftCache = new HashMap(2);
-		
-		/**
-		 * Retrieve the FFT of the wrapped image. Having the image repeated
-		 * computes the FFT of a plain parquetted with the argument image
-		 * instead.
-		 * @param repeatImage repeat the image?
-		 * @return the FFT of the wrapped image
-		 */
-		public Complex[][] getFft(boolean repeatImage) {
-			int dim = 64;
-			int size = Math.min(256, Math.max(this.image.getWidth(), this.image.getHeight()));
-			while (dim < size) dim *= 2;
-			return this.getFft(dim, repeatImage);
-		}
-		
-		/**
-		 * @return the FFT of the wrapped image
-		 */
-		public Complex[][] getFft() {
-			int dim = 64;
-			int size = Math.min(256, Math.max(this.image.getWidth(), this.image.getHeight()));
-			while (dim < size) dim *= 2;
-			return this.getFft(dim, (this.image.getWidth() < this.image.getHeight()));
-		}
+//		
+//		/**
+//		 * Retrieve the FFT of the wrapped image. Having the image repeated
+//		 * computes the FFT of a plain parquetted with the argument image
+//		 * instead.
+//		 * @param tdim the size of the FFT
+//		 * @param repeatImage repeat the image?
+//		 * @return the FFT of the wrapped image, sized tdim x tdim
+//		 */
+//		private Complex[][] getFft(int tdim, boolean repeatImage) {
+//			String fftKey = ("" + tdim + "-" + repeatImage);
+//			Complex[][] fft = ((Complex[][]) this.fftCache.get(fftKey));
+//			if (fft == null) {
+//				fft = Imaging.getFft(this.fullImage, tdim, tdim, repeatImage);
+//				this.fftCache.put(fftKey, fft);
+//			}
+//			return fft;
+//		}
+//		private HashMap fftCache = new HashMap(2);
+//		
+//		/**
+//		 * Retrieve the FFT of the wrapped image. Having the image repeated
+//		 * computes the FFT of a plain parquetted with the argument image
+//		 * instead.
+//		 * @param repeatImage repeat the image?
+//		 * @return the FFT of the wrapped image
+//		 */
+//		private Complex[][] getFft(boolean repeatImage) {
+//			int dim = 64;
+//			int size = Math.min(256, Math.max(this.fullImage.getWidth(), this.fullImage.getHeight()));
+//			while (dim < size)
+//				dim *= 2;
+//			return this.getFft(dim, repeatImage);
+//		}
+//		
+//		/**
+//		 * @return the FFT of the wrapped image
+//		 */
+//		private Complex[][] getFft() {
+//			int dim = 64;
+//			int size = Math.min(256, Math.max(this.fullImage.getWidth(), this.fullImage.getHeight()));
+//			while (dim < size)
+//				dim *= 2;
+//			return this.getFft(dim, (this.fullImage.getWidth() < this.fullImage.getHeight()));
+//		}
 	}
 	
 	/**
@@ -227,24 +251,24 @@ public class Imaging {
 	 * @author sautter
 	 */
 	public static class ImagePartRectangle {
-		final AnalysisImage analysisImage;
+		final AnalysisImage ai;
 		int topRow; // inclusive
 		int bottomRow; // exclusive
 		int leftCol; // inclusive
 		int rightCol; // exclusive
 		boolean splitClean = false;
-		ImagePartRectangle(AnalysisImage analysisImage) {
-			this.analysisImage = analysisImage;
+		ImagePartRectangle(AnalysisImage ai) {
+			this.ai = ai;
 			this.leftCol = 0;
-			this.rightCol = this.analysisImage.image.getWidth();
+			this.rightCol = this.ai.image.getWidth();
 			this.topRow = 0;
-			this.bottomRow = this.analysisImage.image.getHeight();
+			this.bottomRow = this.ai.image.getHeight();
 		}
 		/**
-		 * @return the analysisImage
+		 * @return the backing AnalysisImage
 		 */
 		public AnalysisImage getImage() {
-			return this.analysisImage;
+			return this.ai;
 		}
 		/**
 		 * @return the topRow
@@ -284,9 +308,13 @@ public class Imaging {
 		 * @return the content of the rectangle as a separate image
 		 */
 		public AnalysisImage toImage() {
-			if ((this.leftCol == 0) && (this.topRow == 0) && (this.rightCol == this.analysisImage.image.getWidth()) && (this.bottomRow == this.analysisImage.image.getHeight()))
-				return this.analysisImage;
-			return new AnalysisImage(this.analysisImage.image.getSubimage(this.leftCol, this.topRow, (this.rightCol - this.leftCol), (this.bottomRow - this.topRow)));
+			if ((this.leftCol == 0) && (this.topRow == 0) && (this.rightCol == this.ai.image.getWidth()) && (this.bottomRow == this.ai.image.getHeight()))
+				return this.ai;
+			return new AnalysisImage(
+					this.ai.image.getSubimage(this.leftCol, this.topRow, (this.rightCol - this.leftCol), (this.bottomRow - this.topRow)),
+					((this.ai.backgroundImage == null) ? null : this.ai.backgroundImage.getSubimage(this.leftCol, this.topRow, (this.rightCol - this.leftCol), (this.bottomRow - this.topRow))),
+					((this.ai.textImage == null) ? null : this.ai.textImage.getSubimage(this.leftCol, this.topRow, (this.rightCol - this.leftCol), (this.bottomRow - this.topRow)))
+			);
 		}
 		/**
 		 * Create a sub rectangle of this one, referring to the same image.
@@ -297,7 +325,7 @@ public class Imaging {
 		 * @return a sub rectangle with the specified boundaries
 		 */
 		public ImagePartRectangle getSubRectangle(int l, int r, int t, int b) {
-			ImagePartRectangle ipr = new ImagePartRectangle(this.analysisImage);
+			ImagePartRectangle ipr = new ImagePartRectangle(this.ai);
 			ipr.leftCol = ((l < 0) ? 0 : l);
 			ipr.rightCol = r;
 			ipr.topRow = ((t < 0) ? 0 : t);
@@ -338,31 +366,34 @@ public class Imaging {
 	}
 	
 	/** control flag switching on or off check for and inversion of extremely dark page images */
-	public static final int INVERT_WHITE_ON_BLACK = 0x01;
+	public static final int INVERT_WHITE_ON_BLACK = 0x0001;
 	
 	/** control flag switching on or off smoothing of letters and other edges */
-	public static final int SMOOTH_LETTERS = 0x02;
+	public static final int SMOOTH_LETTERS = 0x0002;
 	
 	/** control flag switching on or off background elimination */
-	public static final int ELIMINATE_BACKGROUND = 0x04;
+	public static final int ELIMINATE_BACKGROUND = 0x0004;
 	
 	/** control flag switching on or off white balance (use strongly recommended) */
-	public static final int WHITE_BALANCE = 0x08;
+	public static final int WHITE_BALANCE = 0x0008;
 	
 	/** control flag switching on or off removal of dark areas along page edges (e.g. shadows on recessed areas of materials on a scanner surface) */
-	public static final int CLEAN_PAGE_EDGES = 0x10;
+	public static final int CLEAN_PAGE_EDGES = 0x0010;
 	
 	/** control flag switching on or off removal of speckles (dark areas too small to even be punctuation marks) */
-	public static final int REMOVE_SPECKLES = 0x20;
+	public static final int REMOVE_SPECKLES = 0x0020;
 	
 	/** control flag switching on or off detection and correction of large deviations (>2°) from the upright */
-	public static final int CORRECT_ROTATION = 0x40;
+	public static final int CORRECT_ROTATION = 0x0040;
 	
 	/** control flag switching on or off detection and correction of small deviations (<2°) from the upright (use strongly recommended) */
-	public static final int CORRECT_SKEW = 0x80;
+	public static final int CORRECT_SKEW = 0x0080;
+	
+	/** control flag switching on or off leveling out brightness gradients in background removal and edge cleanup */
+	public static final int LEVEL_GRADIENTS = 0x0100;
 	
 	/** control flag combination switching on all page image correction steps (useful as shorthand for defaults, and for bit masking) */
-	public static final int ALL_OPTIONS = 0xFF;
+	public static final int ALL_OPTIONS = 0x01FF;
 	
 	/**
 	 * Correct a page image. This method aggregates several lower level
@@ -453,7 +484,7 @@ public class Imaging {
 		
 		//	check binary vs. gray scale or color
 		boolean isGrayScale = isGrayScale(ai);
-		boolean isSharp = true;
+		boolean isBlurry = false;
 		byte[][] faintingDiffs = null;
 		
 		//	do the fuzzy stuff only to gray scale images
@@ -461,11 +492,12 @@ public class Imaging {
 			
 			//	measure blurriness
 			int contrast = measureContrast(ai);
+			pm.setInfo("   - image found non-binary, contrast is " + contrast);
 			if (contrast < 16)
-				isSharp = false;
+				isBlurry = true;
 			
 			//	do background elimination only to blurry images, so not to destroy non-blurry images
-			if (!isSharp) {
+			if (isBlurry) {
 				
 				//	smooth out unevenly printed letters
 				if ((flags & SMOOTH_LETTERS) != 0) {
@@ -480,13 +512,13 @@ public class Imaging {
 				
 				//	apply low pass filter
 				if ((flags & ELIMINATE_BACKGROUND) != 0) {
-					/* TODO figure out if this makes sense here, as images might suffer,
+					/* TODOnot figure out if this makes sense here, as images might suffer,
 					 * maybe better in OCR engine, applied to individual text images, but
 					 * then, this also hampers block identification */
 					changed = false;
 //					changed = eliminateBackground(ai, (dpi / 4), 3, 12);
 //					changed = eliminateBackground(ai, dpi);
-					faintingDiffs = doEliminateBackground(ai, dpi);
+					faintingDiffs = doEliminateBackground(ai, dpi, ((flags & LEVEL_GRADIENTS) != 0));
 					changed = (faintingDiffs != null);
 					if (changed) {
 						pm.setInfo("   - background elimination done");
@@ -497,14 +529,14 @@ public class Imaging {
 			}
 			
 			//	apply low pass filter also if contrast somewhat higher
-			else if (contrast < 32) {
+			else if (contrast < 64 /* used to be 32 ... we can be a bit more aggressive now that we have switch flags */) {
 				if ((flags & ELIMINATE_BACKGROUND) != 0) {
 					/* TODO figure out if this makes sense here, as images might suffer,
 					 * maybe better in OCR engine, applied to individual text images, but
 					 * then, this also hampers block identification */
 					changed = false;
 //					changed = eliminateBackground(ai, dpi);
-					faintingDiffs = doEliminateBackground(ai, dpi);
+					faintingDiffs = doEliminateBackground(ai, dpi, ((flags & LEVEL_GRADIENTS) != 0));
 					changed = (faintingDiffs != null);
 					if (changed) {
 						pm.setInfo("   - background elimination done");
@@ -543,7 +575,7 @@ public class Imaging {
 			byte maxRetainExtentPercentage = (((flags & CLEAN_PAGE_EDGES) == 0) ? Byte.MAX_VALUE : ((byte) 70)); // region exceeding 70% of page width or height TODO find out if this threshold makes sense
 			byte maxRetainBrightness = (((flags & ELIMINATE_BACKGROUND) == 0) ? Byte.MAX_VALUE : ((byte) 96)); // whole region lighter than 25% gray TODO find out if this threshold makes sense
 			changed = false;
-			changed = regionColorAndClean(ai, minRetainSize, minSoloRetainSize, maxRetainExtentPercentage, maxRetainBrightness, dpi, !isGrayScale, isSharp);
+			changed = regionColorAndClean(ai, minRetainSize, minSoloRetainSize, maxRetainExtentPercentage, maxRetainBrightness, dpi, !isGrayScale, !isBlurry);
 			if (changed) {
 				pm.setInfo("   - page edge removal done");
 				if (idd != null)
@@ -560,6 +592,8 @@ public class Imaging {
 						continue; // eliminated
 					brightness[c][r] = ((byte) Math.max(0, (brightness[c][r] - faintingDiffs[c][r])));
 					ai.image.setRGB(c, r, Color.HSBtoRGB(0, 0, (((float) brightness[c][r]) / 127)));
+					if ((ai.backgroundImage != null) && (96 < brightness[c][r]))
+						ai.backgroundImage.setRGB(c, r, Color.HSBtoRGB(0, 0, (((float) brightness[c][r]) / 127)));
 				}
 			pm.setInfo("   - image unfainted");
 		}
@@ -612,11 +646,11 @@ public class Imaging {
 	 * values (black and white) or more. Colors are reduced to their brightness
 	 * in this analysis, so this method will recognize a color image as
 	 * grayscale as well.
-	 * @param image the image to check
+	 * @param ai the image to check
 	 * @return true if the image is grayscale, false otherwise
 	 */
-	public static boolean isGrayScale(AnalysisImage image) {
-		byte[][] brightness = image.getBrightness();
+	public static boolean isGrayScale(AnalysisImage ai) {
+		byte[][] brightness = ai.getBrightness();
 		
 		int[] brightnessCounts = new int[16];
 		Arrays.fill(brightnessCounts, 0);
@@ -645,11 +679,11 @@ public class Imaging {
 	 * difference between neighboring pixels, ignoring 0 differences, bucketizes
 	 * them in 128 buckets, and then returns the 5% quartile of the brightness
 	 * differences.
-	 * @param image the image to check
+	 * @param ai the image to check
 	 * @return true if the image is grayscale, false otherwise
 	 */
-	public static int measureContrast(AnalysisImage image) {
-		byte[][] brightness = image.getBrightness();
+	public static int measureContrast(AnalysisImage ai) {
+		byte[][] brightness = ai.getBrightness();
 		
 		int[] brightnessDiffCounts = new int[128];
 		int brightnessDiffCount = 0;
@@ -685,25 +719,26 @@ public class Imaging {
 	private static final int white = Color.WHITE.getRGB();
 	
 	/**
-	 * Check if an analysisImage is inverted, and correct it if so. This method first
-	 * computes the average brightness of the analysisImage, and then inverts the analysisImage
+	 * Check if an AnalysisImage is inverted, and correct it if so. This method first
+	 * computes the average brightness of the AnalysisImage, and then inverts the AnalysisImage
 	 * if the latter is below the specified threshold.
-	 * @param analysisImage the wrapped analysisImage
+	 * @param ai the wrapped AnalysisImage
 	 * @param threshold the threshold average brightness
-	 * @return true if the analysisImage was changed, false otherwise
+	 * @return true if the AnalysisImage was changed, false otherwise
 	 */
-	public static boolean correctWhiteOnBlack(AnalysisImage analysisImage, byte threshold) {
-		byte brightness = computeAverageBrightness(analysisImage);
+	public static boolean correctWhiteOnBlack(AnalysisImage ai, byte threshold) {
+		byte brightness = computeAverageBrightness(ai);
 		if (brightness > threshold)
 			return false;
 		float[] hsb = null;
 		int rgb;
-		for (int c = 0; c < analysisImage.image.getWidth(); c++)
-			for (int r = 0; r < analysisImage.image.getHeight(); r++) {
-				rgb = analysisImage.image.getRGB(c, r);
-				analysisImage.brightness[c][r] = ((byte) (127 - analysisImage.brightness[c][r]));
+		for (int c = 0; c < ai.image.getWidth(); c++)
+			for (int r = 0; r < ai.image.getHeight(); r++) {
+				rgb = ai.image.getRGB(c, r);
+				ai.brightness[c][r] = ((byte) (127 - ai.brightness[c][r]));
 				hsb = Color.RGBtoHSB(((rgb >> 16) & 0xFF), ((rgb >> 8) & 0xFF), ((rgb >> 0) & 0xFF), hsb);
-				analysisImage.image.setRGB(c, r, Color.HSBtoRGB(hsb [0], hsb[1], (1 - hsb[2])));
+				ai.image.setRGB(c, r, Color.HSBtoRGB(hsb [0], hsb[1], (1 - hsb[2])));
+				//	no use applying this to background or text images
 			}
 		return true;
 	}
@@ -714,12 +749,12 @@ public class Imaging {
 	 * argument radius is less than 1, this method does not change the image and
 	 * returns false. The radius of the kernel used for computing the blur is
 	 * three times the argument radius, to provide a smooth blurring.
-	 * @param analysisImage the wrapped image
+	 * @param ai the wrapped image
 	 * @param radius the radius of the blur
 	 * @return true
 	 */
-	public static boolean gaussBlur(AnalysisImage analysisImage, int radius) {
-		return gaussBlur(analysisImage,  radius, radius, false);
+	public static boolean gaussBlur(AnalysisImage ai, int radius) {
+		return gaussBlur(ai,  radius, radius, false);
 	}
 	
 	/**
@@ -728,13 +763,13 @@ public class Imaging {
 	 * argument radius is less than 1, this method does not change the image and
 	 * returns false. The radius of the kernel used for computing the blur is
 	 * three times the argument radius, to provide a smooth blurring.
-	 * @param analysisImage the wrapped image
+	 * @param ai the wrapped image
 	 * @param hRadius the horizontal radius of the blur
 	 * @param vRadius the vertical radius of the blur
 	 * @return true
 	 */
-	public static boolean gaussBlur(AnalysisImage analysisImage, int hRadius, int vRadius) {
-		return gaussBlur(analysisImage, hRadius, vRadius, false);
+	public static boolean gaussBlur(AnalysisImage ai, int hRadius, int vRadius) {
+		return gaussBlur(ai, hRadius, vRadius, false);
 	}
 	
 	/**
@@ -745,13 +780,13 @@ public class Imaging {
 	 * the radius of the kernel used to compute the blur is exactly the argument
 	 * radius; if it is set to false, radius of the kernel is three times the
 	 * argument radius, to provide a smooth blurring.
-	 * @param analysisImage the wrapped image
+	 * @param ai the wrapped image
 	 * @param radius the radius of the blur
 	 * @param sharpEdge use a sharply edged blur instead of a smooth one?
 	 * @return true
 	 */
-	public static boolean gaussBlur(AnalysisImage analysisImage, int radius, boolean sharpEdge) {
-		return gaussBlur(analysisImage,  radius, radius);
+	public static boolean gaussBlur(AnalysisImage ai, int radius, boolean sharpEdge) {
+		return gaussBlur(ai,  radius, radius);
 	}
 	
 	/**
@@ -762,18 +797,18 @@ public class Imaging {
 	 * the radius of the kernel used to compute the blur is exactly the argument
 	 * radius; if it is set to false, radius of the kernel is three times the
 	 * argument radius, to provide a smooth blurring.
-	 * @param analysisImage the wrapped image
+	 * @param ai the wrapped image
 	 * @param hRadius the horizontal radius of the blur
 	 * @param vRadius the vertical radius of the blur
 	 * @param sharpEdge use a sharply edged blur instead of a smooth one?
 	 * @return true
 	 */
-	public static boolean gaussBlur(AnalysisImage analysisImage, int hRadius, int vRadius, boolean sharpEdge) {
+	public static boolean gaussBlur(AnalysisImage ai, int hRadius, int vRadius, boolean sharpEdge) {
 		if ((hRadius < 1) && (vRadius < 1))
 			return false;
 		
 		//	get brightness array
-		byte[][] brightness = analysisImage.getBrightness();
+		byte[][] brightness = ai.getBrightness();
 		
 		//	blur array
 		if (hRadius == vRadius)
@@ -781,10 +816,11 @@ public class Imaging {
 		else gaussBlur(brightness, hRadius, vRadius, sharpEdge);
 		
 		//	update image
-		for (int c = 0; c < brightness.length; c++) {
-			for (int r = 0; r < brightness[c].length; r++)
-				analysisImage.image.setRGB(c, r, Color.HSBtoRGB(0, 0, (((float) brightness[c][r]) / 127)));
-		}
+		for (int c = 0; c < brightness.length; c++)
+			for (int r = 0; r < brightness[c].length; r++) {
+				ai.image.setRGB(c, r, Color.HSBtoRGB(0, 0, (((float) brightness[c][r]) / 127)));
+				//	no use applying this to background or text images, not even for line drawings, etc.
+			}
 		
 		//	finally ...
 		return true;
@@ -918,74 +954,177 @@ public class Imaging {
 	 * pass filter (large radius Gauss blur) to identify the background, then
 	 * subtracts it from the foreground. WARNING: This filter may eliminate or
 	 * severely damage both color and gray scale images.
-	 * @param analysisImage the wrapped image
+	 * @param ai the wrapped image
 	 * @param dpi the resolution of the image
 	 * @return true
 	 */
-	public static boolean eliminateBackground(AnalysisImage analysisImage, int dpi) {
-		return (doEliminateBackground(analysisImage, dpi) != null);
+	public static boolean eliminateBackground(AnalysisImage ai, int dpi) {
+		return eliminateBackground(ai, dpi, false);
 	}
 	
-	private static byte[][] doEliminateBackground(AnalysisImage analysisImage, int dpi) {
+	/**
+	 * Eliminate the background of an image. This method first applies a low
+	 * pass filter (large radius Gauss blur) to identify the background, then
+	 * subtracts it from the foreground. WARNING: This filter may eliminate or
+	 * severely damage both color and gray scale images.
+	 * @param ai the wrapped image
+	 * @param dpi the resolution of the image
+	 * @param levelGradients follow and level out brightness gradients
+	 * @return true
+	 */
+	public static boolean eliminateBackground(AnalysisImage ai, int dpi, boolean levelGradients) {
+		return (doEliminateBackground(ai, dpi, levelGradients) != null);
+	}
+	
+	private static byte[][] doEliminateBackground(AnalysisImage ai, int dpi, boolean levelGradients) {
+		//	TODO use gradient following area coloring !!!
 		
 		//	get brightness array
-		byte[][] brightness = analysisImage.getBrightness();
+		byte[][] brightness = ai.getBrightness();
 		
 		//	copy and blur brightness array
-//		byte[][] backgroundBrightness = new byte[brightness.length][brightness[0].length];
-//		for (int c = 0; c < brightness.length; c++) {
-//			for (int r = 0; r < brightness[c].length; r++)
-//				backgroundBrightness[c][r] = brightness[c][r];
-//		}
-//		gaussBlur2D(backgroundBrightness, (dpi / 10), false);
 		byte[][] workingBrightness = new byte[brightness.length][brightness[0].length];
 		for (int c = 0; c < brightness.length; c++)
 			System.arraycopy(brightness[c], 0, workingBrightness[c], 0, brightness[c].length);
 		gaussBlur2D(workingBrightness, (dpi / 10), false);
-		
-		//	scale brightness to use background as white
-		for (int c = 0; c < brightness.length; c++)
-			for (int r = 0; r < brightness[c].length; r++) {
-//				if (backgroundBrightness[c][r] == 0)
+//		
+//		//	scale brightness to use background as white
+//		for (int c = 0; c < brightness.length; c++)
+//			for (int r = 0; r < brightness[c].length; r++) {
+//				if (workingBrightness[c][r] == 0)
 //					continue;
+//				int b = ((brightness[c][r] * 127) / workingBrightness[c][r]);
+//				if (b > 127)
+//					b = 127;
+//				int faintingDiff = (b - brightness[c][r]);
+//				brightness[c][r] = ((byte) b);
+//				workingBrightness[c][r] = ((byte) faintingDiff);
+//			}
+		
+		//	TODO use area coloring to level gradients if activated
+		if (levelGradients) {
+			int[][] areaColors = getAreaColoring(ai, 1, false);
+//			BufferedImage rcbi = new BufferedImage(bi.getWidth(), bi.getHeight(), BufferedImage.TYPE_INT_ARGB);
+//			for (int c = 0; c < rcbi.getWidth(); c++)
+//				for (int r = 0; r < rcbi.getHeight(); r++) {
+//					int rgb = Color.HSBtoRGB((((float) (areaColors[c][r] % 360)) / 360), 0.5f, 1.0f);
+//					rcbi.setRGB(c, r, rgb);
+//				}
+//			idd.addImage(rcbi, "Area Colors");
+			
+			int maxAreaColor = 0;
+			for (int c = 0; c < areaColors.length; c++) {
+				for (int r = 0; r < areaColors[c].length; r++)
+					maxAreaColor = Math.max(maxAreaColor, areaColors[c][r]);
+			}
+			int[] areaSizes = new int[maxAreaColor+1];
+			long[] areaBrightnessSums = new long[maxAreaColor+1];
+//			long[] areaBrightnessDiffSums = new long[maxAreaColor+1];
+			long[] areaWorkingBrightnessSums = new long[maxAreaColor+1];
+			for (int c = 0; c < areaColors.length; c++)
+				for (int r = 0; r < areaColors[c].length; r++) {
+					areaSizes[areaColors[c][r]]++;
+					areaBrightnessSums[areaColors[c][r]] += brightness[c][r];
+//					areaBrightnessDiffSums[areaColors[c][r]] += (brightness[c][r] - workingBrightness[c][r]);
+					areaWorkingBrightnessSums[areaColors[c][r]] += workingBrightness[c][r];
+				}
+			byte[] areaBrightnesses = new byte[maxAreaColor+1];
+			byte minAreaBrightness = 127;
+			byte maxAreaBrightness = 0;
+//			byte[] areaBrightnessDiffs = new byte[maxAreaColor+1];
+//			byte minAreaBrightnessDiff = 127;
+//			byte maxAreaBrightnessDiff = 0;
+			byte[] areaWorkingBrightnesses = new byte[maxAreaColor+1];
+			byte minAreaWorkingBrightness = 127;
+			byte maxAreaWorkingBrightness = 0;
+			for (int a = 1; a < areaSizes.length; a++) {
+				areaBrightnesses[a] = ((byte) (areaBrightnessSums[a] / areaSizes[a]));
+				minAreaBrightness = ((byte) Math.min(minAreaBrightness, areaBrightnesses[a]));
+				maxAreaBrightness = ((byte) Math.max(maxAreaBrightness, areaBrightnesses[a]));
+//				areaBrightnessDiffs[a] = ((byte) (areaBrightnessDiffSums[a] / areaSizes[a]));
+//				minAreaBrightnessDiff = ((byte) Math.min(minAreaBrightnessDiff, areaBrightnessDiffs[a]));
+//				maxAreaBrightnessDiff = ((byte) Math.max(maxAreaBrightnessDiff, areaBrightnessDiffs[a]));
+				areaWorkingBrightnesses[a] = ((byte) (areaWorkingBrightnessSums[a] / areaSizes[a]));
+				minAreaWorkingBrightness = ((byte) Math.min(minAreaWorkingBrightness, areaWorkingBrightnesses[a]));
+				maxAreaWorkingBrightness = ((byte) Math.max(maxAreaWorkingBrightness, areaWorkingBrightnesses[a]));
+//				System.out.println("Area " + a + " is brightness " + areaBrightnesses[a] + ", diff " + areaBrightnessDiffs[a] + " on size " + areaSizes[a]);
+			}
+//			System.out.println("Area brightness is in [" + minAreaBrightness + "," + maxAreaBrightness + "], diff in [" + minAreaBrightnessDiff + "," + maxAreaBrightnessDiff + "]");
+			
+//			BufferedImage rbbi = new BufferedImage(ai.image.getWidth(), ai.image.getHeight(), BufferedImage.TYPE_INT_ARGB);
+//			for (int c = 0; c < rbbi.getWidth(); c++)
+//				for (int r = 0; r < rbbi.getHeight(); r++) {
+//					int rgb = Color.HSBtoRGB(0, 0, (((float) (areaBrightnesses[areaColors[c][r]])) / 127));
+//					rbbi.setRGB(c, r, rgb);
+//				}
+//			idd.addImage(rbbi, "Area Brightness");
+//			BufferedImage rbdbi = new BufferedImage(ai.image.getWidth(), ai.image.getHeight(), BufferedImage.TYPE_INT_ARGB);
+//			for (int c = 0; c < brightness.length; c++)
+//				for (int r = 0; r < brightness[c].length; r++) {
+//					byte bd = ((byte) -areaBrightnessDiffs[areaColors[c][r]]);
+//					int rgb;
+//					if (bd <= 0)
+//						rgb = Color.HSBtoRGB((((float) bd) / -maxAreaBrightnessDiff), 0.5f, 1.0f);
+//					else rgb = Color.HSBtoRGB(0, 0, (1.0f - (((float) bd) / -minAreaBrightnessDiff)));
+////					rbdbi.setRGB(c, r, rgb);
+//				}
+//			idd.addImage(rbdbi, "Area Brightness Diffs");
+			for (int c = 0; c < brightness.length; c++)
+				for (int r = 0; r < brightness[c].length; r++) {
+					byte wb = areaWorkingBrightnesses[areaColors[c][r]];
+					if (wb == 0)
+						continue;
+					byte pb = areaBrightnesses[areaColors[c][r]];
+					int rb = ((pb * 127) / wb);
+					if (rb > 127)
+						rb = 127;
+					int faintingDiff = (rb - brightness[c][r]);
+					brightness[c][r] = ((byte) rb);
+					workingBrightness[c][r] = ((byte) faintingDiff);
+				}
+		}
+		
+		//	otherwise, scale brightness to use background as white
+		else for (int c = 0; c < brightness.length; c++)
+			for (int r = 0; r < brightness[c].length; r++) {
 				if (workingBrightness[c][r] == 0)
 					continue;
-//				int b = ((brightness[c][r] * 127) / backgroundBrightness[c][r]);
 				int b = ((brightness[c][r] * 127) / workingBrightness[c][r]);
 				if (b > 127)
 					b = 127;
 				int faintingDiff = (b - brightness[c][r]);
 				brightness[c][r] = ((byte) b);
 				workingBrightness[c][r] = ((byte) faintingDiff);
-//				if (brightness[c][r] >= backgroundBrightness[c][r])
-//					analysisImage.brightness[c][r] = ((byte) 127);
 			}
 		
 		//	update image
-		for (int c = 0; c < brightness.length; c++) {
-			for (int r = 0; r < brightness[c].length; r++)
-				analysisImage.image.setRGB(c, r, ((brightness[c][r] == 127) ? backgroundEliminated : Color.HSBtoRGB(0, 0, (((float) brightness[c][r]) / 127))));
-		}
+		for (int c = 0; c < brightness.length; c++)
+			for (int r = 0; r < brightness[c].length; r++) {
+				ai.image.setRGB(c, r, ((brightness[c][r] == 127) ? backgroundEliminated : Color.HSBtoRGB(0, 0, (((float) brightness[c][r]) / 127))));
+				if ((ai.backgroundImage != null) && (96 < brightness[c][r]) /* making sure not to transfer text to background image */)
+					ai.backgroundImage.setRGB(c, r, ((brightness[c][r] == 127) ? backgroundEliminated : Color.HSBtoRGB(0, 0, (((float) brightness[c][r]) / 127))));
+			}
 		
-		//	indicate update
-//		return true;
+		//	return brightness delta
 		return workingBrightness;
 	}
 	
 	/**
 	 * Apply white balance to an image.
-	 * @param analysisImage the wrapped image
+	 * @param ai the wrapped image
 	 * @return true
 	 */
-	public static boolean whitenWhite(AnalysisImage analysisImage) {
-		byte avgBrightness = computeAverageBrightness(analysisImage);
-		for (int c = 0; c < analysisImage.image.getWidth(); c++)
-			for (int r = 0; r < analysisImage.image.getHeight(); r++) {
-				if (analysisImage.brightness[c][r] == 127)
+	public static boolean whitenWhite(AnalysisImage ai) {
+		byte avgBrightness = computeAverageBrightness(ai);
+		for (int c = 0; c < ai.image.getWidth(); c++)
+			for (int r = 0; r < ai.image.getHeight(); r++) {
+				if (ai.brightness[c][r] == 127)
 					continue;
-				if (analysisImage.brightness[c][r] >= avgBrightness) {
-					analysisImage.brightness[c][r] = 127;
-					analysisImage.image.setRGB(c, r, whiteBalanced);
+				if (ai.brightness[c][r] >= avgBrightness) {
+					ai.brightness[c][r] = 127;
+					ai.image.setRGB(c, r, whiteBalanced);
+					if (ai.backgroundImage != null)
+						ai.backgroundImage.setRGB(c, r, whiteBalanced);
 				}
 			}
 		return true;
@@ -993,11 +1132,11 @@ public class Imaging {
 	
 	/**
 	 * Compute the average brightness of an image.
-	 * @param analysisImage the wrapped image
+	 * @param ai the wrapped image
 	 * @return the average brightness
 	 */
-	public static byte computeAverageBrightness(AnalysisImage analysisImage) {
-		byte[][] brightness = analysisImage.getBrightness();
+	public static byte computeAverageBrightness(AnalysisImage ai) {
+		byte[][] brightness = ai.getBrightness();
 		long brightnessSum = 0; 
 		for (int c = 0; c < brightness.length; c++) {
 			for (int r = 0; r < brightness[c].length; r++)
@@ -1014,7 +1153,7 @@ public class Imaging {
 	public static byte computeAverageBrightness(ImagePartRectangle rect) {
 		if ((rect.rightCol <= rect.leftCol) || (rect.bottomRow <= rect.topRow))
 			return 0;
-		byte[][] brightness = rect.analysisImage.getBrightness();
+		byte[][] brightness = rect.ai.getBrightness();
 		long brightnessSum = 0; 
 		for (int c = rect.leftCol; c < rect.rightCol; c++) {
 			for (int r = rect.topRow; r < rect.bottomRow; r++)
@@ -1055,62 +1194,93 @@ public class Imaging {
 	 * @param toFillValue the brightness value to fill
 	 * @param fillValue the brightness value to fill with
 	 */
+//	public static void floodFill(byte[][] brightness, int startCol, int startRow, byte toFillValue, byte fillValue) {
+//		ArrayList pointsToFill = new ArrayList() {
+//			private HashSet addedPoints = new HashSet();
+//			public boolean add(Object ptf) {
+//				if (this.addedPoints.add(ptf))
+//					return super.add(ptf);
+//				else return false;
+//			}
+//		};
+//		pointsToFill.add(new Point(startCol, startRow));
+//		while (pointsToFill.size() != 0) {
+//			Point ptf = ((Point) pointsToFill.remove(0));
+//			if (brightness[ptf.c][ptf.r] != toFillValue)
+//				continue;
+//			brightness[ptf.c][ptf.r] = fillValue;
+//			
+//			//	explore left and right, and one row above and below
+//			for (int c = (ptf.c - 1); c >= 0; c--) {
+//				if (brightness[c][ptf.r] == toFillValue)
+//					brightness[c][ptf.r] = fillValue;
+//				else break;
+//				if ((ptf.r > 0) && (brightness[c][ptf.r - 1] == toFillValue))
+//					pointsToFill.add(new Point(c, (ptf.r - 1)));
+//				if (((ptf.r + 1) < brightness[c].length) && (brightness[c][ptf.r + 1] == toFillValue))
+//					pointsToFill.add(new Point(c, (ptf.r + 1)));
+//			}
+//			for (int c = (ptf.c + 1); c < brightness.length; c++) {
+//				if (brightness[c][ptf.r] == toFillValue)
+//					brightness[c][ptf.r] = fillValue;
+//				else break;
+//				if ((ptf.r > 0) && (brightness[c][ptf.r - 1] == toFillValue))
+//					pointsToFill.add(new Point(c, (ptf.r - 1)));
+//				if (((ptf.r + 1) < brightness[c].length) && (brightness[c][ptf.r + 1] == toFillValue))
+//					pointsToFill.add(new Point(c, (ptf.r + 1)));
+//			}
+//			
+//			//	explore upward and downward, and one row to left and right
+//			for (int r = (ptf.r - 1); r >= 0; r--) {
+//				if (brightness[ptf.c][r] == toFillValue)
+//					brightness[ptf.c][r] = fillValue;
+//				else break;
+//				if ((ptf.c > 0) && (brightness[ptf.c - 1][r] == toFillValue))
+//					pointsToFill.add(new Point((ptf.c - 1), r));
+//				if (((ptf.c + 1) < brightness.length) && (brightness[ptf.c + 1][r] == toFillValue))
+//					pointsToFill.add(new Point((ptf.c + 1), r));
+//			}
+//			for (int r = (ptf.r + 1); r < brightness[ptf.c].length; r++) {
+//				if (brightness[ptf.c][r] == toFillValue)
+//					brightness[ptf.c][r] = fillValue;
+//				else break;
+//				if ((ptf.c > 0) && (brightness[ptf.c - 1][r] == toFillValue))
+//					pointsToFill.add(new Point((ptf.c - 1), r));
+//				if (((ptf.c + 1) < brightness.length) && (brightness[ptf.c + 1][r] == toFillValue))
+//					pointsToFill.add(new Point((ptf.c + 1), r));
+//			}
+//		}
+//	}
 	public static void floodFill(byte[][] brightness, int startCol, int startRow, byte toFillValue, byte fillValue) {
-		ArrayList pointsToFill = new ArrayList() {
-			private HashSet addedPoints = new HashSet();
-			public boolean add(Object ptf) {
-				if (this.addedPoints.add(ptf))
-					return super.add(ptf);
-				else return false;
-			}
-		};
-		pointsToFill.add(new Point(startCol, startRow));
-		while (pointsToFill.size() != 0) {
-			Point ptf = ((Point) pointsToFill.remove(0));
-			if (brightness[ptf.c][ptf.r] != toFillValue)
-				continue;
-			brightness[ptf.c][ptf.r] = fillValue;
-			
-			//	explore left and right, and one row above and below
-			for (int c = (ptf.c - 1); c >= 0; c--) {
-				if (brightness[c][ptf.r] == toFillValue)
-					brightness[c][ptf.r] = fillValue;
-				else break;
-				if ((ptf.r > 0) && (brightness[c][ptf.r - 1] == toFillValue))
-					pointsToFill.add(new Point(c, (ptf.r - 1)));
-				if (((ptf.r + 1) < brightness[c].length) && (brightness[c][ptf.r + 1] == toFillValue))
-					pointsToFill.add(new Point(c, (ptf.r + 1)));
-			}
-			for (int c = (ptf.c + 1); c < brightness.length; c++) {
-				if (brightness[c][ptf.r] == toFillValue)
-					brightness[c][ptf.r] = fillValue;
-				else break;
-				if ((ptf.r > 0) && (brightness[c][ptf.r - 1] == toFillValue))
-					pointsToFill.add(new Point(c, (ptf.r - 1)));
-				if (((ptf.r + 1) < brightness[c].length) && (brightness[c][ptf.r + 1] == toFillValue))
-					pointsToFill.add(new Point(c, (ptf.r + 1)));
-			}
-			
-			//	explore upward and downward, and one row to left and right
-			for (int r = (ptf.r - 1); r >= 0; r--) {
-				if (brightness[ptf.c][r] == toFillValue)
-					brightness[ptf.c][r] = fillValue;
-				else break;
-				if ((ptf.c > 0) && (brightness[ptf.c - 1][r] == toFillValue))
-					pointsToFill.add(new Point((ptf.c - 1), r));
-				if (((ptf.c + 1) < brightness.length) && (brightness[ptf.c + 1][r] == toFillValue))
-					pointsToFill.add(new Point((ptf.c + 1), r));
-			}
-			for (int r = (ptf.r + 1); r < brightness[ptf.c].length; r++) {
-				if (brightness[ptf.c][r] == toFillValue)
-					brightness[ptf.c][r] = fillValue;
-				else break;
-				if ((ptf.c > 0) && (brightness[ptf.c - 1][r] == toFillValue))
-					pointsToFill.add(new Point((ptf.c - 1), r));
-				if (((ptf.c + 1) < brightness.length) && (brightness[ptf.c + 1][r] == toFillValue))
-					pointsToFill.add(new Point((ptf.c + 1), r));
-			}
+		if (toFillValue == fillValue)
+			return; // no need to go through the hassle, wouldn't change anything
+		if (brightness[startCol][startRow] != toFillValue)
+			return; // not a valid starting point
+		brightness[startCol][startRow] = fillValue;
+		PointBuffer filledPoints = new PointBuffer();
+		filledPoints.add(startCol, startRow);
+		for (int p = 0; p < filledPoints.size(); p++) {
+			int pc = filledPoints.cAt(p);
+			int pr = filledPoints.rAt(p);
+			if (fillPoint((pc-1), pr, brightness, toFillValue, fillValue))
+				filledPoints.add((pc-1), pr);
+			if (fillPoint((pc+1), pr, brightness, toFillValue, fillValue))
+				filledPoints.add((pc+1), pr);
+			if (fillPoint(pc, (pr-1), brightness, toFillValue, fillValue))
+				filledPoints.add(pc, (pr-1));
+			if (fillPoint(pc, (pr+1), brightness, toFillValue, fillValue))
+				filledPoints.add(pc, (pr+1));
 		}
+	}
+	private static boolean fillPoint(int pc, int pr, byte[][] brightness, byte toFillValue, byte fillValue) {
+		if ((pc == -1) || (pr == -1))
+			return false;
+		if ((pc == brightness.length) || (pr == brightness[pc].length))
+			return false;
+		if (brightness[pc][pr] != toFillValue)
+			return false;
+		brightness[pc][pr] = fillValue;
+		return true;
 	}
 	
 	/**
@@ -1125,14 +1295,14 @@ public class Imaging {
 	 * account for gray pixels already set to white during binarization.<br>
 	 * This implementation estimates the minSize and minSoloSize parameters of
 	 * the six-argument version as (dpi/100) and (dpi/25), respectively.
-	 * @param analysisImage the wrapped image
+	 * @param ai the wrapped image
 	 * @param dpi the resolution of the image
 	 * @param isBinary is the image binary, or gray scale or color?
 	 * @param isSharp is the image sharp or blurry?
 	 * @return true if the image was modified, false otherwise
 	 */
-	public static boolean featherDust(AnalysisImage analysisImage, int dpi, boolean isBinary, boolean isSharp) {
-		return featherDust(analysisImage, (dpi / 100), (dpi / 25), dpi, isBinary, isSharp);
+	public static boolean featherDust(AnalysisImage ai, int dpi, boolean isBinary, boolean isSharp) {
+		return featherDust(ai, (dpi / 100), (dpi / 25), dpi, isBinary, isSharp);
 	}
 	
 	/**
@@ -1145,7 +1315,7 @@ public class Imaging {
 	 * diagonally, permitted minimum sizes for standalone spots are smaller, and
 	 * maximum distances to other non-white sport are larger, this all to
 	 * account for gray pixels already set to white during binarization.
-	 * @param analysisImage the wrapped image
+	 * @param ai the wrapped image
 	 * @param minSize the minimum size for non-white spots to be retained
 	 * @param minSoloSize the minimum size for non-white spots far apart from
 	 *            others to be retained
@@ -1154,8 +1324,8 @@ public class Imaging {
 	 * @param isSharp is the image sharp or blurry?
 	 * @return true if the image was modified, false otherwise
 	 */
-	public static boolean featherDust(AnalysisImage analysisImage, int minSize, int minSoloSize, int dpi, boolean isBinary, boolean isSharp) {
-		return regionColorAndClean(analysisImage, minSize, minSoloSize, ((byte) 101), Byte.MAX_VALUE, dpi, isBinary, isSharp);
+	public static boolean featherDust(AnalysisImage ai, int minSize, int minSoloSize, int dpi, boolean isBinary, boolean isSharp) {
+		return regionColorAndClean(ai, minSize, minSoloSize, ((byte) 101), Byte.MAX_VALUE, dpi, isBinary, isSharp);
 		//	TODOne use color coding for coarse cleanup as well
 		//	- merge regions closer than chopMargin, measured by bounding box
 		//	- re-compute size and bounding box in the process
@@ -1175,89 +1345,252 @@ public class Imaging {
 	 * dark regions for positive thresholds, and light regions for negative
 	 * thresholds. In either case, considering diagonally adjacent non-white
 	 * (or non-black) pixels as connected is most sensible for binary images.
-	 * @param analysisImage the image to analyze
+	 * @param ai the image to analyze
 	 * @param brightnessThreshold the white threshold
 	 * @param includeDiagonal consider diagonally adjacent pixels connected?
 	 * @return the region coloring
 	 */
-	public static int[][] getRegionColoring(AnalysisImage analysisImage, byte brightnessThreshold, boolean includeDiagonal) {
-		byte[][] brightness = analysisImage.getBrightness();
+//	public static int[][] getRegionColoring(AnalysisImage ai, byte brightnessThreshold, boolean includeDiagonal) {
+//		byte[][] brightness = ai.getBrightness();
+//		if (brightness.length == 0)
+//			return new int[0][0];
+//		int[][] regionColors = new int[brightness.length][brightness[0].length];
+//		for (int c = 0; c < regionColors.length; c++)
+//			Arrays.fill(regionColors[c], 0);
+//		int currentRegionColor = 1;
+//		for (int c = 0; c < brightness.length; c++)
+//			for (int r = 0; r < brightness[c].length; r++) {
+//				if ((0 < brightnessThreshold) && (brightnessThreshold <= brightness[c][r]))
+//					continue;
+//				if ((brightnessThreshold < 0) && (brightness[c][r] <= -brightnessThreshold))
+//					continue;
+//				if (regionColors[c][r] != 0)
+//					continue;
+//				int rs = colorRegion(brightness, regionColors, c, r, currentRegionColor, brightnessThreshold, includeDiagonal);
+//				if (DEBUG_REGION_COLORING) System.out.println("Region " + currentRegionColor + " is sized " + rs);
+//				currentRegionColor++;
+//				//	TODO assemble region size distribution, use it to estimate font size, and use estimate for cleanup thresholds
+//			}
+//		return regionColors;
+//	}
+//	private static int colorRegion(byte[][] brightness, int[][] regionColors, int c, int r, int regionColor, byte brightnessThreshold, boolean includeDiagonal) {
+//		ArrayList points = new ArrayList() {
+//			HashSet distinctContent = new HashSet();
+//			public boolean add(Object obj) {
+//				return (this.distinctContent.add(obj) ? super.add(obj) : false);
+//			}
+//		};
+//		points.add(new Point(c, r));
+//		
+//		int regionSize = 0;
+//		for (int p = 0; p < points.size(); p++) {
+//			Point point = ((Point) points.get(p));
+//			if ((point.c == -1) || (point.r == -1))
+//				continue;
+//			if ((point.c == brightness.length) || (point.r == brightness[point.c].length))
+//				continue;
+//			if ((0 < brightnessThreshold) && (brightnessThreshold <= brightness[point.c][point.r]))
+//				continue;
+//			if ((brightnessThreshold < 0) && (brightness[point.c][point.r] <= -brightnessThreshold))
+//				continue;
+//			if (regionColors[point.c][point.r] != 0)
+//				continue;
+//			regionColors[point.c][point.r] = regionColor;
+//			regionSize++;
+//			
+//			if (includeDiagonal)
+//				points.add(new Point((point.c - 1), (point.r - 1)));
+//			points.add(new Point((point.c - 1), point.r));
+//			if (includeDiagonal)
+//				points.add(new Point((point.c - 1), (point.r + 1)));
+//			points.add(new Point(point.c, (point.r - 1)));
+//			points.add(new Point(point.c, (point.r + 1)));
+//			if (includeDiagonal)
+//				points.add(new Point((point.c + 1), (point.r - 1)));
+//			points.add(new Point((point.c + 1), point.r));
+//			if (includeDiagonal)
+//				points.add(new Point((point.c + 1), (point.r + 1)));
+//		}
+//		return regionSize;
+//	}
+//	private static class Point {
+//		final int c;
+//		final int r;
+//		Point(int c, int r) {
+//			this.c = c;
+//			this.r = r;
+//		}
+//		public boolean equals(Object obj) {
+//			return ((obj instanceof Point) && (((Point) obj).c == this.c) && (((Point) obj).r == this.r));
+//		}
+//		public int hashCode() {
+//			return ((this.c << 16) + this.r);
+//		}
+//		public String toString() {
+//			return ("(" + this.c + "/" + this.r + ")");
+//		}
+//	}
+	public static int[][] getRegionColoring(AnalysisImage ai, byte brightnessThreshold, boolean includeDiagonal) {
+		byte[][] brightness = ai.getBrightness();
 		if (brightness.length == 0)
 			return new int[0][0];
 		int[][] regionColors = new int[brightness.length][brightness[0].length];
 		for (int c = 0; c < regionColors.length; c++)
 			Arrays.fill(regionColors[c], 0);
 		int currentRegionColor = 1;
-		for (int c = 0; c < brightness.length; c++)
-			for (int r = 0; r < brightness[c].length; r++) {
-				if ((0 < brightnessThreshold) && (brightnessThreshold <= brightness[c][r]))
-					continue;
-				if ((brightnessThreshold < 0) && (brightness[c][r] <= -brightnessThreshold))
-					continue;
-				if (regionColors[c][r] != 0)
-					continue;
-				int rs = colorRegion(brightness, regionColors, c, r, currentRegionColor, brightnessThreshold, includeDiagonal);
-				if (DEBUG_REGION_COLORING) System.out.println("Region " + currentRegionColor + " is sized " + rs);
-				currentRegionColor++;
+		for (int c = 0; c < brightness.length; c++) {
+			for (int r = 0; r < brightness[c].length; r++)
+				if (addPointToRegion(c, r, brightness, brightnessThreshold, regionColors, currentRegionColor)) {
+					int rs = colorRegion(brightness, regionColors, c, r, currentRegionColor, brightnessThreshold, includeDiagonal);
+					if (DEBUG_REGION_COLORING) System.out.println("Region " + currentRegionColor + " is sized " + rs);
+					currentRegionColor++;
+				}
 				//	TODO assemble region size distribution, use it to estimate font size, and use estimate for cleanup thresholds
-			}
+		}
 		return regionColors;
 	}
-	private static int colorRegion(byte[][] brightness, int[][] regionColors, int c, int r, int regionColor, byte brightnessThreshold, boolean includeDiagonal) {
-		ArrayList points = new ArrayList() {
-			HashSet distinctContent = new HashSet();
-			public boolean add(Object obj) {
-				return (this.distinctContent.add(obj) ? super.add(obj) : false);
+	private static int colorRegion(byte[][] brightness, int[][] regionColors, int sc, int sr, int regionColor, byte brightnessThreshold, boolean includeDiagonal) {
+		PointBuffer regionPoints = new PointBuffer();
+		regionPoints.add(sc, sr);
+		for (int p = 0; p < regionPoints.size(); p++) {
+			int pc = regionPoints.cAt(p);
+			int pr = regionPoints.rAt(p);
+			if (addPointToRegion((pc-1), pr, brightness, brightnessThreshold, regionColors, regionColor))
+				regionPoints.add((pc-1), pr);
+			if (addPointToRegion((pc+1), pr, brightness, brightnessThreshold, regionColors, regionColor))
+				regionPoints.add((pc+1), pr);
+			if (addPointToRegion(pc, (pr-1), brightness, brightnessThreshold, regionColors, regionColor))
+				regionPoints.add(pc, (pr-1));
+			if (addPointToRegion(pc, (pr+1), brightness, brightnessThreshold, regionColors, regionColor))
+				regionPoints.add(pc, (pr+1));
+			if (includeDiagonal) {
+				if (addPointToRegion((pc-1), (pr-1), brightness, brightnessThreshold, regionColors, regionColor))
+					regionPoints.add((pc-1), (pr-1));
+				if (addPointToRegion((pc-1), (pr+1), brightness, brightnessThreshold, regionColors, regionColor))
+					regionPoints.add((pc-1), (pr+1));
+				if (addPointToRegion((pc+1), (pr-1), brightness, brightnessThreshold, regionColors, regionColor))
+					regionPoints.add((pc+1), (pr-1));
+				if (addPointToRegion((pc+1), (pr+1), brightness, brightnessThreshold, regionColors, regionColor))
+					regionPoints.add((pc+1), (pr+1));
 			}
-		};
-		points.add(new Point(c, r));
-		
-		int regionSize = 0;
-		for (int p = 0; p < points.size(); p++) {
-			Point point = ((Point) points.get(p));
-			if ((point.c == -1) || (point.r == -1))
-				continue;
-			if ((point.c == brightness.length) || (point.r == brightness[c].length))
-				continue;
-			if ((0 < brightnessThreshold) && (brightnessThreshold <= brightness[point.c][point.r]))
-				continue;
-			if ((brightnessThreshold < 0) && (brightness[point.c][point.r] <= -brightnessThreshold))
-				continue;
-			if (regionColors[point.c][point.r] != 0)
-				continue;
-			regionColors[point.c][point.r] = regionColor;
-			regionSize++;
-			
-			if (includeDiagonal)
-				points.add(new Point((point.c - 1), (point.r - 1)));
-			points.add(new Point((point.c - 1), point.r));
-			if (includeDiagonal)
-				points.add(new Point((point.c - 1), (point.r + 1)));
-			points.add(new Point(point.c, (point.r - 1)));
-			points.add(new Point(point.c, (point.r + 1)));
-			if (includeDiagonal)
-				points.add(new Point((point.c + 1), (point.r - 1)));
-			points.add(new Point((point.c + 1), point.r));
-			if (includeDiagonal)
-				points.add(new Point((point.c + 1), (point.r + 1)));
 		}
-		return regionSize;
+		return regionPoints.size();
 	}
-	private static class Point {
-		final int c;
-		final int r;
-		Point(int c, int r) {
-			this.c = c;
-			this.r = r;
+	private static boolean addPointToRegion(int pc, int pr, byte[][] brightness, int brightnessThreshold, int[][] regionColors, int regionColor) {
+		if ((pc == -1) || (pr == -1))
+			return false;
+		if ((pc == brightness.length) || (pr == brightness[pc].length))
+			return false;
+		if ((0 < brightnessThreshold) && (brightnessThreshold <= brightness[pc][pr]))
+			return false;
+		if ((brightnessThreshold < 0) && (brightness[pc][pr] <= -brightnessThreshold))
+			return false;
+		if (regionColors[pc][pr] != 0)
+			return false;
+		regionColors[pc][pr] = regionColor;
+		return true;
+	}
+	
+	/**
+	 * Compute the area coloring of an image, which makes areas of continuous
+	 * image brightness distinguishable. This method is similar to region
+	 * coloring, but differs in that it aggregates areas with continuous
+	 * brightness, independent of an absolute brightness threshold. The
+	 * <code>maxDiff</code> argument controls by how much the brightnesses of
+	 * two adjacent pixels may differ for them to still be considered part of
+	 * the same area. Areas will continue across such pixel pairs, and two
+	 * adjacent points with a larger local brightness difference may still end
+	 * up in the same area if there is a transitive connection anywhere. This
+	 * means that small increases in the maximum difference can incur vast
+	 * differences in the result. It also means that areas follow brightness
+	 * gradients, like ones resulting from unevenly illuminated scans.
+	 * @param ai the image to analyze
+	 * @param maxDiff the maximum brightness difference between adjacent pixels
+	 *            for an area to continue across them
+	 * @param includeDiagonal consider diagonally adjacent pixels?
+	 * @return the area coloring
+	 */
+	public static int[][] getAreaColoring(AnalysisImage ai, int maxDiff, boolean includeDiagonal) {
+		byte[][] brightness = ai.getBrightness();
+		if (brightness.length == 0)
+			return new int[0][0];
+		int[][] areaColors = new int[brightness.length][brightness[0].length];
+		for (int c = 0; c < areaColors.length; c++)
+			Arrays.fill(areaColors[c], 0);
+		int currentAreaColor = 1;
+		for (int c = 0; c < brightness.length; c++)
+			for (int r = 0; r < brightness[c].length; r++) {
+				if (areaColors[c][r] != 0)
+					continue;
+				int as = colorArea(brightness, areaColors, c, r, currentAreaColor, maxDiff, includeDiagonal);
+				if (DEBUG_REGION_COLORING) System.out.println("Area " + currentAreaColor + " is sized " + as);
+				currentAreaColor++;
+				//	TODO assemble area size distribution, use it to estimate font size, and use estimate for cleanup thresholds
+			}
+		return areaColors;
+	}
+	private static int colorArea(byte[][] brightness, int[][] areaColors, int sc, int sr, int areaColor, int maxDiff, boolean includeDiagonal) {
+		areaColors[sc][sr] = areaColor;
+		
+		PointBuffer areaPoints = new PointBuffer();
+		areaPoints.add(sc, sr);
+		for (int p = 0; p < areaPoints.size(); p++) {
+			int pc = areaPoints.cAt(p);
+			int pr = areaPoints.rAt(p);
+			
+			if (addPointToArea((pc-1), pr, brightness[pc][pr], brightness, maxDiff, areaColors, areaColor))
+				areaPoints.add((pc-1), pr);
+			if (addPointToArea((pc+1), pr, brightness[pc][pr], brightness, maxDiff, areaColors, areaColor))
+				areaPoints.add((pc+1), pr);
+			if (addPointToArea(pc, (pr-1), brightness[pc][pr], brightness, maxDiff, areaColors, areaColor))
+				areaPoints.add(pc, (pr-1));
+			if (addPointToArea(pc, (pr+1), brightness[pc][pr], brightness, maxDiff, areaColors, areaColor))
+				areaPoints.add(pc, (pr+1));
+			if (includeDiagonal) {
+				if (addPointToArea((pc-1), (pr-1), brightness[pc][pr], brightness, maxDiff, areaColors, areaColor))
+					areaPoints.add((pc-1), (pr-1));
+				if (addPointToArea((pc-1), (pr+1), brightness[pc][pr], brightness, maxDiff, areaColors, areaColor))
+					areaPoints.add((pc-1), (pr+1));
+				if (addPointToArea((pc+1), (pr-1), brightness[pc][pr], brightness, maxDiff, areaColors, areaColor))
+					areaPoints.add((pc+1), (pr-1));
+				if (addPointToArea((pc+1), (pr+1), brightness[pc][pr], brightness, maxDiff, areaColors, areaColor))
+					areaPoints.add((pc+1), (pr+1));
+			}
 		}
-		public boolean equals(Object obj) {
-			return ((obj instanceof Point) && (((Point) obj).c == this.c) && (((Point) obj).r == this.r));
+		return areaPoints.size();
+	}
+	private static boolean addPointToArea(int pc, int pr, byte b, byte[][] brightness, int maxDiff, int[][] areaColors, int areaColor) {
+		if ((pc == -1) || (pr == -1))
+			return false;
+		if ((pc == brightness.length) || (pr == brightness[pc].length))
+			return false;
+		if (areaColors[pc][pr] != 0)
+			return false;
+		int bDiff = (brightness[pc][pr] - b);
+		if ((-maxDiff <= bDiff) && (bDiff <= maxDiff)) {
+			areaColors[pc][pr] = areaColor;
+			return true;
 		}
-		public int hashCode() {
-			return ((this.c << 16) + this.r);
+		else return false;
+	}
+	
+	private static class PointBuffer {
+		private int[] points = new int[16];
+		private int size = 0;
+		void add(int c, int r) {
+			if (this.size == this.points.length)
+				this.points = Arrays.copyOf(this.points, (this.points.length * 2));
+			this.points[this.size++] = (((c & 0x0000FFFF) << 16) | ((r & 0x0000FFFF) << 0));
+//			System.out.println("Adding " + c + "/" + r);
 		}
-		public String toString() {
-			return ("(" + this.c + "/" + this.r + ")");
+		int size() {
+			return this.size;
+		}
+		int cAt(int index) {
+			return ((this.points[index] >>> 16) & 0x0000FFFF);
+		}
+		int rAt(int index) {
+			return ((this.points[index] >>> 0) & 0x0000FFFF);
 		}
 	}
 	private static final boolean DEBUG_REGION_COLORING = false;
@@ -1359,6 +1692,8 @@ public class Imaging {
 								continue;
 							ai.brightness[cc][cr] = 127;
 							ai.image.setRGB(cc, cr, tooFaint);
+							if (ai.backgroundImage != null)
+								ai.backgroundImage.setRGB(cc, cr, tooFaint);
 							regionCodes[cc][cr] = 0;
 							changed = true;
 						}
@@ -1491,6 +1826,8 @@ public class Imaging {
 								continue;
 							ai.brightness[cc][cr] = 127;
 							ai.image.setRGB(cc, cr, tooSmallOrBig);
+							if (ai.backgroundImage != null)
+								ai.backgroundImage.setRGB(cc, cr, tooSmallOrBig);
 							regionCodes[cc][cr] = 0;
 							changed = true;
 						}
@@ -1617,6 +1954,8 @@ public class Imaging {
 							continue;
 						ai.brightness[cc][cr] = 127;
 						ai.image.setRGB(cc, cr, tooSmallForStandalone);
+						if (ai.backgroundImage != null)
+							ai.backgroundImage.setRGB(cc, cr, tooSmallForStandalone);
 						regionCodes[cc][cr] = 0;
 						changed = true;
 					}
@@ -1639,7 +1978,6 @@ public class Imaging {
 		return cbi;
 	}
 	
-	//	TODO set debug flag to false for export
 	private static final boolean DEBUG_CLEANUP = false;
 	private static final int whiteBalanced = (DEBUG_CLEANUP ? Color.CYAN.brighter().getRGB() : white);
 	private static final int backgroundEliminated = (DEBUG_CLEANUP ? Color.YELLOW.getRGB() : white);
@@ -1756,11 +2094,11 @@ public class Imaging {
 	/**
 	 * Obtain a rectangle encompassing the content of an image, i.e., the whole
 	 * image except for any white margins.
-	 * @param analysisImage the image to base the rectangle on
+	 * @param ai the image to base the rectangle on
 	 * @return a rectangle encompassing the content of the image
 	 */
-	public static ImagePartRectangle getContentBox(AnalysisImage analysisImage) {
-		ImagePartRectangle rect = new ImagePartRectangle(analysisImage);
+	public static ImagePartRectangle getContentBox(AnalysisImage ai) {
+		ImagePartRectangle rect = new ImagePartRectangle(ai);
 		rect = narrowLeftAndRight(rect);
 		rect = narrowTopAndBottom(rect);
 		return rect;
@@ -1786,7 +2124,7 @@ public class Imaging {
 			top = Math.min(top, parts[p].topRow);
 			bottom = Math.max(bottom, parts[p].bottomRow);
 		}
-		ImagePartRectangle hull = new ImagePartRectangle(parts[0].analysisImage);
+		ImagePartRectangle hull = new ImagePartRectangle(parts[0].ai);
 		hull.leftCol = left;
 		hull.rightCol = right;
 		hull.topRow = top;
@@ -1915,7 +2253,7 @@ public class Imaging {
 		if ((rect.bottomRow <= rect.topRow) || (rect.rightCol <= rect.leftCol))
 			return rect;
 		
-		byte[][] brightness = rect.analysisImage.getBrightness();
+		byte[][] brightness = rect.ai.getBrightness();
 		byte[] colBrightnesses = new byte[rect.rightCol - rect.leftCol];
 		for (int c = rect.leftCol; c < rect.rightCol; c++) {
 			int brightnessSum = 0;
@@ -1938,7 +2276,7 @@ public class Imaging {
 		if ((minCol <= rect.leftCol) && ((maxCol+1) >= rect.rightCol))
 			return rect;
 		
-		ImagePartRectangle res = new ImagePartRectangle(rect.analysisImage);
+		ImagePartRectangle res = new ImagePartRectangle(rect.ai);
 		res.topRow = rect.topRow;
 		res.bottomRow = rect.bottomRow;
 		res.leftCol = ((minCol < 0) ? 0 : minCol);
@@ -1955,7 +2293,7 @@ public class Imaging {
 		if ((rect.bottomRow <= rect.topRow) || (rect.rightCol <= rect.leftCol))
 			return rect;
 		
-		byte[][] brightness = rect.analysisImage.getBrightness();
+		byte[][] brightness = rect.ai.getBrightness();
 		byte[] rowBrightnesses = new byte[rect.bottomRow - rect.topRow];
 		for (int r = rect.topRow; r < rect.bottomRow; r++) {
 			int brightnessSum = 0; 
@@ -1979,7 +2317,7 @@ public class Imaging {
 		if ((minRow <= rect.topRow) && ((maxRow+1) >= rect.bottomRow))
 			return rect;
 		
-		ImagePartRectangle res = new ImagePartRectangle(rect.analysisImage);
+		ImagePartRectangle res = new ImagePartRectangle(rect.ai);
 		res.leftCol = rect.leftCol;
 		res.rightCol = rect.rightCol;
 		res.topRow = ((minRow < 0) ? 0 : minRow);
@@ -2048,7 +2386,7 @@ public class Imaging {
 			else offsets[o] = ((((offsets.length - o - 1) * -maxOffset) + (offsets.length / 2)) / offsets.length);
 		}
 		
-		byte[][] brightness = rect.analysisImage.getBrightness();
+		byte[][] brightness = rect.ai.getBrightness();
 		byte[] colBrightnesses = new byte[rect.rightCol - rect.leftCol];
 		byte[] sColBrightnesses = new byte[rect.rightCol - rect.leftCol];
 		for (int c = rect.leftCol; c < rect.rightCol; c++) {
@@ -2100,7 +2438,7 @@ public class Imaging {
 					if (rc < lc)
 						continue;
 					
-					ImagePartRectangle res = new ImagePartRectangle(rect.analysisImage);
+					ImagePartRectangle res = new ImagePartRectangle(rect.ai);
 					res.topRow = rect.topRow;
 					res.bottomRow = rect.bottomRow;
 					res.leftCol = lc;
@@ -2138,7 +2476,7 @@ public class Imaging {
 		}
 		
 		if (left != -1) {
-			ImagePartRectangle res = new ImagePartRectangle(rect.analysisImage);
+			ImagePartRectangle res = new ImagePartRectangle(rect.ai);
 			res.topRow = rect.topRow;
 			res.bottomRow = rect.bottomRow;
 			res.leftCol = Math.min(Math.max((left - (maxOffset / 2)), rect.leftCol), (rect.rightCol - 1));
@@ -2297,7 +2635,7 @@ public class Imaging {
 		}
 		
 		//	get brightness grid
-		byte[][] brightness = rect.analysisImage.getBrightness();
+		byte[][] brightness = rect.ai.getBrightness();
 		
 		//	this array stores how far to the right a part extends, so finding a path becomes easier
 		int[][] parts = new int[brightness.length][];
@@ -2460,7 +2798,7 @@ public class Imaging {
 			ZigzagSplit zs = ((ZigzagSplit) splits.get(s));
 			
 			//	perform split
-			ImagePartRectangle res = new ImagePartRectangle(rect.analysisImage);
+			ImagePartRectangle res = new ImagePartRectangle(rect.ai);
 			res.leftCol = rect.leftCol;
 			res.rightCol = rect.rightCol;
 			res.topRow = topRow;
@@ -2478,7 +2816,7 @@ public class Imaging {
 		
 		//	mark last rectangle
 		if (topRow < rect.bottomRow-1) {
-			ImagePartRectangle res = new ImagePartRectangle(rect.analysisImage);
+			ImagePartRectangle res = new ImagePartRectangle(rect.ai);
 			res.topRow = topRow;
 			res.leftCol = rect.leftCol;
 			res.bottomRow = rect.bottomRow;
@@ -2509,7 +2847,7 @@ public class Imaging {
 			else offsets[o] = (((o * maxOffset) - (offsets.length / 2)) / offsets.length);
 		}
 		
-		byte[][] brightness = rect.analysisImage.getBrightness();
+		byte[][] brightness = rect.ai.getBrightness();
 		byte[] rowBrightnesses = new byte[rect.bottomRow - rect.topRow];
 		for (int r = rect.topRow; r < rect.bottomRow; r++) {
 			int brightnessSum = 0;
@@ -2552,7 +2890,7 @@ public class Imaging {
 					if (br < tr)
 						continue;
 					
-					ImagePartRectangle res = new ImagePartRectangle(rect.analysisImage);
+					ImagePartRectangle res = new ImagePartRectangle(rect.ai);
 					res.topRow = tr;
 					res.bottomRow = br;
 					res.leftCol = rect.leftCol;
@@ -2578,7 +2916,7 @@ public class Imaging {
 		}
 		
 		if (top != -1) {
-			ImagePartRectangle res = new ImagePartRectangle(rect.analysisImage);
+			ImagePartRectangle res = new ImagePartRectangle(rect.ai);
 			int tr = top + ((maxOffset < 0) ? 0 : maxOffset);
 			if (tr < rect.topRow)
 				tr = rect.topRow;
@@ -2639,25 +2977,25 @@ public class Imaging {
 	});
 	
 	/**
-	 * Compute the FFT of an analysisImage. Having the analysisImage repeated computes the FFT
-	 * of a plain parquetted with the argument analysisImage instead.
+	 * Compute the FFT of an AnalysisImage. Having the AnalysisImage repeated computes the FFT
+	 * of a plain parquetted with the argument AnalysisImage instead.
 	 * @param image the image to use
 	 * @param tdim the size of the FFT
-	 * @param repeatImage repeat the analysisImage?
-	 * @return the FFT of the argument analysisImage, sized tdim x tdim
+	 * @param repeatImage repeat the AnalysisImage?
+	 * @return the FFT of the argument AnalysisImage, sized tdim x tdim
 	 */
 	public static Complex[][] getFft(BufferedImage image, int tdim, boolean repeatImage) {
 		return getFft(image, tdim, tdim, repeatImage);
 	}
 	
 	/**
-	 * Compute the FFT of an analysisImage. Having the analysisImage repeated computes the FFT
-	 * of a plain parquetted with the argument analysisImage instead.
+	 * Compute the FFT of an AnalysisImage. Having the AnalysisImage repeated computes the FFT
+	 * of a plain parquetted with the argument AnalysisImage instead.
 	 * @param image the image to use
 	 * @param tdimx the width of the FFT
 	 * @param tdimy the height of the FFT
-	 * @param repeatImage repeat the analysisImage?
-	 * @return the FFT of the argument analysisImage, sized tdim x tdim
+	 * @param repeatImage repeat the AnalysisImage?
+	 * @return the FFT of the argument AnalysisImage, sized tdim x tdim
 	 */
 	public static Complex[][] getFft(BufferedImage image, int tdimx, int tdimy, boolean repeatImage) {
 		String cacheKey = (image.hashCode() + "-" + tdimx + "-" + tdimy + "-" + repeatImage);
@@ -2752,28 +3090,28 @@ public class Imaging {
 	/**
 	 * Correct page images who are scanned out of the vertical. This method
 	 * first uses FFT peaks to compute the rotation against the vertical, then
-	 * rotates the analysisImage back to the vertical if the deviation is more
+	 * rotates the AnalysisImage back to the vertical if the deviation is more
 	 * than the specified granularity.
-	 * @param analysisImage the analysisImage to correct
+	 * @param ai the AnalysisImage to correct
 	 * @param dpi the resolution of the image
 	 * @param granularity the granularity in degrees
 	 * @param adjustMode the FFT peak adjust mode
 	 * @return true if the argument AnalysisImage was modified, false otherwise
 	 */
-	public static boolean correctPageRotation(AnalysisImage analysisImage, int dpi, double granularity, int adjustMode) {
-		return correctPageRotation(analysisImage, dpi, granularity, null, -1, adjustMode, null);
+	public static boolean correctPageRotation(AnalysisImage ai, int dpi, double granularity, int adjustMode) {
+		return correctPageRotation(ai, dpi, granularity, null, -1, adjustMode, null);
 	}
 	
 	/**
 	 * Correct page images who are scanned out of the vertical. This method
 	 * first uses FFT peaks to compute the rotation against the vertical, then
-	 * rotates the analysisImage back to the vertical if the deviation is more
+	 * rotates the AnalysisImage back to the vertical if the deviation is more
 	 * than the specified granularity. If the argument OCR word boundaries are
 	 * not null, they are rotated alongside the page image and placed in the
 	 * array in the order they come in. The bounding boxes have to be in the
 	 * same coordinate system and resolution as the argument page image proper
 	 * for results to be meaningful.
-	 * @param analysisImage the analysisImage to correct
+	 * @param ai the AnalysisImage to correct
 	 * @param dpi the resolution of the image
 	 * @param granularity the granularity in degrees
 	 * @param adjustMode the FFT peak adjust mode
@@ -2781,47 +3119,47 @@ public class Imaging {
 	 *            OCR words
 	 * @return true if the argument AnalysisImage was modified, false otherwise
 	 */
-	public static boolean correctPageRotation(AnalysisImage analysisImage, int dpi, double granularity, int adjustMode, BoundingBox[] exOcrWordBounds) {
-		return correctPageRotation(analysisImage, dpi, granularity, null, -1, adjustMode, exOcrWordBounds);
+	public static boolean correctPageRotation(AnalysisImage ai, int dpi, double granularity, int adjustMode, BoundingBox[] exOcrWordBounds) {
+		return correctPageRotation(ai, dpi, granularity, null, -1, adjustMode, exOcrWordBounds);
 	}
 	
 	/**
 	 * Correct page images who are scanned out of the vertical. This method
 	 * first uses peaks in the argument FFT to compute the rotation against the
-	 * vertical, then rotates the analysisImage back to the vertical if the
+	 * vertical, then rotates the AnalysisImage back to the vertical if the
 	 * deviation is more than the specified granularity. The argument FFT must
-	 * originate from the argument analysisImage for the result of this method
+	 * originate from the argument AnalysisImage for the result of this method
 	 * to be meaningful. If the argument FFT is null, this method computes it
 	 * as a 256 by 256 complex array.
-	 * @param analysisImage the analysisImage to correct
+	 * @param ai the AnalysisImage to correct
 	 * @param dpi the resolution of the image
 	 * @param granularity the granularity in degrees
-	 * @param fft the FFT of the analysisImage (set to null to have it computed here)
+	 * @param fft the FFT of the AnalysisImage (set to null to have it computed here)
 	 * @param max the adjusted maximum peak height of the argument FFT (set to
 	 *            a negative number to have it computed here)
 	 * @param adjustMode the FFT peak adjust mode
 	 * @return true if the argument AnalysisImage was modified, false otherwise
 	 */
-	public static boolean correctPageRotation(AnalysisImage analysisImage, int dpi, double granularity, Complex[][] fft, double max, int adjustMode) {
-		return correctPageRotation(analysisImage, dpi, granularity, fft, max, adjustMode, null);
+	public static boolean correctPageRotation(AnalysisImage ai, int dpi, double granularity, Complex[][] fft, double max, int adjustMode) {
+		return correctPageRotation(ai, dpi, granularity, fft, max, adjustMode, null);
 	}
 	
 	/**
 	 * Correct page images who are scanned out of the vertical. This method
 	 * first uses peaks in the argument FFT to compute the rotation against the
-	 * vertical, then rotates the analysisImage back to the vertical if the
+	 * vertical, then rotates the AnalysisImage back to the vertical if the
 	 * deviation is more than the specified granularity. The argument FFT must
-	 * originate from the argument analysisImage for the result of this method
+	 * originate from the argument AnalysisImage for the result of this method
 	 * to be meaningful. If the argument FFT is null, this method computes it
 	 * as a 256 by 256 complex array. If the argument OCR word boundaries are
 	 * not null, they are rotated alongside the page image and placed in the
 	 * array in the order they come in. The bounding boxes have to be in the
 	 * same coordinate system and resolution as the argument page image proper
 	 * for results to be meaningful.
-	 * @param analysisImage the analysisImage to correct
+	 * @param ai the AnalysisImage to correct
 	 * @param dpi the resolution of the image
 	 * @param granularity the granularity in degrees
-	 * @param fft the FFT of the analysisImage (set to null to have it computed here)
+	 * @param fft the FFT of the AnalysisImage (set to null to have it computed here)
 	 * @param max the adjusted maximum peak height of the argument FFT (set to
 	 *            a negative number to have it computed here)
 	 * @param adjustMode the FFT peak adjust mode
@@ -2829,14 +3167,20 @@ public class Imaging {
 	 *            OCR words
 	 * @return true if the argument AnalysisImage was modified, false otherwise
 	 */
-	public static boolean correctPageRotation(AnalysisImage analysisImage, int dpi, double granularity, Complex[][] fft, double max, int adjustMode, BoundingBox[] exOcrWordBounds) {
+	public static boolean correctPageRotation(AnalysisImage ai, int dpi, double granularity, Complex[][] fft, double max, int adjustMode, BoundingBox[] exOcrWordBounds) {
 		boolean rotationCorrected = false;
 		double rotatedBy = 0;
 		
-		//	use FFT
+		//	use FFT (preferring text mask if given, as the text is what we're trying to align)
 		if (0 < granularity) {
 			if (fft == null) {
-				fft = analysisImage.getFft();
+//				fft = ai.getFft();
+				BufferedImage fftImage = ((ai.textImage == null) ? ai.image : ai.textImage);
+				int fftDim = 64;
+				int fftSize = Math.min(256, Math.max(fftImage.getWidth(), fftImage.getHeight()));
+				while (fftDim < fftSize)
+					fftDim *= 2;
+				fft = getFft(fftImage, fftDim, fftDim, (fftImage.getWidth() < fftImage.getHeight()));
 				max = getMax(fft, adjustMode);
 			}
 			else if (max < 0)
@@ -2862,16 +3206,22 @@ public class Imaging {
 //			}
 //			else return false;
 			if ((pageRotationAngle < maxPageRotationCorrectionAngle) && (Math.abs(pageRotationAngle) > ((Math.PI / 180) * granularity))) {
-				analysisImage.setImage(rotateImage(analysisImage.getImage(), -pageRotationAngle, exOcrWordBounds));
+//				analysisImage.setImage(rotateImage(analysisImage.getImage(), -pageRotationAngle, exOcrWordBounds));
+				BufferedImage image = rotateImage(ai.image, -pageRotationAngle, exOcrWordBounds);
+				BufferedImage backgroundImage = ((ai.backgroundImage == null) ? null : rotateImage(ai.backgroundImage, -pageRotationAngle, null));
+				BufferedImage textImage = ((ai.textImage == null) ? null : rotateImage(ai.textImage, -pageRotationAngle, null));
+				ai.setImage(image, backgroundImage, textImage);
 				rotatedBy -= pageRotationAngle;
 				rotationCorrected = true;
 			}
 		}
 		
 		//	detect and correct minor skewing via block line focusing
+		//	use text mask if available, as baseline serif peeks is what we're working with
 		ArrayList blocks = new ArrayList();
 		HashSet blockIDs = new HashSet();
-		ImagePartRectangle pageBox = getContentBox(analysisImage);
+//		ImagePartRectangle pageBox = getContentBox(ai);
+		ImagePartRectangle pageBox = getContentBox((ai.textImage == null) ? ai : wrapImage(ai.textImage, null));
 		blocks.add(pageBox);
 		for (int blk = 0; blk < blocks.size(); blk++) {
 			ImagePartRectangle ipr = ((ImagePartRectangle) blocks.get(blk));
@@ -2927,7 +3277,7 @@ public class Imaging {
 		int blockWeightSum = 0;
 		for (int b = 0; b < blocks.size(); b++) {
 			ImagePartRectangle block = ((ImagePartRectangle) blocks.get(b));
-			double blockRotationAngle = getBlockRotationAngle(analysisImage, block);
+			double blockRotationAngle = getBlockRotationAngle(ai, block);
 			if (blockRotationAngle == invalidBlockRotationAngle) {
 				if (DEBUG_LINE_FOCUSSING) System.out.println("Could not determine block rotation angle");
 				continue;
@@ -2940,13 +3290,17 @@ public class Imaging {
 		double blockRotationAngle = (weightedBlockRotationAngleSum / blockWeightSum);
 		System.out.println("Page rotation angle by block line focusing is " + (((float) ((int) (blockRotationAngle * 100))) / 100) + "°");
 		if (Math.abs(blockRotationAngle) > blockRotationAngleStep) {
-			analysisImage.setImage(rotateImage(analysisImage.getImage(), ((Math.PI / 180) * -blockRotationAngle), exOcrWordBounds));
+//			analysisImage.setImage(rotateImage(analysisImage.getImage(), ((Math.PI / 180) * -blockRotationAngle), exOcrWordBounds));
+			BufferedImage image = rotateImage(ai.image, ((Math.PI / 180) * -blockRotationAngle), exOcrWordBounds);
+			BufferedImage backgroundImage = ((ai.backgroundImage == null) ? null : rotateImage(ai.backgroundImage, ((Math.PI / 180) * -blockRotationAngle), null));
+			BufferedImage textImage = ((ai.textImage == null) ? null : rotateImage(ai.textImage, ((Math.PI / 180) * -blockRotationAngle), null));
+			ai.setImage(image, backgroundImage, textImage);
 			rotatedBy -= ((Math.PI / 180) * blockRotationAngle);
 			rotationCorrected = true;
 		}
 		
 		//	finally ...
-		analysisImage.setRotatedBy(rotatedBy);
+		ai.setRotatedBy(rotatedBy);
 		return rotationCorrected;
 	}
 //	private static final double maxPageRotationAngle = ((Math.PI / 180) * 30); // 30°;
@@ -3025,7 +3379,7 @@ public class Imaging {
 	private static final double minBlockRotationAngle = -2;
 	private static final double maxBlockRotationAngle = 2;
 	private static final double blockRotationAngleStep = 0.05;
-	private static double getBlockRotationAngle(AnalysisImage analysisImage, ImagePartRectangle block) {
+	private static double getBlockRotationAngle(AnalysisImage ai, ImagePartRectangle block) {
 		if (DEBUG_LINE_FOCUSSING)
 			System.out.println("Testing rotation of block " + block.getId());
 		
@@ -3041,7 +3395,7 @@ public class Imaging {
 		}
 		
 		//	test rotation angles, and identify best one
-		byte[][] brightness = analysisImage.getBrightness();
+		byte[][] brightness = ai.getBrightness();
 		double rotationAngle = invalidBlockRotationAngle;
 		int rotationAngleScore = 0;
 		for (int a = 0; a < testAngles.length; a++) {
@@ -3385,15 +3739,15 @@ public class Imaging {
 	/**
 	 * Enhance the contrast of a gray-sclae image. This method uses a simple
 	 * for of contrast limited adaptive histogram equalization.
-	 * @param analysisImage the image to treat
+	 * @param ai the image to treat
 	 * @param dpi the resolution of the image
 	 * @return true if the image was modified, false otherwise
 	 */
-	public static boolean enhanceContrast(AnalysisImage analysisImage, int dpi, int ignoreThreshold) {
+	public static boolean enhanceContrast(AnalysisImage ai, int dpi, int ignoreThreshold) {
 		//	TODO figure out if threshold makes sense
 		
 		//	get brightness array
-		byte[][] brightness = analysisImage.getBrightness();
+		byte[][] brightness = ai.getBrightness();
 		if ((brightness.length == 0) || (brightness[0].length == 0))
 			return false;
 		
@@ -3469,7 +3823,9 @@ public class Imaging {
 						else if (b < 0)
 							b = 0;
 						brightness[c][r] = ((byte) b);
-						analysisImage.image.setRGB(c, r, Color.HSBtoRGB(0, 0, (((float) brightness[c][r]) / 127)));
+						ai.image.setRGB(c, r, Color.HSBtoRGB(0, 0, (((float) brightness[c][r]) / 127)));
+						if (ai.backgroundImage != null)
+							ai.backgroundImage.setRGB(c, r, Color.HSBtoRGB(0, 0, (((float) brightness[c][r]) / 127)));
 					}
 			}
 		
@@ -3781,6 +4137,50 @@ public class Imaging {
 //		};
 //		dialogThread.start();
 //	}
+	
+	//	ENHANCEMENT AFTER INDIVIDUAL SCAN REPAIR ONLY !!!
+	public static void mainScanRepair(String[] args) throws Exception {
+		String scanFileName;
+		int dpi;
+		String pageImageFileName;
+		
+		scanFileName = "EPHE.9.11-81.pdf.imf.data/scan@70.png"; dpi = 300;
+		pageImageFileName = "EPHE.9.11-81.pdf.imf.data/page0070.png";
+		int flags = 0;
+//		flags |= INVERT_WHITE_ON_BLACK;
+//		flags |= SMOOTH_LETTERS;
+		flags |= ELIMINATE_BACKGROUND;
+		flags |= WHITE_BALANCE;
+		flags |= CLEAN_PAGE_EDGES;
+//		flags |= REMOVE_SPECKLES;
+//		flags |= CORRECT_ROTATION;
+//		flags |= CORRECT_SKEW;
+		
+		//	load and wrap image
+		BufferedImage pageImage = ImageIO.read(new File("E:/Testdaten/PdfExtract", scanFileName));
+		int scaleFactor = 1;
+		if ((pageImage.getType() != BufferedImage.TYPE_BYTE_GRAY) || (dpi > 300)) {
+			scaleFactor = Math.max(1, ((dpi + 299) / 300));
+			BufferedImage aPageImage = new BufferedImage((pageImage.getWidth() / scaleFactor), (pageImage.getHeight() / scaleFactor), BufferedImage.TYPE_BYTE_GRAY);
+			Graphics2D ag = aPageImage.createGraphics();
+			ag.drawImage(pageImage, 0, 0, aPageImage.getWidth(), aPageImage.getHeight(), null);
+			pageImage = aPageImage;
+			dpi /= scaleFactor;
+		}
+		BufferedImage oPageImage = cloneImage(pageImage);
+		AnalysisImage ai = Imaging.wrapImage(pageImage, null);
+		ai = Imaging.correctImage(ai, dpi, null, flags, ProgressMonitor.dummy);
+		pageImage = ai.getImage();
+		
+		ImageDisplayDialog idd = new ImageDisplayDialog("Test result for " + scanFileName);
+		idd.addImage(oPageImage, "Scan");
+		idd.addImage(pageImage, "PageImage");
+		idd.setSize(Math.min(1600, pageImage.getWidth()), Math.min(1000, pageImage.getHeight()));
+		idd.setLocationRelativeTo(null);
+		idd.setVisible(true);
+		
+		ImageIO.write(pageImage, "PNG", new File("E:/Testdaten/PdfExtract", pageImageFileName));
+	}
 	
 	//	FOR TESTS ONLY !!!
 	public static void main(String[] args) throws Exception {

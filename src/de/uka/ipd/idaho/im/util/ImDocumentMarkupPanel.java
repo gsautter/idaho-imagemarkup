@@ -38,6 +38,7 @@ import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.GraphicsEnvironment;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.GridLayout;
@@ -65,6 +66,8 @@ import java.awt.image.BufferedImage;
 import java.awt.image.ImageObserver;
 import java.awt.image.IndexColorModel;
 import java.awt.image.WritableRaster;
+import java.beans.PropertyChangeEvent;
+import java.beans.PropertyChangeListener;
 import java.io.File;
 import java.io.FileInputStream;
 import java.util.ArrayList;
@@ -130,6 +133,7 @@ import de.uka.ipd.idaho.im.ImWord;
 import de.uka.ipd.idaho.im.analysis.Imaging;
 import de.uka.ipd.idaho.im.util.ImDocumentMarkupPanel.ImDocumentViewControl.AnnotControl;
 import de.uka.ipd.idaho.im.util.ImDocumentMarkupPanel.ImDocumentViewControl.RegionControl;
+import de.uka.ipd.idaho.im.util.ImDocumentMarkupPanel.ImDocumentViewControl.TypeControl;
 import de.uka.ipd.idaho.im.util.ImImageEditorPanel.ImImageEditTool;
 import de.uka.ipd.idaho.stringUtils.StringUtils;
 
@@ -140,6 +144,17 @@ import de.uka.ipd.idaho.stringUtils.StringUtils;
  * @author sautter
  */
 public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
+	
+	/** array holding all fixed names of display properties (this does not
+	 * include annotation colors or display modes, as those differ between
+	 * annotation types, and the associated display property names include
+	 * those very annotation types for distinction) */
+	public static final String[] displayPropertyNames = {
+		"wordSelection.color",
+		"boxSelection.color",
+		"boxSelection.thickness",
+		"annot.highlightAlpha",
+	};
 	
 	//	TODO make markup and page image editors accessible to plugins through interfaces
 	//	==> GUI can be replaced (theoretically)
@@ -158,8 +173,27 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	/** the image markup document displayed in this viewer panel */
 	public final ImDocument document;
 	
-	/** indicates if the image markup document displayed in this viewer panel is born digital */
+	/** indicates if the image markup document displayed in this viewer panel is born digital
+	 * @deprecated */
 	public final boolean documentBornDigital;
+	
+	/** indicates if the image markup document displayed in this viewer panel is born-digital page backgrounds */
+	public final boolean documentPagesBornDigital;
+	
+	/** indicates how the text of the image markup document displayed in this viewer panel was generated */
+	public final char documentTextOrigin;
+	
+	/** text origin indicating document text that was born-digital */
+	public static final char TEXT_ORIGIN_BORN_DIGITAL = 'B';
+	
+	/** text origin indicating document text that was scanned and then replaced by a digital rendition */
+	public static final char TEXT_ORIGIN_DIGITIZED_OCR = 'D';
+	
+	/** text origin indicating document text that was scanned and then replaced by a vectorized rendition (e.g. DjVu encoding) */
+	public static final char TEXT_ORIGIN_VECTORIZED = 'V';
+	
+	/** text origin indicating document text that was created by OCR */
+	public static final char TEXT_ORIGIN_OCR = 'O';
 	
 	private ImPage[] pages;
 	private ImPageMarkupPanel[] pagePanels;
@@ -214,14 +248,22 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	private HashSet paintedLayoutObjectTypes = new HashSet();
 	private TreeMap layoutObjectColors = new TreeMap();
 	
+	private static final int defaultAnnotationHighlightAlpha = 0x40;
+	
 	private HashSet paintedAnnotationTypes = new HashSet();
 	private TreeMap annotationColors = new TreeMap();
+	private TreeMap annotationHighlightColors = new TreeMap();
+	private int annotationHighlightAlpha = defaultAnnotationHighlightAlpha;
 	private int annotationHighlightMargin = 2;
 	
-	private Color selectionHighlightColor = new Color(Color.GREEN.getRed(), Color.GREEN.getGreen(), Color.GREEN.getBlue(), 128);
-	private Color selectionBoxColor = Color.RED;
+	private static final Color defaultSelectionHighlightColor = new Color(Color.GREEN.getRed(), Color.GREEN.getGreen(), Color.GREEN.getBlue(), 128);
+	private static final Color defaultSelectionBoxColor = Color.RED;
+	private static final int defaultSelectionBoxThickness = 3;
+	
+	private Color selectionHighlightColor = defaultSelectionHighlightColor;
+	private Color selectionBoxColor = defaultSelectionBoxColor;
 	private BasicStroke selectionBoxStroke = defaultSelectionBoxStroke;
-	private int selectionBoxThickness = 3;
+	private int selectionBoxThickness = defaultSelectionBoxThickness;
 	
 	private static final IndexColorModel pageImageColorModel = createPageImageColorModel();
 	
@@ -233,19 +275,12 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	private ImPageMarkupPanel pointSelectionPage = null;
 	
 	private boolean selectionClicked = true;
-//	
-//	/** TODOne get rid of old editing dialog
-//	 * @deprecated */
-//	private EditWordDialog editWordDialog = null;
-//	/** TODOne get rid of old editing dialog
-//	 * @deprecated */
-//	private ImPageMarkupPanel editWordPage = null;
 	
 	private DisplayOverlay displayOverlay = null;
 	private int displayOverlayPage = -1;
 	
-	private TwoClickSelectionAction pendingTwoClickAction = null;
-	private TwoClickActionMessenger twoClickActionMessenger = null;
+	TwoClickSelectionAction pendingTwoClickAction = null;
+	TwoClickActionMessenger twoClickActionMessenger = null;
 	
 	private long atomicActionId = 0;
 	private ImageMarkupTool atomicActionImt = null;
@@ -301,13 +336,23 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		this.pageThumbnails = new PageThumbnail[this.pages.length];
 		Arrays.fill(this.pageThumbnails, null);
 		
+		int pageCount = 0;
+		int scanCount = 0;
 		int wordCount = 0;
-		int fnWordCount = 0;
+//		int fnWordCount = 0;
+		int fWordCount = 0;
+		int vfWordCount = 0;
 		for (int p = 0; p < this.pages.length; p++) {
 			if (this.pages[p] == null)
 				continue;
 			System.out.println(" - page " + p + " with ID " + this.pages[p].pageId + " at " + this.pages[p].getImageDPI() + " DPI");
 			this.maxPageImageDpi = Math.max(this.maxPageImageDpi, this.pages[p].getImageDPI());
+			pageCount++;
+			ImSupplement[] pageSupplements = this.pages[p].getSupplements();
+			for (int s = 0; s < pageSupplements.length; s++) {
+				if (pageSupplements[s] instanceof ImSupplement.Scan)
+					scanCount++;
+			}
 			ImWord[] pageWords = this.pages[p].getWords();
 			int minWordLeft = this.pages[p].bounds.right;
 			int maxWordRight = this.pages[p].bounds.left;
@@ -315,8 +360,14 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			int maxWordBottom = this.pages[p].bounds.top;
 			for (int w = 0; w < pageWords.length; w++) {
 				wordCount++;
-				if (pageWords[w].hasAttribute(ImWord.FONT_NAME_ATTRIBUTE))
-					fnWordCount++;
+//				if (pageWords[w].hasAttribute(ImWord.FONT_NAME_ATTRIBUTE))
+//					fnWordCount++;
+				ImFont wordFont = pageWords[w].getFont();
+				if (wordFont != null) {
+					fWordCount++;
+					if (wordFont.hasAttribute(ImFont.VECTORIZED_ATTRIBUTE))
+						vfWordCount++;
+				}
 				minWordLeft = Math.min(minWordLeft, pageWords[w].bounds.left);
 				maxWordRight = Math.max(maxWordRight, pageWords[w].bounds.right);
 				minWordTop = Math.min(minWordTop, pageWords[w].bounds.top);
@@ -335,7 +386,16 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 //		this.documentBornDigital = ((minPageWidth == this.maxPageWidth) && (minPageHeight == this.maxPageHeight));
 //		//	we cannot use page width, as latter may be distorted in born-digital PDFs due to vertical block flips
 //		this.documentBornDigital = (((wordCount * 2) < (fnWordCount * 3)) || ((pages.length > 2) && (minPageHeight == this.maxPageHeight)));
-		this.documentBornDigital = ((wordCount * 2) < (fnWordCount * 3));
+//		this.documentBornDigital = ((wordCount * 2) < (fnWordCount * 3));
+		this.documentBornDigital = ((wordCount * 2) < (fWordCount * 3));
+		this.documentPagesBornDigital = ((scanCount * 3) < (pageCount * 2)); // fewer than two thirds or pages have scans
+		if ((fWordCount * 3) < (wordCount * 2)) // fewer than two thirds of words bound to font at all
+			this.documentTextOrigin = TEXT_ORIGIN_OCR;
+		else if ((fWordCount * 2) < (vfWordCount * 3)) // more than two thirds of font-bound words bound to vetorized fonts
+			this.documentTextOrigin = TEXT_ORIGIN_VECTORIZED;
+		else if (this.documentPagesBornDigital) // no indication of scans at all
+			this.documentTextOrigin = TEXT_ORIGIN_BORN_DIGITAL;
+		else this.documentTextOrigin = TEXT_ORIGIN_DIGITIZED_OCR; // normal digital fonts, but on top of scanned page backgrounds
 		
 		for (int p = Math.max(0, fvp); p < Math.min(this.pages.length, (fvp + vpc)); p++) {
 			if (this.pages[p] == null)
@@ -353,6 +413,34 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		this.document.addDocumentListener(new ImDocumentChangeTracker());
 	}
 	
+	/**
+	 * Check whether or not a bit vector document origin indicates born-digital
+	 * page backgrounds.
+	 * @param docOrigin the document origin to check
+	 * @return true if the argument document origin indicates born-digital pages
+	 */
+	public boolean arePagesBordDigital() {
+		return this.documentPagesBornDigital;
+	}
+	
+	/**
+	 * Check whether or not the text of the document showing in this markup
+	 * panel is rendered via 'normal' fonts.
+	 * @return true if the displaying document uses 'normal' fonts for its text
+	 */
+	public boolean textUsesNormalFonts() {
+		return ((this.documentTextOrigin == TEXT_ORIGIN_BORN_DIGITAL) || (this.documentTextOrigin == TEXT_ORIGIN_DIGITIZED_OCR));
+	}
+	
+	/**
+	 * Check whether or not the text of the document showing in this markup
+	 * panel  representing the original state of the source document.
+	 * @return true if the displaying document shows text in its original state
+	 */
+	public boolean textShowsOriginalState() {
+		return ((this.documentTextOrigin == TEXT_ORIGIN_BORN_DIGITAL) || (this.documentTextOrigin == TEXT_ORIGIN_VECTORIZED));
+	}
+	
 	private class MouseTracker extends MouseAdapter {
 		public void mousePressed(MouseEvent me) {
 //			System.out.println("Mouse pressed");
@@ -361,8 +449,6 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				return;
 			if (ipmp.pageImageDpi == -1)
 				return;
-//			if (editWordDialog != null)
-//				editWordDialog.dispose();
 			if (displayOverlay != null)
 				displayOverlay.close(displayOverlay.cancelOnOutsideClick());
 			Point ipmpLocation = ipmp.getLocation();
@@ -443,22 +529,6 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			}
 			
 			//	handle any pending two-click action first
-//			if ((pendingTwoClickAction != null) && (selectionStartWord != null)) {
-//				boolean handleAtomicAction = (pendingTwoClickAction.isAtomicAction() && !isAtomicActionRunning());
-//				try {
-//					if (handleAtomicAction) // might have been started from built-in click listener in selection action
-//						beginAtomicAction(pendingTwoClickAction.label);
-//					pendingTwoClickAction.performAction(selectionStartWord);
-//				}
-//				finally {
-//					if (handleAtomicAction)
-//						endAtomicAction();
-//				}
-//				cleanupSelection();
-//				repaint();
-//				this.updateCursor(me, ipmp);
-//				return;
-//			}
 			if (pendingTwoClickAction != null) {
 				boolean handleAtomicAction = (pendingTwoClickAction.isAtomicAction() && !isAtomicActionRunning());
 				try {
@@ -518,7 +588,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				this.me = me;
 				this.ipmp = ipmp;
 				this.setRepeats(false);
-				this.addActionListener(this);
+				this.addActionListener(this); // cannot pass 'this' to super constructor
 				this.start();
 			}
 			public void actionPerformed(ActionEvent ae) {
@@ -554,6 +624,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				cleanupSelection();
 				repaint();
 				this.updateCursor(me, ipmp);
+				System.err.println("Empty context menu");
 				return;
 			}
 			final JPopupMenu pm = new JPopupMenu();
@@ -563,14 +634,15 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			for (int a = 0; a < actions.length; a++) {
 				if (actions[a] == SelectionAction.SEPARATOR)
 					continue;
-				mis[a] = actions[a].getMenuItem(ImDocumentMarkupPanel.this);
+//				mis[a] = actions[a].getMenuItem(ImDocumentMarkupPanel.this);
+				mis[a] = actions[a].getContextMenuItem(ImDocumentMarkupPanel.this);
 				this.addNotifier(mis[a], actions[a]);
 				if (isAdvancedSelectionAction[a])
 					advancedSelectionActionCount++;
 			}
 			this.fillContextMenu(pm, mis, isAdvancedSelectionAction);
-			if (advancedSelectionActionCount > 0) {
-				final JMenuItem mmi = new JMenuItem("More ...");
+			if (advancedSelectionActionCount != 0) {
+				JMenuItem mmi = new JMenuItem("More ...");
 				mmi.setBorder(BorderFactory.createLoweredBevelBorder());
 				mmi.setBackground(new Color(240, 240, 240));
 				mmi.addActionListener(new ActionListener() {
@@ -604,8 +676,14 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		private void fillContextMenu(JPopupMenu pm, JMenuItem[] mis, boolean[] isAdvancedSelectionAction) {
 			int windowHeight = Integer.MAX_VALUE;
 			Window topWindow = DialogFactory.getTopWindow();
-			if ((topWindow != null) && (topWindow.isVisible()))
+			if ((topWindow != null) && topWindow.isVisible())
 				windowHeight = topWindow.getHeight();
+			else if (GraphicsEnvironment.isHeadless()) {}
+			else {
+				Dimension screenSize = Toolkit.getDefaultToolkit().getScreenSize();
+				if (screenSize != null)
+					windowHeight = screenSize.height;
+			}
 			pm.removeAll();
 			boolean lastWasSeparator = true;
 			int misHeight = 0;
@@ -628,7 +706,8 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 					continue;
 				
 				//	test if menu items up to next separator fit current menu, and wrap into (new) sub menu if not (unless current (sub) menu empty or only one menu item left to add)
-				if (lastWasSeparator && (isAdvancedSelectionAction == null) && (misHeight != 0) && ((i+1) < mis.length)) {
+//				if (lastWasSeparator && (isAdvancedSelectionAction == null) && (misHeight != 0) && ((i+1) < mis.length)) {
+				if (lastWasSeparator && (misHeight != 0) && ((i+1) < mis.length)) {
 					int lMisHeight = 0;
 					for (int li = i; li < mis.length; li++) {
 						if (mis[li] == null)
@@ -1192,7 +1271,8 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 * anything. If the page the word lies upon is not visible, this method 
 	 * also returns false and has no effect. Sub classes overwriting the
 	 * two-argument version of this method need not overwrite this method
-	 * separately, as it loops through to the latter.
+	 * separately, as it loops through to the latter. If another box or word
+	 * selection is already set, it is cleared.<BR/>
 	 * Sub classes overwriting this implementation, e.g. to move the selection
 	 * into the visible part of a scroll pane, should first check the result of
 	 * the super call to check if selection was successful. If this method is
@@ -1201,6 +1281,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 * <code>SwingUtilities.invokeLater()</code> to make sure it behaves as
 	 * planned and does not interfere with an existing word selection.
 	 * @param word the word to select
+	 * @return true if the selection was set successfully
 	 */
 	public boolean setWordSelection(ImWord word) {
 		return this.setWordSelection(word, word);
@@ -1213,7 +1294,8 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 * false. If either of the two argument words is null, this method also
 	 * simply returns false without doing anything. Further, if a page either
 	 * of the argument words lies on is not visible, this method returns false
-	 * without taking any action.<BR>
+	 * without taking any action. If another box or word selection is already
+	 * set, it is cleared.<BR>
 	 * Sub classes overwriting this implementation, e.g. to move the selection
 	 * into the visible part of a scroll pane, should first check the result of
 	 * the super call to check if selection was successful. If this method is
@@ -1223,20 +1305,28 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 * planned and does not interfere with an existing word selection.
 	 * @param startWord the first word of the selection to make
 	 * @param endWord the last word of the selection to make
+	 * @return true if the selection was set successfully
 	 */
 	public boolean setWordSelection(ImWord startWord, ImWord endWord) {
 		
 		//	check arguments
 		if ((startWord == null) || (endWord == null))
 			return false;
-		
-		//	check page visibility
-		if (!this.pageVisible[startWord.pageId] || !this.pageVisible[endWord.pageId])
-			return false;
+//		
+//		//	check page visibility
+//		if (!this.pageVisible[startWord.pageId] || !this.pageVisible[endWord.pageId])
+//			return false;
 		
 		//	check text stream ID
 		if (!startWord.getTextStreamId().equals(endWord.getTextStreamId()))
 			return false;
+		
+		//	ensure pages visible
+		if (!this.pageVisible[startWord.pageId] || !this.pageVisible[endWord.pageId])
+			this.setPagesVisible(Math.min(startWord.pageId, endWord.pageId),  Math.max(startWord.pageId, endWord.pageId), true);
+		
+		//	clear existing selection
+		this.cleanupSelection();
 		
 		//	swap words if necessary
 		if (0 < ImUtils.textStreamOrder.compare(startWord, endWord)) {
@@ -1255,6 +1345,75 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		
 		//	indicate success
 		return true;
+	}
+	
+	/**
+	 * Externally set the page and box selected in the document markup panel.
+	 * If the page with the argument ID is not visible, this method returns
+	 * false without taking any action. Further, if the argument bounding box
+	 * exceeds the dimensions of the page with the argument ID, this method
+	 * returns false as well. If another box or word selection is already set,
+	 * it is cleared.<BR>
+	 * Sub classes overwriting this implementation, e.g. to move the selection
+	 * into the visible part of a scroll pane, should first check the result of
+	 * the super call to check if selection was successful. If this method is
+	 * to be called from a selection action returned from
+	 * <code>getActions()</code>, the call is best made via
+	 * <code>SwingUtilities.invokeLater()</code> to make sure it behaves as
+	 * planned and does not interfere with an existing word selection.
+	 * @param pageId the ID of the page to make the selection on
+	 * @param box the box to select
+	 * @return true if the selection was set successfully
+	 * @throws IllegalStateException if another selection is already set
+	 */
+	public boolean setBoxSelection(int pageId, BoundingBox box) {
+		
+		//	check arguments
+		if (box == null)
+			return false;
+		
+		//	get page
+		ImPage page = this.document.getPage(pageId);
+		if (page == null)
+			return false;
+		
+		//	check bounds
+		if (!page.bounds.includes(box, false))
+			return false;
+//		
+//		//	check page visibility
+//		if (!this.pageVisible[pageId])
+//			return false;
+		
+		//	ensure pages visible
+		if (this.pageVisible[pageId])
+			this.setPageVisible(pageId, true);
+		
+		//	clear existing selection
+		this.cleanupSelection();
+		
+		//	make selection (managed in original page coordinates)
+		this.selectionStartPoint = new Point(box.left, box.top);
+		this.selectionEndPoint = new Point(box.right, box.bottom);
+		this.selectionClicked = ((box.getWidth() < 3) && (box.getHeight() < 3));
+		
+		//	make selection visible
+		this.repaint();
+		
+		//	indicate success
+		return true;
+	}
+	
+	/**
+	 * Clear any existing word or box selection.
+	 */
+	public void clearSelection() {
+		
+		//	clear existing selection
+		this.cleanupSelection();
+		
+		//	make selection visible
+		this.repaint();
 	}
 	
 	/**
@@ -1321,7 +1480,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 * @return the page point corresponding to the argument coordinates
 	 */
 	public PagePoint pagePointAt(int x, int y) {
-		Component pvp = getComponentAt(x, y);
+		Component pvp = this.getComponentAt(x, y);
 		if ((pvp == null) || !(pvp instanceof ImPageMarkupPanel))
 			return null;
 		ImPageMarkupPanel ipmp = ((ImPageMarkupPanel) pvp);
@@ -1432,6 +1591,21 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			this.layoutPages();
 		}
 //		else System.out.println(" ==> no need for laying out pages");
+	}
+	
+	/**
+	 * Retrieve the pages currently in this image markup panel.
+	 * @return an array holding the pages
+	 */
+	public ImPage[] getVisiblePages() {
+		ArrayList pages = new ArrayList();
+		for (int p = 0; p < this.pages.length; p++) {
+			if (this.pages[p] == null)
+				continue;
+			if (this.pageVisible[p])
+				pages.add(this.pages[p]);
+		}
+		return ((ImPage[]) pages.toArray(new ImPage[pages.size()]));
 	}
 	
 	/**
@@ -1642,7 +1816,11 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 * @param shc the color of word selections
 	 */
 	public void setSelectionHighlightColor(Color shc) {
+		if (shc.getRGB() == this.selectionHighlightColor.getRGB())
+			return;
+		Color oldShc = this.selectionHighlightColor;
 		this.selectionHighlightColor = shc;
+		this.notifyDisplayPropertyChanged("wordSelection.color", oldShc, shc);
 		this.validate();
 		this.repaint();
 	}
@@ -1660,7 +1838,11 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 * @param sbc the color for the selection box
 	 */
 	public void setSelectionBoxColor(Color sbc) {
+		if (sbc.getRGB() == this.selectionBoxColor.getRGB())
+			return;
+		Color oldSbc = this.selectionBoxColor;
 		this.selectionBoxColor = sbc;
+		this.notifyDisplayPropertyChanged("boxSelection.color", oldSbc, sbc);
 		this.validate();
 		this.repaint();
 	}
@@ -1680,8 +1862,12 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 * @param sbt the thickness of the selection box in pixels
 	 */
 	public void setSelectionBoxThickness(int sbt) {
+		if (sbt == this.selectionBoxThickness)
+			return;
+		int oldSbt = this.selectionBoxThickness;
 		this.selectionBoxThickness = sbt;
 		this.selectionBoxStroke = new BasicStroke(this.selectionBoxThickness, BasicStroke.CAP_SQUARE, BasicStroke.JOIN_MITER);;
+		this.notifyDisplayPropertyChanged("boxSelection.thickness", new Integer(oldSbt), new Integer(sbt));
 		this.validate();
 		this.repaint();
 	}
@@ -1796,10 +1982,27 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	private Color getLayoutObjectColor(String type, boolean create) {
 		Color loc = ((Color) this.layoutObjectColors.get(type));
 		if ((loc == null) && create) {
-			loc = new Color(Color.HSBtoRGB(((float) Math.random()), 0.7f, 1.0f));
+			loc = this.createLayoutObjectColor(type);
+			if (loc == null)
+				loc = new Color(Color.HSBtoRGB(((float) Math.random()), 0.7f, 1.0f));
 			this.layoutObjectColors.put(type, loc);
+			this.notifyDisplayPropertyChanged(("region." + type + ".color"), null, loc);
 		}
 		return loc;
+	}
+	
+	/**
+	 * Create a color for visualizing layout objects of a given type that has
+	 * not been assigned a color yet. If this method returns null, a color will
+	 * be created internally, using HSB with a random hue, 70% saturation, and
+	 * full brightness. This default implementation does return null and thus
+	 * delegate to the internal approach, subclasses are welcome to overwrite
+	 * it and provide their own logic.
+	 * @param type the layout object type the color is intended for
+	 * @return the color for visualizing the annotations of the argument type
+	 */
+	protected Color createLayoutObjectColor(String type) {
+		return null;
 	}
 	
 	/**
@@ -1809,7 +2012,11 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 *            argument type
 	 */
 	public void setLayoutObjectColor(String type, Color color) {
+		Color oldColor = this.getLayoutObjectColor(type);
+		if ((oldColor != null) && (oldColor.getRGB() == color.getRGB()))
+			return;
 		this.layoutObjectColors.put(type, color);
+		this.notifyDisplayPropertyChanged(("region," + type + ".color"), oldColor, color);
 		if (this.isVisible() && this.areRegionsPainted(type)) {
 			this.highlightModCount++;
 			this.validate();
@@ -1846,10 +2053,27 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	private Color getTextStreamTypeColor(String type, boolean create) {
 		Color tstc = ((Color) this.textStreamTypeColors.get(type));
 		if ((tstc == null) && create) {
-			tstc = new Color(Color.HSBtoRGB(((float) Math.random()), 0.7f, 1.0f));
+			tstc = this.createTextStreamTypeColor(type);
+			if (tstc == null)
+				tstc = new Color(Color.HSBtoRGB(((float) Math.random()), 0.7f, 1.0f));
 			this.textStreamTypeColors.put(type, tstc);
+			this.notifyDisplayPropertyChanged(("textStream." + type + ".color"), null, tstc);
 		}
 		return tstc;
+	}
+	
+	/**
+	 * Create a color for visualizing text streams of a given type that has not
+	 * been assigned a color yet. If this method returns null, a color will be
+	 * created internally, using HSB with a random hue, 70% saturation, and
+	 * full brightness. This default implementation does return null and thus
+	 * delegate to the internal approach, subclasses are welcome to overwrite
+	 * it and provide their own logic.
+	 * @param type the text stream type the color is intended for
+	 * @return the color for visualizing the annotations of the argument type
+	 */
+	protected Color createTextStreamTypeColor(String type) {
+		return null;
 	}
 	
 	/**
@@ -1860,7 +2084,11 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 *            argument type
 	 */
 	public void setTextStreamTypeColor(String type, Color color) {
+		Color oldColor = this.getTextStreamTypeColor(type);
+		if ((oldColor != null) && (oldColor.getRGB() == color.getRGB()))
+			return;
 		this.textStreamTypeColors.put(type, color);
+		this.notifyDisplayPropertyChanged(("rextStream," + type + ".color"), oldColor, color);
 		if (this.isVisible()) {
 			this.highlightModCount++;
 			this.validate();
@@ -1877,6 +2105,59 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	}
 	
 	/**
+	 * Retrieve the alpha used for drawing annotation value highlights. This
+	 * alpha value is also used for the central portion of the color selector
+	 * buttons representing annotation types in any associated view control
+	 * panel.
+	 * @return the annotation highlight alpha
+	 */
+	public int getAnnotationHighlightAlpha() {
+		return this.annotationHighlightAlpha;
+	}
+	
+	/**
+	 * Set the alpha to use for drawing annotation value highlights. This alpha
+	 * value is also used for the central portion of the color selector buttons
+	 * representing annotation types in any associated view control panel. The
+	 * argument value must be between 0 and 255, inclusive.
+	 * @param aha the annotation highlight alpha to set
+	 */
+	public void setAnnotationHighlightAlpha(int aha) {
+		if (aha == this.annotationHighlightAlpha)
+			return;
+		if (aha < 0x00)
+			throw new IllegalArgumentException("Annotation highlight alpha cannot be less than 0");
+		if (0xFF < aha)
+			throw new IllegalArgumentException("Annotation highlight alpha cannot be more than 255");
+		int oldAha = this.annotationHighlightAlpha;
+		this.annotationHighlightAlpha = aha;
+		this.notifyDisplayPropertyChanged("annot.highlightAlpha", new Integer(oldAha), new Integer(aha));
+		for (Iterator atit = this.annotationColors.keySet().iterator(); atit.hasNext();) {
+			String type = ((String) atit.next());
+			Color color = ((Color) this.annotationColors.get(type));
+			this.annotationHighlightColors.put(type, new Color(color.getRed(), color.getGreen(), color.getBlue(), this.annotationHighlightAlpha));
+			TypeControl tc = ((this.idvc == null) ? null : ((TypeControl) this.idvc.annotControls.get(type)));
+			if (tc != null)
+				tc.setColor(color);
+		}
+		if (this.isVisible())
+			this.highlightModCount++;
+		this.validate();
+		this.repaint();
+		if (this.idvc != null) {
+			for (Iterator rtit = this.idvc.regionControls.keySet().iterator(); rtit.hasNext();) {
+				String type = ((String) rtit.next());
+				TypeControl tc = ((TypeControl) this.idvc.regionControls.get(type));
+				if (tc != null)
+					tc.setColor(tc.color);
+			}
+			this.idvc.wordControl.setColor(this.getLayoutObjectColor(WORD_ANNOTATION_TYPE, true));
+			this.idvc.validate();
+			this.idvc.repaint();
+		}
+	}
+	
+	/**
 	 * Retrieve the color used for painting annotations of a specific type.
 	 * @param type the type of annotation to retrieve the color for
 	 * @return the color to use for painting the annotations of the argument
@@ -1885,13 +2166,37 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	public Color getAnnotationColor(String type) {
 		return this.getAnnotationColor(type, false);
 	}
-	private Color getAnnotationColor(String type, boolean create) {
+	Color getAnnotationColor(String type, boolean create) {
 		Color ac = ((Color) this.annotationColors.get(type));
 		if ((ac == null) && create) {
-			ac = new Color(Color.HSBtoRGB(((float) Math.random()), 0.7f, 1.0f));
+			ac = this.createAnnotationColor(type);
+			if (ac == null)
+				ac = new Color(Color.HSBtoRGB(((float) Math.random()), 0.7f, 1.0f));
 			this.annotationColors.put(type, ac);
+			this.annotationHighlightColors.put(type, new Color(ac.getRed(), ac.getGreen(), ac.getBlue(), this.annotationHighlightAlpha));
+			this.notifyDisplayPropertyChanged(("annot." + type + ".color"), null, ac);
 		}
 		return ac;
+	}
+	Color getAnnotationHighlightColor(String type, boolean create) {
+		Color ahc = ((Color) this.annotationHighlightColors.get(type));
+		if ((ahc == null) && create)
+			this.getAnnotationColor(type, create);
+		return ((Color) this.annotationHighlightColors.get(type));
+	}
+	
+	/**
+	 * Create a color for visualizing annotations of a given type that has not
+	 * been assigned a color yet. If this method returns null, a color will be
+	 * created internally, using HSB with a random hue, 70% saturation, and
+	 * full brightness. This default implementation does return null and thus
+	 * delegate to the internal approach, subclasses are welcome to overwrite
+	 * it and provide their own logic.
+	 * @param type the annotation type the color is intended for
+	 * @return the color for visualizing the annotations of the argument type
+	 */
+	protected Color createAnnotationColor(String type) {
+		return null;
 	}
 	
 	/**
@@ -1901,7 +2206,12 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 *            argument type
 	 */
 	public void setAnnotationColor(String type, Color color) {
+		Color oldColor = this.getAnnotationColor(type);
+		if ((oldColor != null) && (oldColor.getRGB() == color.getRGB()))
+			return;
 		this.annotationColors.put(type, color);
+		this.annotationHighlightColors.put(type, new Color(color.getRed(), color.getGreen(), color.getBlue(), this.annotationHighlightAlpha));
+		this.notifyDisplayPropertyChanged(("annot," + type + ".color"), oldColor, color);
 		if (this.isVisible() && this.areAnnotationsPainted(type)) {
 			this.highlightModCount++;
 			this.validate();
@@ -1931,7 +2241,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	public void setRegionsPainted(String type, boolean paint) {
 		this.setRegionsPainted(type, paint, true);
 	}
-	private void setRegionsPainted(String type, boolean paint, boolean isApiCall) {
+	void setRegionsPainted(String type, boolean paint, boolean isApiCall) {
 		boolean changed;
 		if (paint)
 			changed = this.paintedLayoutObjectTypes.add(type);
@@ -1965,7 +2275,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	public void setAnnotationsPainted(String type, boolean paint) {
 		this.setAnnotationsPainted(type, paint, true);
 	}
-	private void setAnnotationsPainted(String type, boolean paint, boolean isApiCall) {
+	void setAnnotationsPainted(String type, boolean paint, boolean isApiCall) {
 		boolean changed;
 		if (paint)
 			changed = this.paintedAnnotationTypes.add(type);
@@ -2023,7 +2333,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	public void setTextStreamsPainted(boolean textStreamsPainted) {
 		this.setTextStreamsPainted(textStreamsPainted, true);
 	}
-	private void setTextStreamsPainted(boolean textStreamsPainted, boolean isApiCall) {
+	void setTextStreamsPainted(boolean textStreamsPainted, boolean isApiCall) {
 		this.textStreamsPainted = textStreamsPainted;
 		if (this.isVisible()) {
 			this.highlightModCount++;
@@ -2060,7 +2370,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	public void setTextStringPercentage(int textStringPercentage) {
 		this.setTextStringPercentage(textStringPercentage, true);
 	}
-	private void setTextStringPercentage(int textStringPercentage, boolean isApiCall) {
+	void setTextStringPercentage(int textStringPercentage, boolean isApiCall) {
 		textStringPercentage = Math.max(0, Math.min(100, textStringPercentage));
 		if (this.textStringPercentage == textStringPercentage)
 			return;
@@ -2167,6 +2477,251 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		if (this.isVisible()) {
 			this.validate();
 			this.repaint();
+		}
+	}
+	
+	/**
+	 * Add a listener to receive notification about changes to document display
+	 * properties like annotation colors or the fonts used for rendering the
+	 * document. This is not to be confused with the property change listeners
+	 * registered via the <code>addPropertyChangeListener()</code> method to
+	 * listen for changes to properties of a specific graphics component.
+	 * @param pcl the property change listener to add
+	 */
+	public void addDisplayPropertyChangeListener(PropertyChangeListener pcl) {
+		if (pcl == null)
+			return;
+		if (this.displayPropertyListeners == null)
+			this.displayPropertyListeners = new ArrayList();
+		if (!this.displayPropertyListeners.contains(pcl))
+			this.displayPropertyListeners.add(pcl);
+	}
+	
+	/**
+	 * Remove a listener for changes to document display properties like
+	 * annotation colors or the fonts used for rendering the document. This is
+	 * not to be confused with the property change listeners registered via the
+	 * <code>addPropertyChangeListener()</code> method to listen for changes to
+	 * properties of a specific graphics component.
+	 * @param pcl the property change listener to remove
+	 */
+	public void removeDisplayPropertyListener(PropertyChangeListener pcl) {
+		if (this.displayPropertyListeners == null)
+			return;
+		this.displayPropertyListeners.remove(pcl);
+		if (this.displayPropertyListeners.isEmpty())
+			this.displayPropertyListeners = null;
+	}
+	
+	private ArrayList displayPropertyListeners = null;
+	
+	private void notifyDisplayPropertyChanged(String propName, Object oldValue, Object newValue) {
+		if (this.displayPropertyListeners == null)
+			return;
+		PropertyChangeEvent pce = new PropertyChangeEvent(this, propName, oldValue, newValue);
+		for (int l = 0; l < this.displayPropertyListeners.size(); l++) try {
+			((PropertyChangeListener) this.displayPropertyListeners.get(l)).propertyChange(pce);
+		}
+		catch (RuntimeException re) {
+			System.out.println("Error notifying about property '" + propName + "' changing from " + oldValue + " to " + newValue + ": " + re.getMessage());
+			re.printStackTrace(System.out);
+		}
+	}
+	
+	/**
+	 * Generically retrieve the default value of a display property by its
+	 * name, be it a font or a color. There is no default values for the
+	 * display mode or colors of any types of annotations. If the argument
+	 * name does not correspond to an actual display property, this method
+	 * returns null.
+	 * @param name the name of the display property to retrieve
+	 * @return the default value of the display propert with the argument name
+	 */
+	public static Object getDisplayPropertyDefault(String name) {
+		if (name == null)
+			return null;
+		else if ("wordSelection.color".equals(name))
+			return defaultSelectionHighlightColor;
+		else if ("boxSelection.color".equals(name))
+			return defaultSelectionBoxColor;
+		else if ("boxSelection.thickness".equals(name))
+			return new Integer(defaultSelectionBoxThickness);
+		else if ("annot.highlightAlpha".equals(name))
+			return new Integer(defaultAnnotationHighlightAlpha);
+		else return null;
+	}
+	
+	/**
+	 * Check whether or not the markup panel generally supports a generic
+	 * display property with a given name, independent of whether or not that
+	 * property specifically applies to a given instance.The highlight color
+	 * or display mode of any given type of annotation, for instance, can only
+	 * ever have any actual effect if the document showing in a given markup
+	 * panel actually contains annotations of that type.
+	 * @param name the name of the display property to retrieve
+	 * @return the current value of the display propert with the argument name
+	 */
+	public static boolean supportsDisplayProperty(String name) {
+		if (name == null)
+			return false;
+		else if ("wordSelection.color".equals(name))
+			return true;
+		else if ("boxSelection.color".equals(name))
+			return true;
+		else if ("boxSelection.thickness".equals(name))
+			return true;
+		else if ("annot.highlightAlpha".equals(name))
+			return true;
+		else if (name.startsWith("annot.")) {
+			name = name.substring("annot.".length());
+			if (name.endsWith(".color"))
+				return true;
+			//	TODO anything else ??? end cap thickness ???
+			else return false;
+		}
+		else if (name.startsWith("region.")) {
+			name = name.substring("region.".length());
+			if (name.endsWith(".color"))
+				return true;
+			//	TODO anything else ??? outline thickness ???
+			else return false;
+		}
+		else if (name.startsWith("textStream.")) {
+			name = name.substring("textStream.".length());
+			if (name.endsWith(".color"))
+				return true;
+			//	TODO anything else ??? outline thickness ??? paragraph end thickness ??? connector thickness ???
+			else return false;
+		}
+		else return false;
+	}
+	
+	/**
+	 * Generically retrieve a display property by its name, be it a font, or a
+	 * color, or the current display mode of some type of annotation. In the
+	 * latter case, however, the returned vylue for non-showing annotations
+	 * will be null rather than the invisible mode object. If the argument name
+	 * does not correspond to an actual display property, this method returns
+	 * null.
+	 * @param name the name of the display property to retrieve
+	 * @return the current value of the display property with the argument name
+	 */
+	public Object getDisplayProperty(String name) {
+		if (name == null)
+			return null;
+		else if ("wordSelection.color".equals(name))
+			return this.selectionHighlightColor;
+		else if ("boxSelection.color".equals(name))
+			return this.selectionBoxColor;
+		else if ("boxSelection.thickness".equals(name))
+			return new Integer(this.selectionBoxThickness);
+		else if ("annot.highlightAlpha".equals(name))
+			return new Integer(this.annotationHighlightAlpha);
+		else if (name.startsWith("annot.")) {
+			String annotType = name.substring("annot.".length());
+			if (annotType.endsWith(".color")) {
+				annotType = annotType.substring(0, (annotType.length() - ".color".length()));
+				return this.getAnnotationColor(annotType);
+			}
+			else return null;
+		}
+		else if (name.startsWith("region.")) {
+			String regionType = name.substring("region.".length());
+			if (regionType.endsWith(".color")) {
+				regionType = regionType.substring(0, (regionType.length() - ".color".length()));
+				return this.getLayoutObjectColor(regionType);
+			}
+			else return null;
+		}
+		else if (name.startsWith("textStream.")) {
+			String textStreamType = name.substring("textStream.".length());
+			if (textStreamType.endsWith(".color")) {
+				textStreamType = textStreamType.substring(0, (textStreamType.length() - ".color".length()));
+				return this.getTextStreamTypeColor(textStreamType);
+			}
+			else return null;
+		}
+		else return null;
+	}
+	
+	/**
+	 * Generically set a display property by its name. If the argument object
+	 * is of the wrong type for the specified display property, this method
+	 * throws an illegal argument exception. If the argument name does not
+	 * correspond to an actual display property, this method does nothing.
+	 * Setting a display property to null resets it to the built-in default, if
+	 * any exists, and does nothing otherwise, except setting the display mode
+	 * for a given annotation type to null does the same as setting it to the
+	 * invisible mode object.
+	 * @param name the name of the display property to set
+	 * @param value the value to set the display property to
+	 */
+	public void setDisplayProperty(String name, Object value) {
+		if (name == null)
+			return;
+		else if ("wordSelection.color".equals(name)) {
+			if (value == null)
+				value = defaultSelectionHighlightColor;
+			if (value instanceof Color)
+				this.setSelectionHighlightColor((Color) value);
+			else throw new IllegalArgumentException("Cannot convert " + value.getClass().getName() + " to color");
+		}
+		else if ("boxSelection.color".equals(name)) {
+			if (value == null)
+				value = defaultSelectionBoxColor;
+			if (value instanceof Color)
+				this.setSelectionBoxColor((Color) value);
+			else throw new IllegalArgumentException("Cannot convert " + value.getClass().getName() + " to color");
+		}
+		else if ("boxSelection.thickness".equals(name)) {
+			if (value == null)
+				value = Integer.valueOf(defaultSelectionBoxThickness);
+			if (value instanceof Number)
+				this.setSelectionBoxThickness(((Number) value).intValue());
+			else throw new IllegalArgumentException("Cannot convert " + value.getClass().getName() + " to int");
+		}
+		else if ("annot.highlightAlpha".equals(name)) {
+			if (value == null)
+				value = Integer.valueOf(defaultAnnotationHighlightAlpha);
+			if (value instanceof Number)
+				this.setAnnotationHighlightAlpha(((Number) value).intValue());
+			else throw new IllegalArgumentException("Cannot convert " + value.getClass().getName() + " to int");
+		}
+		else if (name.startsWith("annot.")) {
+			String annotType = name.substring("annot.".length());
+			if (annotType.endsWith(".color")) {
+				if (value == null)
+					return; // no defaults for annotation colors
+				if (value instanceof Color) {
+					annotType = annotType.substring(0, (annotType.length() - ".color".length()));
+					this.setAnnotationColor(annotType, ((Color) value));
+				}
+				else throw new IllegalArgumentException("Cannot convert " + value.getClass().getName() + " to color");
+			}
+		}
+		else if (name.startsWith("region.")) {
+			String regionType = name.substring("region.".length());
+			if (regionType.endsWith(".color")) {
+				if (value == null)
+					return; // no defaults for region colors
+				if (value instanceof Color) {
+					regionType = regionType.substring(0, (regionType.length() - ".color".length()));
+					this.setLayoutObjectColor(regionType, ((Color) value));
+				}
+				else throw new IllegalArgumentException("Cannot convert " + value.getClass().getName() + " to color");
+			}
+		}
+		else if (name.startsWith("textStream.")) {
+			String textStreamType = name.substring("textStream.".length());
+			if (textStreamType.endsWith(".color")) {
+				if (value == null)
+					return; // no resetting defaults for text stream colors
+				if (value instanceof Color) {
+					textStreamType = textStreamType.substring(0, (textStreamType.length() - ".color".length()));
+					this.setTextStreamTypeColor(textStreamType, ((Color) value));
+				}
+				else throw new IllegalArgumentException("Cannot convert " + value.getClass().getName() + " to color");
+			}
 		}
 	}
 	
@@ -2819,6 +3374,9 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		 * @param pm a progress monitor observing processing progress
 		 */
 		public abstract void process(ImDocument doc, ImAnnotation annot, ImDocumentMarkupPanel idmp, ProgressMonitor pm);
+		
+		//	TODO add isApplicableTo(ImDocumentMarkupPanel) method to indicate whether or not the IMT can work on a given document
+		//	TODO use this in GGI UI to gray out items in Edit and Tools menus if document of wrong type selected (e.g. font editing on scanned document, or OCR adjustment on born-digital one)
 	}
 	
 	/**
@@ -3036,7 +3594,9 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			}
 			else if (attributed instanceof ImAnnotation) {
 				type = ((ImAnnotation) attributed).getType();
-				value = getAnnotationValue((ImAnnotation) attributed);
+//				value = getAnnotationValue((ImAnnotation) attributed);
+//				value = ImUtils.getString(((ImAnnotation) attributed).getFirstWord(), ((ImAnnotation) attributed).getLastWord(), 40, true);
+				value = this.getAttributeEditorAnnotationValue((ImAnnotation) attributed);
 			}
 			else if (attributed instanceof ImRegion) {
 				type = ((ImRegion) attributed).getType();
@@ -3046,51 +3606,63 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		}
 	}
 	
-	private static String getAnnotationValue(ImAnnotation annot) {
-		
-		//	count out annotation length
-		int annotChars = 0;
-		for (ImWord imw = annot.getFirstWord(); imw != null; imw = imw.getNextWord()) {
-			annotChars += imw.getString().length();
-			if (imw == annot.getLastWord())
-				break;
-		}
-		
-		//	this one's short enough
-		if (annotChars <= 40)
-			return ImUtils.getString(annot.getFirstWord(), annot.getLastWord(), true);
-		
-		//	get end of head
-		ImWord headEnd = annot.getFirstWord();
-		int headChars = 0;
-		for (; headEnd != null; headEnd = headEnd.getNextWord()) {
-			headChars += headEnd.getString().length();
-			if (headChars >= 20)
-				break;
-			if (headEnd == annot.getLastWord())
-				break;
-		}
-		
-		//	get start of tail
-		ImWord tailStart = annot.getLastWord();
-		int tailChars = 0;
-		for (; tailStart != null; tailStart = tailStart.getPreviousWord()) {
-			tailChars += tailStart.getString().length();
-			if (tailChars >= 20)
-				break;
-			if (tailStart == annot.getFirstWord())
-				break;
-			if (tailStart == headEnd)
-				break;
-		}
-		
-		//	met in the middle, use whole string
-		if ((headEnd == tailStart) || (headEnd.getNextWord() == tailStart) || (headEnd.getNextWord() == tailStart.getPreviousWord()))
-			return ImUtils.getString(annot.getFirstWord(), annot.getLastWord(), true);
-		
-		//	give head and tail only if annotation too long
-		else return (ImUtils.getString(annot.getFirstWord(), headEnd, true) + " ... " + ImUtils.getString(tailStart, annot.getLastWord(), true));
+	/**
+	 * Create the string to represent an annotation in an attribute editing
+	 * dialog. This default implementation restricts the string to roughly 40
+	 * character at most, taken from the start and the end of the annotation.
+	 * Subclasses are welcome to overwrite it with a different behavior.
+	 * @param annot the annotation to create the display string for
+	 * @return the display string for the argument annotation
+	 */
+	protected String getAttributeEditorAnnotationValue(ImAnnotation annot) {
+		return ImUtils.getString(annot.getFirstWord(), annot.getLastWord(), 40, true);
 	}
+//	
+//	private static String getAnnotationValue(ImAnnotation annot) {
+//		
+//		//	count out annotation length
+//		int annotChars = 0;
+//		for (ImWord imw = annot.getFirstWord(); imw != null; imw = imw.getNextWord()) {
+//			annotChars += imw.getString().length();
+//			if (imw == annot.getLastWord())
+//				break;
+//		}
+//		
+//		//	this one's short enough
+//		if (annotChars <= 40)
+//			return ImUtils.getString(annot.getFirstWord(), annot.getLastWord(), true);
+//		
+//		//	get end of head
+//		ImWord headEnd = annot.getFirstWord();
+//		int headChars = 0;
+//		for (; headEnd != null; headEnd = headEnd.getNextWord()) {
+//			headChars += headEnd.getString().length();
+//			if (headChars >= 20)
+//				break;
+//			if (headEnd == annot.getLastWord())
+//				break;
+//		}
+//		
+//		//	get start of tail
+//		ImWord tailStart = annot.getLastWord();
+//		int tailChars = 0;
+//		for (; tailStart != null; tailStart = tailStart.getPreviousWord()) {
+//			tailChars += tailStart.getString().length();
+//			if (tailChars >= 20)
+//				break;
+//			if (tailStart == annot.getFirstWord())
+//				break;
+//			if (tailStart == headEnd)
+//				break;
+//		}
+//		
+//		//	met in the middle, use whole string
+//		if ((headEnd == tailStart) || (headEnd.getNextWord() == tailStart) || (headEnd.getNextWord() == tailStart.getPreviousWord()))
+//			return ImUtils.getString(annot.getFirstWord(), annot.getLastWord(), true);
+//		
+//		//	give head and tail only if annotation too long
+//		else return (ImUtils.getString(annot.getFirstWord(), headEnd, true) + " ... " + ImUtils.getString(tailStart, annot.getLastWord(), true));
+//	}
 	
 	private Attributed editAttributes(Attributed attributed, Attributed[] context, final String type, String value) {
 		final AttributeEditor aePanel = new AttributeEditor(attributed, type, value, context);
@@ -3158,12 +3730,14 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				previous.setPreferredSize(new Dimension(80, 21));
 				previous.addActionListener(new ActionListener() {
 					public void actionPerformed(ActionEvent ae) {
-						beginAtomicAction("Edit " + type + " Attributes");
+						if (handleAtomicAction)
+							beginAtomicAction("Edit " + type + " Attributes");
 						aePanel.writeChanges();
 						attributeEditorDialogSize = aeDialog.getSize();
 						attributeEditorDialogLocation = aeDialog.getLocation(attributeEditorDialogLocation);
 						aeDialog.dispose();
-						endAtomicAction();
+						if (handleAtomicAction)
+							endAtomicAction();
 						nextToOpen[0] = fPreviousAttributed;
 					}
 				});
@@ -3176,12 +3750,14 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				next.setPreferredSize(new Dimension(80, 21));
 				next.addActionListener(new ActionListener() {
 					public void actionPerformed(ActionEvent ae) {
-						beginAtomicAction("Edit " + type + " Attributes");
+						if (handleAtomicAction)
+							beginAtomicAction("Edit " + type + " Attributes");
 						aePanel.writeChanges();
 						attributeEditorDialogSize = aeDialog.getSize();
 						attributeEditorDialogLocation = aeDialog.getLocation(attributeEditorDialogLocation);
 						aeDialog.dispose();
-						endAtomicAction();
+						if (handleAtomicAction)
+							endAtomicAction();
 						nextToOpen[0] = fNextAttributed;
 					}
 				});
@@ -3212,9 +3788,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	private static Dimension attributeEditorDialogSize = new Dimension(400, 300);
 	private static Point attributeEditorDialogLocation = null;
 	
-	/**
-	 * @param args
-	 */
+	//	FOR TEST PURPOSES ONLY !!!
 	public static void main(String[] args) throws Exception {
 		try {
 			UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
@@ -3278,12 +3852,12 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	
 	private static class IdmpViewport extends JViewport implements TwoClickActionMessenger {
 		private static Color halfTransparentRed = new Color(Color.red.getRed(), Color.red.getGreen(), Color.red.getBlue(), 128);
-		private ImDocumentMarkupPanel idvp;
+		private ImDocumentMarkupPanel idmp;
 		private String tcaMessage = null;
-		IdmpViewport(ImDocumentMarkupPanel idvp) {
-			this.idvp = idvp;
-			this.idvp.setTwoClickActionMessenger(this);
-			this.setView(this.idvp);
+		IdmpViewport(ImDocumentMarkupPanel idmp) {
+			this.idmp = idmp;
+			this.idmp.setTwoClickActionMessenger(this);
+			this.setView(this.idmp);
 			this.setOpaque(false);
 		}
 		public void twoClickActionChanged(TwoClickSelectionAction tcsa) {
@@ -3551,6 +4125,14 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 //		private WeakReference scaledPageImageWeak = null; // ==> component listener doesn't seem to work properly, so no point in using this ...
 		private BufferedImage scaledPageImage = null;
 		private int scaledPageImageDpi = -1;
+		/*
+TODO Re-consider using weak references for page images in IM document markup panels
+- might help in low-memory situations, if at cost of possibly reloading page image later
+- maybe add GC probe and (obviously weak) instance list to IM document markup panel ...
+- ... and move page images to weak references only if not used in 2-3 between-QC intervals
+  ==> might in fact do similar thing with page image replacement before-values in GGI UNDO history ...
+  ==> ... moving said images to disk based cache on weakening reference
+		 */
 		
 		/* (non-Javadoc)
 		 * @see javax.swing.JComponent#getPreferredSize()
@@ -3623,7 +4205,8 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 					int imwBaseline = -1;
 					if (!documentBornDigital) {
 						if ((imwBaseline == -1) && imw.hasAttribute(BASELINE_ATTRIBUTE))
-							imwBaseline = Integer.parseInt((String) imw.getAttribute(BASELINE_ATTRIBUTE, "-1"));
+//							imwBaseline = Integer.parseInt((String) imw.getAttribute(BASELINE_ATTRIBUTE, "-1"));
+							imwBaseline = imw.getBaseline();
 						if ((imwBaseline == -1) && (line != null) && line.hasAttribute(BASELINE_ATTRIBUTE))
 							imwBaseline = Integer.parseInt((String) line.getAttribute(BASELINE_ATTRIBUTE, "-1"));
 					}
@@ -3848,8 +4431,9 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				ImWord lw = annots[a].getLastWord();
 				
 				//	create transparent color
-				Color annotColor = getAnnotationColor(annots[a].getType(), true);
-				Color annotHighlightColor = new Color(annotColor.getRed(), annotColor.getGreen(), annotColor.getBlue(), 64);
+//				Color annotColor = getAnnotationColor(annots[a].getType(), true);
+//				Color annotHighlightColor = new Color(annotColor.getRed(), annotColor.getGreen(), annotColor.getBlue(), 64);
+				Color annotHighlightColor = getAnnotationHighlightColor(annots[a].getType(), true);
 				
 				//	paint word highlights
 				for (ImWord imw = fw; imw != null; imw = ((imw == lw) ? null : imw.getNextWord())) {
@@ -4532,8 +5116,6 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 * atomic action has been finished.
 	 */
 	public void validateControlPanel() {
-//		if (this.idvc != null)
-//			this.idvc.updateControls();
 		if (this.idvc == null)
 			return;
 		if (this.validIdvcDocModCount == this.idvcDocModCount)
@@ -4563,20 +5145,20 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 	 * @author sautter
 	 */
 	public class ImDocumentViewControl extends JPanel {
-		private ImDocumentMarkupPanel idmp;
+		final ImDocumentMarkupPanel idmp;
 		private JPanel controlPanel = new JPanel(new GridBagLayout(), true);
 		private JScrollPane controlPanelBox;
-		private WordControl wordControl;
+		final WordControl wordControl;
 		private JLabel regionLabel = new JLabel("Regions, Blocks, etc.", JLabel.CENTER);
 		private JButton showRegionsButton = new JButton("Show All");
 		private JButton hideRegionsButton = new JButton("Hide All");
 		private JPanel regionButtons = new JPanel(new GridLayout(1, 2), true);
-		private TreeMap regionControls = new TreeMap(String.CASE_INSENSITIVE_ORDER);
+		final TreeMap regionControls = new TreeMap(String.CASE_INSENSITIVE_ORDER);
 		private JLabel annotLabel = new JLabel("Annotations", JLabel.CENTER);
 		private JButton showAnnotsButton = new JButton("Show All");
 		private JButton hideAnnotsButton = new JButton("Hide All");
 		private JPanel annotButtons = new JPanel(new GridLayout(1, 2), true);
-		private TreeMap annotControls = new TreeMap(String.CASE_INSENSITIVE_ORDER);
+		final TreeMap annotControls = new TreeMap(String.CASE_INSENSITIVE_ORDER);
 		
 		ImDocumentViewControl(ImDocumentMarkupPanel idmp) {
 			super(new BorderLayout(), true);
@@ -4752,7 +5334,9 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			this.controlPanel.add(this.wordControl.label, gbc.clone());
 			gbc.gridy++;
 			
-			if (!idmp.documentBornDigital) {
+//			if (!idmp.documentBornDigital) {
+			boolean showTextStringPercentag = ((this.idmp.documentTextOrigin == TEXT_ORIGIN_OCR) || (this.idmp.documentTextOrigin == TEXT_ORIGIN_DIGITIZED_OCR));
+			if (showTextStringPercentag) {
 				gbc.gridwidth = 2;
 				gbc.gridx = 0;
 				gbc.weightx = 1;
@@ -4830,13 +5414,33 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			String type;
 			Color color;
 			JCheckBox paint = new JCheckBox();
-			JButton label = new JButton();
+			JButton label = new JButton() {
+				public void paint(Graphics gr) {
+					Color preColor = gr.getColor();
+					
+					//	paint background (need to be non-opaque and then draw background ourselves to facilitate mixing colors)
+					Dimension size = this.getSize();
+					gr.setColor(Color.WHITE);
+					gr.fillRect(0, 0, size.width, size.height);
+					gr.setColor(this.getBackground());
+					gr.fillRect(0, 0, size.width, size.height);
+					
+					//	paint text
+					gr.setColor(preColor);
+					super.paint(gr);
+				}
+				public void setBackground(Color bg) {
+//					super.setBackground(new Color(bg.getRed(), bg.getGreen(), bg.getBlue(), 0x40));
+					super.setBackground(new Color(bg.getRed(), bg.getGreen(), bg.getBlue(), idmp.getAnnotationHighlightAlpha()));
+				}
+			};
 			TypeControl(String type, boolean paint, Color color) {
 				this.type = type;
 				this.color = color;
 				this.label.setText(type);
-				this.label.setOpaque(true);
-				this.label.setBorder(BorderFactory.createLineBorder(this.label.getBackground(), 2));
+//				this.label.setOpaque(true);
+//				this.label.setBorder(BorderFactory.createLineBorder(this.label.getBackground(), 2));
+				this.label.setBorder(BorderFactory.createLineBorder(this.color, 2));
 				this.label.setBackground(this.color);
 				this.label.addActionListener(new ActionListener() {
 					public void actionPerformed(ActionEvent ae) {
@@ -4844,6 +5448,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 						if (color != null) {
 							TypeControl.this.color = color;
 							TypeControl.this.label.setBackground(color);
+							TypeControl.this.label.setBorder(BorderFactory.createLineBorder(color, 2));
 							TypeControl.this.colorChanged(color);
 						}
 					}
@@ -4859,19 +5464,42 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			void setColor(Color color) {
 				this.color = color;
 				this.label.setBackground(color);
+				this.label.setBorder(BorderFactory.createLineBorder(this.color, 2));
 			}
 			abstract void paintChanged(boolean paint);
 			abstract void colorChanged(Color color);
 		}
 		class WordControl {
 			JCheckBox textStreamsPainted = new JCheckBox();
-			JButton label = new JButton();
+			JButton label = new JButton() {
+				public void paint(Graphics gr) {
+					Color preColor = gr.getColor();
+					
+					//	paint background (need to be non-opaque and then draw background ourselves to facilitate mixing colors)
+					Dimension size = this.getSize();
+					gr.setColor(Color.WHITE);
+					gr.fillRect(0, 0, size.width, size.height);
+					gr.setColor(this.getBackground());
+					gr.fillRect(0, 0, size.width, size.height);
+					
+					//	paint text
+					gr.setColor(preColor);
+					super.paint(gr);
+				}
+				public void setBackground(Color bg) {
+//					super.setBackground(new Color(bg.getRed(), bg.getGreen(), bg.getBlue(), 0x40));
+					super.setBackground(new Color(bg.getRed(), bg.getGreen(), bg.getBlue(), idmp.getAnnotationHighlightAlpha()));
+				}
+			};
 			JSlider textStringPercentage = new JSlider(0, 100);
 			WordControl() {
 				this.label.setText(WORD_ANNOTATION_TYPE);
-				this.label.setOpaque(true);
-				this.label.setBorder(BorderFactory.createLineBorder(this.label.getBackground(), 2));
-				this.label.setBackground(idmp.getLayoutObjectColor(WORD_ANNOTATION_TYPE, true));
+//				this.label.setOpaque(true);
+//				this.label.setBorder(BorderFactory.createLineBorder(this.label.getBackground(), 2));
+//				this.label.setBackground(idmp.getLayoutObjectColor(WORD_ANNOTATION_TYPE, true));
+				Color wordColor = idmp.getLayoutObjectColor(WORD_ANNOTATION_TYPE, true);
+				this.label.setBackground(wordColor);
+				this.label.setBorder(BorderFactory.createLineBorder(wordColor, 2));
 				this.label.addActionListener(new ActionListener() {
 					public void actionPerformed(ActionEvent ae) {
 						editColors();
@@ -4904,6 +5532,7 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			}
 			void setColor(Color color) {
 				this.label.setBackground(color);
+				this.label.setBorder(BorderFactory.createLineBorder(color, 2));
 			}
 			void editColors() {
 				final JDialog ecd = DialogFactory.produceDialog("Edit Word and Text Stream Colors", true);
@@ -5121,18 +5750,6 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 		 */
 		public abstract boolean isActive();
 		
-//		/**
-//		 * Indicate whether or not the shapes belonging to this display extension
-//		 * graphics should have their filling (if any) rendered on top of the
-//		 * document text. This default implementation returns false, indicating
-//		 * that document text should be on top of any filling. Sub classes may
-//		 * overwrite this method as needed, but should make sure to not completely
-//		 * obfuscate the document text, e.g. by using a transparent fill color.
-//		 * @return true if shape fillings should be rendered over document text
-//		 */
-//		public boolean fillOverText() {
-//			return false;
-//		}
 		/**
 		 * Indicate when the shapes belonging to this display extension
 		 * graphics should have their filling (if any) rendered. This default
@@ -5148,19 +5765,6 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			return ORDER_BEFORE_PAGE_OBJECTS;
 		}
 		
-//		/**
-//		 * Indicate whether or not the shapes belonging to this display extension
-//		 * graphics should have their outlines (if any) rendered on top of the
-//		 * document text. This default implementation returns true, indicating
-//		 * that the outlines should be rendered on top of any document text. Sub
-//		 * classes may overwrite this method as needed, but should make sure to
-//		 * not have the document text completely obfuscate the outline, e.g. by
-//		 * using a very bright line color or broad line stroke.
-//		 * @return true if shape outlines should be rendered over document text
-//		 */
-//		public boolean outlineOverText() {
-//			return true;
-//		}
 		/**
 		 * Indicate when the shapes belonging to this display extension 
 		 * graphics should have their outlines (if any) rendered. This default
@@ -5548,17 +6152,36 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 			});
 			return mi;
 		}
+		
+		JMenuItem getContextMenuItem(ImDocumentMarkupPanel invoker) {
+			if (this.contextMenuItem == null)
+				this.contextMenuItem = invoker.getContextMenuItemFor(this);
+			return this.contextMenuItem;
+		}
+		JMenuItem contextMenuItem = null;
+	}
+	
+	/**
+	 * Create a context menu item for a selection action. This default implementation
+	 * simply calls <code>getMenuItem()</code> on the argument selection action. Sub
+	 * classes are welcome to overwrite this method to add furether implementation
+	 * specific operations.
+	 * @param action the selection action to obtain the mnu item for
+	 * @return the menu item for the argument selection action
+	 */
+	protected JMenuItem getContextMenuItemFor(SelectionAction action) {
+		return action.getMenuItem(this);
 	}
 	
 	/**
 	 * Selection action to execute straight away for a plain click on an Image
 	 * Markup layout object, i.e., without intermediate display of a context
 	 * menu. Click actions provide a means of injecting default behavior on
-	 * plain clicks, i.e., selections that do not involve maouse movement in
+	 * plain clicks, i.e., selections that do not involve mouse movement in
 	 * between pressing and releasing the mouse button. If multiple click
 	 * actions are available for a single click, they are consulted in order of
 	 * descending priority, stopping soon as the first returns true from it
-	 * <code>handleClick()</code> method. No further aelection action come to
+	 * <code>handleClick()</code> method. No further selection action come to
 	 * bear after that. If no click action handles a click, normal selection
 	 * actions will a context menu as usual.
 	 * 
@@ -5650,16 +6273,16 @@ public class ImDocumentMarkupPanel extends JPanel implements ImagingConstants {
 				invoker.twoClickActionMessenger.twoClickActionChanged(this);
 			return false;
 		}
-		
-		/**
-		 * Sub classes overwriting this method to return something else but a
-		 * single menu item have to make sure to call the <code>performAction()</code>
-		 * method, as the latter registers the two-click action as pending
-		 * @see de.uka.ipd.idaho.im.util.ImPageMarkupPanel.SelectionAction#getMenuItem(ImDocumentMarkupPanel)
-		 */
-		public JMenuItem getMenuItem(ImDocumentMarkupPanel invoker) {
-			return super.getMenuItem(invoker);
-		}
+//		
+//		/**
+//		 * Sub classes overwriting this method to return something else but a
+//		 * single menu item have to make sure to call the <code>performAction()</code>
+//		 * method, as the latter registers the two-click action as pending
+//		 * @see de.uka.ipd.idaho.im.util.ImPageMarkupPanel.SelectionAction#getMenuItem(ImDocumentMarkupPanel)
+//		 */
+//		public JMenuItem getMenuItem(ImDocumentMarkupPanel invoker) {
+//			return super.getMenuItem(invoker);
+//		}
 //		
 //		/**
 //		 * Retrieve the word this two-click action was created upon, aka the

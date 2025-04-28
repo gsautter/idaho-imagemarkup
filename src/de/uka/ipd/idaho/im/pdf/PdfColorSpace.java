@@ -112,7 +112,7 @@ abstract class PdfColorSpace {
 		csObj = PdfParser.dereference(csObj, objects);
 		if (csObj instanceof List) {
 			List csData = ((List) csObj);
-			PdfParser.dereferenceObjects(csData, objects);
+			PdfParser.dereferenceObjects(csData, objects, null);
 			if (csData.size() < 1)
 				throw new RuntimeException("Invalid empty Color Space data.");
 			String csType = csData.get(0).toString();
@@ -178,6 +178,12 @@ abstract class PdfColorSpace {
 					else throw new RuntimeException("Invalid ICCBased Color Space component count: " + n);
 				}
 				else throw new RuntimeException("Invalid ICCBased Color Space content: " + csContentObj);
+			}
+			else if ("Pattern".equals(csType) && (csData.size() > 1)) {
+				PdfColorSpace bcs = getColorSpace(csData.get(1).toString());
+				if (bcs == null)
+					throw new RuntimeException("Need to implement Color Space type '" + csData.get(1).toString() + "'.");
+				else return new PatternColorSpace(bcs);
 			}
 			else {
 				PdfColorSpace cs = getColorSpace(csType);
@@ -339,11 +345,20 @@ abstract class PdfColorSpace {
 		}
 	};
 	
-	private static PdfColorSpace pattern = new PdfColorSpace("Pattern", 1, true) {
-		Color decodeColor(LinkedList stack, String indent) {
-			throw new RuntimeException("Need to get pattern from page resources ...");
+	static class PatternColorSpace extends PdfColorSpace {
+		final PdfColorSpace baseColorSpace;
+		PatternColorSpace(PdfColorSpace baseColorSpace) {
+			super("Pattern", 1, true);
+			this.baseColorSpace = baseColorSpace;
 		}
-	};
+		Color decodeColor(LinkedList stack, String indent) {
+			if (this.baseColorSpace == null)
+				throw new RuntimeException("Need to get pattern from page resources ...");
+			else return this.baseColorSpace.getColor(stack, indent);
+		}
+	}
+	
+	private static PdfColorSpace pattern = new PatternColorSpace(null);
 	
 	private static class IndexedColorSpace extends PdfColorSpace {
 		private PdfColorSpace baseColorSpace;
@@ -378,12 +393,14 @@ abstract class PdfColorSpace {
 			else if (lookupObj instanceof PString) {
 				PString lookup = ((PString) lookupObj);
 				if (lookup.isHex4)
-					lookup = new PString(lookup.bytes, true, false, lookup.isHexWithSpace);
+					lookup = new PString(lookup.bytes, true, false, lookup.isHexWithSpace, false, -1);
 				this.lookup = new byte[lookup.length()];
 				for (int l = 0; l < this.lookup.length; l++) {
 					int b = ((int) lookup.charAt(l));
-					if (b > 127)
-						b -= 256;
+//					if (b > 127)
+//						b -= 256;
+					if (0x007F < b)
+						b -= 0x0100;
 					this.lookup[l] = ((byte) b);
 				}
 			}
@@ -392,8 +409,10 @@ abstract class PdfColorSpace {
 				this.lookup = new byte[lookup.length()];
 				for (int l = 0; l < this.lookup.length; l++) {
 					int b = ((int) lookup.charAt(l));
-					if (b > 127)
-						b -= 256;
+//					if (b > 127)
+//						b -= 256;
+					if (0x007F < b)
+						b -= 0x0100;
 					this.lookup[l] = ((byte) b);
 				}
 			}
@@ -414,9 +433,10 @@ abstract class PdfColorSpace {
 				if (indent != null)
 					System.out.println(indent + this.name + ": Offset is " + offset);
 				for (int c = 0; c < this.baseColorSpace.numComponents; c++) {
-					int b = this.lookup[offset + c];
-					if (b < 0)
-						b += 256;
+//					int b = this.lookup[offset + c];
+//					if (b < 0)
+//						b += 256;
+					int b = (this.lookup[offset + c] & 0x000000FF);
 					stack.addLast(new Float(((float) b) / 255));
 				}
 				if (indent != null)
@@ -437,9 +457,10 @@ abstract class PdfColorSpace {
 				int offset = (ci.intValue() * this.baseColorSpace.numComponents);
 				StringBuffer lookup = new StringBuffer("");
 				for (int c = 0; c < this.baseColorSpace.numComponents; c++) {
-					int b = this.lookup[offset + c];
-					if (b < 0)
-						b += 256;
+//					int b = this.lookup[offset + c];
+//					if (b < 0)
+//						b += 256;
+					int b = (this.lookup[offset + c] & 0x000000FF);
 					lookup.append(" " + Integer.toString(b, 16).toUpperCase());
 				}
 				System.out.println(" - " + ci + "/" + Integer.toString(ci.intValue(), 16).toUpperCase() + ": ==>" + lookup + " = " + this.colorCache.get(ci) + " (" + this.colorStats.getCount(ci) + " times)");

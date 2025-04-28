@@ -83,7 +83,19 @@ public class OcrInstance {
 		else if (osName.matches("Mac.*"))
 			return "streamtess-mac";
 		else {
-			System.out.println("OcrEngin: unknown OS name: " + osName);
+			System.out.println("OcrEngine: unknown OS name: " + osName);
+			return null;
+		}
+	}
+	
+	private static String getTessSystemCommand() {
+		String osName = System.getProperty("os.name");
+		if (osName.matches(".*Linux.*"))
+			return "streamtess";
+		else if (osName.matches("Mac.*"))
+			return "streamtess";
+		else {
+			System.out.println("OcrEngine: system command unknown for OS name: " + osName);
 			return null;
 		}
 	}
@@ -234,8 +246,14 @@ public class OcrInstance {
 		if (!this.cachePath.exists())
 			this.cachePath.mkdirs();
 		
-		if (!this.install(this.tessCommand))
-			throw new IOException("StreamTess: binary not found");
+//		if (!this.install(this.tessCommand))
+//			throw new IOException("StreamTess: binary not found");
+		if (!this.install(this.tessCommand)) {
+			String tessSysCommand = getTessSystemCommand();
+			if (tessSysCommand == null)
+				throw new IOException("StreamTess: binary not found");
+			else this.tessCommand = tessSysCommand;
+		}
 		if (!this.install("tessdata" + this.tessVersion + "/eng.traineddata"))
 			throw new IOException("StreamTess: language data for English not found");
 		

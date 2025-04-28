@@ -55,6 +55,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -79,9 +80,9 @@ import de.uka.ipd.idaho.gamta.TokenSequenceUtils;
 import de.uka.ipd.idaho.gamta.Tokenizer;
 import de.uka.ipd.idaho.gamta.util.CountingSet;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
+import de.uka.ipd.idaho.im.pdf.PdfColorSpace.PatternColorSpace;
 import de.uka.ipd.idaho.im.pdf.PdfFontDecoder.FontDecoderCharset;
 import de.uka.ipd.idaho.im.pdf.PdfUtils.PdfByteInputStream;
-import de.uka.ipd.idaho.im.pdf.PdfUtils.PdfLineInputStream;
 import de.uka.ipd.idaho.im.pdf.test.PdfExtractorTest;
 import de.uka.ipd.idaho.stringUtils.StringUtils;
 
@@ -96,6 +97,92 @@ import de.uka.ipd.idaho.stringUtils.StringUtils;
  * @author sautter
  */
 public class PdfParser {
+	private static class PdfByteTrackerInputStream extends PdfByteInputStream {
+		int depth = -1;
+		ByteArrayOutputStream depths = new ByteArrayOutputStream();
+		PdfByteTrackerInputStream(byte[] data) throws IOException {
+			super(data);
+		}
+		PdfByteTrackerInputStream(byte[] data, int start, int end) throws IOException {
+			super(data, start, end);
+		}
+		void padDepth(int len) {
+			for (int b = 0; b < len; b++)
+				this.depths.write(this.depth);
+		}
+		public int read() throws IOException {
+			int read = super.read();
+			if (read != -1)
+				this.depths.write(this.depth);
+			return read;
+		}
+		public int read(byte[] b, int off, int len) throws IOException {
+			int read = super.read(b, off, len);
+			for (int r = 0; r < read; r++) // never fires if return value if -1
+				this.depths.write(this.depth);
+			return read;
+		}
+		int skipSpace() throws IOException {
+			int skipped = super.skipSpace();
+			for (int s = 0; s < skipped; s++)
+				this.depths.write(this.depth);
+			return skipped;
+		}
+		boolean skipSpaceCheckEnd() throws IOException {
+			this.skipSpace();
+			return this.checkEnd();
+		}
+	}
+	
+	/**
+	 * Parse a trailer dictionary of a PDF file. The argument start offset is
+	 * expected to point at the first byte of the 'trailer' keyword, i.e., the
+	 * 't'.
+	 * @param bytes the bytes of the PDF file
+	 * @param startOffset the start offset to read the argument bytes from
+	 * @return the parsed trailer dictionary
+	 * @throws IOException
+	 */
+	public static Map readTrailer(byte[] bytes, int startOffset) throws IOException {
+		return readTrailer(bytes, startOffset, null);
+	}
+	
+	/**
+	 * Parse a trailer dictionary of a PDF file. The argument start offset is
+	 * expected to point at the first byte of the 'trailer' keyword, i.e., the
+	 * 't'. If the argument object tracker is not null, tracking information
+	 * about the trailer dictionary is put in the binary object map under the
+	 * key 'trailer@&lt;startOffset&gt;'.
+	 * @param bytes the bytes of the PDF file
+	 * @param startOffset the start offset to read the argument bytes from
+	 * @return the parsed trailer dictionary
+	 * @throws IOException
+	 */
+	public static Map readTrailer(byte[] bytes, int startOffset, PObjectTracker objectTracker) throws IOException {
+		if (!PdfUtils.startsWith(bytes, "trailer", startOffset))
+			throw new IllegalArgumentException("Expected 'trailer' keyword not found at offset " + startOffset);
+		int trailerDataStartOffset = (startOffset + "trailer".length());
+		while ((trailerDataStartOffset < bytes.length) && (bytes[trailerDataStartOffset] <= 0x0020))
+			trailerDataStartOffset++;
+		PdfByteInputStream pdfBytes;
+		if (objectTracker == null)
+			pdfBytes = new PdfByteInputStream(bytes, trailerDataStartOffset, bytes.length);
+		else {
+			pdfBytes = new PdfByteTrackerInputStream(bytes, trailerDataStartOffset, bytes.length);
+			((PdfByteTrackerInputStream) pdfBytes).padDepth(trailerDataStartOffset - startOffset);
+		}
+		while (pdfBytes.peek() != -1) {
+			Object obj = cropNext(pdfBytes, false, false);
+			if (obj instanceof Map) {
+				if (objectTracker != null) {
+					byte[] byteDepths = ((PdfByteTrackerInputStream) pdfBytes).depths.toByteArray();
+					objectTracker.binaryObjects.put(("trailer@" + startOffset), new PBinaryObject(startOffset, (startOffset + byteDepths.length), obj, byteDepths));
+				}
+				return ((Map) obj);
+			}
+		}
+		return null;
+	}
 	
 	/**
 	 * Parse a binary PDF file into individual objects. The returned map holds
@@ -107,48 +194,146 @@ public class PdfParser {
 	 * @throws IOException
 	 */
 	public static HashMap getObjects(byte[] bytes, SecurityManager sm) throws IOException {
-		HashMap objects = new HashMap() {
+		return getObjects(bytes, sm, null, true);
+	}
+	
+	/**
+	 * Parse a binary PDF file into individual objects. The returned map holds
+	 * the parsed objects, the keys being the object numbers together with the
+	 * generation numbers. If the argument map is not null, it will be filled
+	 * with the same keys as the returned map, but map those keys to
+	 * <code>PBinaryObject</code>s that combine the actual objects with the
+	 * offsets of their constituent bytes in the argument array.
+	 * @param bytes the binary PDF file to parse
+	 * @param sm a security manager to use on encrypted object streams
+	 * @param objectTracker a data container to record details about the
+	 *            returned objects and other structural details of the argument
+	 *            PDF file in
+	 * @param resolveBasicRefs replace references to basic objects like numbers
+	 *            with the objects proper?
+	 * @return a Map holding the objects parsed from the PDF file
+	 * @throws IOException
+	 */
+	public static HashMap getObjects(byte[] bytes, SecurityManager sm, PObjectTracker objectTracker, boolean resolveBasicRefs) throws IOException {
+		HashMap objects = new LinkedHashMap() {
 			public Object put(Object key, Object value) {
-				if (PdfExtractorTest.aimAtPage != -1)
-					System.out.println("PDF Object map: " + key + " mapped to " + value);
-//					System.out.println("PDF Object map: " + key + " mapped to " + value.getClass().getName());
-				return super.put(key, value);
+				if (!DEBUG_PARSE_PDF && !DEBUG_PDF_BYTES && (PdfExtractorTest.aimAtPage == -1))
+					return super.put(key, value);
+				System.out.println("PDF Object map: " + key + " mapped to " + value);
+				Object oldValue = super.put(key, value);
+				if (oldValue == null)
+					return oldValue;
+				System.out.println(" ==> replaced " + oldValue);
+				StackTraceElement[] stes = Thread.currentThread().getStackTrace();
+				for (int e = 0; e < stes.length; e++)
+					System.out.println("\tat " + stes[e].toString());
+				return oldValue;
 			}
 		};
 		
-		PdfLineInputStream lis = new PdfLineInputStream(new ByteArrayInputStream(bytes));
+		PdfByteInputStream lis = new PdfByteInputStream(bytes);
 		for (byte[] line; (line = lis.readLine()) != null;) {
 			if (PdfUtils.matches(line, "[1-9][0-9]*\\s[0-9]+\\sobj.*")) {
 				String objId = PdfUtils.toString(line, true).trim();
-//				System.out.println("Got object ID: " + objId);
-				ByteArrayOutputStream baos = new ByteArrayOutputStream();
+//				ByteArrayOutputStream baos = new ByteArrayOutputStream();
+				int objByteStart = lis.bytesRead();
+				int objByteCount = 0;
 				if (!objId.endsWith("obj")) {
 					objId = objId.substring(0, (objId.indexOf("obj") + "obj".length()));
-					baos.write(line, objId.length(), (line.length - objId.length()));
+//					baos.write(line, objId.length(), (line.length - objId.length()));
+					objByteStart -= (line.length - objId.length());
+					objByteCount += (line.length - objId.length());
 				}
 				objId = objId.substring(0, (objId.length() - "obj".length())).trim();
+//				int objStart = (lis.bytesRead - line.length);
+				int objStart = (lis.bytesRead() - line.length);
+				if (DEBUG_PARSE_PDF || DEBUG_PDF_BYTES)
+					System.out.println("PDF File Parser: starting object " + objId + " at " + objStart);
 				
+				//	chunk whole object data off input (easier to overcome minor anomalies or errors that way)
+				boolean inObj = true;
+				Object obj = null;
+				byte[] objByteDepths = null;
 				boolean needLineBreakEndObj = false;
 				for (byte[] objLine; (objLine = lis.readLine()) != null;) {
+					int objLineWrittenTo = 0;
 					if (PdfUtils.equals(objLine, "endobj"))
-						break;
-					if (PdfUtils.startsWith(objLine, "endobj ")) {
+						inObj = false;
+					else if (PdfUtils.startsWith(objLine, "endobj ")) {
+						inObj = false;
 						needLineBreakEndObj = true;
-						break; // need to add line-break after 'endobj' and start over
 					}
-					if (PdfUtils.indexOf(objLine, " endobj", 0, 32) != -1) {
+					else if (PdfUtils.indexOf(objLine, " endobj", 0, 32) != -1) {
+						inObj = false;
 						needLineBreakEndObj = true;
-						break; // need to add line-break before 'endobj' and start over
 					}
-					if (PdfUtils.endsWith(objLine, "endobj")) {
-						baos.write(objLine, 0, (objLine.length - "endobj".length()));
-						break;
+					else if (PdfUtils.endsWith(objLine, "endobj")) {
+						objLineWrittenTo = (objLine.length - "endobj".length());
+//						baos.write(objLine, 0, objLineWrittenTo);
+						objByteCount += objLineWrittenTo;
+						inObj = false;
 					}
-					else baos.write(objLine);
+					else {
+//						baos.write(objLine);
+						objByteCount += objLine.length;
+					}
+					
+					//	keep going?
+					if (inObj)
+						continue;
+					
+					//	parse object
+					if (DEBUG_PARSE_PDF || DEBUG_PDF_BYTES) {
+//						System.out.println(" - parsing object " + objId + " from " + baos.size() + " bytes");
+						System.out.println(" - parsing object " + objId + " from " + objByteCount + " bytes starting at " + objByteStart);
+					}
+//					PdfByteInputStream objBytes;
+					PdfByteInputStream objBytes;
+					if (objectTracker == null)
+//						objBytes = new PdfByteInputStream(baos.toByteArray()); // TODOne only ever track offsets, and put stream on main array
+						objBytes = new PdfByteInputStream(bytes, objByteStart, (objByteStart + objByteCount));
+					else {
+//						objBytes = new PdfByteTrackerInputStream(baos.toByteArray()); // TODOne only ever track offsets, and put stream on main array
+//						for (int b = objStart; b < bytes.length; b++)
+//							if (PdfUtils.startsWith(bytes, "obj", (b - "obj".length()))) {
+//								while ((bytes[b] == '\r') || (bytes[b] == '\n')) // need to add these specifically, get omitted at start of object contents above
+//									b++;
+//								((PdfByteTrackerInputStream) objBytes).padDepth(b - objStart);
+//								break;
+//							}
+						objBytes = new PdfByteTrackerInputStream(bytes, objByteStart, (objByteStart + objByteCount));
+						((PdfByteTrackerInputStream) objBytes).padDepth(objByteStart - objStart);
+					}
+					obj = parseObject(objBytes, objects);
+					if (objBytes instanceof PdfByteTrackerInputStream) {
+						((PdfByteTrackerInputStream) objBytes).padDepth("endobj".length());
+						objByteDepths = ((PdfByteTrackerInputStream) objBytes).depths.toByteArray();
+					}
+					if (!(obj instanceof PStream))
+						break; // none of the trouble makers
+					
+					//	check stream length
+					Object lengthObj = getObject(((PStream) obj).params, "Length", objects);
+					if (!(lengthObj instanceof Number))
+						break; // nothing to check against
+					
+					//	check if we got all of that stream data
+					int objBytesMissing = (((Number) lengthObj).intValue() - ((PStream) obj).bytes.length);
+					if (objBytesMissing <= "\r\n".length()) // we're OK, or at least in the ballpark
+						break; // do actual padding below (unless we have to insert a line break and start over)
+					
+					//	add (remainder of) current line and continue with object
+//					baos.write(objLine, objLineWrittenTo, (objLine.length - objLineWrittenTo));
+					objByteCount += (objLine.length - objLineWrittenTo);
+					inObj = true;
+					obj = null;
+					objByteDepths = null;
+					needLineBreakEndObj = false;
 				}
 				
 				if (needLineBreakEndObj) {
-					System.out.println("PDF File Parser: ensuring line break after 'endobj'");
+					if (DEBUG_PARSE_PDF)
+						System.out.println("PDF File Parser: ensuring line break after 'endobj'");
 					int lineBreaksAddedBefore = 0;
 					int lineBreaksAddedAfter = 0;
 					for (int b = 0; b < bytes.length; b++) {
@@ -162,44 +347,79 @@ public class PdfParser {
 							lineBreaksAddedAfter++;
 						}
 					}
-					System.out.println(" ==> added " + lineBreaksAddedBefore + " line breaks before 'endobj', " + lineBreaksAddedAfter + " after");
-					if ((lineBreaksAddedBefore + lineBreaksAddedAfter) != 0)
-						return getObjects(bytes, sm);
+					if (DEBUG_PARSE_PDF)
+						System.out.println(" ==> added " + lineBreaksAddedBefore + " line breaks before 'endobj', " + lineBreaksAddedAfter + " after");
+					if ((lineBreaksAddedBefore + lineBreaksAddedAfter) != 0) {
+						if (objectTracker != null)
+							objectTracker.clear();
+						return getObjects(bytes, sm, objectTracker, resolveBasicRefs);
+					}
 				}
 				
-//				System.out.println("Parsing object from " + new String(baos.toByteArray()));
-				Object obj = parseObject(new PdfByteInputStream(new ByteArrayInputStream(baos.toByteArray())));
 				if (obj instanceof PStream)
-					obj = checkStreamLength(((PStream) obj), objects);
+					obj = checkStreamLength(((PStream) obj), objects, 16);
+				int objEnd = lis.bytesRead();
+				while (objStart < objEnd) {
+					if (bytes[objEnd - 1] == '\r')
+						objEnd--;
+					else if (bytes[objEnd - 1] == '\n')
+						objEnd--;
+					else break;
+				}
+				if (DEBUG_PARSE_PDF || DEBUG_PDF_BYTES)
+					System.out.println(" ==> finished object at " + objEnd);
 				objects.put(objId, obj);
-//				System.out.println("Got object: " + obj);
+				if (objectTracker != null)
+					objectTracker.binaryObjects.put(objId, new PBinaryObject(objStart, objEnd, obj, objByteDepths));
 				
 				//	decode object streams
 				if (obj instanceof PStream) {
 					Object type = ((PStream) obj).params.get("Type");
 					if ((type != null) && "ObjStm".equals(type.toString())) {
 						Reference sObjRef = null;
-						if (sm != null) {
+						if ((sm != null) || (objectTracker != null)) {
 							String[] objIdNrs = objId.split("[^0-9]+");
 							sObjRef = new Reference(Integer.parseInt(objIdNrs[0]), Integer.parseInt(objIdNrs[1]));
 						}
-						decodeObjectStream(sObjRef, ((PStream) obj), objects, false, sm);
+						decodeObjectStream(sObjRef, ((PStream) obj), objects, false, sm, objectTracker);
 					}
 				}
 			}
+			else if (objectTracker == null) {}
+			else if (PdfUtils.matches(line, "trailer.*"))
+//				objectTracker.trailerOffsets.add(new Integer(lis.bytesRead - line.length));
+				objectTracker.trailerOffsets.add(new Integer(lis.bytesRead() - line.length));
+			else if (PdfUtils.matches(line, "xref.*"))
+//				objectTracker.xrefOffsets.add(new Integer(lis.bytesRead - line.length));
+				objectTracker.xrefOffsets.add(new Integer(lis.bytesRead() - line.length));
+			else if (PdfUtils.matches(line, "\\s+xref.*")) {
+//				int xrefOffset = (lis.bytesRead - line.length);
+				int xrefOffset = (lis.bytesRead() - line.length);
+				while ((xrefOffset < bytes.length) && !PdfUtils.startsWith(bytes, "xref", xrefOffset))
+					xrefOffset++;
+				if (PdfUtils.startsWith(bytes, "xref", xrefOffset))
+					objectTracker.xrefOffsets.add(new Integer(xrefOffset));
+			}
+			else if (PdfUtils.matches(line, "startxref.*"))
+				objectTracker.startxrefOffsets.add(new Integer(lis.bytesRead() - line.length));
 		}
 		lis.close();
 		
-		dereferenceObjects(objects);
+		if (resolveBasicRefs)
+			dereferenceObjects(objects, objectTracker);
+		if (objectTracker != null)
+			objectTracker.sourceBytes = bytes; // have to hand back actual bytes we parsed, might have padded some stream
 		return objects;
 	}
 	
-	static void decodeObjectStream(Reference objStreamRef, PStream objStream, Map objects, boolean forInfo, SecurityManager sm) throws IOException {
-		System.out.println("Decoding object stream " + objStreamRef + ": " + objStream);
-		System.out.println(Arrays.toString(objStream.bytes));
+	static void decodeObjectStream(Reference objStreamRef, PStream objStream, Map objects, boolean forInfo, SecurityManager sm, PObjectTracker objectTracker) throws IOException {
+		if (DEBUG_PARSE_PDF || DEBUG_PDF_BYTES) {
+			System.out.println("Decoding object stream " + objStreamRef + ": " + objStream);
+			System.out.println(Arrays.toString(objStream.bytes));
+		}
 		if ((objStreamRef != null) && (sm != null)) {
 			decryptObject(objStreamRef, objStream.params, sm);
-			System.out.println(Arrays.toString(objStream.bytes));
+			if (DEBUG_PARSE_PDF || DEBUG_PDF_BYTES) System.out.println(Arrays.toString(objStream.bytes));
 			decryptBytes(objStreamRef, objStream.bytes, sm);
 		}
 		
@@ -212,7 +432,7 @@ public class PdfParser {
 		decode(filter, objStream.bytes, objStream.params, baos, objects);
 		byte[] decodedStream = baos.toByteArray();
 		if (forInfo) {
-			System.out.println("Decoded: " + new String(decodedStream));
+			if (DEBUG_PARSE_PDF || DEBUG_PDF_BYTES) System.out.println("Decoded: " + new String(decodedStream));
 			return;
 		}
 		//	TODO_ne work on bytes UNNECESSARY, as offsets don't change, and actual decoding works on bytes further down the road
@@ -227,27 +447,54 @@ public class PdfParser {
 			int e = (((o+1) == sObjs.length) ? decodedStream.length : (sObjs[o+1].offset + f));
 			byte[] sObjBytes = new byte[e-s];
 			System.arraycopy(decodedStream, s, sObjBytes, 0, sObjBytes.length);
-			Object sObj = parseObject(new PdfByteInputStream(new ByteArrayInputStream(sObjBytes)));
+			PdfByteInputStream sObjIn;
+			if (objectTracker == null)
+				sObjIn = new PdfByteInputStream(sObjBytes);
+			else sObjIn = new PdfByteTrackerInputStream(sObjBytes);
+			Object sObj = parseObject(sObjIn, objects);
 			if (sObj instanceof PStream)
-				sObj = checkStreamLength(((PStream) sObj), objects);
+				sObj = checkStreamLength(((PStream) sObj), objects, 16);
 			objects.put(sObjs[o].objId, sObj);
+			if (objectTracker != null) {
+				objectTracker.binaryObjects.put(sObjs[o].objId, new PBinaryObject(sObj, ((PdfByteTrackerInputStream) sObjIn).depths.toByteArray(), sObjBytes));
+				objectTracker.parentObjectStreamReferences.put(sObjs[o].objId, objStreamRef);
+			}
 		}
 	}
 	
-	private static PStream checkStreamLength(PStream pStream, Map objects) {
+//	private static PStream checkStreamLength(PStream pStream, Map objects) {
+	private static PStream checkStreamLength(PStream pStream, Map objects, int maxPad) throws IOException {
 		Object length = getObject(pStream.params, "Length", objects);
 		if (length instanceof Number) {
-			if (pStream.bytes.length < ((Number) length).intValue()) {
+			int pad = (((Number) length).intValue() - pStream.bytes.length);
+			if (pad == 0)
+				return pStream;
+			if ((0 < maxPad) && (maxPad < Math.abs(pad))) {
+				if (DEBUG_PARSE_PDF) {
+					System.out.println("Found " + pStream.bytes.length + " bytes of stream data vs. indicated " + ((Number) length).intValue() + " bytes:");
+					PdfByteInputStream lis = new PdfByteInputStream(pStream.bytes);
+					int pStreamPos = 0;
+					for (byte[] pStreamLine; (pStreamLine = lis.readLine()) != null;) {
+						System.out.print(" - " + pStreamPos);
+						pStreamPos += pStreamLine.length;
+						System.out.print("-" + pStreamPos + ": " + new String(pStreamLine));
+					}
+				}
+				throw new IOException("Only found " + pStream.bytes.length + " of an indicated " + ((Number) length).intValue() + " stream bytes");
+			}
+//			if (pStream.bytes.length < ((Number) length).intValue()) {
+			if (0 < pad) {
 				byte[] padStream = new byte[((Number) length).intValue()];
 				System.arraycopy(pStream.bytes, 0, padStream, 0, pStream.bytes.length);
 				for (int b = pStream.bytes.length; b < padStream.length; b++)
 					padStream[b] = '\n';
-				return new PStream(pStream.params, padStream);
+				return new PStream(pStream.params, padStream, pStream.byteOffset);
 			}
-			else if (pStream.bytes.length > ((Number) length).intValue()) {
+//			else if (pStream.bytes.length > ((Number) length).intValue()) {
+			else if (pad < 0) {
 				byte[] cropStream = new byte[((Number) length).intValue()];
 				System.arraycopy(pStream.bytes, 0, cropStream, 0, cropStream.length);
-				return new PStream(pStream.params, cropStream);
+				return new PStream(pStream.params, cropStream, pStream.byteOffset);
 			}
 		}
 		return pStream;
@@ -396,21 +643,21 @@ public class PdfParser {
 		return obj;
 	}
 	
-	static void dereferenceObjects(Map objects) {
+	static void dereferenceObjects(Map objects, PObjectTracker objectTracker) {
 		ArrayList ids = new ArrayList(objects.keySet());
 		for (Iterator idit = ids.iterator(); idit.hasNext();) {
 			Object id = idit.next();
 			Object obj = objects.get(id);
 			if (obj instanceof Map)
-				dereferenceObjects(((Map) obj), objects);
+				dereferenceObjects(((Map) obj), objects, objectTracker);
 			else if (obj instanceof List)
-				dereferenceObjects(((List) obj), objects);
+				dereferenceObjects(((List) obj), objects, objectTracker);
 			else if (obj instanceof PStream)
-				dereferenceObjects(((PStream) obj).params, objects);
+				dereferenceObjects(((PStream) obj).params, objects, objectTracker);
 		}
 	}
 	
-	static void dereferenceObjects(Map dict, Map objects) {
+	static void dereferenceObjects(Map dict, Map objects, PObjectTracker objectTracker) {
 		ArrayList ids = new ArrayList(dict.keySet());
 		for (Iterator idit = ids.iterator(); idit.hasNext();) {
 			Object id = idit.next();
@@ -426,7 +673,7 @@ public class PdfParser {
 				}
 				if (DEBUG_HANDLE_PDF_OBJECTS) System.out.println("  Dereferenced " + refId + " R to " + obj);
 				if (obj instanceof PStream) {
-					dereferenceObjects(((PStream) obj).params, objects);
+					dereferenceObjects(((PStream) obj).params, objects, objectTracker);
 					continue;
 				}
 				else if (obj instanceof Map)
@@ -434,11 +681,13 @@ public class PdfParser {
 				else if (obj instanceof List)
 					continue;
 				dict.put(id, obj);
+				if (objectTracker != null)
+					objectTracker.resolvedReferences.put(obj, ref);
 			}
 		}
 	}
 	
-	static void dereferenceObjects(List array, Map objects) {
+	static void dereferenceObjects(List array, Map objects, PObjectTracker objectTracker) {
 		for (int i = 0; i < array.size(); i++) {
 			Object obj = array.get(i);
 			if (obj instanceof Reference) {
@@ -452,7 +701,7 @@ public class PdfParser {
 				}
 				if (DEBUG_HANDLE_PDF_OBJECTS) System.out.println("  Dereferenced " + refId + " R to " + obj);
 				if (obj instanceof PStream) {
-					dereferenceObjects(((PStream) obj).params, objects);
+					dereferenceObjects(((PStream) obj).params, objects, objectTracker);
 					continue;
 				}
 				else if (obj instanceof Map)
@@ -460,6 +709,8 @@ public class PdfParser {
 				else if (obj instanceof List)
 					continue;
 				array.set(i, obj);
+				if (objectTracker != null)
+					objectTracker.resolvedReferences.put(obj, ref);
 			}
 		}
 	}
@@ -566,12 +817,13 @@ public class PdfParser {
 		else if (DEBUG_DECRYPT_PDF) System.out.println("Failed to decrypt " + objRef + ", bytes are " + new String(bytes));
 	}
 	
+	private static final boolean DEBUG_PDF_BYTES = false;
 	private static final boolean DEBUG_PARSE_PDF = false;
 	
 	/**
-	 * Retrieve an object from a Hashtable based on its name and dereference it
+	 * Retrieve an object from a map based on its name and dereference it
 	 * against the object map.
-	 * @param data the Hashtable to retrieve the object from
+	 * @param data the map to retrieve the object from
 	 * @param name the name of the sought object
 	 * @param objects the object map to use for dereferencing
 	 * @return the sought object
@@ -582,54 +834,89 @@ public class PdfParser {
 		return dereference(data.get(name), objects);
 	}
 	
-	private static Object parseObject(PdfByteInputStream bytes) throws IOException {
-		Object obj = cropNext(bytes, false, false);
+	private static Object parseObject(PdfByteInputStream objBytes, Map objects) throws IOException {
+		Object obj = cropNext(objBytes, false, false);
 		
 		//	check for subsequent stream
-		if (!bytes.skipSpaceCheckEnd())
+		if (!objBytes.skipSpaceCheckEnd())
 			return obj;
 		
-		//	must be parameters ...
+		//	stream parameters must be map ...
 		if (!(obj instanceof Map))
 			return obj;
 		
-		//	read stream start TODO use 'Length' parameter if possible
-		PdfLineInputStream lis = new PdfLineInputStream(bytes);
-		byte[] marker = lis.readLine();
-		if ((marker == null) || !PdfUtils.equals(marker, "stream")) {
-			lis.close();
+		//	read stream start
+		int streamByteStartOffset = ((objBytes instanceof PdfByteTrackerInputStream) ? ((PdfByteTrackerInputStream) objBytes).depths.size() : -1);
+//		PdfByteInputStream lis = objBytes;
+//		byte[] streamMarker = lis.readLine();
+		byte[] streamMarker = objBytes.readLine();
+		if ((streamMarker == null) || !PdfUtils.equals(streamMarker, "stream")) {
+//			lis.close();
 			return obj;
 		}
+		if (streamByteStartOffset != -1)
+			streamByteStartOffset += streamMarker.length;
 		
+		//	get stream length
+		Map streamParams = ((Map) obj);
+		Object lengthObj = getObject(streamParams, "Length", objects);
+		int streamLength = -1;
+		if (lengthObj instanceof Number)
+			streamLength = ((Number) lengthObj).intValue();
+		if (DEBUG_PARSE_PDF)
+			System.out.println("Reading stream with parameters " + streamParams);
+		
+		//	read stream content
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
-		for (byte[] streamLine, lastStreamLine = null; (streamLine = lis.readLine()) != null;) {
+//		for (byte[] streamLine; (streamLine = lis.readLine()) != null;) {
+		for (byte[] streamLine; (streamLine = objBytes.readLine()) != null;) {
 			if (PdfUtils.equals(streamLine, "endstream")) {
-				if (lastStreamLine != null)
-					baos.write(lastStreamLine, 0, lastStreamLine.length);
-				break;
+				if ((streamLength < 0) || (streamLength <= (baos.size() + "\r\n".length()))) /* do we have all the data bytes we're supposed to have (in case we know the latter)? */ {
+					if (DEBUG_PARSE_PDF)
+						System.out.println(" - reached stream data end at " + baos.size() + " bytes of indicated " + streamLength);
+					break;
+				}
+				else if (DEBUG_PARSE_PDF)
+					System.out.println(" - ignoring embedded 'endstream' (1) after " + baos.size() + " bytes of indicated " + streamLength);
 			}
 			else if (PdfUtils.endsWith(streamLine, "endstream")) {
-				if (lastStreamLine != null)
-					baos.write(lastStreamLine, 0, lastStreamLine.length);
 				int dataByteCount = streamLine.length;
-				while (!PdfUtils.startsWith(streamLine, "endstream", dataByteCount))
+				while ((dataByteCount != 0) && !PdfUtils.startsWith(streamLine, "endstream", dataByteCount))
 					dataByteCount--;
-				baos.write(streamLine, 0, dataByteCount);
-				break;
+				if ((streamLength < 0) || (streamLength <= (baos.size() + dataByteCount + "\r\n".length()))) /* do we have all the data bytes we're supposed to have (in case we know the latter)? */ {
+					if (DEBUG_PARSE_PDF)
+						System.out.println(" - reached stream data end at " + baos.size() + " bytes of indicated " + streamLength);
+					if (0 < dataByteCount)
+						baos.write(streamLine, 0, dataByteCount);
+					break;
+				}
+				else if (DEBUG_PARSE_PDF)
+					System.out.println(" - ignoring embedded 'endstream' (2) after " + baos.size() + " bytes of indicated " + streamLength);
 			}
-			if (lastStreamLine != null)
-				baos.write(lastStreamLine);
-			lastStreamLine = streamLine;
+			baos.write(streamLine, 0, streamLine.length);
 		}
+		if (DEBUG_PARSE_PDF)
+			System.out.println("Read stream of " + baos.size() + " bytes, indicated length was " + streamLength);
 		
-		lis.close();
-		return new PStream(((Map) obj), baos.toByteArray());
+//		lis.close();
+		return new PStream(((Map) obj), baos.toByteArray(), streamByteStartOffset);
 	}
 	
 	static Object cropNext(PdfByteInputStream bytes, boolean expectPTags) throws IOException {
 		return cropNext(bytes, expectPTags, false);
 	}
 	static Object cropNext(PdfByteInputStream bytes, boolean expectPTags, boolean hexIsHex2) throws IOException {
+		if (!(bytes instanceof PdfByteTrackerInputStream))
+			return doCropNext(bytes, expectPTags, hexIsHex2);
+		else try {
+			((PdfByteTrackerInputStream) bytes).depth++;
+			return doCropNext(bytes, expectPTags, hexIsHex2);
+		}
+		finally {
+			((PdfByteTrackerInputStream) bytes).depth--;
+		}
+	}
+	static Object doCropNext(PdfByteInputStream bytes, boolean expectPTags, boolean hexIsHex2) throws IOException {
 		if (!bytes.skipSpaceCheckEnd())
 			return null;
 		
@@ -645,7 +932,7 @@ public class PdfParser {
 			bytes.read();
 			if (bytes.peek() == '<') {
 				bytes.read();
-				return cropHashtable(bytes, expectPTags, hexIsHex2);
+				return cropDictionary(bytes, expectPTags, hexIsHex2);
 			}
 			else return cropHexString(bytes, hexIsHex2);
 		}
@@ -679,11 +966,11 @@ public class PdfParser {
 			if (PdfUtils.matches(lookahead, "[1-9][0-9]*\\s+[0-9]+\\s*R.*")) {
 				if (DEBUG_PARSE_PDF) System.out.println(" ==> reference");
 				StringBuffer objNumber = new StringBuffer();
-				while (bytes.peek() > 32)
+				while (0x0020 < bytes.peek())
 					objNumber.append((char) bytes.read());
 				bytes.skipSpace();
 				StringBuffer genNumber = new StringBuffer();
-				while (bytes.peek() > 32)
+				while (0x0020 < bytes.peek())
 					genNumber.append((char) bytes.read());
 				bytes.skipSpace();
 				bytes.read();
@@ -698,12 +985,21 @@ public class PdfParser {
 				bytes.read(); // consume I
 				bytes.skipSpace();
 				ByteArrayOutputStream iImageData = new ByteArrayOutputStream();
+				boolean lastWasLineBreak = false;
 				while (bytes.peek() != -1) {
-					while ((bytes.peek() != -1) && (bytes.peek() != 'E'))
-						iImageData.write(bytes.read());
+//					while ((bytes.peek() != -1) && (bytes.peek() != 'E'))
+//						iImageData.write(bytes.read());
+					for (int b; (b = bytes.peek()) != -1;) {
+						if (lastWasLineBreak && (b == 'E'))
+							break;
+						lastWasLineBreak = ((b == '\r') || (b == '\n'));
+						iImageData.write(bytes.read()); // consume and store image data byte
+					}
 					if (bytes.peek() == 'E') {
+						lastWasLineBreak = false;
 						bytes.read(); // consume E
 						if (bytes.peek() == 'I') {
+							lastWasLineBreak = false;
 							bytes.read(); // consume I
 							return new PInlineImage("BI", iImageData.toByteArray());
 						}
@@ -712,6 +1008,7 @@ public class PdfParser {
 						}
 						else {
 							iImageData.write((int) 'E'); // re-add E
+							lastWasLineBreak = ((bytes.peek() == '\r') || (bytes.peek() == '\n'));
 							iImageData.write(bytes.read());
 						}
 					}
@@ -724,7 +1021,7 @@ public class PdfParser {
 				if (DEBUG_PARSE_PDF) System.out.println(" ==> other object");
 				StringBuffer valueBuffer = new StringBuffer();
 				char firstChar = ((char) bytes.peek());
-				while ((bytes.peek() > 32) && ("%()<>[]{}/#".indexOf((char) bytes.peek()) == -1)) {
+				while ((bytes.peek() > 0x0020) && ("%()<>[]{}/#".indexOf((char) bytes.peek()) == -1)) {
 //					valueBuffer.append((char) bytes.read());
 					if (valueBuffer.length() == 0) // nothing known thus far
 						valueBuffer.append((char) bytes.read());
@@ -744,19 +1041,21 @@ public class PdfParser {
 					return new Integer(value);
 				else if (value.matches("\\-?[0-9]*+\\.[0-9]++"))
 					return new Double(value);
-				else if (expectPTags)
+				else if (expectPTags && (value.length() != 0))
 					return new PTag(value);
 				else try {
 					return new Double(value);
 				}
 				catch (NumberFormatException nfe) {
-					System.out.println("Invalid or unexpected object: " + value);
-					return NULL;
+					System.out.println("Invalid or unexpected object: " + value + " ('" + value + "', length " + value.length() + ", next is " + bytes.peek() + "/" + Integer.toString(bytes.peek(), 16) + ")");
+//					throw new RuntimeException("Invalid or unexpected object: " + value);
+					return INVALID;
 				}
 			}
 		}
 	}
 	private static final Object NULL = new Object();
+	private static final Object INVALID = new Object();
 	
 	private static void skipComment(PdfByteInputStream bytes) throws IOException {
 		if (DEBUG_PARSE_PDF) System.out.println("Skipping comment");
@@ -819,27 +1118,28 @@ public class PdfParser {
 	}
 	
 	//	TODOne decode bytes only when encoding clear
-	private static PString cropString(PdfByteInputStream bytes) throws IOException {
+	private static PString cropString(PdfByteInputStream stringBytes) throws IOException {
 		if (DEBUG_PARSE_PDF) System.out.println("Cropping string");
+		int stringByteStartOffset = ((stringBytes instanceof PdfByteTrackerInputStream) ? ((PdfByteTrackerInputStream) stringBytes).depths.size() : -1);
 		ByteArrayOutputStream oBaos = (DEBUG_PARSE_PDF ? new ByteArrayOutputStream() : null);
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		int open = 1;
 		boolean escaped = false;
-		while (bytes.peek() != -1) {
+		while (stringBytes.peek() != -1) {
 			if (escaped) {
-				int peek = bytes.peek();
+				int peek = stringBytes.peek();
 				if (('0' <= peek) && (peek <= '9')) {
 					int oct = 0;
-					if (oBaos != null) oBaos.write(bytes.peek());
-					int b0 = bytes.read();
-					peek = bytes.peek();
+					if (oBaos != null) oBaos.write(stringBytes.peek());
+					int b0 = stringBytes.read();
+					peek = stringBytes.peek();
 					if (('0' <= peek) && (peek <= '9')) {
-						if (oBaos != null) oBaos.write(bytes.peek());
-						int b1 = bytes.read();
-						peek = bytes.peek();
+						if (oBaos != null) oBaos.write(stringBytes.peek());
+						int b1 = stringBytes.read();
+						peek = stringBytes.peek();
 						if (('0' <= peek) && (peek <= '9')) {
-							if (oBaos != null) oBaos.write(bytes.peek());
-							int b2 = bytes.read();
+							if (oBaos != null) oBaos.write(stringBytes.peek());
+							int b2 = stringBytes.read();
 							oct = (((b0 - '0') * 64) + ((b1 - '0') * 8) + (b2 - '0'));
 						}
 						else oct = (((b0 - '0') * 8) + (b1 - '0'));
@@ -851,77 +1151,77 @@ public class PdfParser {
 				}
 				else if (peek == 'n') {
 					baos.write('\n');
-					if (oBaos != null) oBaos.write(bytes.peek());
-					bytes.read();
+					if (oBaos != null) oBaos.write(stringBytes.peek());
+					stringBytes.read();
 				}
 				else if (peek == 'r') {
 					baos.write('\r');
-					if (oBaos != null) oBaos.write(bytes.peek());
-					bytes.read();
+					if (oBaos != null) oBaos.write(stringBytes.peek());
+					stringBytes.read();
 				}
 				else if (peek == 't') {
 					baos.write('\t');
-					if (oBaos != null) oBaos.write(bytes.peek());
-					bytes.read();
+					if (oBaos != null) oBaos.write(stringBytes.peek());
+					stringBytes.read();
 				}
 				else if (peek == 'f') {
 					baos.write('\f');
-					if (oBaos != null) oBaos.write(bytes.peek());
-					bytes.read();
+					if (oBaos != null) oBaos.write(stringBytes.peek());
+					stringBytes.read();
 				}
 				else if (peek == 'b') {
 					baos.write('\b');
-					if (oBaos != null) oBaos.write(bytes.peek());
-					bytes.read();
+					if (oBaos != null) oBaos.write(stringBytes.peek());
+					stringBytes.read();
 				}
 				else if (peek == '\r') {
-					if (oBaos != null) oBaos.write(bytes.peek());
-					bytes.read();
-					peek = bytes.peek();
+					if (oBaos != null) oBaos.write(stringBytes.peek());
+					stringBytes.read();
+					peek = stringBytes.peek();
 					if (peek == '\n') {
-						if (oBaos != null) oBaos.write(bytes.peek());
-						bytes.read();
+						if (oBaos != null) oBaos.write(stringBytes.peek());
+						stringBytes.read();
 					}
 				}
 				else if (peek == '\n') {
-					if (oBaos != null) oBaos.write(bytes.peek());
-					bytes.read();
-					peek = bytes.peek();
+					if (oBaos != null) oBaos.write(stringBytes.peek());
+					stringBytes.read();
+					peek = stringBytes.peek();
 					if (peek == '\r') {
-						if (oBaos != null) oBaos.write(bytes.peek());
-						bytes.read();
+						if (oBaos != null) oBaos.write(stringBytes.peek());
+						stringBytes.read();
 					}
 				}
 				else {
-					if (oBaos != null) oBaos.write(bytes.peek());
-					baos.write(bytes.read());
+					if (oBaos != null) oBaos.write(stringBytes.peek());
+					baos.write(stringBytes.read());
 				}
 				escaped = false;
 			}
-			else if (bytes.peek() == '\\') {
+			else if (stringBytes.peek() == '\\') {
 				escaped = true;
-				if (oBaos != null) oBaos.write(bytes.peek());
-				bytes.read();
+				if (oBaos != null) oBaos.write(stringBytes.peek());
+				stringBytes.read();
 			}
-			else if (bytes.peek() == '(') {
-				if (oBaos != null) oBaos.write(bytes.peek());
-				baos.write(bytes.read());
+			else if (stringBytes.peek() == '(') {
+				if (oBaos != null) oBaos.write(stringBytes.peek());
+				baos.write(stringBytes.read());
 				open++;
 			}
-			else if (bytes.peek() == ')') {
+			else if (stringBytes.peek() == ')') {
 				open--;
 				if (open == 0) {
-					bytes.read();
+					stringBytes.read();
 					break;
 				}
 				else {
-					if (oBaos != null) oBaos.write(bytes.peek());
-					baos.write(bytes.read());
+					if (oBaos != null) oBaos.write(stringBytes.peek());
+					baos.write(stringBytes.read());
 				}
 			}
 			else {
-				if (oBaos != null) oBaos.write(bytes.peek());
-				baos.write(bytes.read());
+				if (oBaos != null) oBaos.write(stringBytes.peek());
+				baos.write(stringBytes.read());
 			}
 		}
 		if (DEBUG_PARSE_PDF) {
@@ -931,28 +1231,30 @@ public class PdfParser {
 			System.out.println("  UTF-16LE " + new String(baos.toByteArray(), "UTF-16LE"));
 			System.out.println("  UTF-16BE " + new String(baos.toByteArray(), "UTF-16BE"));
 		}
-		return new PString(baos.toByteArray());
+		return new PString(baos.toByteArray(), stringByteStartOffset);
 	}
 	
-	private static PString cropHexString(PdfByteInputStream bytes, boolean hexIsHex2) throws IOException {
+	private static PString cropHexString(PdfByteInputStream stringBytes, boolean hexIsHex2) throws IOException {
 		if (DEBUG_PARSE_PDF) System.out.println("Cropping hex string");
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		int stringByteStartOffset = ((stringBytes instanceof PdfByteTrackerInputStream) ? ((PdfByteTrackerInputStream) stringBytes).depths.size() : -1);
 		boolean withSpace = false;
-		while (bytes.peek() != -1) {
-			withSpace = ((bytes.peek() < 33) || withSpace);
-			bytes.skipSpace();
-			if (bytes.peek() == '>') {
-				bytes.read();
+		while (stringBytes.peek() != -1) {
+//			withSpace = ((stringBytes.peek() < 33) || withSpace);
+			withSpace = ((stringBytes.peek() <= 0x0020) || withSpace);
+			stringBytes.skipSpace();
+			if (stringBytes.peek() == '>') {
+				stringBytes.read();
 				break;
 			}
-			while (bytes.peek() == '%') {
-				skipComment(bytes);
-				if (!bytes.skipSpaceCheckEnd())
+			while (stringBytes.peek() == '%') {
+				skipComment(stringBytes);
+				if (!stringBytes.skipSpaceCheckEnd())
 					throw new IOException("Broken dictionary");
 			}
-			baos.write(bytes.read());
+			baos.write(stringBytes.read());
 		}
-		return new PString(baos.toByteArray(), hexIsHex2, !hexIsHex2, withSpace);
+		return new PString(baos.toByteArray(), hexIsHex2, !hexIsHex2, withSpace, false, stringByteStartOffset);
 	}
 	
 //	private static Vector cropArray(PdfByteInputStream bytes, boolean expectPTags, boolean hexIsHex2) throws IOException {
@@ -966,7 +1268,7 @@ public class PdfParser {
 			while (bytes.peek() == '%') {
 				skipComment(bytes);
 				if (!bytes.skipSpaceCheckEnd())
-					throw new IOException("Broken array");
+					throw new IOException("Broken array: unexpected end of stream");
 			}
 			if (bytes.peek() == ']') {
 				bytes.read();
@@ -975,26 +1277,30 @@ public class PdfParser {
 			while (bytes.peek() == '%') {
 				skipComment(bytes);
 				if (!bytes.skipSpaceCheckEnd())
-					throw new IOException("Broken array");
+					throw new IOException("Broken array: unexpected end of stream");
 			}
-			array.add(cropNext(bytes, expectPTags, hexIsHex2));
+//			array.add(cropNext(bytes, expectPTags, hexIsHex2));
+			Object entry = cropNext(bytes, expectPTags, hexIsHex2);
+			if (entry == INVALID)
+				throw new IOException("Broken array: invalid element");
+			array.add(entry);
 		}
 		if (DEBUG_PARSE_PDF) System.out.println(" --> " + array.toString());
 		return array;
 	}
 	
 //	private static Hashtable cropHashtable(PdfByteInputStream bytes, boolean expectPTags, boolean hexIsHex2) throws IOException {
-	private static Map cropHashtable(PdfByteInputStream bytes, boolean expectPTags, boolean hexIsHex2) throws IOException {
+	private static Map cropDictionary(PdfByteInputStream bytes, boolean expectPTags, boolean hexIsHex2) throws IOException {
 		if (DEBUG_PARSE_PDF) System.out.println("Cropping dictionary");
 //		Hashtable ht = new Hashtable(2);
 		Map ht = new HashMap(2);
 		while (true) {
 			if (!bytes.skipSpaceCheckEnd())
-				throw new IOException("Broken dictionary");
+				throw new IOException("Broken dictionary: unexpected end of stream");
 			while (bytes.peek() == '%') {
 				skipComment(bytes);
 				if (!bytes.skipSpaceCheckEnd())
-					throw new IOException("Broken dictionary");
+					throw new IOException("Broken dictionary: unexpected end of stream");
 			}
 			if (bytes.peek() == '>') {
 				bytes.read();
@@ -1002,35 +1308,37 @@ public class PdfParser {
 					bytes.read();
 					break;
 				}
-				else throw new IOException("Broken dictionary");
+				else throw new IOException("Broken dictionary: unexpected single '>'");
 			}
 			if (!bytes.skipSpaceCheckEnd())
 				throw new IOException("Broken dictionary");
 			while (bytes.peek() == '%') {
 				skipComment(bytes);
 				if (!bytes.skipSpaceCheckEnd())
-					throw new IOException("Broken dictionary");
+					throw new IOException("Broken dictionary: unexpected end of stream before entry name");
 			}
 //			Name name = cropName(bytes);
 			String name = cropName(bytes);
+			if (name.length() == 0)
+				throw new IOException("Broken dictionary: empty entry name");
 			if (!bytes.skipSpaceCheckEnd())
 				throw new IOException("Broken dictionary");
 			while (bytes.peek() == '%') {
 				skipComment(bytes);
 				if (!bytes.skipSpaceCheckEnd())
-					throw new IOException("Broken dictionary");
+					throw new IOException("Broken dictionary: unexpected end of stream after entry name");
 			}
 			Object value = cropNext(bytes, expectPTags, hexIsHex2);
+			if (value == INVALID)
+				throw new IOException("Broken dictionary: invalid entry value");
 			ht.put(name, value);
 		}
 		if (DEBUG_PARSE_PDF) System.out.println(" --> " + ht.toString());
 		return ht;
 	}
 	
-//	private static Hashtable cropInlineImageParams(PdfByteInputStream iiBytes) throws IOException {
-	private static Map cropInlineImageParams(PdfByteInputStream iiBytes) throws IOException {
+	static Map cropInlineImageParams(PdfByteInputStream iiBytes) throws IOException {
 		if (DEBUG_PARSE_PDF) System.out.println("Cropping dictionary");
-//		Hashtable iip = new Hashtable(2);
 		Map iip = new HashMap(2);
 		while (true) {
 			if (!iiBytes.skipSpaceCheckEnd())
@@ -1054,7 +1362,6 @@ public class PdfParser {
 				if (!iiBytes.skipSpaceCheckEnd())
 					throw new IOException("Broken inline image dictionary");
 			}
-//			Name name = cropName(iiBytes);
 			String name = cropName(iiBytes);
 			if (!iiBytes.skipSpaceCheckEnd())
 				throw new IOException("Broken inline image dictionary");
@@ -1130,30 +1437,95 @@ public class PdfParser {
 	}
 	
 	/**
+	 * Wrapper for an object parsed from a PDF file and the offsets of its
+	 * constituent bytes in that same file.
+	 * 
+	 * @author sautter
+	 */
+	public static class PObjectTracker {
+		public byte[] sourceBytes;
+		public final Map binaryObjects = new LinkedHashMap();
+		public final List trailerOffsets = new ArrayList();
+		public final List xrefOffsets = new ArrayList();
+		public final List startxrefOffsets = new ArrayList();
+		public final Map parentObjectStreamReferences = new LinkedHashMap();
+		public final Map resolvedReferences = new LinkedHashMap();
+		void clear() {
+			this.binaryObjects.clear();
+			this.trailerOffsets.clear();
+			this.xrefOffsets.clear();
+			this.startxrefOffsets.clear();
+			this.parentObjectStreamReferences.clear();
+			this.resolvedReferences.clear();
+		}
+	}
+	
+	/**
+	 * Wrapper for an object parsed from a PDF file and the offsets of its
+	 * constituent bytes in that same file.
+	 * 
+	 * @author sautter
+	 */
+	public static class PBinaryObject {
+		
+		/** the offset of the first byte (inclusive, -1 if the object was extracted from an object stream) */
+		public final int startOffset;
+		
+		/** the offset of the last byte (exclusive, -1 if the object was extracted from an object stream) */
+		public final int endOffset;
+		
+		/** the object proper */
+		public final Object object;
+		
+		/** nesting depths of constituent bytes of object, starting from the start offset of the object in the underlying PDF file (the wrapped object has depth 0 or greater, surrounding PDF syntax is at depth -1) */
+		public final byte[] byteDepths;
+		
+		/** the constituting bytes of the object (null unless the object was unpacked from an object stream) */
+		public final byte[] objectBytes;
+		
+		PBinaryObject(int startOffset, int endOffset, Object object, byte[] byteDepths) {
+			this.startOffset = startOffset;
+			this.endOffset = endOffset;
+			this.object = object;
+			this.byteDepths = byteDepths;
+			this.objectBytes = null;
+		}
+		
+		PBinaryObject(Object object, byte[] byteDepths, byte[] objectBytes) {
+			this.startOffset = -1;
+			this.endOffset = -1;
+			this.object = object;
+			this.byteDepths = byteDepths;
+			this.objectBytes = objectBytes;
+		}
+	}
+	
+	/**
 	 * Wrapper object for a raw, unparsed stream object and its associated meta
 	 * data.
 	 * 
 	 * @author sautter
 	 */
 	public static class PStream {
-		/**
-		 * the Hashtable holding the stream parameters
-		 */
-//		public final Hashtable params;
+		
+		/** the map holding the stream parameters */
 		public final Map params;
-		/**
-		 * the raw binary data
-		 */
+		
+		/** the raw binary data */
 		public final byte[] bytes;
-//		PStream(Hashtable params, byte[] bytes) {
+		
+		/** the offset of the first byte of stream data relative to the start of the object proper */
+		public final int byteOffset;
+		
 		PStream(Map params, byte[] bytes) {
+			this(params, bytes, -1);
+		}
+		PStream(Map params, byte[] bytes, int byteOffset) {
 			this.params = params;
 			this.bytes = bytes;
+			this.byteOffset = byteOffset;
 		}
 		
-		/* (non-Javadoc)
-		 * @see java.lang.Object#toString()
-		 */
 		public String toString() {
 			return (this.params.toString() + ", [" + this.bytes.length + "]");
 		}
@@ -1175,35 +1547,68 @@ public class PdfParser {
 		/** does the binary data come from a HEX with 4 bytes per output byte object? */
 		public final boolean isHex4;
 		
-		final boolean isHexWithSpace;
+		/** the offset of the first byte of string data relative to the start of the enclosing top level object */
+		public final int byteOffset;
 		
-		final boolean isUtf16beAnsi;
-		final boolean isUtf16leAnsi;
+		public final boolean isHexWithSpace;
 		
-		PString(byte[] bytes) {
-			this(bytes, false, false, false);
+		public final boolean isUtf16beAnsi;
+		public final boolean isUtf16be;
+		
+		public final boolean isUtf16leAnsi;
+		public final boolean isUtf16le;
+		
+		PString(byte[] bytes, int byteOffset) {
+			this(bytes, false, false, false, true, byteOffset);
 		}
-		PString(byte[] bytes, boolean isHex2, boolean isHex4, boolean withSpace) {
+		PString(byte[] bytes, boolean isHex2, boolean isHex4, boolean withSpace, boolean checkUtf16, int byteOffset) {
 			this.bytes = bytes;
 			this.isHex2 = isHex2;
 			this.isHex4 = isHex4;
 			this.isHexWithSpace = withSpace;
-			if (!this.isHex2 && !this.isHex4 && ((bytes.length & 1) == 0))  {
+			if (checkUtf16 && !this.isHex2 && !this.isHex4 && ((bytes.length & 0x0001) == 0)) {
 				int evenZeros = 0;
 				int oddZeros = 0;
 				for (int b = 0; b < bytes.length; b++)
 					if (bytes[b] == 0) {
-						if ((b & 1) == 0)
+						if ((b & 0x0000001) == 0)
 							evenZeros++;
 						else oddZeros++;
 					}
-				this.isUtf16beAnsi = ((evenZeros * 2) == bytes.length);
-				this.isUtf16leAnsi = ((oddZeros * 2) == bytes.length);
+//				this.isUtf16beAnsi = ((evenZeros * 2) == bytes.length);
+				if ((evenZeros * 2) == bytes.length) {
+					this.isUtf16beAnsi = true;
+					this.isUtf16be = false;
+				}
+				else if ((bytes.length <= (evenZeros * 3)) && (oddZeros == 0)) {
+					this.isUtf16beAnsi = false;
+					this.isUtf16be = true;
+				}
+				else {
+					this.isUtf16beAnsi = false;
+					this.isUtf16be = false;
+				}
+//				this.isUtf16leAnsi = ((oddZeros * 2) == bytes.length);
+				if (((oddZeros * 2) == bytes.length)) {
+					this.isUtf16leAnsi = true;
+					this.isUtf16le = false;
+				}
+				else if ((bytes.length <= (oddZeros * 3)) && (evenZeros == 0)) {
+					this.isUtf16leAnsi = false;
+					this.isUtf16le = true;
+				}
+				else {
+					this.isUtf16leAnsi = false;
+					this.isUtf16le = false;
+				}
 			}
 			else {
 				this.isUtf16beAnsi = false;
+				this.isUtf16be = false;
 				this.isUtf16leAnsi = false;
+				this.isUtf16le = false;
 			}
+			this.byteOffset = byteOffset;
 		}
 		public int hashCode() {
 			return this.toString().hashCode();
@@ -1239,12 +1644,16 @@ public class PdfParser {
 				for (int c = 0; c < this.bytes.length; c+=2)
 					string.append((char) convertUnsigned(this.bytes[c]));
 			}
+			else if (this.isUtf16be || this.isUtf16le) {
+				for (int c = 0; c < (this.bytes.length / 2); c++)
+					string.append(this.charAt(c));
+			}
 			else for (int c = 0; c < this.bytes.length; c++)
 				string.append((char) convertUnsigned(this.bytes[c]));
 			return string.toString();
 		}
 		public int length() {
-			return (this.isHex4 ? ((this.bytes.length + 3) / 4) : ((this.isHex2 || this.isUtf16beAnsi || this.isUtf16leAnsi) ? ((this.bytes.length + 1) / 2) : this.bytes.length));
+			return (this.isHex4 ? ((this.bytes.length + 3) / 4) : ((this.isHex2 || this.isUtf16beAnsi || this.isUtf16be || this.isUtf16leAnsi || this.isUtf16le) ? ((this.bytes.length + 1) / 2) : this.bytes.length));
 		}
 		public char charAt(int index) {
 			if (this.isHex2)
@@ -1253,10 +1662,15 @@ public class PdfParser {
 				return ((char) this.getHex4(index * 4));
 			else if (this.isUtf16beAnsi || this.isUtf16leAnsi)
 				return ((char) convertUnsigned(this.bytes[(index * 2) + (this.isUtf16beAnsi ? 1 : 0)]));
+			else if (this.isUtf16be || this.isUtf16le) {
+				int high = convertUnsigned(this.bytes[(index * 2) + (this.isUtf16be ? 0 : 1)]);
+				int low = convertUnsigned(this.bytes[(index * 2) + (this.isUtf16be ? 1 : 0)]);
+				return ((char) ((high << 8) | low));
+			}
 			else return ((char) convertUnsigned(this.bytes[index]));
 		}
 		public CharSequence subSequence(int start, int end) {
-			if (this.isHex2 || this.isUtf16beAnsi || this.isUtf16leAnsi) {
+			if (this.isHex2 || this.isUtf16beAnsi || this.isUtf16be || this.isUtf16leAnsi || this.isUtf16le) {
 				start *= 2;
 				end *= 2;
 				if (end > this.bytes.length)
@@ -1268,7 +1682,23 @@ public class PdfParser {
 			}
 			byte[] bytes = new byte[end - start];
 			System.arraycopy(this.bytes, start, bytes, 0, (end - start));
-			return new PString(bytes, this.isHex2, this.isHex4, this.isHexWithSpace);
+			return new PString(bytes, this.isHex2, this.isHex4, this.isHexWithSpace, this.isUtf16beAnsi, this.isUtf16be, this.isUtf16leAnsi, this.isUtf16le, (this.byteOffset + start));
+		}
+		public PString toAnsiString() {
+			if (this.isUtf16beAnsi || this.isUtf16leAnsi)
+				return new PString(this.bytes, this.isHex2, this.isHex4, this.isHexWithSpace, false, false, false, false, -1);
+			else return this;
+		}
+		private PString(byte[] bytes, boolean isHex2, boolean isHex4, boolean isHexWithSpace, boolean isUtf16beAnsi, boolean isUtf16be, boolean isUtf16leAnsi, boolean isUtf16le, int byteOffset) {
+			this.bytes = bytes;
+			this.isHex2 = isHex2;
+			this.isHex4 = isHex4;
+			this.isHexWithSpace = isHexWithSpace;
+			this.isUtf16beAnsi = isUtf16beAnsi;
+			this.isUtf16be = isUtf16be;
+			this.isUtf16leAnsi = isUtf16leAnsi;
+			this.isUtf16le = isUtf16le;
+			this.byteOffset = byteOffset;
 		}
 		private int getHex2(int index) {
 			int ch = 0;
@@ -1352,8 +1782,8 @@ public class PdfParser {
 	 * 
 	 * @author sautter
 	 */
-	public static class PImage {
-		public final PStream data;
+	static class PImage {
+		final PStream data;
 		BufferedImage image;
 		/**
 		 * Constructor
@@ -1384,7 +1814,7 @@ public class PdfParser {
 	 * 
 	 * @author sautter
 	 */
-	public static class PMatrix {
+	static class PMatrix {
 		static final PMatrix identity;
 		static {
 			float[][] itm = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
@@ -1404,12 +1834,6 @@ public class PdfParser {
 			else this.tm = tm;
 			this.rotate = rotate;
 		}
-//		private float[] scaleRotate1 = null;
-//		private float[] scaleRotate2 = null;
-//		private float scaleX;
-//		private float scaleY;
-//		private float scaleLin;
-//		private float scaleDiag;
 		private boolean containsInversion;
 		private double rotation1 = Double.NaN;
 		private double rotation2 = Double.NaN;
@@ -1419,7 +1843,6 @@ public class PdfParser {
 		private boolean rightSideLeft;
 		private int quadrantRotation;
 		private void ensureAnalyzed() {
-//			if ((this.scaleRotate1 != null) && (this.scaleRotate2 != null))
 			if (!Double.isNaN(this.rotation))
 				return;
 			float[] scaleRotate0 = {1, 0, 0};
@@ -1569,7 +1992,9 @@ public class PdfParser {
 	 * 
 	 * @author sautter
 	 */
-	public static abstract class PObject implements Comparable {
+	static abstract class PObject implements Comparable {
+		//	TODOne do we REALLY want all these objects package private ?!?
+		//	==> most likely yes, as fonts are package private already
 		final int renderOrderNumber;
 		PObject(int renderOrderNumber) {
 			this.renderOrderNumber = renderOrderNumber;
@@ -1589,30 +2014,43 @@ public class PdfParser {
 	 * 
 	 * @author sautter
 	 */
-	public static class PWord extends PObject {
-		public static final int LEFT_RIGHT_FONT_DIRECTION = 0;
-		public static final int BOTTOM_UP_FONT_DIRECTION = 1;
-		public static final int TOP_DOWN_FONT_DIRECTION = -1;
-		public static final int UPSIDE_DOWN_FONT_DIRECTION = -2;
-		public final String charCodes;
-		public final String str;
-		public final float baseline;
-		public final Rectangle2D.Float bounds;
-		public final Color color;
-		public final boolean bold;
-		public final boolean italics;
-		public final boolean serif;
-		public final boolean monospaced;
-		public final int fontSize;
-		public final int fontDirection;
-		public final PdfFont font;
+	static class PWord extends PObject {
+		static final int LEFT_RIGHT_FONT_DIRECTION = 0;
+		static final int BOTTOM_UP_FONT_DIRECTION = 1;
+		static final int TOP_DOWN_FONT_DIRECTION = -1;
+		static final int UPSIDE_DOWN_FONT_DIRECTION = -2;
+//		final String charCodes;
+		final String charCodesEnlarged;
+		final char lastCharCode;
+		final String str;
+		final float baseline;
+		final Rectangle2D.Float bounds;
+		final Color color;
+		final boolean bold;
+		final boolean italics;
+		final boolean serif;
+		final boolean monospaced;
+//		final int fontSize;
+		final float fontSize;
+		final int fontDirection;
+		final PdfFont font;
 		boolean joinWithNext = false;
-		PWord(int renderOrderNumber, String charCodes, float baseline, Rectangle2D.Float bounds, Color color, int fontSize, int fontDirection, PdfFont font) {
+//		PWord(int renderOrderNumber, String charCodes, float baseline, Rectangle2D.Float bounds, Color color, int fontSize, int fontDirection, PdfFont font) {
+		PWord(int renderOrderNumber, String charCodes, float baseline, Rectangle2D.Float bounds, Color color, float fontSize, int fontDirection, PdfFont font) {
 			this(renderOrderNumber, charCodes, null, baseline, bounds, color, fontSize, fontDirection, font);
 		}
-		PWord(int renderOrderNumber, String charCodes, String str, float baseline, Rectangle2D.Float bounds, Color color, int fontSize, int fontDirection, PdfFont font) {
+//		PWord(int renderOrderNumber, String charCodes, String str, float baseline, Rectangle2D.Float bounds, Color color, int fontSize, int fontDirection, PdfFont font) {
+		PWord(int renderOrderNumber, String charCodes, String str, float baseline, Rectangle2D.Float bounds, Color color, float fontSize, int fontDirection, PdfFont font) {
 			super(renderOrderNumber);
-			this.charCodes = charCodes;
+			this.charCodesEnlarged = charCodes;
+			char lastCharCode = ((char) 0);
+			if (this.charCodesEnlarged != null)
+				for (int c = 0; c < charCodesEnlarged.length(); c++) {
+					char cc = this.charCodesEnlarged.charAt(c);
+					if (cc != 0)
+						lastCharCode = cc;
+				}
+			this.lastCharCode = lastCharCode;
 			this.str = str;
 			this.baseline = baseline;
 			this.bounds = bounds;
@@ -1626,8 +2064,8 @@ public class PdfParser {
 			this.font = font;
 			if (DEBUG_RENDER_PAGE_CONTENT && (str != null)) {
 				System.out.print("Got word '" + this.str + "' at RON " + this.renderOrderNumber + " with char codes '");
-				for (int c = 0; c < this.charCodes.length(); c++)
-					System.out.print(((c == 0) ? "" : " ") + Integer.toString(((int) this.charCodes.charAt(c)), 16));
+				for (int c = 0; c < this.charCodesEnlarged.length(); c++)
+					System.out.print(((c == 0) ? "" : " ") + Integer.toString(((int) this.charCodesEnlarged.charAt(c)), 16));
 				System.out.println("'" + ((this.font == null) ? "" : (" in font " + this.font.name)));
 				System.out.println("  color is " + this.color + ((this.color == null) ? "" : (" with alpha " + this.color.getAlpha())));
 			}
@@ -1660,25 +2098,11 @@ public class PdfParser {
 	 * 
 	 * @author sautter
 	 */
-	public static class PFigure extends PVisualObject {
+	static class PFigure extends PVisualObject {
 		String name;
 		Rectangle2D.Float bounds;
-//		double rotation;
-//		boolean rightSideLeft;
-//		boolean upsideDown;
 		PFigure[] subFigures;
 		Object refOrData;
-//		PFigure(int renderOrderNumber, String name, Rectangle2D.Float bounds, PPath[] clipPaths, Object refOrData, double rotation, boolean rightSideLeft, boolean upsideDown) {
-//			super(renderOrderNumber);
-//			this.name = name;
-//			this.bounds = bounds;
-//			this.refOrData = refOrData;
-//			this.rotation = rotation;
-//			this.rightSideLeft = rightSideLeft;
-//			this.upsideDown = upsideDown;
-//			this.subFigures = null;
-//			this.setClipPaths(clipPaths);
-//		}
 		PFigure[] softMasks;
 		PMatrix transform;
 		PFigure(int renderOrderNumber, String name, Rectangle2D.Float bounds, PPath[] clipPaths, PFigure[] softMasks, Object refOrData, PMatrix transform) {
@@ -1717,9 +2141,6 @@ public class PdfParser {
 			this.bounds = new Rectangle2D.Float(lx, by, (rx - lx), (ty - by));
 			this.clipPaths = null;
 			this.refOrData = null;
-//			this.rotation = 0;
-//			this.rightSideLeft = false;
-//			this.upsideDown = false;
 			this.transform = PMatrix.identity;
 			this.softMasks = null;
 			this.visibleBounds = convertFloat(pf1.visibleBounds.createUnion(pf2.visibleBounds));
@@ -1743,7 +2164,7 @@ public class PdfParser {
 	 * 
 	 * @author sautter
 	 */
-	public static class PPath extends PVisualObject {
+	static class PPath extends PVisualObject {
 		private float x;
 		private float y;
 		
@@ -1876,10 +2297,11 @@ public class PdfParser {
 		float dashPatternPhase = Float.NaN;
 		void stroke(PPath[] clipPaths, Color color, float lineWidth, byte lineCapStyle, byte lineJointStyle, float miterLimit, List dashPattern, float dashPatternPhase, PcrTransformationMatrixStack transformationMatrices) {
 			strokeCount++;
-			if (color != null)
-				strokeColors.add(Integer.toString((color.getRGB() & 0xFFFFFF), 16).toUpperCase());
-			if (color == null)
-				throw new RuntimeException("Cannot stroke without color");
+			if (color == null) {
+//				throw new RuntimeException("Cannot stroke without color");
+				color = Color.MAGENTA;
+			}
+			strokeColors.add(Integer.toString((color.getRGB() & 0xFFFFFF), 16).toUpperCase());
 			this.strokeColor = color;
 			this.lineWidth = zoom(lineWidth, transformationMatrices);
 			this.lineCapStyle = lineCapStyle;
@@ -1907,10 +2329,11 @@ public class PdfParser {
 		boolean fillEvenOdd = false;
 		void fill(PPath[] clipPaths, Color color, boolean fillEvenOdd) {
 			fillCount++;
-			if (color != null)
-				fillColors.add(Integer.toString((color.getRGB() & 0xFFFFFF), 16).toUpperCase());
-			if (color == null)
-				throw new RuntimeException("Cannot fill without color");
+			if (color == null) {
+//				throw new RuntimeException("Cannot fill without color");
+				color = Color.CYAN;
+			}
+			fillColors.add(Integer.toString((color.getRGB() & 0xFFFFFF), 16).toUpperCase());
 			this.fillColor = color;
 			this.fillEvenOdd = fillEvenOdd;
 			if (PdfExtractorTest.aimAtPage != -1)
@@ -2061,7 +2484,7 @@ public class PdfParser {
 			return ((this.fillColor == null) ? "ffffff" : Integer.toString((this.fillColor.getRGB() & 0xFFFFFF), 16).toUpperCase());
 		}
 		
-		public void paint(Graphics2D gr) {
+		void paint(Graphics2D gr) {
 			Color preColor = gr.getColor();
 			Stroke preStroke = gr.getStroke();
 			
@@ -2140,12 +2563,6 @@ public class PdfParser {
 			for (int p = 0; p < this.subPaths.size(); p++)
 				tPath.subPaths.add(((PSubPath) this.subPaths.get(p)).translate(tPath, x, y));
 			
-//			if (this.clipPaths != null) {
-//				tPath.clipPaths = new PPath[this.clipPaths.length];
-//				for (int cp = 0; cp < this.clipPaths.length; cp++)
-//					tPath.clipPaths[cp] = this.clipPaths[cp].translate(x, y);
-//			}
-//			tPath.visibleBounds = getVisibleBounds(tPath.getBounds(), tPath.clipPaths);
 			PPath[] tClipPaths = null;
 			if (this.clipPaths != null) {
 				tClipPaths = new PPath[this.clipPaths.length];
@@ -2156,37 +2573,6 @@ public class PdfParser {
 			
 			return tPath;
 		}
-//		
-//		PPath transform(LinkedList matrices) {
-//			PPath tPath = new PPath(this.renderOrderNumber);
-//			float[] minPoint = transformPoint(this.minX, this.minY, matrices);
-//			tPath.minX = minPoint[0];
-//			tPath.minY = minPoint[1];
-//			float[] maxPoint = transformPoint(this.maxX, this.maxY, matrices);
-//			tPath.maxX = maxPoint[0];
-//			tPath.maxY = maxPoint[1];
-//			
-//			tPath.strokeColor = this.strokeColor;
-//			tPath.lineWidth = this.lineWidth;
-//			tPath.lineCapStyle = this.lineCapStyle;
-//			tPath.lineJointStyle = this.lineJointStyle;
-//			tPath.miterLimit = this.miterLimit;
-//			tPath.dashPattern = this.dashPattern;
-//			tPath.dashPatternPhase = this.dashPatternPhase;
-//			tPath.fillColor = this.fillColor;
-//			
-//			for (int p = 0; p < this.subPaths.size(); p++)
-//				tPath.subPaths.add(((PSubPath) this.subPaths.get(p)).transform(tPath, matrices));
-//			
-//			if (this.clipPaths != null) {
-//				tPath.clipPaths = new PPath[this.clipPaths.length];
-//				for (int cp = 0; cp < this.clipPaths.length; cp++)
-//					tPath.clipPaths[cp] = this.clipPaths[cp].transform(matrices);
-//			}
-//			tPath.visibleBounds = getVisibleBounds(tPath.getBounds(), tPath.clipPaths);
-//			
-//			return tPath;
-//		}
 		
 		public String toString() {
 			Rectangle2D bounds = this.getBounds();
@@ -2199,7 +2585,7 @@ public class PdfParser {
 	 * 
 	 * @author sautter
 	 */
-	public static class PSubPath {
+	static class PSubPath {
 		//	TODO_not derive this class from Path2D.Float for easier handling ==> too much overhead, getPath() works better
 		
 		final PPath parent;
@@ -2370,8 +2756,6 @@ public class PdfParser {
 				}
 				this.bounds = new Rectangle2D.Float(minX, minY, (maxX - minX), (maxY - minY));
 			}
-//			if (this.bounds == null)
-//				this.bounds = new Rectangle2D.Float(this.minX, this.minY, (this.maxX - this.minX), (this.maxY - this.minY));
 			return this.bounds;
 		}
 		
@@ -2390,36 +2774,6 @@ public class PdfParser {
 			}
 			return tSubPath;
 		}
-//		
-//		PSubPath transform(PPath tParent, LinkedList matrices) {
-//			float[] startPoint = transformPoint(this.startX, this.startY, matrices);
-//			PSubPath tSubPath = new PSubPath(tParent, startPoint[0], startPoint[1]);
-//			float[] minPoint = transformPoint(this.minX, this.minY, matrices);
-//			tSubPath.minX = minPoint[0];
-//			tSubPath.minY = minPoint[1];
-//			float[] maxPoint = transformPoint(this.maxX, this.maxY, matrices);
-//			tSubPath.maxX = maxPoint[0];
-//			tSubPath.maxY = maxPoint[1];
-//			
-//			for (int s = 0; s < this.shapes.size(); s++) {
-//				Shape shape = ((Shape) this.shapes.get(s));
-//				if (shape instanceof Line2D) {
-//					Line2D line = ((Line2D) shape);
-//					float[] sPoint = transformPoint(((float) line.getX1()), ((float) line.getY1()), matrices);
-//					float[] ePoint = transformPoint(((float) line.getX2()), ((float) line.getY2()), matrices);
-//					tSubPath.shapes.add(new Line2D.Float(sPoint[0], sPoint[1], ePoint[0], ePoint[1]));
-//				}
-//				else if (shape instanceof CubicCurve2D) {
-//					CubicCurve2D curve = ((CubicCurve2D) shape);
-//					float[] sPoint = transformPoint(((float) curve.getX1()), ((float) curve.getY1()), matrices);
-//					float[] cPoint1 = transformPoint(((float) curve.getCtrlX1()), ((float) curve.getCtrlY1()), matrices);
-//					float[] cPoint2 = transformPoint(((float) curve.getCtrlX2()), ((float) curve.getCtrlY2()), matrices);
-//					float[] ePoint = transformPoint(((float) curve.getX2()), ((float) curve.getY2()), matrices);
-//					tSubPath.shapes.add(new CubicCurve2D.Float(sPoint[0], sPoint[1], cPoint1[0], cPoint1[1], cPoint2[0], cPoint2[1], ePoint[0], ePoint[1]));
-//				}
-//			}
-//			return tSubPath;
-//		}
 	}
 	
 	static Rectangle2D getVisibleBounds(Rectangle2D bounds, PPath[] clipPaths) {
@@ -2442,10 +2796,10 @@ public class PdfParser {
 	 * 
 	 * @author sautter
 	 */
-	public static class PPageContent {
-		public final PWord[] words;
-		public final PFigure[] figures;
-		public final PPath[] paths;
+	static class PPageContent {
+		final PWord[] words;
+		final PFigure[] figures;
+		final PPath[] paths;
 		PPageContent(PWord[] words, PFigure[] figures, PPath[] paths) {
 			this.words = words;
 			this.figures = figures;
@@ -2458,11 +2812,11 @@ public class PdfParser {
 	 * 
 	 * @author sautter
 	 */
-	public static class PRotate {
+	static class PRotate {
 		static final PRotate identity = new PRotate(0, 0, 0);
-		public final float centerX;
-		public final float centerY;
-		public final int degrees;
+		final float centerX;
+		final float centerY;
+		final int degrees;
 		PRotate(float centerX, float centerY, int degrees) {
 			this.centerX = centerX;
 			this.centerY = centerY;
@@ -2498,8 +2852,8 @@ public class PdfParser {
 	 * @param wordsAreOcr are words OCR embedded in a scanned PDF?
 	 * @throws IOException
 	 */
-	public static void getPageWordChars(Map entries, byte[] content, PRotate rotate, Map resources, Map objects, boolean wordsAreOcr, ProgressMonitor pm) throws IOException {
-		runPageContent(entries, content, rotate, resources, objects, null, null, PdfFontDecoder.NO_DECODING, wordsAreOcr, null, null, pm);
+	public static void getPageWordChars(Map entries, byte[] content, PRotate rotate, Library library, Map resources, Map objects, FontDecoderCharset fontCharSet, boolean wordsAreOcr, ProgressMonitor pm) throws IOException {
+		runPageContent(entries, content, rotate, library, resources, objects, null, null, fontCharSet, wordsAreOcr, null, null, pm);
 	}
 	
 	/**
@@ -2516,8 +2870,8 @@ public class PdfParser {
 	 * @return the words extracted from the page
 	 * @throws IOException
 	 */
-	public static PWord[] getPageWords(Map entries, byte[] content, PRotate rotate, Map resources, Map objects, Tokenizer tokenizer, boolean wordsAreOcr, ProgressMonitor pm) throws IOException {
-		return getPageWords(entries, content, rotate, resources, objects, tokenizer, PdfFontDecoder.UNICODE, wordsAreOcr, null, null, pm);
+	public static PWord[] getPageWords(Map entries, byte[] content, PRotate rotate, Library library, Map resources, Map objects, Tokenizer tokenizer, boolean wordsAreOcr, ProgressMonitor pm) throws IOException {
+		return getPageWords(entries, content, rotate, library, resources, objects, tokenizer, PdfFontDecoder.UNICODE, wordsAreOcr, null, null, pm);
 	}
 	
 	/**
@@ -2535,8 +2889,8 @@ public class PdfParser {
 	 * @return the words extracted from the page
 	 * @throws IOException
 	 */
-	public static PWord[] getPageWords(Map entries, byte[] content, PRotate rotate, Map resources, Map objects, Tokenizer tokenizer, FontDecoderCharset fontCharSet, boolean wordsAreOcr, ProgressMonitor pm) throws IOException {
-		return getPageWords(entries, content, rotate, resources, objects, tokenizer, fontCharSet, wordsAreOcr, null, null, pm);
+	public static PWord[] getPageWords(Map entries, byte[] content, PRotate rotate, Library library, Map resources, Map objects, Tokenizer tokenizer, FontDecoderCharset fontCharSet, boolean wordsAreOcr, ProgressMonitor pm) throws IOException {
+		return getPageWords(entries, content, rotate, library, resources, objects, tokenizer, fontCharSet, wordsAreOcr, null, null, pm);
 	}
 	
 	/**
@@ -2557,8 +2911,8 @@ public class PdfParser {
 	 * @return the words extracted from the page
 	 * @throws IOException
 	 */
-	public static PWord[] getPageWords(Map entries, byte[] content, PRotate rotate, Map resources, Map objects, Tokenizer tokenizer, boolean wordsAreOcr, List figures, List paths, ProgressMonitor pm) throws IOException {
-		return getPageWords(entries, content, rotate, resources, objects, tokenizer, PdfFontDecoder.UNICODE, wordsAreOcr, figures, paths, pm);
+	public static PWord[] getPageWords(Map entries, byte[] content, PRotate rotate, Library library, Map resources, Map objects, Tokenizer tokenizer, boolean wordsAreOcr, List figures, List paths, ProgressMonitor pm) throws IOException {
+		return getPageWords(entries, content, rotate, library, resources, objects, tokenizer, PdfFontDecoder.UNICODE, wordsAreOcr, figures, paths, pm);
 	}
 	
 	/**
@@ -2580,9 +2934,9 @@ public class PdfParser {
 	 * @return the words extracted from the page
 	 * @throws IOException
 	 */
-	public static PWord[] getPageWords(Map entries, byte[] content, PRotate rotate, Map resources, Map objects, Tokenizer tokenizer, FontDecoderCharset fontCharSet, boolean wordsAreOcr, List figures, List paths, ProgressMonitor pm) throws IOException {
+	public static PWord[] getPageWords(Map entries, byte[] content, PRotate rotate, Library library, Map resources, Map objects, Tokenizer tokenizer, FontDecoderCharset fontCharSet, boolean wordsAreOcr, List figures, List paths, ProgressMonitor pm) throws IOException {
 		ArrayList words = new ArrayList();
-		runPageContent(entries, content, rotate, resources, objects, words, tokenizer, fontCharSet, wordsAreOcr, figures, paths, pm);
+		runPageContent(entries, content, rotate, library, resources, objects, words, tokenizer, fontCharSet, wordsAreOcr, figures, paths, pm);
 		return ((PWord[]) words.toArray(new PWord[words.size()]));
 	}
 	
@@ -2598,9 +2952,9 @@ public class PdfParser {
 	 * @return the figures extracted from the page
 	 * @throws IOException
 	 */
-	public static PFigure[] getPageFigures(Map entries, byte[] content, PRotate rotate, Map resources, Map objects, ProgressMonitor pm) throws IOException {
+	public static PFigure[] getPageFigures(Map entries, byte[] content, PRotate rotate, Library library, Map resources, Map objects, ProgressMonitor pm) throws IOException {
 		ArrayList figures = new ArrayList();
-		runPageContent(entries, content, rotate, resources, objects, null, null, false, figures, null, pm);
+		runPageContent(entries, content, rotate, library, resources, objects, null, null, false, figures, null, pm);
 		return ((PFigure[]) figures.toArray(new PFigure[figures.size()]));
 	}
 	
@@ -2616,9 +2970,9 @@ public class PdfParser {
 	 * @return the vector graphics paths extracted from the page
 	 * @throws IOException
 	 */
-	public static PPath[] getPagePaths(Map entries, byte[] content, PRotate rotate, Map resources, Map objects, ProgressMonitor pm) throws IOException {
+	public static PPath[] getPagePaths(Map entries, byte[] content, PRotate rotate, Library library, Map resources, Map objects, ProgressMonitor pm) throws IOException {
 		ArrayList paths = new ArrayList();
-		runPageContent(entries, content, rotate, resources, objects, null, null, false, null, paths, pm);
+		runPageContent(entries, content, rotate, library, resources, objects, null, null, false, null, paths, pm);
 		return ((PPath[]) paths.toArray(new PPath[paths.size()]));
 	}
 	
@@ -2637,10 +2991,10 @@ public class PdfParser {
 	 *            page
 	 * @throws IOException
 	 */
-	public static PPageContent getPageGraphics(Map entries, byte[] content, PRotate rotate, Map resources, Map objects, ProgressMonitor pm) throws IOException {
+	public static PPageContent getPageGraphics(Map entries, byte[] content, PRotate rotate, Library library, Map resources, Map objects, ProgressMonitor pm) throws IOException {
 		ArrayList figures = new ArrayList();
 		ArrayList paths = new ArrayList();
-		runPageContent(entries, content, rotate, resources, objects, null, null, false, figures, paths, pm);
+		runPageContent(entries, content, rotate, library, resources, objects, null, null, false, figures, paths, pm);
 		return new PPageContent(new PWord[0], ((PFigure[]) figures.toArray(new PFigure[figures.size()])), ((PPath[]) paths.toArray(new PPath[paths.size()])));
 	}
 	
@@ -2659,8 +3013,8 @@ public class PdfParser {
 	 *            page
 	 * @throws IOException
 	 */
-	public static PPageContent getPageContent(Map entries, byte[] content, PRotate rotate, Map resources, Map objects, Tokenizer tokenizer, boolean wordsAreOcr, ProgressMonitor pm) throws IOException {
-		return getPageContent(entries, content, rotate, resources, objects, tokenizer, PdfFontDecoder.UNICODE, wordsAreOcr, pm);
+	public static PPageContent getPageContent(Map entries, byte[] content, PRotate rotate, Library library, Map resources, Map objects, Tokenizer tokenizer, boolean wordsAreOcr, ProgressMonitor pm) throws IOException {
+		return getPageContent(entries, content, rotate, library, resources, objects, tokenizer, PdfFontDecoder.UNICODE, wordsAreOcr, pm);
 	}
 	
 	/**
@@ -2679,22 +3033,21 @@ public class PdfParser {
 	 *            page
 	 * @throws IOException
 	 */
-	public static PPageContent getPageContent(Map entries, byte[] content, PRotate rotate, Map resources, Map objects, Tokenizer tokenizer, FontDecoderCharset fontCharSet, boolean wordsAreOcr, ProgressMonitor pm) throws IOException {
+	public static PPageContent getPageContent(Map entries, byte[] content, PRotate rotate, Library library, Map resources, Map objects, Tokenizer tokenizer, FontDecoderCharset fontCharSet, boolean wordsAreOcr, ProgressMonitor pm) throws IOException {
 		ArrayList words = new ArrayList();
 		ArrayList figures = new ArrayList();
 		ArrayList paths = new ArrayList();
-		runPageContent(entries, content, rotate, resources, objects, words, tokenizer, fontCharSet, wordsAreOcr, figures, paths, pm);
+		runPageContent(entries, content, rotate, library, resources, objects, words, tokenizer, fontCharSet, wordsAreOcr, figures, paths, pm);
 		return new PPageContent(((PWord[]) words.toArray(new PWord[words.size()])), ((PFigure[]) figures.toArray(new PFigure[figures.size()])), ((PPath[]) paths.toArray(new PPath[paths.size()])));
 	}
 	
 	//	SYNCHRONIZING THIS AS A WHOLE DOES DO THE TRICK ... BUT MAYBE WE CAN BE FASTER
-//	private static synchronized Map getPageFonts(Map resources, Map objects, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException {
-	private static Map getPageFonts(Map resources, Map objects, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException {
+	private static Map getPageFonts(Library library, Map resources, Map objects, FontDecoderCharset charSet, boolean decode, ProgressMonitor pm) throws IOException {
 		synchronized (objects) /* as objects map is local to decoding run, this should allow multiple PDFs to decode in parallel */ {
-			return doGetPageFonts(resources, objects, charSet, pm);
+			return doGetPageFonts(library, resources, objects, charSet, decode, pm);
 		}
 	}
-	private static Map doGetPageFonts(Map resources, Map objects, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException {
+	private static Map doGetPageFonts(Library library, Map resources, Map objects, FontDecoderCharset charSet, boolean decode, ProgressMonitor pm) throws IOException {
 		Map fonts = new HashMap();
 		Map charDecoders = new HashMap();
 		
@@ -2730,7 +3083,7 @@ public class PdfParser {
 			//	this one has already been loaded
 			if (fontObj instanceof PdfFont) {
 				fonts.put(fontKey.toString(), ((PdfFont) fontObj));
-				if (charSet != PdfFontDecoder.NO_DECODING)
+				if (decode && (charSet != PdfFontDecoder.NO_DECODING))
 					toDecodeFonts.add(fontObj);
 				if (PdfFont.DEBUG_LOAD_FONTS && (fontRef != null)) System.out.println("Font cache hit for " + ((Reference) fontRef).getObjectNumber() + " " + ((Reference) fontRef).getGenerationNumber());
 			}
@@ -2738,15 +3091,15 @@ public class PdfParser {
 			//	we need to load this one
 			else if (fontObj instanceof Map) {
 				if (PdfFont.DEBUG_LOAD_FONTS) System.out.println("Loading font from " + fontObj);
-				PdfFont pFont = PdfFont.readFont(fontKey, ((Map) fontObj), objects, true, charDecoders, charSet, pm);
+				PdfFont pFont = PdfFont.readFont(fontKey, ((Map) fontObj), library, objects, charDecoders, charSet, pm);
 				if (pFont != null) {
 					if (PdfFont.DEBUG_LOAD_FONTS) System.out.println("Font loaded: " + pFont.name + " (" + pFont + ")");
 					fonts.put(fontKey.toString(), pFont);
-					if (fontRef != null) synchronized (objects) {
+					if (fontRef != null) synchronized (objects) /* store font in object map so next page using it need not decode it again */ {
 						objects.put((((Reference) fontRef).getObjectNumber() + " " + ((Reference) fontRef).getGenerationNumber()), pFont);
 						if (PdfFont.DEBUG_LOAD_FONTS) System.out.println("Font cached as " + ((Reference) fontRef).getObjectNumber() + " " + ((Reference) fontRef).getGenerationNumber());
 					}
-					if (charSet != PdfFontDecoder.NO_DECODING)
+					if (decode && (charSet != PdfFontDecoder.NO_DECODING))
 						toDecodeFonts.add(pFont);
 				}
 			}
@@ -2798,8 +3151,8 @@ public class PdfParser {
 	 * @return the words extracted from the page
 	 * @throws IOException
 	 */
-	public static void runPageContent(Map entries, byte[] content, PRotate rotate, Map resources, Map objects, List words, Tokenizer tokenizer, boolean wordsAreOcr, List figures, List paths, ProgressMonitor pm) throws IOException {
-		runPageContent(0, null, entries, content, rotate, resources, objects, words, tokenizer, PdfFontDecoder.UNICODE, figures, paths, ((words == null) && (figures == null) && (paths == null)), wordsAreOcr, pm, "");
+	public static void runPageContent(Map entries, byte[] content, PRotate rotate, Library library, Map resources, Map objects, List words, Tokenizer tokenizer, boolean wordsAreOcr, List figures, List paths, ProgressMonitor pm) throws IOException {
+		runPageContent(0, null, entries, content, rotate, library, resources, objects, words, tokenizer, PdfFontDecoder.UNICODE, figures, paths, ((words == null) && (figures == null) && (paths == null)), wordsAreOcr, null, pm, "");
 	}
 	
 	/**
@@ -2817,32 +3170,32 @@ public class PdfParser {
 	 * @return the words extracted from the page
 	 * @throws IOException
 	 */
-	public static void runPageContent(Map entries, byte[] content, PRotate rotate, Map resources, Map objects, List words, Tokenizer tokenizer, FontDecoderCharset fontCharSet, boolean wordsAreOcr, List figures, List paths, ProgressMonitor pm) throws IOException {
-		runPageContent(0, null, entries, content, rotate, resources, objects, words, tokenizer, fontCharSet, figures, paths, ((words == null) && (figures == null) && (paths == null)), wordsAreOcr, pm, "");
+	public static void runPageContent(Map entries, byte[] content, PRotate rotate, Library library, Map resources, Map objects, List words, Tokenizer tokenizer, FontDecoderCharset fontCharSet, boolean wordsAreOcr, List figures, List paths, ProgressMonitor pm) throws IOException {
+		runPageContent(0, null, entries, content, rotate, library, resources, objects, words, tokenizer, fontCharSet, figures, paths, ((words == null) && (figures == null) && (paths == null)), wordsAreOcr, null, pm, "");
 	}
 	
-	private static int runPageContent(int firstRenderOrderNumber, PcrTransformationMatrixStack inheritedTransformationMatrices, Map entries, byte[] content, PRotate rotate, Map resources, Map objects, List words, Tokenizer tokenizer, FontDecoderCharset fontCharSet, List figures, List paths, boolean assessFonts, boolean wordsAreOcr, ProgressMonitor pm, String indent) throws IOException {
+	static int runPageContent(int firstRenderOrderNumber, PcrTransformationMatrixStack inheritedTransformationMatrices, Map entries, byte[] content, PRotate rotate, Library library, Map resources, Map objects, List words, Tokenizer tokenizer, FontDecoderCharset fontCharSet, List figures, List paths, boolean assessFonts, boolean wordsAreOcr, List colors, ProgressMonitor pm, String indent) throws IOException {
 		
 		//	get XObject (required for figure extraction and recursive form handling)
 		Object xObjectObj = dereference(resources.get("XObject"), objects);
 		Map xObject = ((xObjectObj instanceof Map) ? ((Map) xObjectObj) : null);
 		
 		//	get fonts (unless we're after figures or vector paths, but not after words)
-		Map fonts = (((words == null) && ((figures != null) || (paths != null))) ? new HashMap() : getPageFonts(resources, objects, ((words == null) ? PdfFontDecoder.NO_DECODING : fontCharSet), pm));
+		Map fonts = (((words == null) && ((figures != null) || (paths != null))) ? new HashMap() : getPageFonts(library, resources, objects, fontCharSet, !assessFonts, pm));
 		
 		//	we need to collect words even in font assessment mode
 		if ((words == null) && assessFonts)
 			words = new ArrayList();
 		
 		//	create renderer to fill lists
-		PageContentRenderer pcr = new PageContentRenderer(firstRenderOrderNumber, rotate, inheritedTransformationMatrices, resources, fonts, fontCharSet, xObject, objects, words, figures, paths, assessFonts, wordsAreOcr, indent);
+		PageContentRenderer pcr = new PageContentRenderer(firstRenderOrderNumber, rotate, inheritedTransformationMatrices, resources, fonts, fontCharSet, xObject, library, objects, words, figures, paths, assessFonts, wordsAreOcr, colors, indent);
 		
 		//	process page content through renderer
-		PdfByteInputStream bytes = new PdfByteInputStream(new ByteArrayInputStream(content));
-		System.out.println("Running page content of " + content.length + " bytes");
-		Object obj;
+		PdfByteInputStream bytes = new PdfByteInputStream(content);
+		if (DEBUG_RENDER_PAGE_CONTENT) System.out.println("Running page content of " + content.length + " bytes");
+//		if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(new String(content));
 		LinkedList stack = new LinkedList();
-		while ((obj = cropNext(bytes, true, false)) != null) {
+		for (Object obj; (obj = cropNext(bytes, true, false)) != null;) {
 			if (obj instanceof PInlineImage) {
 				if (DEBUG_RENDER_PAGE_CONTENT) System.out.println("Inline Image: " + ((PInlineImage) obj).tag + " [" + ((PInlineImage) obj).data.length + "]");
 				pcr.evaluateTag(((PInlineImage) obj).tag, ((PInlineImage) obj).data, stack, pm);
@@ -2875,6 +3228,10 @@ public class PdfParser {
 				stack.addLast(obj);
 			}
 		}
+		
+		//	we're after the colors in some tiling pattern only
+		if (colors != null)
+			return firstRenderOrderNumber;
 		
 		//	sort out words with invalid bounding boxes, duplicate words, and words in all too light colors (water marks, etc.)
 		if (words != null) {
@@ -2909,52 +3266,6 @@ public class PdfParser {
 //				}
 			}
 		}
-		
-//		NO NEED TO CHECK ROTATION HERE ANY MORE, AS WE DON'T HAVE TO FIT AN IcePDF PAGE IMAGE ANY LONGER
-//		//	check rotation
-//		Object rotateObj = dereference(entries.get("Rotate"), objects);
-//		int rotate = ((rotateObj instanceof Number) ? ((Number) rotateObj).intValue() : 0);
-//		if (DEBUG_RENDER_PAGE_CONTENT) System.out.println("Page rotation is " + rotate);
-//		
-//		//	rotate words and figures
-//		if (rotate != 0) {
-//			if (DEBUG_RENDER_PAGE_CONTENT) System.out.println("Rotating words and figures");
-//			Object mbObj = dereference(entries.get("MediaBox"), objects);
-//			if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" - media box is " + mbObj);
-//			float pgw = -1;
-//			float pgh = -1;
-//			if ((mbObj instanceof Vector) && (((Vector) mbObj).size() == 4)) {
-//				Object pgwObj = ((Vector) mbObj).get(2);
-//				if (pgwObj instanceof Number)
-//					pgw = ((Number) pgwObj).floatValue();
-//				Object pghObj = ((Vector) mbObj).get(3);
-//				if (pghObj instanceof Number)
-//					pgh = ((Number) pghObj).floatValue();
-//			}
-//			if (DEBUG_RENDER_PAGE_CONTENT) System.out.println(" - page width is " + pgw + ", page height is " + pgh);
-//			if (words != null)
-//				for (int w = 0; w < words.size(); w++) {
-//					PWord pw = ((PWord) words.get(w));
-//					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" - '" + pw.str + "' @ " + pw.bounds + " directed " + pw.fontDirection);
-//					int rfd = pw.fontDirection;
-//					if ((rotate == 90) || (rotate == -270))
-//						rfd--;
-//					else if ((rotate == 270) || (rotate == -90))
-//						rfd++;
-//					PWord rpw = new PWord(pw.renderOrderNumber, pw.charCodes, pw.str, rotateBounds(pw.bounds, pgw, pgh, rotate), pw.color, pw.fontSize, rfd, pw.font);
-//					rpw.joinWithNext = pw.joinWithNext;
-//					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" --> '" + rpw.str + "' @ " + rpw.bounds + " directed " + rpw.fontDirection);
-//					words.set(w, rpw);
-//				}
-//			if (figures != null)
-//				for (int f = 0; f < figures.size(); f++) {
-//					PFigure pf = ((PFigure) figures.get(f));
-//					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" - '" + pf.name + "' @ " + pf.bounds);
-//					PFigure rpf = new PFigure(pf.renderOrderNumber, pf.name, rotateBounds(pf.bounds, pgw, pgh, rotate), pf.refOrData, pf.rotation, pf.rightSideLeft, pf.upsideDown);
-//					if (DEBUG_RENDER_PAGE_CONTENT && !assessFonts) System.out.println(" --> '" + rpf.name + "' @ " + rpf.bounds);
-//					figures.set(f, rpf);
-//				}
-//		}
 		
 		//	TODO eliminate second words of pairs with same strings, font, and font size that overlap by more than 90% in each direction
 		//	(some documents actually emulate bold face by slightly offset multi-rendering, TEST page 0 of RevistaBrasZool_25_4.pdf)
@@ -3067,7 +3378,7 @@ public class PdfParser {
 			double lastWordMiddleY = ((lastWord.bounds.getMinY() + lastWord.bounds.getMaxY()) / 2);
 			for (int w = 1; w < words.size(); w++) {
 				PWord word = ((PWord) words.get(w));
-				if (DEBUG_MERGE_WORDS && !assessFonts) System.out.println("Checking words " + lastWord.str + " @" + lastWord.bounds.toString() + " and " + word.str + " @" + word.bounds.toString());
+				if (DEBUG_MERGE_WORDS && !assessFonts) System.out.println("Checking merger of words " + lastWord.str + " @" + lastWord.bounds.toString() + " and " + word.str + " @" + word.bounds.toString());
 				double wordMiddleX = ((word.bounds.getMinX() + word.bounds.getMaxX()) / 2);
 				double wordMiddleY = ((word.bounds.getMinY() + word.bounds.getMaxY()) / 2);
 				
@@ -3089,8 +3400,10 @@ public class PdfParser {
 				//	in font assessment mode, check distance, record char neighborhood, and we're done
 				if (assessFonts || (tokenizer == null)) {
 					if ((lastWord.font != null) && (word.font != null) && areWordsCloseEnough(lastWord, word, true)) {
-						int lwChb = (lastWord.charCodes.charAt(lastWord.charCodes.length() - 1) & 255);
-						int wChb = (word.charCodes.charAt(0) & 255);
+//						int lwChb = (lastWord.charCodes.charAt(lastWord.charCodes.length() - 1) & 255);
+						int lwChb = lastWord.lastCharCode;
+//						int wChb = (word.charCodes.charAt(0) & 255);
+						int wChb = word.charCodesEnlarged.charAt(0);
 						lastWord.font.setCharsNeighbored(lwChb, word.font, wChb);
 					}
 					lastWord = word;
@@ -3158,7 +3471,7 @@ public class PdfParser {
 						lastWord = word;
 						lastWordMiddleX = wordMiddleX;
 						lastWordMiddleY = wordMiddleY;
-						if (DEBUG_MERGE_WORDS && !assessFonts) System.out.println(" --> font name or size mismatch");
+						if (DEBUG_MERGE_WORDS && !assessFonts) System.out.println(" --> joined for font name or size mismatch");
 						continue;
 					}
 				}
@@ -3187,13 +3500,15 @@ public class PdfParser {
 					if (combinedChar > 0) {
 						
 						//	synthesize combined diacritic in last word font
-						int lwEndChb = (((int) lastWord.charCodes.charAt(lastWord.charCodes.length()-1)) & 255);
-						int wStartChb = (((int) word.charCodes.charAt(0)) & 255);
+//						int lwEndChb = (((int) lastWord.charCodes.charAt(lastWord.charCodes.length()-1)) & 255);
+						int lwEndChb = lastWord.lastCharCode;
+//						int wStartChb = (((int) word.charCodes.charAt(0)) & 255);
+						int wStartChb = word.charCodesEnlarged.charAt(0);
 						int cChb = lastWord.font.addCombinedChar(lwEndChb, lastWord.font, wStartChb, word.font, ("" + combinedChar), combinedCharName);
 						
 						//	modify char codes
 						String jointCharCodes;
-						if (cChb == -1) {
+//						if (cChb == -1) {
 							if (fontMismatch) {
 								lastWord.joinWithNext = true;
 								lastWord = word;
@@ -3202,13 +3517,15 @@ public class PdfParser {
 								if (DEBUG_MERGE_WORDS && !assessFonts) System.out.println(" --> font name or size mismatch, cannot merge words without char synthesis");
 								continue;
 							}
-							else jointCharCodes = (lastWord.charCodes.substring(0, lastWord.charCodes.length()-1) + ((char) (((int) lastWord.charCodes.charAt(lastWord.charCodes.length()-1)) & 255)) + word.charCodes);
-						}
-						else jointCharCodes = (lastWord.charCodes.substring(0, lastWord.charCodes.length()-1) + ((char) (256 | cChb)) + word.charCodes.substring(1));
+//							else jointCharCodes = (lastWord.charCodes.substring(0, lastWord.charCodes.length()-1) + ((char) (((int) lastWord.charCodes.charAt(lastWord.charCodes.length()-1)) & 255)) + word.charCodes);
+//						}
+//						else jointCharCodes = (lastWord.charCodes.substring(0, lastWord.charCodes.length()-1) + ((char) (256 | cChb)) + word.charCodes.substring(1));
+						else jointCharCodes = (lastWord.charCodesEnlarged.substring(0, lastWord.charCodesEnlarged.length()-1) + ((char) cChb) + word.charCodesEnlarged.substring(1));
 						
 						//	create joint word
 						jointWord = new PWord(Math.min(lastWord.renderOrderNumber, word.renderOrderNumber), jointCharCodes, (lastWord.str.substring(0, lastWord.str.length()-1) + combinedChar + word.str.substring(1)), lastWord.baseline, jointWordBox, lastWord.color, Math.max(lastWord.fontSize, word.fontSize), lastWord.fontDirection, lastWord.font);
 						jointWord.joinWithNext = word.joinWithNext;
+						jointWord.font.setCharUsed(cChb, jointWord.fontSize);
 						if (DEBUG_RENDER_PAGE_CONTENT || DEBUG_MERGE_WORDS)
 							System.out.println(" --> combined letter and diacritic marker");
 					}
@@ -3221,7 +3538,7 @@ public class PdfParser {
 						continue;
 					}
 					else {
-						jointWord = new PWord(Math.min(lastWord.renderOrderNumber, word.renderOrderNumber), (lastWord.charCodes + word.charCodes), (lastWord.str + word.str), lastWord.baseline, jointWordBox, lastWord.color, Math.max(lastWord.fontSize, word.fontSize), lastWord.fontDirection, lastWord.font);
+						jointWord = new PWord(Math.min(lastWord.renderOrderNumber, word.renderOrderNumber), (lastWord.charCodesEnlarged + word.charCodesEnlarged), (lastWord.str + word.str), lastWord.baseline, jointWordBox, lastWord.color, Math.max(lastWord.fontSize, word.fontSize), lastWord.fontDirection, lastWord.font);
 						jointWord.joinWithNext = word.joinWithNext;
 						if (DEBUG_RENDER_PAGE_CONTENT || DEBUG_MERGE_WORDS)
 							System.out.println(" --> combination not possible");
@@ -3244,13 +3561,15 @@ public class PdfParser {
 					if (combinedChar > 0) {
 						
 						//	synthesize combined diacritic in word font
-						int lwEndChb = (((int) lastWord.charCodes.charAt(lastWord.charCodes.length()-1)) & 255);
-						int wStartChb = (((int) word.charCodes.charAt(0)) & 255);
+//						int lwEndChb = (((int) lastWord.charCodes.charAt(lastWord.charCodes.length()-1)) & 255);
+						int lwEndChb = lastWord.lastCharCode;
+//						int wStartChb = (((int) word.charCodes.charAt(0)) & 255);
+						int wStartChb = word.charCodesEnlarged.charAt(0);
 						int cChb = word.font.addCombinedChar(lwEndChb, lastWord.font, wStartChb, word.font, ("" + combinedChar), combinedCharName);
 						
 						//	modify char codes
 						String jointCharCodes;
-						if (cChb == -1) {
+//						if (cChb == -1) {
 							if (fontMismatch) {
 								lastWord.joinWithNext = true;
 								lastWord = word;
@@ -3259,9 +3578,10 @@ public class PdfParser {
 								if (DEBUG_MERGE_WORDS && !assessFonts) System.out.println(" --> font name or size mismatch, cannot merge words without char synthesis");
 								continue;
 							}
-							else jointCharCodes = (lastWord.charCodes + ((char) (((int) word.charCodes.charAt(0)) & 255)) + word.charCodes.substring(1));
-						}
-						else jointCharCodes = (lastWord.charCodes.substring(0, lastWord.charCodes.length()-1) + ((char) (256 | cChb)) + word.charCodes.substring(1));
+//							else jointCharCodes = (lastWord.charCodes + ((char) (((int) word.charCodes.charAt(0)) & 255)) + word.charCodes.substring(1));
+//						}
+//						else jointCharCodes = (lastWord.charCodes.substring(0, lastWord.charCodes.length()-1) + ((char) (256 | cChb)) + word.charCodes.substring(1));
+						else jointCharCodes = (lastWord.charCodesEnlarged.substring(0, lastWord.charCodesEnlarged.length()-1) + ((char) cChb) + word.charCodesEnlarged.substring(1));
 						
 						//	create joint word
 						jointWord = new PWord(Math.min(lastWord.renderOrderNumber, word.renderOrderNumber), jointCharCodes, (lastWord.str.substring(0, lastWord.str.length()-1) + combinedChar + word.str.substring(1)), lastWord.baseline, jointWordBox, lastWord.color, Math.max(lastWord.fontSize, word.fontSize), word.fontDirection, word.font);
@@ -3274,7 +3594,7 @@ public class PdfParser {
 							revisitPreviousWord = true;
 					}
 					else {
-						jointWord = new PWord(Math.min(lastWord.renderOrderNumber, word.renderOrderNumber), (lastWord.charCodes + word.charCodes), (lastWord.str + word.str), lastWord.baseline, jointWordBox, lastWord.color, Math.max(lastWord.fontSize, word.fontSize), lastWord.fontDirection, lastWord.font);
+						jointWord = new PWord(Math.min(lastWord.renderOrderNumber, word.renderOrderNumber), (lastWord.charCodesEnlarged + word.charCodesEnlarged), (lastWord.str + word.str), lastWord.baseline, jointWordBox, lastWord.color, Math.max(lastWord.fontSize, word.fontSize), lastWord.fontDirection, lastWord.font);
 						jointWord.joinWithNext = word.joinWithNext;
 						if (DEBUG_RENDER_PAGE_CONTENT || DEBUG_MERGE_WORDS)
 							System.out.println(" --> combination not possible");
@@ -3289,7 +3609,7 @@ public class PdfParser {
 					continue;
 				}
 				else {
-					jointWord = new PWord(Math.min(lastWord.renderOrderNumber, word.renderOrderNumber), (lastWord.charCodes + word.charCodes), (lastWord.str + word.str), lastWord.baseline, jointWordBox, lastWord.color, Math.max(lastWord.fontSize, word.fontSize), lastWord.fontDirection, lastWord.font);
+					jointWord = new PWord(Math.min(lastWord.renderOrderNumber, word.renderOrderNumber), (lastWord.charCodesEnlarged + word.charCodesEnlarged), (lastWord.str + word.str), lastWord.baseline, jointWordBox, lastWord.color, Math.max(lastWord.fontSize, word.fontSize), lastWord.fontDirection, lastWord.font);
 					jointWord.joinWithNext = word.joinWithNext;
 				}
 				
@@ -3324,7 +3644,7 @@ public class PdfParser {
 			PWord lastWord = ((PWord) words.get(0));
 			for (int w = 1; w < words.size(); w++) {
 				PWord word = ((PWord) words.get(w));
-				if (DEBUG_MERGE_WORDS && !assessFonts) System.out.println("Checking words " + lastWord.str + " @" + lastWord.bounds.toString() + " and " + word.str + " @" + word.bounds.toString());
+				if (DEBUG_MERGE_WORDS && !assessFonts) System.out.println("Checking overlap of words " + lastWord.str + " @" + lastWord.bounds.toString() + " and " + word.str + " @" + word.bounds.toString());
 				
 				//	no overlap
 				if (!lastWord.bounds.intersects(word.bounds)) {
@@ -3434,7 +3754,7 @@ public class PdfParser {
 				else continue; // never gonna happen, but Java don't know
 				
 				//	cut previous word
-				PWord cutWord = new PWord(lastWord.renderOrderNumber, lastWord.charCodes, lastWord.str, lastWord.baseline, cutWordBox, lastWord.color, lastWord.fontSize, lastWord.fontDirection, lastWord.font);
+				PWord cutWord = new PWord(lastWord.renderOrderNumber, lastWord.charCodesEnlarged, lastWord.str, lastWord.baseline, cutWordBox, lastWord.color, lastWord.fontSize, lastWord.fontDirection, lastWord.font);
 				cutWord.joinWithNext = lastWord.joinWithNext;
 				if (DEBUG_RENDER_PAGE_CONTENT || DEBUG_MERGE_WORDS) System.out.println("Got cut word: '" + cutWord.str + "' @ " + cutWord.bounds);
 				if (DEBUG_RENDER_PAGE_CONTENT || DEBUG_MERGE_WORDS) System.out.println("  overlaps with: '" + word.str + "' @ " + word.bounds);
@@ -3635,7 +3955,7 @@ public class PdfParser {
 		if (checkStyle) {
 			
 			//	waive font style check for combining accents
-			if (PdfCharDecoder.isCombiningAccent(lastWord.str.charAt(lastWord.str.length()-1)) || PdfCharDecoder.isCombiningAccent(word.str.charAt(0))) {}
+			if (((lastWord.str.length() != 0) && PdfCharDecoder.isCombiningAccent(lastWord.str.charAt(lastWord.str.length()-1))) || ((word.str.length() != 0) && PdfCharDecoder.isCombiningAccent(word.str.charAt(0)))) {}
 			
 			//	compare basic properties
 			else if ((lastWord.bold != word.bold) || (lastWord.italics != word.italics) || (lastWord.font.hasDescent != word.font.hasDescent)) {
@@ -3688,7 +4008,7 @@ public class PdfParser {
 	}
 	
 	//	observe <userSpace> = <textSpace> * <textMatrix> * <transformationMatrix> * <pageRotation>
-	private static float[] transform(float x, float y, float z, float[][] matrix, PRotate rotate, String indent) {
+	static float[] transform(float x, float y, float z, float[][] matrix, PRotate rotate, String indent) {
 		float[] res = new float[3];
 		for (int c = 0; c < matrix.length; c++)
 			res[c] = ((matrix[c][0] * x) + (matrix[c][1] * y) + (matrix[c][2] * z));
@@ -3782,14 +4102,18 @@ public class PdfParser {
 		private Map fonts;
 		private FontDecoderCharset fontCharSet;
 		private Map xObject;
+		private Library library;
 		private Map objects;
 		
 		private class SavedGraphicsState {
 			private PdfColorSpace sgsStrokeColorSpace;
 			private Color sgsStrokeColor;
+			private PStream sgsStrokePattern;
+			private Color sgsStrokePatternColor;
 			private PdfColorSpace sgsNonStrokeColorSpace;
 			private Color sgsNonStrokeColor;
 			private PStream sgsNonStrokePattern;
+			private Color sgsNonStrokePatternColor;
 			
 			private float sgsLineWidth;
 			private byte sgsLineCapStyle;
@@ -3811,6 +4135,7 @@ public class PdfParser {
 			
 			private Object sgsFontKey;
 			private PdfFont sgsFont;
+			private int sgsFontScaleDown;
 			private float sgsFontSpaceWidth;
 			
 			private float sgsFontSize;
@@ -3826,9 +4151,12 @@ public class PdfParser {
 			SavedGraphicsState() {
 				this.sgsStrokeColorSpace = pcrStrokeColorSpace;
 				this.sgsStrokeColor = pcrStrokeColor;
+				this.sgsStrokePattern = pcrStrokePattern;
+				this.sgsStrokePatternColor = pcrStrokePatternColor;
 				this.sgsNonStrokeColorSpace = pcrNonStrokeColorSpace;
 				this.sgsNonStrokeColor = pcrNonStrokeColor;
 				this.sgsNonStrokePattern = pcrNonStrokePattern;
+				this.sgsNonStrokePatternColor = pcrNonStrokePatternColor;
 				
 				this.sgsLineWidth = pcrLineWidth;
 				this.sgsLineCapStyle = pcrLineCapStyle;
@@ -3850,6 +4178,7 @@ public class PdfParser {
 				
 				this.sgsFontKey = pcrFontKey;
 				this.sgsFont = pcrFont;
+				this.sgsFontScaleDown = pcrFontScaleDown;
 				this.sgsFontSpaceWidth = pcrFontSpaceWidth;
 				
 				this.sgsFontSize = pcrFontSize;
@@ -3866,9 +4195,12 @@ public class PdfParser {
 			void restore() {
 				pcrStrokeColorSpace = this.sgsStrokeColorSpace;
 				pcrStrokeColor = this.sgsStrokeColor;
+				pcrStrokePattern = this.sgsStrokePattern;
+				pcrStrokePatternColor = this.sgsStrokePatternColor;
 				pcrNonStrokeColorSpace = this.sgsNonStrokeColorSpace;
 				pcrNonStrokeColor = this.sgsNonStrokeColor;
 				pcrNonStrokePattern = this.sgsNonStrokePattern;
+				pcrNonStrokePatternColor = this.sgsNonStrokePatternColor;
 				
 				pcrLineWidth = this.sgsLineWidth;
 				pcrLineCapStyle = this.sgsLineCapStyle;
@@ -3890,6 +4222,7 @@ public class PdfParser {
 				
 				pcrFontKey = this.sgsFontKey;
 				pcrFont = this.sgsFont;
+				pcrFontScaleDown = this.sgsFontScaleDown;
 				pcrFontSpaceWidth = this.sgsFontSpaceWidth;
 				
 				pcrFontSize = this.sgsFontSize;
@@ -3906,9 +4239,12 @@ public class PdfParser {
 		
 		private PdfColorSpace pcrStrokeColorSpace = PdfColorSpace.getColorSpace("DeviceGray");
 		private Color pcrStrokeColor = Color.BLACK;
+		private PStream pcrStrokePattern = null;
+		private Color pcrStrokePatternColor = null;
 		private PdfColorSpace pcrNonStrokeColorSpace = PdfColorSpace.getColorSpace("DeviceGray");
 		private Color pcrNonStrokeColor = Color.BLACK;
 		private PStream pcrNonStrokePattern = null;
+		private Color pcrNonStrokePatternColor = null;
 		
 		private PPath pcrPath = null;
 		private float pcrLineWidth = 1.0f;
@@ -3932,6 +4268,7 @@ public class PdfParser {
 		
 		private Object pcrFontKey = null;
 		private PdfFont pcrFont = null;
+		private int pcrFontScaleDown = 1;
 		private float pcrFontSpaceWidth = 0;
 		private float narrowSpaceToleranceFactor = PdfParser.defaultNarrowSpaceToleranceFactor;
 		
@@ -3956,6 +4293,7 @@ public class PdfParser {
 		private List words;
 		private List figures;
 		private List paths;
+		private List colors;
 		
 		private boolean assessFonts;
 		private boolean wordsAreOcr;
@@ -3964,7 +4302,7 @@ public class PdfParser {
 		
 		private String indent;
 		
-		PageContentRenderer(int firstRenderOrderNumber, PRotate rotate, PcrTransformationMatrixStack inheritedTransformationMatrices, Map resources, Map fonts, FontDecoderCharset fontCharSet, Map xObject, Map objects, List words, List figures, List paths, boolean assessFonts, boolean wordsAreOcr, String indent) {
+		PageContentRenderer(int firstRenderOrderNumber, PRotate rotate, PcrTransformationMatrixStack inheritedTransformationMatrices, Map resources, Map fonts, FontDecoderCharset fontCharSet, Map xObject, Library library, Map objects, List words, List figures, List paths, boolean assessFonts, boolean wordsAreOcr, List colors, String indent) {
 			this.nextRenderOrderNumber = firstRenderOrderNumber;
 			this.pcrTransformationMatrices = new PcrTransformationMatrixStack(rotate);
 			if (inheritedTransformationMatrices != null)
@@ -3975,12 +4313,14 @@ public class PdfParser {
 			this.fonts = fonts;
 			this.fontCharSet = fontCharSet;
 			this.xObject = xObject;
+			this.library = library;
 			this.objects = objects;
 			this.words = words;
 			this.figures = figures;
 			this.paths = paths;
 			this.assessFonts = assessFonts;
 			this.wordsAreOcr = wordsAreOcr;
+			this.colors = colors;
 			for (int c = 0; c < this.textMatrix.length; c++) {
 				Arrays.fill(this.textMatrix[c], 0);
 				this.textMatrix[c][c] = 1;
@@ -4152,11 +4492,15 @@ public class PdfParser {
 		}
 		
 		private void dol(LinkedList stack) {
+			if (this.pcrPath == null)
+				this.pcrPath = new PPath(this.nextRenderOrderNumber++);
 			this.pcrPath.dol(stack, this.pcrTransformationMatrices);
 			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
 				System.out.println(this.indent + " --> line to " + this.pcrPath.x + "/" + this.pcrPath.y);
 		}
 		private void doh(LinkedList stack) {
+			if (this.pcrPath == null)
+				return;
 			this.pcrPath.doh(stack);
 			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
 				System.out.println(this.indent + " --> path closed to " + this.pcrPath.x + "/" + this.pcrPath.y);
@@ -4172,22 +4516,30 @@ public class PdfParser {
 		}
 		
 		private void doc(LinkedList stack) {
+			if (this.pcrPath == null)
+				this.pcrPath = new PPath(this.nextRenderOrderNumber++);
 			this.pcrPath.doc(stack, this.pcrTransformationMatrices);
 			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
 				System.out.println(this.indent + " --> curve to " + this.pcrPath.x + "/" + this.pcrPath.y);
 		}
 		private void dov(LinkedList stack) {
+			if (this.pcrPath == null)
+				this.pcrPath = new PPath(this.nextRenderOrderNumber++);
 			this.pcrPath.dov(stack, this.pcrTransformationMatrices);
 			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
 				System.out.println(this.indent + " --> curve to " + this.pcrPath.x + "/" + this.pcrPath.y);
 		}
 		private void doy(LinkedList stack) {
+			if (this.pcrPath == null)
+				this.pcrPath = new PPath(this.nextRenderOrderNumber++);
 			this.pcrPath.doy(stack, this.pcrTransformationMatrices);
 			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
 				System.out.println(" --> curve to " + this.pcrPath.x + "/" + this.pcrPath.y);
 		}
 		
 		private void doS(LinkedList stack) {
+			if (this.pcrPath == null)
+				return;
 			PPath[] clipPaths = this.getClipPaths();
 			this.pcrPath.stroke(clipPaths, this.getStrokeColor(), this.pcrLineWidth, this.pcrLineCapStyle, this.pcrLineJointStyle, this.pcrMiterLimit, this.pcrDashPattern, this.pcrDashPatternPhase, this.pcrTransformationMatrices);
 			int clipReason = this.getClipReason(this.pcrPath.getBounds(), clipPaths, this.getStrokeColor());
@@ -4224,10 +4576,12 @@ public class PdfParser {
 			this.doFillPath(stack, true, pm);
 		}
 		private void doFillPath(LinkedList stack, boolean fillEvenOdd, ProgressMonitor pm) {
+			if (this.pcrPath == null)
+				return;
 			if (this.pcrNonStrokePattern == null) {
 				PPath[] clipPaths = this.getClipPaths();
-				this.pcrPath.fill(clipPaths, this.getNonStrokeColor(), fillEvenOdd);
-				int clipReason = this.getClipReason(this.pcrPath.getBounds(), clipPaths, this.getNonStrokeColor());
+				this.pcrPath.fill(clipPaths, this.getNonStrokeColor(false), fillEvenOdd);
+				int clipReason = this.getClipReason(this.pcrPath.getBounds(), clipPaths, this.getNonStrokeColor(false));
 				if ((this.paths != null) && (clipReason == -1))
 					this.paths.add(this.pcrPath);
 				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) {
@@ -4315,8 +4669,10 @@ public class PdfParser {
 			this.doBasterisk(stack);
 		}
 		private void doFillAndStrokePath(LinkedList stack, boolean fillEvenOdd) {
+			if (this.pcrPath == null)
+				return;
 			PPath[] clipPaths = this.getClipPaths();
-			this.pcrPath.fillAndStroke(clipPaths, this.getNonStrokeColor(), fillEvenOdd, this.getStrokeColor(), this.pcrLineWidth, this.pcrLineCapStyle, this.pcrLineJointStyle, this.pcrMiterLimit, this.pcrDashPattern, this.pcrDashPatternPhase, this.pcrTransformationMatrices);
+			this.pcrPath.fillAndStroke(clipPaths, this.getNonStrokeColor(false), fillEvenOdd, this.getStrokeColor(), this.pcrLineWidth, this.pcrLineCapStyle, this.pcrLineJointStyle, this.pcrMiterLimit, this.pcrDashPattern, this.pcrDashPatternPhase, this.pcrTransformationMatrices);
 			/*
 TODO Filling with patterns:
 - in page content renderer, keep corresponding pattern object (map) at least for non-stroking color
@@ -4341,7 +4697,7 @@ TODO Filling with patterns:
     ==> should eliminate that Rube-Goldberg-white page background
   - restore graphics state
 			 */
-			int clipReason = this.getClipReason(this.pcrPath.getBounds(), clipPaths, this.getNonStrokeColor());
+			int clipReason = this.getClipReason(this.pcrPath.getBounds(), clipPaths, this.getNonStrokeColor(false));
 			if ((this.paths != null) && (clipReason == -1))
 				this.paths.add(this.pcrPath);
 			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) {
@@ -4360,6 +4716,8 @@ TODO Filling with patterns:
 		}
 		
 		private void doW(LinkedList stack) {
+			if (this.pcrPath == null)
+				return;
 			this.pcrClippingPathStack.addLast(this.pcrPath);
 			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
 				System.out.println(this.indent + " --> clipping restricted to " + this.pcrPath.getBounds());
@@ -4382,8 +4740,8 @@ TODO Filling with patterns:
 							PWord cpw = ((PWord) clipPaths[cp].clipWords.get(cw));
 							if (cpw.bounds.intersects(bounds)) {
 								if (this.assessFonts)
-									this.words.add(new PWord(cpw.renderOrderNumber, cpw.charCodes, cpw.baseline, cpw.bounds, clipWordColor, cpw.fontSize, cpw.fontDirection, cpw.font));
-								else this.words.add(new PWord(cpw.renderOrderNumber, cpw.charCodes, cpw.str, cpw.baseline, cpw.bounds, clipWordColor, cpw.fontSize, cpw.fontDirection, cpw.font));
+									this.words.add(new PWord(cpw.renderOrderNumber, cpw.charCodesEnlarged, cpw.baseline, cpw.bounds, clipWordColor, cpw.fontSize, cpw.fontDirection, cpw.font));
+								else this.words.add(new PWord(cpw.renderOrderNumber, cpw.charCodesEnlarged, cpw.str, cpw.baseline, cpw.bounds, clipWordColor, cpw.fontSize, cpw.fontDirection, cpw.font));
 								clipPaths[cp].clipWords.remove(cw--);
 							}
 						}
@@ -4531,77 +4889,234 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 		}
 		
 		private void doSCN(LinkedList stack) {
-			if ("Pattern".equals(this.pcrStrokeColorSpace.name)) {
+			if (this.pcrStrokeColorSpace instanceof PatternColorSpace) {
+//				Object pRef = stack.removeLast();
+//				Map pPatterns = ((Map) PdfParser.dereference(this.resources.get("Pattern"), this.objects));
+//				Object pObj = dereference(pPatterns.get(pRef), this.objects);
+//				System.out.println(this.indent + "Pattern " + pRef + " resolved to " + pObj);
+//				try {
+//					PStream pStream = ((PStream) pObj);
+//					ByteArrayOutputStream baos = new ByteArrayOutputStream();
+//					decode(pStream.params.get("Filter"), pStream.bytes, pStream.params, baos, this.objects);
+//					System.out.println(this.indent + new String(baos.toByteArray()));
+//				}
+//				catch (Exception e) {
+//					e.printStackTrace(System.out);
+//				}
+//				//	TODO treat this as repeated form-style Do command on stroking
+//				this.pcrStrokeColor = Color.CYAN; // using fallback for now ...
+//				//	do NOT factor in GS composite alpha here, as GS might change
+//				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+//					System.out.println(this.indent + " --> stroking color " + this.pcrStrokeColor);
 				Object pRef = stack.removeLast();
 				Map pPatterns = ((Map) PdfParser.dereference(this.resources.get("Pattern"), this.objects));
 				Object pObj = dereference(pPatterns.get(pRef), this.objects);
-				System.out.println(this.indent + "Pattern " + pRef + " resolved to " + pObj);
 				try {
 					PStream pStream = ((PStream) pObj);
 					ByteArrayOutputStream baos = new ByteArrayOutputStream();
 					decode(pStream.params.get("Filter"), pStream.bytes, pStream.params, baos, this.objects);
 					System.out.println(this.indent + new String(baos.toByteArray()));
+					this.pcrStrokeColor = null;
+					Map pStreamParams = new HashMap();
+					pStreamParams.putAll(pStream.params);
+					pStreamParams.remove("Filter"); // already decoded, no more need for a filter
+					this.pcrStrokePattern = new PStream(pStreamParams, baos.toByteArray());
+					this.pcrStrokePatternColor = this.getTilePatternColors(this.pcrStrokePattern, ((PatternColorSpace) this.pcrStrokeColorSpace), stack);
+					if (this.pcrStrokePatternColor == null)
+						this.pcrStrokePatternColor = Color.MAGENTA; // using fallback for now ...
 				}
 				catch (Exception e) {
+					System.out.println("Error setting pattern color: " + e);
 					e.printStackTrace(System.out);
+					this.pcrStrokeColor = Color.CYAN; // using fallback for now ...
+					this.pcrStrokePattern = null;
+					this.pcrStrokePatternColor = null;
 				}
-				//	TODO treat this as repeated form-style Do command on stroking
-				this.pcrStrokeColor = Color.CYAN; // using fallback for now ...
-				//	do NOT factor in GS composite alpha here, as GS might change
-				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
-					System.out.println(this.indent + " --> stroking color " + this.pcrNonStrokeColor);
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) {
+					System.out.println(this.indent + " --> stroking color " + this.pcrStrokeColor + ((this.pcrStrokeColor == null) ? "" : (" with alpha " + this.pcrStrokeColor.getAlpha())));
+					System.out.println(this.indent + " --> stroking text fallback color " + this.pcrStrokePatternColor + ((this.pcrStrokePatternColor == null) ? "" : (" with alpha " + this.pcrStrokePatternColor.getAlpha())));
+				}
 			}
 			else {
 				this.pcrStrokeColor = this.pcrStrokeColorSpace.getColor(stack, ((DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) ? "" : null));
+				if (this.colors != null)
+					this.colors.add(this.pcrStrokeColor);
 				//	do NOT factor in GS composit alpha here, as GS might change
 				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
 					System.out.println(this.indent + " --> stroking color " + this.pcrStrokeColor + ((this.pcrStrokeColor == null) ? "" : (" with alpha " + this.pcrStrokeColor.getAlpha())));
 			}
 		}
+		
 		private void doscn(LinkedList stack) {
-			if ("Pattern".equals(this.pcrNonStrokeColorSpace.name)) {
+			if (this.pcrNonStrokeColorSpace instanceof PatternColorSpace) {
 				Object pRef = stack.removeLast();
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) System.out.println(this.indent + " - pattern reference: " + pRef);
 				Map pPatterns = ((Map) PdfParser.dereference(this.resources.get("Pattern"), this.objects));
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) System.out.println(this.indent + " - patterns: " + pPatterns);
 				Object pObj = dereference(pPatterns.get(pRef), this.objects);
-				System.out.println(this.indent + "Pattern " + pRef + " resolved to " + pObj);
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) System.out.println(this.indent + " - pattern: " + pObj);
 				try {
 					PStream pStream = ((PStream) pObj);
 					ByteArrayOutputStream baos = new ByteArrayOutputStream();
 					decode(pStream.params.get("Filter"), pStream.bytes, pStream.params, baos, this.objects);
 					System.out.println(this.indent + new String(baos.toByteArray()));
 					this.pcrNonStrokeColor = null;
-					this.pcrNonStrokePattern = new PStream(pStream.params, baos.toByteArray());
+					Map pStreamParams = new HashMap();
+					pStreamParams.putAll(pStream.params);
+					pStreamParams.remove("Filter"); // already decoded, no more need for a filter
+					this.pcrNonStrokePattern = new PStream(pStreamParams, baos.toByteArray());
+					this.pcrNonStrokePatternColor = this.getTilePatternColors(this.pcrNonStrokePattern, ((PatternColorSpace) this.pcrNonStrokeColorSpace), stack);
+					if (this.pcrNonStrokePatternColor == null)
+						this.pcrNonStrokePatternColor = Color.MAGENTA; // using fallback for now ...
 				}
 				catch (Exception e) {
 					System.out.println("Error setting pattern color: " + e);
 					e.printStackTrace(System.out);
+					System.out.println("Renderer stack: " + stack);
 					this.pcrNonStrokeColor = Color.MAGENTA; // using fallback for now ...
 					this.pcrNonStrokePattern = null;
+					this.pcrNonStrokePatternColor = null;
 				}
-//				//	TODOne treat this as repeated form-style Do command on filling
-//				this.pcrNonStrokeColor = Color.MAGENTA; // using fallback for now ...
-				//	do NOT factor in GS composite alpha here, as GS might change
-				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) {
 					System.out.println(this.indent + " --> non-stroking color " + this.pcrNonStrokeColor + ((this.pcrNonStrokeColor == null) ? "" : (" with alpha " + this.pcrNonStrokeColor.getAlpha())));
+					System.out.println(this.indent + " --> non-stroking text fallback color " + this.pcrNonStrokePatternColor + ((this.pcrNonStrokePatternColor == null) ? "" : (" with alpha " + this.pcrNonStrokePatternColor.getAlpha())));
+				}
 			}
 			else {
 				this.pcrNonStrokeColor = this.pcrNonStrokeColorSpace.getColor(stack, ((DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) ? "" : null));
+				if (this.colors != null)
+					this.colors.add(this.pcrNonStrokeColor);
 				//	do NOT factor in GS composite alpha here, as GS might change
 				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
 					System.out.println(this.indent + " --> non-stroking color " + this.pcrNonStrokeColor + ((this.pcrNonStrokeColor == null) ? "" : (" with alpha " + this.pcrNonStrokeColor.getAlpha())));
+				this.pcrNonStrokePattern = null;
+				this.pcrNonStrokePatternColor = null;
 			}
 		}
 		
+		private Color getTilePatternColors(PStream pattern, PatternColorSpace patternColorSpace, LinkedList stack) throws IOException {
+			if (this.assessFonts)
+				return null; // no need to go through all this rigmarole in char usage assessment
+			Object ptObj = pattern.params.get("PaintType");
+			int paintType = ((ptObj instanceof Number) ? ((Number) ptObj).intValue() : -1);
+			if (paintType == 1) {
+				if (DEBUG_RENDER_PAGE_CONTENT)
+					System.out.println("Running pattern content for colors in " + pattern);
+				List pColors = this.getTilePatternColors(pattern);
+				if (DEBUG_RENDER_PAGE_CONTENT)
+					System.out.println(" --> uses colors " + pColors);
+				if (pColors == null)
+					return null; // trigger using fallback for now ...
+				Color pColor = null;
+				for (int c = 0; c < pColors.size(); c++) {
+					Color color = ((Color) pColors.get(c));
+					if (color.getAlpha() < 64)
+						continue; // just too pade
+					if (pColor == null)
+						pColor = color;
+					else if (this.getBrightness(color) < this.getBrightness(pColor))
+						pColor = color;
+				}
+				//	TODO somehow store this color !!!
+				return pColor;
+			}
+			else if (paintType == 2) {
+				if (patternColorSpace.baseColorSpace == null)
+					return null; // trigger using fallback for now ...
+				//	for PaintType 2 patterns, get actual color from underlying color space of pattern color space
+				if (DEBUG_RENDER_PAGE_CONTENT)
+					System.out.println("Getting color from pattern underlying color space in " + pattern);
+				return patternColorSpace.getColor(stack, ((DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) ? "" : null));
+			}
+			//	TODO figure out shading patterns soon as we find an example
+			else return null;
+		}
+		private int getBrightness(Color color) {
+			float[] hsb = Color.RGBtoHSB(color.getRed(), color.getGreen(), color.getBlue(), null);
+			return ((int) ((1.0f - (((1.0f - hsb[2]) * color.getAlpha()) / 255)) * 255));
+		}
+		private List getTilePatternColors(PStream pattern) throws IOException {
+			Object patternResObj = dereference(pattern.params.get("Resources"), this.objects);
+			if (!(patternResObj instanceof Map))
+				return null;
+			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) {
+				System.out.println(this.indent + "Doing tiling pattern");
+				System.out.println(this.indent + " - parameters are " + pattern.params);
+				System.out.println(this.indent + " - overprint is " + this.pcrStrokeOverPrint + "/" + this.pcrNonStrokeOverPrint + ", mode " + this.pcrOverPrintMode + ", composit alpha " + this.pcrStrokeCompositAlpha + "/" + this.pcrNonStrokeCompositAlpha + ", blend mode " + ((this.pcrBlendMode == null) ? "Normal" : this.pcrBlendMode.name));
+			}
+			Map patternResources = ((Map) patternResObj);
+			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+				System.out.println(this.indent + " - resources are " + patternResources);
+			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+				System.out.println(this.indent + " - content is " + pattern.bytes.length + " bytes");
+			Object patternMatrixObj = pattern.params.get("Matrix");
+			float[][] patternMatrix = null;
+			if ((patternMatrixObj instanceof List) && (((List) patternMatrixObj).size() == 6)) {
+				List formMatrixData = ((List) patternMatrixObj);
+				patternMatrix = new float[3][3];
+				patternMatrix[0][0] = ((Number) formMatrixData.get(0)).floatValue();
+				patternMatrix[1][0] = ((Number) formMatrixData.get(1)).floatValue();
+				patternMatrix[2][0] = 0;
+				patternMatrix[0][1] = ((Number) formMatrixData.get(2)).floatValue();
+				patternMatrix[1][1] = ((Number) formMatrixData.get(3)).floatValue();
+				patternMatrix[2][1] = 0;
+				patternMatrix[0][2] = ((Number) formMatrixData.get(4)).floatValue();
+				patternMatrix[1][2] = ((Number) formMatrixData.get(5)).floatValue();
+				patternMatrix[2][2] = 1;
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) {
+					System.out.println(this.indent + " - matrix is");
+					printMatrix(patternMatrix, this.indent);
+				}
+			}
+			PcrTransformationMatrixStack patternTransformationMatrices = new PcrTransformationMatrixStack(this.pcrTransformationMatrices);
+			if (patternMatrix != null)
+				patternTransformationMatrices.addFirst(patternMatrix);
+			Object patternBoundsObj = pattern.params.get("BBox");
+			Rectangle2D.Float patternBounds = null;
+			if ((patternBoundsObj instanceof List) && (((List) patternBoundsObj).size() == 4)) {
+				List formBoundsData = ((List) patternBoundsObj);
+				float left = ((Number) formBoundsData.get(0)).floatValue();
+				float bottom = ((Number) formBoundsData.get(1)).floatValue();
+				float right = ((Number) formBoundsData.get(2)).floatValue();
+				float top = ((Number) formBoundsData.get(3)).floatValue();
+				patternBounds = new Rectangle2D.Float(left, bottom, (right - left), (top - bottom));
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+					System.out.println(this.indent + " - raw bounds are " + patternBounds);
+				patternBounds = this.transformBounds(patternBounds, patternMatrix, PRotate.identity);
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+					System.out.println(this.indent + " - transformed bounds are " + patternBounds);
+				if (patternBounds.width < 0) {
+					patternBounds.x += patternBounds.width;
+					patternBounds.width = -patternBounds.width;
+				}
+				if (patternBounds.height < 0) {
+					patternBounds.y += patternBounds.height;
+					patternBounds.height = -patternBounds.height;
+				}
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+					System.out.println(this.indent + " - sanitized bounds are " + patternBounds);
+			}
+			ArrayList patternWords = ((this.words == null) ? null : new ArrayList());
+			ArrayList patternFigures = ((this.figures == null) ? null : new ArrayList());
+			ArrayList patternPaths = ((this.paths == null) ? null : new ArrayList());
+			ArrayList patternColors = new ArrayList();
+			ProgressMonitor pm = ((DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) ? ProgressMonitor.dummy : ProgressMonitor.quiet);
+			runPageContent(this.nextRenderOrderNumber, patternTransformationMatrices, pattern.params, pattern.bytes, this.pcrTransformationMatrices.rotate, this.library, patternResources, this.objects, patternWords, null, this.fontCharSet, patternFigures, patternPaths, this.assessFonts, this.wordsAreOcr, patternColors, pm, ((this.indent == null) ? null : (this.indent + "    ")));
+			return patternColors;
+		}
+		
 		private Color getStrokeColor() {
-			if (this.pcrStrokeCompositAlpha == 255)
+			if (this.pcrStrokeCompositAlpha == 0xFF)
 				return this.pcrStrokeColor;
 			return this.getCompositeAlphaColor(this.pcrStrokeColor, this.pcrStrokeCompositAlpha);
 		}
 		
-		private Color getNonStrokeColor() {
-			if (this.pcrNonStrokePattern != null)
-				return null; // we're in pattern mode ...
-			if (this.pcrNonStrokeCompositAlpha == 255)
+		private Color getNonStrokeColor(boolean forText) {
+			if (this.pcrNonStrokePattern != null) {
+//				return null; // we're in pattern mode, which handles like a form ...
+				return (forText ? this.pcrNonStrokePatternColor : null); // we're in pattern mode, which handles like a form ...
+			}
+			if (this.pcrNonStrokeCompositAlpha == 0xFF)
 				return this.pcrNonStrokeColor;
 			return this.getCompositeAlphaColor(this.pcrNonStrokeColor, this.pcrNonStrokeCompositAlpha);
 		}
@@ -4677,6 +5192,7 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 			if (DEBUG_RENDER_PAGE_CONTENT)
 				System.out.println(this.indent + " --> font key set to " + this.pcrFontKey);
 			this.pcrFont = ((PdfFont) this.fonts.get(this.pcrFontKey));
+			this.pcrFontScaleDown = ((this.pcrFont == null) ? 1 : this.pcrFont.scaleDownFactor);
 			if (this.pcrFont != null) {
 				this.pcrFontSpaceWidth = this.pcrFont.getCharWidth(' ');
 				this.narrowSpaceToleranceFactor = Math.max(defaultNarrowSpaceToleranceFactor, (absMinNarrowSpaceWidth / Math.max(this.pcrFontSpaceWidth, minFontSpaceWidth)));
@@ -4686,6 +5202,7 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 					System.out.println(this.indent + "   - font descriptor " + this.pcrFont.descriptor);
 					System.out.println(this.indent + "   - font name " + this.pcrFont.name);
 					System.out.println(this.indent + "   - bold: " + this.pcrFont.bold + ", italic: " + this.pcrFont.italics);
+					System.out.println(this.indent + "   - ascent: " + this.pcrFont.ascent + ", descent: " + this.pcrFont.descent + ", cap height: " +  + this.pcrFont.capHeight);
 					System.out.println(this.indent + "   - space width is " + this.pcrFontSpaceWidth);
 					System.out.println(this.indent + "   - narrow space tolerance factor is " + this.narrowSpaceToleranceFactor);
 					System.out.println(this.indent + "   - implicit space: " + this.pcrFont.hasImplicitSpaces);
@@ -4702,7 +5219,7 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 		private void doTfs(LinkedList stack) {
 			this.pcrFontSize = ((Number) stack.removeLast()).floatValue();
 			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
-				System.out.println(this.indent + " --> font size " + this.pcrFontSize);
+				System.out.println(this.indent + " --> font size " + this.pcrFontSize + " * " + this.pcrFontScaleDown);
 			this.computeEffectiveFontSizeAndDirection();
 		}
 		
@@ -4726,7 +5243,8 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 		
 		//	compute effective font size as round(font size * ((a + d) / 2)) in text matrix
 		private void computeEffectiveFontSizeAndDirection() {
-			float[] pwrFontSize = {0, this.pcrFontSize, 0};
+//			float[] pwrFontSize = {0, this.pcrFontSize, 0};
+			float[] pwrFontSize = {0, (this.pcrFontSize * this.pcrFontScaleDown), 0};
 			pwrFontSize = this.applyTransformationMatrices(transform(pwrFontSize, this.textMatrix, PRotate.identity, this.indent));
 			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) {
 				System.out.println(this.indent + " ==> font analysis vector is " + Arrays.toString(pwrFontSize));
@@ -4977,7 +5495,7 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 				System.out.println(this.indent + "Drawing inline image at RON " + this.nextRenderOrderNumber);
 			
 			try {
-				PdfByteInputStream iImageData = new PdfByteInputStream(new ByteArrayInputStream(data));
+				PdfByteInputStream iImageData = new PdfByteInputStream(data);
 				
 				Map imageParams = cropInlineImageParams(iImageData);
 				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
@@ -5109,7 +5627,7 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 			ArrayList formWords = ((this.words == null) ? null : new ArrayList());
 			ArrayList formFigures = ((this.figures == null) ? null : new ArrayList());
 			ArrayList formPaths = ((this.paths == null) ? null : new ArrayList());
-			this.nextRenderOrderNumber = runPageContent(this.nextRenderOrderNumber, formTransformationMatrices, form.params, formContent, this.pcrTransformationMatrices.rotate, formResources, this.objects, formWords, null, this.fontCharSet, formFigures, formPaths, this.assessFonts, this.wordsAreOcr, pm, (this.indent + "    "));
+			this.nextRenderOrderNumber = runPageContent(this.nextRenderOrderNumber, formTransformationMatrices, form.params, formContent, this.pcrTransformationMatrices.rotate, this.library, formResources, this.objects, formWords, null, this.fontCharSet, formFigures, formPaths, this.assessFonts, this.wordsAreOcr, null, pm, ((this.indent == null) ? null : (this.indent + "    ")));
 			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) {
 				System.out.println(this.indent + "Form content done");
 				System.out.println(this.indent + "Clipping path stack is " + this.pcrClippingPathStack);
@@ -5133,11 +5651,12 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 					}
 					float fwBaseline = fw.baseline;//this.transformBounds(fw.bounds, formMatrix);
 					Rectangle2D.Float fwBounds = fw.bounds;//this.transformBounds(fw.bounds, formMatrix);
-					int fwFontSize = fw.fontSize;//Math.round((fw.fontSize * fwBounds.height) / fw.bounds.height);
+//					int fwFontSize = fw.fontSize;//Math.round((fw.fontSize * fwBounds.height) / fw.bounds.height);
+					float fwFontSize = fw.fontSize;//Math.round((fw.fontSize * fwBounds.height) / fw.bounds.height);
 					Color fwColor = ((fw.color == null) ? null : this.getCompositeAlphaColor(fw.color, this.pcrNonStrokeCompositAlpha));
 					if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
 						System.out.println(this.indent + "   word color transformed from " + fw.color + ((fw.color == null) ? "" : (" with alpha " + fw.color.getAlpha())) + " to " + fwColor + ((fwColor == null) ? "" : (" with alpha " + fwColor.getAlpha())));
-					fw = new PWord(fw.renderOrderNumber, fw.charCodes, fw.str, fwBaseline, fwBounds, fwColor, fwFontSize, fw.fontDirection, fw.font);
+					fw = new PWord(fw.renderOrderNumber, fw.charCodesEnlarged, fw.str, fwBaseline, fwBounds, fwColor, fwFontSize, fw.fontDirection, fw.font);
 					this.words.add(fw);
 				}
 			if (formFigures != null) // TODO consider storing composite alpha with figures (if it turns out necessary)
@@ -5508,6 +6027,13 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 		private void doTj(LinkedList stack) {
 			CharSequence cs = ((CharSequence) stack.removeLast());
 			if (this.pcrFont != null) {
+				if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) {
+					System.out.println("Char sequence is '" + cs + "'");
+					for (int c = 0; c < cs.length(); c++) {
+						char ch = cs.charAt(c);
+						System.out.println(" - " + c + ": " + ((int) ch) + " " + Integer.toString(((int) ch), 16));
+					}
+				}
 				
 				//	start line, computing top and bottom
 				this.startLine();
@@ -5594,17 +6120,25 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 							nextShift = (((Number) stros.get(s+1)).floatValue() / 1000);
 						else nextShift = 0.0f;
 						
+						if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) {
+							System.out.println("Char sequence is '" + str + "'");
+							for (int c = 0; c < str.length(); c++) {
+								char ch = str.charAt(c);
+								System.out.println(" - " + c + ": " + ((int) ch) + " " + Integer.toString(((int) ch), 16));
+							}
+						}
+						
 						String rStr = this.renderCharSequence(str, prevShift, nextShift);
 						totalRendered.append(rStr);
 					}
 				}
 				else if (o instanceof Number) {
 					float d = (((Number) o).floatValue() / 1000); // TODOne does factoring in char spacing make sense or cause trouble ??? ==> we basically _have_to_ factor it in, as it does contribute
-					float eShift = ((-d * this.pcrFontSize) + this.pcrCharSpacing);
+					float eShift = ((-d * this.pcrFontSize * this.pcrFontScaleDown) + this.pcrCharSpacing);
 					if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) {
-						System.out.println(this.indent + "Re-positioning by TJ array number " + d + "*" + this.pcrFontSize + " at effective " + this.eFontSize + ", char spacing is " + this.pcrCharSpacing + ", word spacing is " + this.pcrWordSpacing);
+						System.out.println(this.indent + "Re-positioning by TJ array number " + d + "*" + this.pcrFontSize + " * " + this.pcrFontScaleDown + " at effective " + this.eFontSize + ", char spacing is " + this.pcrCharSpacing + ", word spacing is " + this.pcrWordSpacing);
 						System.out.println(this.indent + " - effective shift is " + eShift);
-						System.out.println(this.indent + " - minimum implicit space width is " + ((this.pcrFontSpaceWidth * this.narrowSpaceToleranceFactor * this.pcrFontSize) / 1000));
+						System.out.println(this.indent + " - minimum implicit space width is " + ((this.pcrFontSpaceWidth * this.narrowSpaceToleranceFactor * this.pcrFontSize * this.pcrFontScaleDown) / 1000));
 						System.out.println(this.indent + " - average explicit space width is " + explicitSpaceWidth + " (capped off from " + mExplicitSpaceWidth + ")");
 					}
 					if ((this.pcrFont != null) && ((eShift * 3) > (explicitSpaceWidth * 2)) && ((-d + this.pcrCharSpacing) > ((this.pcrFontSpaceWidth * this.narrowSpaceToleranceFactor) / 1000))) {
@@ -5615,7 +6149,7 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 					}
 					else if ((s+1) == stros.size())
 						this.endWord();
-					updateMatrix(this.lineMatrix, (-d * this.pcrFontSize), 0);
+					updateMatrix(this.lineMatrix, (-d * this.pcrFontSize * this.pcrFontScaleDown), 0);
 					if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
 						this.printPosition();
 				}
@@ -5673,9 +6207,9 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 						//	get effective char
 						char ech = ((this.pcrFont == null) ? ch : this.pcrFont.getChar((int) ch));
 						
-						//	count space width is rendering space
-						if ((ech <= 32) || (ech == 160)) {
-							float exSpaceWidth = ((((this.pcrFont.getCharWidth(ch) * this.pcrFontSize) + (this.pcrWordSpacing * 1000)) * this.pcrHorizontalScaling) / (1000 * 100));
+						//	count space width if rendering space
+						if ((ech <= 0x0020) || (ech == 0x00A0)) {
+							float exSpaceWidth = ((((this.pcrFont.getCharWidth(ch) * this.pcrFontSize * this.pcrFontScaleDown) + (this.pcrWordSpacing * 1000)) * this.pcrHorizontalScaling) / (1000 * 100));
 							exSpaceWidthSum += (((chCount == 0) ? -prevShift : 0) + exSpaceWidth + (((chCount + 1) >= cscs.length) ? -nextShift : 0));
 							exSpaceCount++;
 						}
@@ -5700,7 +6234,8 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 			}
 		}
 		
-		private StringBuffer wordCharCodes = null;
+//		private StringBuffer wordCharCodes = null;
+		private StringBuffer wordCharCodesEnlarged = null;
 		private StringBuffer wordString = null;
 		private float[] start;
 		private float[] top;
@@ -5709,12 +6244,23 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 		private String renderCharSequence(CharSequence cs, float prevShift, float nextShift) {
 			StringBuffer rendered = new StringBuffer();
 			
+			//	remember UTF-16 usage in font
+			if (cs instanceof PString) {
+				if (this.assessFonts)
+					this.pcrFont.recordCharStringUsage((PString) cs);
+				else if (this.pcrFont.usesAnsiStrings() && (((PString) cs).isUtf16beAnsi || ((PString) cs).isUtf16leAnsi)) {
+					cs = ((PString) cs).toAnsiString();
+					if (DEBUG_RENDER_PAGE_CONTENT)
+						System.out.println(this.indent + "Converted strange UTF-16 string to ANSI: " + cs.toString());
+				}
+			}
+			
 			//	put characters in array to facilitate modification
 			char[] cscs = new char[cs.length()];
 			for (int c = 0; c < cs.length(); c++)
 				cscs[c] = cs.charAt(c);
 			
-			//	TODO test if char sequence is actually to be interpreted two bytes
+			//	test if char sequence is actually to be interpreted two bytes
 			cscs = checkForSplitBytePairs(cscs, this.pcrFont, this.indent);
 			
 			//	render characters
@@ -5722,27 +6268,32 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 				char ch = cscs[c];
 				
 				//	split up two bytes conflated in one (only if font doesn't know them as one, and does know them as two, though)
-				if ((255 < ch) && !this.pcrFont.ucMappings.containsKey(new Integer((int) ch))) {
+				if ((0xFF < ch) && !this.pcrFont.ucMappings.containsKey(new Integer((int) ch))) {
 					int hch = (ch >>> 8);
-					int lch = (ch & 255);
+					int lch = (ch & 0xFF);
 					boolean split = false;
 					if (this.pcrFont.ucMappings.containsKey(new Integer((int) hch)) && this.pcrFont.ucMappings.containsKey(new Integer((int) lch))) {
 //						cscs[c] = ((char) (ch & 255)); // store low byte for next round
 //						ch = ((char) (ch >>> 8)); // move high byte into rendering range
 						if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
-							System.out.println(this.indent + "Handling high byte char '" + ch + "' (" + ((int) ch) + ", " + Integer.toString(((int) ch), 16).toUpperCase() + ") for now, coming back for low byte char '" + cscs[c] + "' (" + ((int) cscs[c]) + ", " + Integer.toString(((int) cscs[c]), 16).toUpperCase() + ") next round (UC mapping)");
+							System.out.println(this.indent + "Handling UC-mapped high byte char '" + ch + "' (" + ((int) ch) + ", " + Integer.toString(((int) ch), 16).toUpperCase() + ") for now, coming back for UC-mapped low byte char '" + cscs[c] + "' (" + ((int) cscs[c]) + ", " + Integer.toString(((int) cscs[c]), 16).toUpperCase() + ") next round (UC mapping)");
 //						c--; // come back for low byte in the next round
+						split = true;
+					}
+					else if (this.pcrFont.isBinaryFont && (this.pcrFont.lastChar <= 255)) {
+						if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
+							System.out.println(this.indent + "Handling binary font high byte char '" + ch + "' (" + ((int) ch) + ", " + Integer.toString(((int) ch), 16).toUpperCase() + ") for now, coming back for binary font low byte char '" + cscs[c] + "' (" + ((int) cscs[c]) + ", " + Integer.toString(((int) cscs[c]), 16).toUpperCase() + ") next round (built-in font)");
 						split = true;
 					}
 					else if (this.pcrFont.isBuiltInFont) {
 						if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
-							System.out.println(this.indent + "Handling high byte char '" + ch + "' (" + ((int) ch) + ", " + Integer.toString(((int) ch), 16).toUpperCase() + ") for now, coming back for low byte char '" + cscs[c] + "' (" + ((int) cscs[c]) + ", " + Integer.toString(((int) cscs[c]), 16).toUpperCase() + ") next round (built-in font)");
+							System.out.println(this.indent + "Handling built-in font high byte char '" + ch + "' (" + ((int) ch) + ", " + Integer.toString(((int) ch), 16).toUpperCase() + ") for now, coming back for built-in font low byte char '" + cscs[c] + "' (" + ((int) cscs[c]) + ", " + Integer.toString(((int) cscs[c]), 16).toUpperCase() + ") next round (built-in font)");
 						split = true;
 					}
 					else if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
 						System.out.println(this.indent + "Retaining non-ASCII char '" + ch + "' (" + ((int) ch) + ", " + Integer.toString(((int) ch), 16).toUpperCase() + ") for lack of Unicode mapping on parts.");
 					if (split) {
-						cscs[c] = ((char) (ch & 255)); // store low byte for next round
+						cscs[c] = ((char) (ch & 0xFF)); // store low byte for next round
 						ch = ((char) (ch >>> 8)); // move high byte into rendering range
 						c--; // come back for low byte in the next round
 					}
@@ -5778,8 +6329,8 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 				//	we're actually extracting words
 				else {
 					rCh = this.pcrFont.getUnicode((int) ch);
-					//	also recognize spaces ignored by trim() (NBSP as well as 0x20xx spaces)
-					if ((rCh.length() == 1) && ("\u00A0\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u200B\u202F\u205F".indexOf(rCh.charAt(0)) != -1 /* NBSP, ignored by trim() */))
+					//	also recognize spaces ignored by trim() (NBSP as well as 0x20xx spaces and U+2000=U+2002 and U+2001=U+2003), as well as zero-width non-printing characters (U+200B-U+200F)
+					if ((rCh.length() == 1) && ("\u00A0\u2001\u2002\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u200B\u200C\u200D\u200E\u200F\u202F\u205F".indexOf(rCh.charAt(0)) != -1 /* NBSP, ignored by trim() */))
 						rCh = " ";
 					rIsSpace = (rCh.trim().length() == 0);
 				}
@@ -5788,11 +6339,11 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 				if (rIsSpace) {
 					//	compute effective space width and effective last shift (only at start and end of char sequence, though)
 					//	copy from width computation resulting from drawChar()
-					float spaceWidth = ((((this.pcrFont.getCharWidth(ch) * this.pcrFontSize) + ((this.pcrCharSpacing + (fIsSpace ? this.pcrWordSpacing : 0)) * 1000)) * this.pcrHorizontalScaling) / (1000 * 100));
-					float spaceCharWidth = ((((this.pcrFont.getCharWidth(ch) * this.pcrFontSize)) * this.pcrHorizontalScaling) / (1000 * 100));
+					float spaceWidth = ((((this.pcrFont.getCharWidth(ch) * this.pcrFontSize * this.pcrFontScaleDown) + ((this.pcrCharSpacing + (fIsSpace ? this.pcrWordSpacing : 0)) * 1000)) * this.pcrHorizontalScaling) / (1000 * 100));
+					float spaceCharWidth = ((((this.pcrFont.getCharWidth(ch) * this.pcrFontSize * this.pcrFontScaleDown)) * this.pcrHorizontalScaling) / (1000 * 100));
 					//	copy from width computation resulting from array shift
-					float prevShiftWidth = ((c == 0) ? (prevShift * this.pcrFontSize) : 0.0f);
-					float nextShiftWidth = (((c+1) == cscs.length) ? (nextShift * this.pcrFontSize) : 0.0f);
+					float prevShiftWidth = ((c == 0) ? (prevShift * this.pcrFontSize * this.pcrFontScaleDown) : 0.0f);
+					float nextShiftWidth = (((c+1) == cscs.length) ? (nextShift * this.pcrFontSize * this.pcrFontScaleDown) : 0.0f);
 					if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
 						System.out.println(this.indent + " - space is " + spaceWidth + " (char " + spaceCharWidth + "), shifts are " + prevShiftWidth + " and " + nextShiftWidth);
 					
@@ -5818,9 +6369,13 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 				else {
 					this.startWord();
 					String nrCh = dissolveLigature(rCh, this.indent);
-					if ((this.wordCharCodes != null) && (this.wordString != null)) {
+//					if ((this.wordCharCodes != null) && (this.wordString != null)) {
+					if ((this.wordCharCodesEnlarged != null) && (this.wordString != null)) {
 						int chc = ((this.pcrFont == null) ? ((int) ch) : this.pcrFont.getCharCode((int) ch));
-						this.wordCharCodes.append((char) ((nrCh.length() * 256) | chc));
+//						this.wordCharCodes.append((char) ((nrCh.length() * 256) | chc));
+						this.wordCharCodesEnlarged.append((char) chc);
+						for (int p = 1; p < nrCh.length(); p++)
+							this.wordCharCodesEnlarged.append((char) 0); // add padding zeros for multi-character transcripts
 						this.wordString.append(nrCh);
 					}
 					rendered.append(nrCh);
@@ -5831,7 +6386,8 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 				
 				//	remember char usage (only now, after word is started)
 				if (this.assessFonts)
-					this.pcrFont.setCharUsed((int) ch);
+//					this.pcrFont.setCharUsed((int) ch);
+					this.pcrFont.setCharUsed(((int) ch), this.eFontSize);
 				
 				//	extreme char or word spacing, add space
 				if (nextIsImplicitSpace) {
@@ -5861,11 +6417,10 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 			return rendered.toString();
 		}
 		
-		
 		private void drawChar(char ch, boolean fontIndicatesSpace, boolean implicitSpaceComing, String rCh) {
 			float spacing = (implicitSpaceComing ? 0 : (this.pcrCharSpacing + (fontIndicatesSpace ? this.pcrWordSpacing : 0)));
 //			float width = (((((this.pcrFont.hasImplicitSpaces ? this.pcrFont.getMeasuredCharWidth(ch) : this.pcrFont.getCharWidth(ch)) * this.pcrFontSize) + (spacing * 1000)) * this.pcrHorizontalScaling) / (1000 * 100));
-			float chWidth = (((((this.pcrFont.hasImplicitSpaces ? this.pcrFont.getMeasuredCharWidth(ch) : this.pcrFont.getCharWidth(ch)) * this.pcrFontSize)) * this.pcrHorizontalScaling) / (1000 * 100));
+			float chWidth = (((((this.pcrFont.hasImplicitSpaces ? this.pcrFont.getMeasuredCharWidth(ch) : this.pcrFont.getCharWidth(ch)) * this.pcrFontSize * this.pcrFontScaleDown)) * this.pcrHorizontalScaling) / (1000 * 100));
 			float spWidth = ((spacing * this.pcrHorizontalScaling) / 100);
 			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
 //				System.out.println("Drawing char '" + ch + "' (" + ((int) ch) + ", " + Integer.toString(((int) ch), 16).toUpperCase() + ") ==> '" + rCh + "' (" + ((int) rCh.charAt(0)) + ", '" + dissolveLigature(rCh) + "') with width " + width + " (" + (this.pcrFont.hasImplicitSpaces ? this.pcrFont.getMeasuredCharWidth(ch) : this.pcrFont.getCharWidth(ch)) + " with spacing " + spacing + ")");
@@ -5901,9 +6456,9 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 				return;
 			if (this.pcrFont == null)
 				return;
-			this.top = transform(0, (Math.min(this.pcrFont.capHeight, this.pcrFont.ascent) * this.pcrFontSize), 1, this.lineMatrix, PRotate.identity, this.indent);
+			this.top = transform(0, (Math.min(this.pcrFont.capHeight, this.pcrFont.ascent) * this.pcrFontSize * this.pcrFontScaleDown), 1, this.lineMatrix, PRotate.identity, this.indent);
 			this.top = this.applyTransformationMatrices(this.top);
-			this.bottom = transform(0, (this.pcrFont.descent * this.pcrFontSize), 1, this.lineMatrix, PRotate.identity, this.indent);
+			this.bottom = transform(0, (this.pcrFont.descent * this.pcrFontSize * this.pcrFontScaleDown), 1, this.lineMatrix, PRotate.identity, this.indent);
 			this.bottom = this.applyTransformationMatrices(this.bottom);
 		}
 		
@@ -5921,7 +6476,7 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 			if (this.assessFonts)
 				this.pcrFont.startWord();
 			this.drawPendingSpace(); // need to do this before computing word start position
-			this.wordCharCodes = new StringBuffer();
+			this.wordCharCodesEnlarged = new StringBuffer();
 			this.wordString = new StringBuffer();
 			this.start = transform(0, 0, 1, this.lineMatrix, PRotate.identity, this.indent);
 			this.start = this.applyTransformationMatrices(this.start);
@@ -5936,10 +6491,12 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 				this.pcrFont.endWord();
 			float[] end = transform(0, 0, 1, this.lineMatrix, PRotate.identity, this.indent);
 			end = this.applyTransformationMatrices(end);
-			float eTextRise = ((this.pcrTextRise * this.eFontSize) / this.pcrFontSize); // use font size modification to assess effect of current transformation
+			float eTextRise = ((this.pcrTextRise * this.eFontSize) / (this.pcrFontSize * this.pcrFontScaleDown)); // use font size modification to assess effect of current transformation
 			if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts) {
 				System.out.println(this.indent + "Got word '" + this.wordString.toString() + "' at RON " + this.nextRenderOrderNumber + ":");
 				System.out.println(this.indent + " - colors are " + this.pcrStrokeColor + " (S) / " + this.pcrNonStrokeColor + " (NS)");
+				System.out.println(this.indent + " - NS pattern is " + this.pcrNonStrokePattern);
+				System.out.println(this.indent + " - rendering mode is " + this.pcrTextRenderingMode);
 				System.out.println(this.indent + " - start is " + Arrays.toString(this.start));
 				System.out.println(this.indent + " - end is " + Arrays.toString(end));
 				System.out.println(this.indent + " - top is " + Arrays.toString(this.top));
@@ -5996,7 +6553,7 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 					if (DEBUG_RENDER_PAGE_CONTENT && !this.assessFonts)
 						System.out.println(this.indent + "     --> contained");
 				}
-				if ((pwb != null) && (this.wordsAreOcr || (this.pcrTextRenderingMode != 3 /* born-digital and invisible */))) {
+				if ((pwb != null) && (this.wordsAreOcr || (this.pcrTextRenderingMode != 3 /* born-digital and invisible (mode 3) */))) {
 					Color pwColor = null;
 					if (this.wordsAreOcr)
 						pwColor = ((this.pcrTextRenderingMode >= 3) ? clipWordColor : Color.BLACK); // required for generic decoding (clip words will be filtered by alpha in born-digital mode)
@@ -6004,20 +6561,20 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 						pwColor = this.getStrokeColor(); // outline only, which Java2D doesn't support, so we still fill, but with stroking color
 					else if (this.pcrTextRenderingMode == 7)
 						pwColor = clipWordColor;
-					else pwColor = this.getNonStrokeColor(); // unless purely clipping, use filling (non-stroking) color for rendering
+					else pwColor = this.getNonStrokeColor(true); // unless purely clipping, use filling (non-stroking) color for rendering, as outline stroking not supported in Java2D text, and outline usually too thin to see anyway at our resolutions
 					PWord pw;
 					if (this.assessFonts)
-						pw = new PWord(this.nextRenderOrderNumber++, this.wordCharCodes.toString(), pwbl, pwb, pwColor, Math.round(this.eFontSize), this.eFontDirection, this.pcrFont);
-					else pw = new PWord(this.nextRenderOrderNumber++, this.wordCharCodes.toString(), this.wordString.toString(), pwbl, pwb, pwColor, Math.round(this.eFontSize), this.eFontDirection, this.pcrFont);
+						pw = new PWord(this.nextRenderOrderNumber++, this.wordCharCodesEnlarged.toString(), pwbl, pwb, pwColor, this.eFontSize, this.eFontDirection, this.pcrFont);
+					else pw = new PWord(this.nextRenderOrderNumber++, this.wordCharCodesEnlarged.toString(), this.wordString.toString(), pwbl, pwb, pwColor, this.eFontSize, this.eFontDirection, this.pcrFont);
 					if (this.wordsAreOcr || (this.pcrTextRenderingMode != 7))
 						this.words.add(pw);
-					if (this.pcrTextRenderingMode >= 4)
+					if ((this.pcrTextRenderingMode >= 4) && (this.pcrClipWords != null))
 						this.pcrClipWords.add(pw);
 				}
 			}
 			this.drawPendingSpace(); // need to do this after computing word end position
 			this.pendingSpace = 0;
-			this.wordCharCodes = null;
+			this.wordCharCodesEnlarged = null;
 			this.wordString = null;
 			this.start = null;
 		}
@@ -6025,12 +6582,19 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 		private static char[] checkForSplitBytePairs(char[] chars, PdfFont font, String indent) {
 			if ((chars.length % 2) != 0)
 				return chars; // no way of pairwise aggregating an odd number of bytes
+			boolean allCharsUcMapped = true;
 			for (int c = 0; c < chars.length; c += 2) {
-				if ((chars[c] > 255) || (chars[c+1] > 255))
+				if ((0xFF < chars[c]) || (0xFF < chars[c+1]))
 					return chars; // if we have chars with the high byte in use, we cannot aggregate
 				if (!font.ucMappings.containsKey(new Integer((chars[c] << 8) | chars[c+1])))
 					return chars; // aggregate char code not in use
+				if ((chars[c] == 0) && font.ucMappings.containsKey(new Integer(0)))
+					return chars; // zero char code in use (above aggregation makes no difference in that case)
+				if (!font.ucMappings.containsKey(new Integer((int) chars[c])) || !font.ucMappings.containsKey(new Integer((int) chars[c+1])))
+					allCharsUcMapped = false;
 			}
+			if (allCharsUcMapped)
+				return chars; // all incoming chars properly mapped, no need to aggregate
 			char[] aChars = new char[chars.length / 2];
 			for (int c = 0; c < chars.length; c += 2)
 				aChars[c / 2] = ((char) ((chars[c] << 8) | chars[c+1]));
@@ -6179,15 +6743,20 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 		}
 		
 		public CompositeContext createContext(ColorModel srcColorModel, ColorModel dstColorModel, RenderingHints hints) {
-			return new BlendingContext(this);
+//			return new BlendingContext(this);
+			return new BlendingContext(this, srcColorModel, dstColorModel);
 		}
 		
 		private static final class BlendingContext implements CompositeContext {
 			private final Blender blender;
 			private final BlendComposite composite;
-			private BlendingContext(BlendComposite composite) {
+			private ColorModel srcColorModel;
+			private ColorModel dstColorModel;
+			private BlendingContext(BlendComposite composite, ColorModel srcColorModel, ColorModel dstColorModel) {
 				this.composite = composite;
 				this.blender = Blender.getBlenderFor(composite.mode);
+				this.srcColorModel = srcColorModel;
+				this.dstColorModel = dstColorModel;
 			}
 			public void dispose() {}
 			public void compose(Raster src, Raster dstIn, WritableRaster dstOut) {
@@ -6205,8 +6774,6 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 				
 				int[] srcPixel = new int[4];
 				int[] dstPixel = new int[4];
-//				int[] srcPixels = new int[width];
-//				int[] dstPixels = new int[width];
 				Object srcPixels = getPixelRowArray(src.getSampleModel().getDataType(), width);
 				Object dstPixels = getPixelRowArray(dstIn.getSampleModel().getDataType(), width);
 				
@@ -6214,17 +6781,19 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 					src.getDataElements(0, y, width, 1, srcPixels);
 					dstIn.getDataElements(0, y, width, 1, dstPixels);
 					for (int x = 0; x < width; x++) {
+						int pixel;
+						
 						// pixels are stored as INT_ARGB
 						// our arrays are [R, G, B, A]
-//						int pixel = srcPixels[x];
-						int pixel = getPixel(srcPixels, x);
+//						pixel = getPixel(srcPixels, x);
+						pixel = this.srcColorModel.getRGB(getPixel(srcPixels, x));
 						srcPixel[0] = (pixel >> 16) & 0xFF;
 						srcPixel[1] = (pixel >>  8) & 0xFF;
 						srcPixel[2] = (pixel	  ) & 0xFF;
 						srcPixel[3] = (pixel >> 24) & 0xFF;
 						
-//						pixel = dstPixels[x];
-						pixel = getPixel(dstPixels, x);
+//						pixel = getPixel(dstPixels, x);
+						pixel = this.dstColorModel.getRGB(getPixel(dstPixels, x));
 						dstPixel[0] = (pixel >> 16) & 0xFF;
 						dstPixel[1] = (pixel >>  8) & 0xFF;
 						dstPixel[2] = (pixel	  ) & 0xFF;
@@ -6237,10 +6806,12 @@ TK	boolean (Optional; PDF 1.4) The text knockout flag, which determines the beha
 //									   ((int) (dstPixel[0] + (result[0] - dstPixel[0]) * alpha) & 0xFF) << 16 |
 //									   ((int) (dstPixel[1] + (result[1] - dstPixel[1]) * alpha) & 0xFF) <<  8 |
 //										(int) (dstPixel[2] + (result[2] - dstPixel[2]) * alpha) & 0xFF;
+						//	TODO this works in practice because we always render on a direct color model (32-bit ARGB), but in general, we have to encode color for destination raster
 						pixel = ((int) (dstPixel[3] + (result[3] - dstPixel[3]) * alpha) & 0xFF) << 24 |
 								((int) (dstPixel[0] + (result[0] - dstPixel[0]) * alpha) & 0xFF) << 16 |
 								((int) (dstPixel[1] + (result[1] - dstPixel[1]) * alpha) & 0xFF) <<  8 |
 								 (int) (dstPixel[2] + (result[2] - dstPixel[2]) * alpha) & 0xFF;
+						
 						setPixel(dstPixels, x, pixel);
 					}
 					dstOut.setDataElements(0, y, width, 1, dstPixels);

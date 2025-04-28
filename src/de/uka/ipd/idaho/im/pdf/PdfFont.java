@@ -30,6 +30,7 @@ package de.uka.ipd.idaho.im.pdf;
 import java.awt.Color;
 import java.awt.Font;
 import java.awt.Graphics;
+import java.awt.geom.Path2D;
 import java.awt.image.BufferedImage;
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
@@ -47,12 +48,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.TreeMap;
-import java.util.TreeSet;
 
 import org.icepdf.core.pobjects.Name;
+import org.icepdf.core.util.Library;
 
 import de.uka.ipd.idaho.gamta.util.CountingSet;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
+import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.im.pdf.PdfFontDecoder.FontDecoderCharset;
 import de.uka.ipd.idaho.im.pdf.PdfParser.PStream;
 import de.uka.ipd.idaho.im.pdf.PdfParser.PString;
@@ -66,11 +68,56 @@ import de.uka.ipd.idaho.stringUtils.StringUtils;
  * @author sautter
  */
 public class PdfFont {
+	/*
+TODO Revisit general approach to glyph decoding:
+- map char codes to glyph keys in fonts, not other way around
+- map (used) glyph keys to char images and paths in char decoder ...
+- ... and that's it ...
+- ... marking used glyph keys during char usage assessment or by font extraction mode
+- run font style assessment, UC mapping verification, and decoding after glyphs rendered ...
+- ... using char codes, associated glyph keys, and char images only ...
+- ... calling latter with font proper as argument _after_ glyphs rendered ...
+- ... and setting char images and paths only then as well
+- store names of accessing fonts in char decoders ...
+- ... and use that list in title of rendering debug display dialog
+- do _not_ call decodeChars() from readFont<XYZ>() methods ...
+- ... but from fonts proper _after_ glyphs decoded and keys mapped to images
+==> associates char codes with glyphs same way as intended in PDF spec (finally)
+==> should enable char decoder sharing even across font types again (and we now have a test PDF)
+==> should resolve plethora of problems and obsolete as many workarounds
+
+Store glyph baseline in char images alongside image and path
+==> simplifies alignment for matching
+==> also, visualize baseline in GGI font editor
+
+Get full picture of "comb. nov.":
+- does it take along subspecies?
+- does it take along synonyms?
+- does it take along synonyms of subspecies?
+==> ask Donat & Rich via mail  ...
+==> ... and use response for MSW 3rd Ed.
+
+Add "annotation types" field group to TCS:
+- list annotation types ...
+- ... alongside number of annotations of that type in treatment
+- likely do same in ACS
+==> quite likely rather use dedicated content summary stats ...
+  - hard to build field group on annotation _types_ as context needs annotation _set_
+==> ... aggregating respective summaries in XML before ingestion ...
+==> ... feeding from both DIO and SRS
+  ==> more flexible DCS based version of legacy ATS
+  ==> most likely dub Document Annotation Statistics (DAS) ...
+  ==> ... and deploy separately for DIO and SRS
+	 */
+	
+	
+//	private static final int MAX_CHAR_CODE = 0x00FF;
+	private static final int MAX_CHAR_CODE = 0x0FFF;
+	private static final int MAX_NON_SUBSTITUTE_CHAR_CODE = 0x00FF;
 	
 	private static final boolean DEBUG_CHAR_HANDLING = false;
 	
 	static class BaseFont {
-//		Hashtable descriptor;
 		Map descriptor;
 		int firstChar;
 		int lastChar;
@@ -82,7 +129,6 @@ public class PdfFont {
 		String encoding;
 		HashMap charMappings = new HashMap(1);
 		HashMap nCharWidths = new HashMap(1);
-//		BaseFont(Hashtable data, Hashtable descriptor, float mCharWidth, String name, String encoding) {
 		BaseFont(Map data, Map descriptor, float mCharWidth, String name, String encoding) {
 			this.descriptor = descriptor;
 			this.mCharWidth = mCharWidth;
@@ -91,45 +137,46 @@ public class PdfFont {
 			this.serif = name.startsWith("Times");
 			this.encoding = encoding;
 		}
-		char resolveByte(int chb) {
-			if (DEBUG_CHAR_HANDLING || (127 < chb))
+//		char resolveByte(int chb) {
+		char resolveByte(int chb, Integer chc) {
+			if (DEBUG_CHAR_HANDLING || (0x7F < chb))
 				System.out.println("   - BF resolving '" + ((char) chb) + "' (" + chb + ")");				
-			Integer chi = new Integer(chb);
-			Character mCh = ((Character) this.charMappings.get(chi));
+//			Integer chc = new Integer(chb);
+			Character mCh = ((Character) this.charMappings.get(chc));
 			if (mCh != null) {
-				if (DEBUG_CHAR_HANDLING || (127 < chb))
+				if (DEBUG_CHAR_HANDLING || (0x7F < chb))
 					System.out.println("   --> mapping resolved to '" + mCh.charValue() + "' (" + ((int) mCh.charValue()) + ")");				
 				return mCh.charValue();
 			}
 			if ("WinAnsiEncoding".equals(this.encoding))
-				mCh = ((Character) PdfFont.winAnsiMappings.get(chi));
+				mCh = ((Character) PdfFont.winAnsiMappings.get(chc));
 			else if ("MacRomanEncoding".equals(this.encoding))
-				mCh = ((Character) PdfFont.macRomanMappings.get(chi));
+				mCh = ((Character) PdfFont.macRomanMappings.get(chc));
 			else if ("MacExpertEncoding".equals(this.encoding))
-				mCh = ((Character) PdfFont.macExpertMappings.get(chi));
+				mCh = ((Character) PdfFont.macExpertMappings.get(chc));
 			else if ("AdobeStandardEncoding".equals(this.encoding) || "StandardEncoding".equals(this.encoding))
-				mCh = ((Character) PdfFont.standardAdobeMappings.get(chi));
-			if ((DEBUG_CHAR_HANDLING || (127 < chb)) && (mCh != null))
+				mCh = ((Character) PdfFont.standardAdobeMappings.get(chc));
+			if ((DEBUG_CHAR_HANDLING || (0x7F < chb)) && (mCh != null))
 				System.out.println("   --> " + this.encoding + " resolved to '" + mCh.charValue() + "' (" + ((int) mCh.charValue()) + ")");				
 			return ((mCh == null) ? 0 : mCh.charValue());
 		}
 		float getCharWidth(char ch) {
-			if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println(" - getting width for '" + ch + "' (" + ((int) ch) + ")");
-			float cw = 0;
-			if (cw == 0) {
+			if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println(" - getting width for '" + ch + "' (" + ((int) ch) + ")");
+			float cw = -1;
+			if (cw == -1) {
 				Float cwObj = ((Float) this.nCharWidths.get(new Character(ch)));
 				if (cwObj != null) {
 					cw = cwObj.floatValue();
-					if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println("   - got char width from map: " + cw);
+					if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println("   - got char width from named map: " + cw);
 				}
 			}
-			if ((cw == 0) && (this.firstChar <= ch) && (ch <= this.lastChar)) {
+			if ((cw == -1) && (this.firstChar <= ch) && (ch <= this.lastChar)) {
 				cw = this.charWidths[((int) ch) - this.firstChar];
-				if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println("   - got char width from array: " + cw);
+				if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println("   - got char width from array: " + cw);
 			}
-			if (cw == 0) {
+			if ((cw == -1) && (this.mCharWidth != 0)) {
 				cw = this.mCharWidth;
-				if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println("   - falling back to missing width: " + cw);
+				if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println("   - falling back to missing width: " + cw);
 			}
 			return cw;
 		}
@@ -150,11 +197,12 @@ public class PdfFont {
 	int lastChar;
 	float[] charWidths;
 	float mCharWidth;
+	int scaleDownFactor = 1; // TODO use this to reduce size of glyphs and increase font size in return
 	
 	String name;
 	String encoding;
-//	int type = 1;
 	String type = null;
+	boolean isVectorized = false;
 	
 	boolean bold;
 	boolean italics;
@@ -164,33 +212,197 @@ public class PdfFont {
 	float descent = 0;
 	float xHeight = 0;
 	float capHeight = 0;
+	BoundingBox bBox = null;
 	boolean hasDescent = true;
 	
 	boolean hasImplicitSpaces = false;
 	HashMap mCcWidths = null;
 	
-	HashMap ucMappings = new HashMap(1);
+	HashMap ucMappings = new HashMap(1) {
+		public Object put(Object key, Object value) {
+			Object oldVal = super.put(key, value);
+			if (oldVal != null) {
+				System.out.println(name + ": UC-mapping of " + key + " set to " + value + ", replacing " + oldVal);
+				StackTraceElement[] stes = Thread.currentThread().getStackTrace();
+				for (int e = 0; e < stes.length; e++) {
+					if ("java.lang.Thread".equals(stes[e].getClassName()))
+						continue;
+					System.out.println("  from " + stes[e].toString());
+				}
+			}
+			return oldVal;
+		}
+		public Object remove(Object key) {
+			Object oldVal = super.remove(key);
+			if (DEBUG_CHAR_HANDLING && (oldVal != null)) {
+				System.out.println(name + ": UC-mapping of " + key + " removed, was " + oldVal);
+				StackTraceElement[] stes = Thread.currentThread().getStackTrace();
+				for (int e = 0; e < stes.length; e++) {
+					if ("java.lang.Thread".equals(stes[e].getClassName()))
+						continue;
+					System.out.println("  from " + stes[e].toString());
+				}
+			}
+			return oldVal;
+		}
+	};
 	HashSet fontUcMapped = new HashSet(1);
 	HashMap diffMappings = new HashMap(1);
-	HashMap diffMappingsReverse = new HashMap(1);
+//	HashMap diffMappingsReverse = new HashMap(1);
 	HashMap diffNameMappings = new HashMap(1);
 	HashMap diffNameMappingsReverse = new HashMap(1);
-	HashSet subSetFilter = null;
+//	HashSet subSetFilter = null;
 	BaseFont baseFont = null;
 	boolean isBuiltInFont = false;
 	HashMap ccWidths = new HashMap(1);
-	HashMap cWidths = new HashMap(1);
-	HashMap charBaselineShifts = new HashMap(2);
+//	HashMap cWidths = new HashMap(1);
+//	HashMap charBaselineShifts = new HashMap(2);
 	HashMap charImages = new HashMap(2);
 	HashMap charNameImages = new HashMap(2);
+	HashMap charPaths = new HashMap(2);
+	HashMap charNamePaths = new HashMap(2);
+	boolean isBinaryFont = true;
 	
 	TreeMap usedCharStats = new TreeMap(); // stats about char usages (predecessors, successors) to help resolve glyph decoding ambiguities
 				// when decoding glyphs, only go for chars in this map, as all others are spurious and never used in document
-	TreeSet usedCharNames = new TreeSet(); // names of chars in above set, as those might also come from Differences mapping in SID fonts
+//	TreeSet usedCharNames = new TreeSet(); // names of chars in above set, as those might also come from Differences mapping in SID fonts
 	HashMap charCodeSynonyms = new HashMap(2);
 	CharDecoder charDecoder = null;
 	
-	private HashMap charCodeSubstitutes = new HashMap();
+//	private HashMap charCodeSubstitutes = new HashMap();
+	private int maxNonSubstitutedCharCode = MAX_NON_SUBSTITUTE_CHAR_CODE;
+	
+	
+	private HashMap charsByCode = new HashMap();
+	private HashMap charsByName = new HashMap();
+	private TreeMap usedCharsByCode = new TreeMap();
+	private HashMap charsByGlyphKey = new HashMap();
+	private TreeMap usedCharsByCompactCode = new TreeMap();
+	
+	private Encoding charEncoding;
+	
+	private static class Char {
+		final PdfFont font; // font the char belongs to
+		final int code; // byte(s) used to access char from PDF side
+		String name; // PostScript or font program given name of char
+		String unicode; // Unicode transcript of char (can be multiple characters)
+		byte unicodeCase = 0; // case of Unicode transcript (upper, lower, or neutral)
+		float width; // width of the char as indicated by the PDF font
+		Object glyphKey; // key to associated glyph in backing font program (can be Integer or String)
+		BufferedImage image; // rendered char image
+		Path2D.Float path; // vector outline of glyph
+		float mWidth; // width of the char measured from the glyph
+		int cCode; // code after code range compression
+		Char valid; // pointer to valid chars for synonymized ones
+		Char(PdfFont font, int code, String name, String unicode) {
+			this.font = font;
+			this.code = code;
+			this.font.charsByCode.put(new Integer(this.code), this);
+			this.cCode = code;
+			if (name != null)
+				this.setName(name);
+			if (unicode != null)
+				this.setUnicode(unicode);
+		}
+		void setName(String name) {
+			if (this.name != null) {
+				if (this.name.equals(name))
+					return;
+				this.font.charsByName.remove(this.name);
+			}
+			this.name = name;
+			if (this.name != null)
+				this.font.charsByName.put(this.name, this);
+		}
+		void setUnicode(String unicode) {
+			this.unicode = unicode;
+			boolean ucEqual = this.unicode.equals(this.unicode.toUpperCase());
+			boolean lcEqual = this.unicode.equals(this.unicode.toLowerCase());
+			if (ucEqual && lcEqual)
+				this.unicodeCase = 0;
+			else if (ucEqual)
+				this.unicodeCase = 1;
+			else if (lcEqual)
+				this.unicodeCase = -1;
+			else this.unicodeCase = 0;
+		}
+		boolean isLowerCase() {
+			return (this.unicodeCase == -1);
+		}
+		boolean isUpperCase() {
+			return (this.unicodeCase == 1);
+		}
+		
+		int usageCount = 0;
+		final CountingSet usageSizes = new CountingSet(new HashMap());
+		final CountingSet predecessorsInWord = new CountingSet(new HashMap());
+		final CountingSet successorsInWord = new CountingSet(new HashMap());
+		final CountingSet predecessorsCrossWord = new CountingSet(new HashMap());
+		final CountingSet successorsCrossWord = new CountingSet(new HashMap());
+		void addUsage(float size, Char prevChInWord) {
+			this.usageCount++;
+			this.usageSizes.add(new Float(size));
+			if (prevChInWord == null)
+				return;
+			prevChInWord.successorsInWord.add(this);
+			this.predecessorsInWord.add(prevChInWord);
+		}
+		void addSuccessorCrossWord(Char ch) {
+			if (ch == null)
+				return;
+			this.successorsCrossWord.add(ch);
+			ch.predecessorsCrossWord.add(this);
+		}
+	}
+	
+	int getCharCodeByGlyphKey(Object glyphKey) {
+		Char ch = ((Char) this.charsByGlyphKey.get(glyphKey));
+		return ((ch == null) ? -1 : ch.code);
+	}
+	
+	private static class Encoding {
+		String name; // holds name of base encoding in case of non-standard encodings
+		boolean keysAreNames;
+		HashMap differences = null;
+		HashMap cidsToGids = null;
+		Encoding(String name, boolean keysAreNames) {
+			this.name = name;
+			this.keysAreNames = keysAreNames;
+		}
+		void mapDifference(int chc, Object glyphKey) {
+			if (this.differences == null)
+				this.differences = new HashMap();
+			this.differences.put(new Integer(chc), glyphKey);
+		}
+		void mapCidToGid(int chc, Object glyphKey) {
+			if (this.cidsToGids == null)
+				this.cidsToGids = new HashMap();
+			this.cidsToGids.put(new Integer(chc), glyphKey);
+		}
+		Object getGlyphKey(int chc) {
+			if (DEBUG_CHAR_HANDLING) System.out.println("Getting glyph key for " + chc);
+			Integer chcObj = new Integer(chc);
+			if ("Identity".equals(this.name) || "Identity-H".equals(this.name) || "Identity-V".equals(this.name)) {
+				if (DEBUG_CHAR_HANDLING) System.out.println(" ==> identity resolved to " + chcObj);
+				return chcObj;
+			}
+			Object glyphKey = null;
+			if ((glyphKey == null) && (this.differences != null) && this.differences.containsKey(chcObj)) {
+				glyphKey = this.differences.get(chcObj);
+				if (DEBUG_CHAR_HANDLING) System.out.println(" ==> diff resolved to " + glyphKey);
+			}
+			if ((glyphKey == null) && (this.cidsToGids != null) && this.cidsToGids.containsKey(chcObj)) {
+				glyphKey = this.differences.get(chcObj);
+				if (DEBUG_CHAR_HANDLING) System.out.println(" ==> CID-to-GID resolved to " + glyphKey);
+			}
+			if (glyphKey == null) {
+				if (this.keysAreNames && (this.name != null))
+					glyphKey = PdfFont.getCharName(chcObj, this.name, DEBUG_CHAR_HANDLING);
+				else glyphKey = chcObj;
+			}
+			return glyphKey;
+		}
+	}
 	
 	PdfFont(Map data, Map descriptor, int firstChar, int lastChar, float[] charWidths, float mCharWidth, String name, String encoding) {
 		this.data = data;
@@ -243,11 +455,6 @@ public class PdfFont {
 		return this.usedCharStats.containsKey(cc);
 	}
 	int[] getUsedCharCodes() {
-//		int[] charCodes = new int[this.usedChars.size()];
-//		int cci = 0;
-//		for (Iterator ccit = this.usedChars.iterator(); ccit.hasNext();)
-//			charCodes[cci++] = ((Integer) ccit.next()).intValue();
-//		return charCodes;
 		int[] charCodes = new int[this.usedCharStats.size()];
 		int cci = 0;
 		for (Iterator ccit = this.usedCharStats.keySet().iterator(); ccit.hasNext();)
@@ -255,24 +462,57 @@ public class PdfFont {
 		return charCodes;
 	}
 	
+	int getCharCodeLength() {
+		if (0x0FFF < this.maxNonSubstitutedCharCode)
+			return 4;
+		else if (0x00FF < this.maxNonSubstitutedCharCode)
+			return 3;
+		else return 2;
+	}
+	
 	private int wordCount = 0;
 	private int wordLength = 0;
 	private int charCount = 0;
+	private int ansiCharCount = 0;
+	private int utf16beCharCount = 0;
+	private int utf16leCharCount = 0;
+	private CountingSet charSizes = new CountingSet();
 	private int prevUsedChb = -1;
+	private Char prevUsedCh = null;
 	void startWord() {
 		this.prevUsedChb = -1;
-//		System.out.println("Font " + this.name + ": word started");
+		this.prevUsedCh = null;
 	}
 	void endWord() {
-		this.setCharUsed(-1);
+//		this.setCharUsed(-1);
+		this.setCharUsed(-1, -1);
 		this.wordCount++;
 		this.charCount += this.wordLength;
 		this.wordLength = 0;
-//		System.out.println("Font " + this.name + ": word ended");
 	}
-	synchronized void setCharUsed(int chb) {
-		if (chb != -1)
+	synchronized void recordCharStringUsage(PString pStr) {
+		if (pStr.isUtf16beAnsi || pStr.isUtf16be)
+			this.utf16beCharCount += pStr.length();
+		else if (pStr.isUtf16leAnsi || pStr.isUtf16le)
+			this.utf16leCharCount += pStr.length();
+		else this.ansiCharCount += pStr.length();
+	}
+	boolean usesAnsiStrings() {
+		return (this.ansiCharCount > (this.utf16beCharCount + this.utf16leCharCount));
+	}
+	boolean usesUtf16beStrings() {
+		return (this.utf16beCharCount > (this.ansiCharCount + this.utf16leCharCount));
+	}
+	boolean usesUtf16leStrings() {
+		return (this.utf16leCharCount > (this.ansiCharCount + this.utf16beCharCount));
+	}
+//	synchronized void setCharUsed(int chb) {
+	synchronized void setCharUsed(int chb, float size) {
+		size = (((float) Math.round(size * 100)) / 100); // cut to two significant digits in favor of aggregation
+		if (chb != -1) {
 			this.wordLength++;
+			this.charSizes.add(new Float(size));
+		}
 		
 		Integer chbObj = new Integer(chb);
 		Object chnObj = null;
@@ -280,15 +520,20 @@ public class PdfFont {
 		CharUsageStats chbStats = ((CharUsageStats) this.usedCharStats.get(chbObj));
 		if ((chb != -1) && (chbStats == null)) {
 			chnObj = this.diffNameMappings.get(chbObj);
-			if (chnObj != null)
-				this.usedCharNames.add(chnObj);
-			else {
+//			if (chnObj != null)
+//				this.usedCharNames.add(chnObj);
+//			else {
+//				String uch = this.getUnicode(chb);
+//				if (uch.length() != 0) {
+//					chn = StringUtils.getCharName(uch.charAt(0));
+//					if (chn != null)
+//						this.usedCharNames.add(chn);
+//				}
+//			}
+			if (chnObj == null) {
 				String uch = this.getUnicode(chb);
-				if (uch.length() != 0) {
+				if (uch.length() != 0)
 					chn = StringUtils.getCharName(uch.charAt(0));
-					if (chn != null)
-						this.usedCharNames.add(chn);
-				}
 			}
 			if (DEBUG_LOAD_FONTS)
 				System.out.println("Font " + this.name + " (" + this + "): using char " + chb + " / " + ((chnObj == null) ? chn : chnObj));
@@ -317,13 +562,29 @@ public class PdfFont {
 		if ((prevChbStats != null) && (chb != -1))
 			prevChbStats.successors.add(chbObj);
 		
-//		System.out.println("Font " + this.name + ": using char " + chb + " after " + this.prevUsedChb);
-//		
 		this.prevUsedChb = chb;
+		
+		Char ch = null;
+		if (chb != -1) {
+			ch = ((Char) this.usedCharsByCode.get(chbObj));
+			if (ch == null) {
+				ch = ((Char) this.charsByCode.get(chbObj));
+				if (ch == null)
+					ch = new Char(this, chb, ((chnObj == null) ? chn : chnObj.toString()), null);
+				this.usedCharsByCode.put(chbObj, ch);
+				ch.glyphKey = this.charEncoding.getGlyphKey(chb);
+				System.out.println("Font " + this.name + ": newly used char code " + chb + " mapped to glyph key " + ch.glyphKey);
+				this.charsByGlyphKey.put(ch.glyphKey, ch);
+				if (this.charDecoder != null)
+					this.charDecoder.usedGlyphKeys.add(ch.glyphKey);
+			}
+			ch.addUsage(size, this.prevUsedCh);
+		}
+		this.prevUsedCh = ch;
 	}
 	synchronized void setCharsNeighbored(int fChb, PdfFont sChbFont, int sChb) {
 		fChb = this.getValidCharCode(new Integer(fChb)).intValue();
-		sChb = this.getValidCharCode(new Integer(sChb)).intValue();
+		sChb = sChbFont.getValidCharCode(new Integer(sChb)).intValue();
 		
 		Integer fChbObj = new Integer(fChb);
 		CharUsageStats fChbStats = ((CharUsageStats) this.usedCharStats.get(fChbObj));
@@ -341,26 +602,32 @@ public class PdfFont {
 		
 		fChbStats.successorChars.add(new CharNeighbor(sChb, sChbFont));
 		sChbStats.predecessorChars.add(new CharNeighbor(fChb, this));
-//		System.out.println("Font " + this.name + ": using char " + fChb + " before " + sChb + " in font " + sChbFont.name);
+		
+		Char fCh = ((Char) this.charsByCode.get(fChbObj));
+		if (fCh != null)
+			fCh.addSuccessorCrossWord((Char) sChbFont.charsByCode.get(sChbObj));
 	}
-	void setCharCodeSynonym(Integer synCh, Integer withCh) {
-		if (withCh.intValue() == 32) // cannot synonymize with space, as char spacing vs. word spacing depends upon it
-			System.out.println("Cannot synonymize " + synCh + " with space " + withCh);
-		else if (synCh.intValue() == 32) // cannot synonymize space, as char spacing vs. word spacing depends upon it
-			System.out.println("Cannot synonymize space " + synCh + " with " + withCh);
-		else if (this.usedCharStats.containsKey(withCh)) /* cannot synonymization with unused character code */ {
-			String synChUc = this.getUnicode(synCh.intValue());
+	void setCharCodeSynonym(Integer synChb, Integer withChb) {
+		if (withChb.intValue() == 32) // cannot synonymize with space, as char spacing vs. word spacing depends upon it
+			System.out.println("Cannot synonymize " + synChb + " with space " + withChb);
+		else if (synChb.intValue() == 32) // cannot synonymize space, as char spacing vs. word spacing depends upon it
+			System.out.println("Cannot synonymize space " + synChb + " with " + withChb);
+		else if (this.usedCharStats.containsKey(withChb)) /* cannot synonymize with unused character code */ {
+			String synChUc = this.getUnicode(synChb.intValue());
 			String synChName = (((synChUc == null) || (synChUc.length() != 1)) ? null : StringUtils.getCharName(synChUc.charAt(0)));
-			String withChUc = this.getUnicode(withCh.intValue());
+			String withChUc = this.getUnicode(withChb.intValue());
 			String withChName = (((withChUc == null) || (withChUc.length() != 1)) ? null : StringUtils.getCharName(withChUc.charAt(0)));
 			if ((synChUc != null) && (withChUc != null) && !synChUc.equals(withChUc))
-				System.out.println("Cannot synonymize " + synCh + "(" + synChUc + "/" + synChName + ") with " + withCh + " (" + withChUc + "/" + withChName + ") for different Unicode mappings");
+				System.out.println("Cannot synonymize " + synChb + "(" + synChUc + "/" + synChName + ") with " + withChb + " (" + withChUc + "/" + withChName + ") for different Unicode mappings");
 			else {
-				System.out.println("Synonymized " + synCh + "(" + synChUc + "/" + synChName + ") with " + withCh + " (" + withChUc + "/" + withChName + ")");
-				this.charCodeSynonyms.put(synCh, withCh);
+				System.out.println("Synonymized " + synChb + "(" + synChUc + "/" + synChName + ") with " + withChb + " (" + withChUc + "/" + withChName + ")");
+				this.charCodeSynonyms.put(synChb, withChb);
+				Char synCh = ((Char) this.charsByCode.get(synChb));
+				if (synCh != null)
+					synCh.valid = ((Char) this.charsByCode.get(withChb));
 			}
 		}
-		else System.out.println("Cannot synonymize " + synCh + " with unused char " + withCh);
+		else System.out.println("Cannot synonymize " + synChb + " with unused char " + withChb);
 	}
 	Integer getValidCharCode(Integer chc) {
 		//	handle transitivity even though it cannot only emerge from rendering sequence equality ...
@@ -413,6 +680,13 @@ public class PdfFont {
 			return ((uc == null) ? ((char) 0) : uc.charAt(0));
 		}
 	}
+	CountingSet getCharUsageSizes(Integer chc) {
+		Char ch = ((Char) this.charsByCode.get(chc));
+		return ((ch == null) ? null : ch.usageSizes);
+	}
+	CountingSet getCharSizes() {
+		return this.charSizes;
+	}
 	
 	boolean isDecoded() {
 		return (this.charDecoder == null);
@@ -427,38 +701,79 @@ public class PdfFont {
 	}
 	
 	synchronized int getCharCode(int chc) {
+		//	TODO find substitute for char code 0, used for actual chars in C671_65-74.pdf (and who knows where else)
+//		chc = this.getValidCharCode(new Integer(chc)).intValue();
+//		if (chc <= MAX_NON_SUBSTITUTE_CHAR_CODE)
+//			return chc;
+//		Integer chcObj = new Integer(chc);
+//		Integer sChcObj = ((Integer) this.charCodeSubstitutes.get(chcObj));
+//		if (sChcObj == null) {
+//			for (int c = 1; c <= MAX_CHAR_CODE; c++) {
+//				Integer tsChcObj = new Integer(c);
+//				if (this.usedCharStats.containsKey(tsChcObj))
+//					continue;
+//				if (this.charCodeSubstitutes.containsKey(tsChcObj))
+//					continue;
+//				sChcObj = tsChcObj;
+//				this.charCodeSubstitutes.put(chcObj, sChcObj); // hold on to substitution mapping
+//				this.charCodeSubstitutes.put(sChcObj, sChcObj); // mark substitute char code as used
+//				if (DEBUG_LOAD_FONTS)
+//					System.out.println("Font " + this.name + ": substituting char code " + chc + " with " + c);
+//				break;
+//			}
+//			if (sChcObj == null)
+//				throw new RuntimeException("No substitutes available for > " + MAX_CHAR_CODE + " char code " + chc);
+//			this.maxNonSubstitutedCharCode = Math.max(this.maxNonSubstitutedCharCode, sChcObj.intValue());
+//		}
+//		return sChcObj.intValue();
 		chc = this.getValidCharCode(new Integer(chc)).intValue();
-		if (chc < 256)
-			return chc;
-		Integer chcObj = new Integer(chc);
-		Integer sChcObj = ((Integer) this.charCodeSubstitutes.get(chcObj));
-		if (sChcObj == null) {
-			for (int c = 1; c < 255; c++) {
-				Integer tsChcObj = new Integer(c);
-				if (this.usedCharStats.containsKey(tsChcObj))
-					continue;
-				if (this.charCodeSubstitutes.containsKey(tsChcObj))
-					continue;
-				sChcObj = tsChcObj;
-				this.charCodeSubstitutes.put(chcObj, sChcObj); // hold on to substitution mapping
-				this.charCodeSubstitutes.put(sChcObj, sChcObj); // mark substitute char code as used
-				if (DEBUG_LOAD_FONTS)
-					System.out.println("Font " + this.name + ": substituting char code " + chc + " with " + c);
-				break;
-			}
-			if (sChcObj == null)
-				throw new RuntimeException("No substitutes available for > 255 char code " + chc);
-		}
-		return sChcObj.intValue();
+		this.maxNonSubstitutedCharCode = Math.max(this.maxNonSubstitutedCharCode, chc);
+		return chc;
 	}
 	
 	private void setCharDecoder(CharDecoder charDecoder) {
 		if (this.charDecoder != null)
 			System.out.println("Font " + this.name + ": having replaced char decoder " + this.charDecoder);
 		this.charDecoder = charDecoder;
+		this.isBinaryFont = false;
 		System.out.println("Font " + this.name + ": char decoder set to " + this.charDecoder);
 	}
 	void decodeChars(ProgressMonitor pm, FontDecoderCharset charSet) throws IOException {
+		this.doDecodeChars(pm, charSet);
+		
+		//	compress char codes into 1-255 range (if possible) ...
+		//	... or at least into 1-4095 range (if that's possible)
+		ArrayList usedChars = new ArrayList(this.usedCharsByCode.values());
+		HashSet usedCharCodes = new HashSet();
+		for (int c = 0; c < usedChars.size(); c++) {
+			Char ch = ((Char) usedChars.get(c));
+			if ((0x0000 < ch.code) && (ch.code <= 0x00FF)) {
+				ch.cCode = ch.code;
+				Integer cChc = new Integer(ch.code);
+				usedCharCodes.add(cChc);
+				this.usedCharsByCompactCode.put(cChc, ch);
+			}
+			else ch.cCode = -1;
+		}
+		int minFreeCharCode = 1;
+		for (int c = 0; c < usedChars.size(); c++) {
+			Char ch = ((Char) usedChars.get(c));
+			if (ch.cCode != -1)
+				continue;
+			for (int chc = minFreeCharCode;; chc++) {
+				Integer cChc = new Integer(chc);
+				if (usedCharCodes.add(cChc)) {
+					ch.cCode = chc;
+					this.usedCharsByCompactCode.put(cChc, ch);
+					if (DEBUG_LOAD_FONTS)
+						System.out.println("Font " + this.name + ": substituting char code " + ch.code + " with " + ch.cCode);
+					minFreeCharCode = (chc+1);
+					break;
+				}
+			}
+		}
+	}
+	private void doDecodeChars(ProgressMonitor pm, FontDecoderCharset charSet) throws IOException {
 		System.out.println("Font " + this.name + " (" + this + "): decoding chars");
 		if (this.charDecoder == null) {
 			System.out.println(" ==> decoder not found");
@@ -482,16 +797,23 @@ public class PdfFont {
 				return true;
 			return false;
 		}
+		final HashSet usedGlyphKeys = new HashSet();
+//		boolean usesGlyph(Object glyphKey) {
+//			//	TODO use this from font decoder
+//			return this.usedGlyphKeys.contains(glyphKey);
+//		}
 		final HashMap plainCharCodesToImages = new HashMap();
 		final HashMap plainCharCodesToWidths = new HashMap();
-		final HashMap plainCharCodesToUnicode = new HashMap();
+//		final HashMap plainCharCodesToUnicode = new HashMap();
+//		final HashMap glyphKeysToImages = new HashMap();
+//		final HashMap glyphKeysToWidths = new HashMap();
 		abstract void decodeChars(PdfFont font, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException;
 	}
 	
 	String getUnicode(int chb) {
 		chb = this.getValidCharCode(new Integer(chb)).intValue();
 		
-		if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println("UC-resolving " + chb + " ...");
+		if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(this.name + ": UC-resolving " + chb + " ...");
 		if (chb < 0) {
 			chb += 256;
 			if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" - incremented to " + ((int) chb));
@@ -515,7 +837,7 @@ public class PdfFont {
 			chb += 256;
 			if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" - incremented to " + ((int) chb));
 		}
-		Integer chi = new Integer(chb);
+		Integer chc = new Integer(chb);
 		
 		/* We need to cut this out here, as we need access to the char indicated
 		 * by the font to decide if word spacing or not. That is independent of
@@ -529,7 +851,7 @@ public class PdfFont {
 //		}
 		
 		//	try differences mapping
-		Character mCh = ((Character) this.diffMappings.get(chi));
+		Character mCh = ((Character) this.diffMappings.get(chc));
 		if (mCh != null) {
 			if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> Diff resolved to " + mCh);
 //			return ("" + mCh.charValue());
@@ -538,7 +860,8 @@ public class PdfFont {
 		
 		//	check base font if char in range
 		if ((this.baseFont != null) && ((chb < this.firstChar) || (this.lastChar < chb))) {
-			char ch = this.baseFont.resolveByte(chb);
+//			char ch = this.baseFont.resolveByte(chb);
+			char ch = this.baseFont.resolveByte(chb, chc);
 			if (ch != 0) {
 				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> base font out of own range resolved to " + ch);
 //				return ("" + ch);
@@ -547,7 +870,7 @@ public class PdfFont {
 		}
 		
 		//	try default encodings (only bytes less than 256)
-		mCh = getChar(chi, this.encoding, DEBUG_CHAR_HANDLING || (127 < chb));
+		mCh = getChar(chc, this.encoding, DEBUG_CHAR_HANDLING || (127 < chb));
 		if (mCh != null)
 			return mCh.charValue();
 		else if ((this.firstChar <= chb) && (chb <= this.lastChar)) {
@@ -555,62 +878,11 @@ public class PdfFont {
 //			return ("" + ((char) chb));
 			return ((char) chb);
 		}
-//		if ("AdobeStandardEncoding".equals(this.encoding)) {
-//			mCh = ((Character) standardAdobeMappings.get(chi));
-//			if (mCh != null) {
-//				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> Adobe resolved to " + mCh.charValue());
-////				return ("" + mCh.charValue());
-//				return mCh.charValue();
-//			}
-//			else if ((this.firstChar <= chb) && (chb <= this.lastChar)) {
-//				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> Adobe default resolved to " + ((char) chb));
-////				return ("" + ((char) chb));
-//				return ((char) chb);
-//			}
-//		}
-//		else if ("MacRomanEncoding".equals(this.encoding)) {
-//			mCh = ((Character) macRomanMappings.get(chi));
-//			if (mCh != null) {
-//				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> MacRoman resolved to " + mCh.charValue());
-////				return ("" + mCh.charValue());
-//				return mCh.charValue();
-//			}
-//			else if ((this.firstChar <= chb) && (chb <= this.lastChar)) {
-//				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> MacRoman default resolved to " + ((char) chb));
-////				return ("" + ((char) chb));
-//				return ((char) chb);
-//			}
-//		}
-//		else if ("MacExpertEncoding".equals(this.encoding)) {
-//			mCh = ((Character) macExpertMappings.get(chi));
-//			if (mCh != null) {
-//				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> MacExpert resolved to " + mCh.charValue());
-////				return ("" + mCh.charValue());
-//				return mCh.charValue();
-//			}
-//			else if ((this.firstChar <= chb) && (chb <= this.lastChar)) {
-//				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> MacExpert default resolved to " + ((char) chb));
-////				return ("" + ((char) chb));
-//				return ((char) chb);
-//			}
-//		}
-//		else if ("WinAnsiEncoding".equals(this.encoding) || (this.encoding == null)) {
-//			mCh = ((Character) winAnsiMappings.get(chi));
-//			if (mCh != null) {
-//				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> ANSI resolved to " + mCh.charValue());
-////				return ("" + mCh.charValue());
-//				return mCh.charValue();
-//			}
-//			else if ((this.firstChar <= chb) && (chb <= this.lastChar)) {
-//				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> ANSI default resolved to " + ((char) chb));
-////				return ("" + ((char) chb));
-//				return ((char) chb);
-//			}
-//		}
 		
 		//	try base font regardless of range
 		if (this.baseFont != null) {
-			char ch = this.baseFont.resolveByte(chb);
+//			char ch = this.baseFont.resolveByte(chb);
+			char ch = this.baseFont.resolveByte(chb, chc);
 			if (ch != 0) {
 				if (DEBUG_CHAR_HANDLING || (127 < chb)) System.out.println(" --> base font resolved to " + ch);
 //				return ("" + ch);
@@ -633,19 +905,26 @@ public class PdfFont {
 		chc = getCharCode(ch, this.encoding, DEBUG_CHAR_HANDLING);
 		return ((chc == null) ? 0 : chc.intValue());
 	}
-	synchronized void mapDifference(Integer ch, Character mCh, String mChName) {
+	synchronized void mapDifference(Integer chc, Character mCh, String mChName) {
 		if (mCh != null) {
-			this.diffMappings.put(ch, mCh);
-			this.diffMappingsReverse.put(mCh, ch);
+			this.diffMappings.put(chc, mCh);
+//			this.diffMappingsReverse.put(mCh, chc);
 		}
 		if (mChName != null) {
-			this.diffNameMappings.put(ch, mChName);
-			this.diffNameMappingsReverse.put(mChName, ch);
+			this.diffNameMappings.put(chc, mChName);
+			this.diffNameMappingsReverse.put(mChName, chc);
 		}
 		if (DEBUG_CHAR_HANDLING)
-			System.out.println("Diff-Mapped " + ch + " to '" + mCh + "'");
+			System.out.println("Diff-Mapped " + chc + " to '" + mCh + "'");
+		Char ch = ((Char) this.charsByCode.get(chc));
+		if (ch == null)
+			ch = new Char(this, chc.intValue(), mChName, null);
+		else if (mChName != null)
+			ch.setName(mChName);
+		if (mCh != null)
+			ch.setUnicode(mCh.toString());
 	}
-	synchronized void mapUnicode(Integer ch, String str, boolean isFontUcMapping) {
+	synchronized void mapUnicode(Integer chc, String str, boolean isFontUcMapping) {
 		String nStr = str;
 		
 		//	mapped string is dissolved ligature (which usually happen to correspond to PostScript names for those very ligatures)
@@ -667,30 +946,30 @@ public class PdfFont {
 		}
 		
 		//	revert deviations from Unicode (especially default encodings)
-		if ((ch.intValue() > 255) && !this.usesCharCode(ch)) {
-			Integer mCh = getCharCode(new Character((char) ch.intValue()), this.encoding, DEBUG_CHAR_HANDLING);
-			if (DEBUG_LOAD_FONTS) System.out.println(" ==> resolved unused char code " + ch + " to " + mCh);
-			if ((mCh != null) && this.usesCharCode(new Integer(mCh))) {
-				if (DEBUG_LOAD_FONTS) System.out.println(" ==> replaced unused char code " + ch + " with used char code " + mCh);
-				ch = mCh;
+		if ((chc.intValue() > MAX_NON_SUBSTITUTE_CHAR_CODE) && !this.usesCharCode(chc)) {
+			Integer mChc = getCharCode(new Character((char) chc.intValue()), this.encoding, DEBUG_CHAR_HANDLING);
+			if (DEBUG_LOAD_FONTS) System.out.println(" ==> resolved unused char code " + chc + " to " + mChc);
+			if ((mChc != null) && this.usesCharCode(new Integer(mChc))) {
+				if (DEBUG_LOAD_FONTS) System.out.println(" ==> replaced unused char code " + chc + " with used char code " + mChc);
+				chc = mChc;
 			}
 		}
 		
 		//	store mapping
-		this.ucMappings.put(ch, nStr);
+		Object oldStr = this.ucMappings.put(chc, nStr);
 		
 		//	remember mapping comes from font proper (need this for char width lookups)
 		if (isFontUcMapping)
-			this.fontUcMapped.add(ch);
+			this.fontUcMapped.add(chc);
 		
 		//	be verbose if required
 		if (DEBUG_CHAR_HANDLING) {
-			System.out.print(this.name + ": UC-Mapped " + ch + " to '" + str + "' (");
+			System.out.print(this.name + ": UC-Mapped " + chc + " to '" + str + "' (");
 			for (int c = 0; c < str.length(); c++)
 				 System.out.print(((c == 0) ? "" : " ") + ((int) str.charAt(c)));
 			for (int c = 0; c < str.length(); c++)
 				 System.out.print(((c == 0) ? ", " : " ") + Integer.toString(((int) str.charAt(c)), 16));
-			System.out.println(")");
+			System.out.println(")" + ((oldStr == null) ? "" : (", replacing '" + oldStr + "'")));
 			if (nStr != str) {
 				System.out.print("  normalized to '" + nStr + "' (");
 				for (int c = 0; c < nStr.length(); c++)
@@ -700,18 +979,35 @@ public class PdfFont {
 				System.out.println(")");
 			}
 		}
+		
+		//	remember in char object
+		Char ch = ((Char) this.charsByCode.get(chc));
+		if (ch == null)
+			ch = new Char(this, chc.intValue(), null, nStr);
+		else ch.setUnicode(nStr);
 	}
+//	synchronized void mapUnicode(Object glyphKey, String str) {
+//		//	TODO use this from font decoder
+//		Char ch = ((Char) this.charsByGlyphKey.get(glyphKey));
+//		if (ch != null)
+//			this.mapUnicode(new Integer(ch.code), str, false);
+//	}
 	
 	BufferedImage getCharImage(int chb) {
 		if (this.charImages.containsKey(new Integer(chb)))
 			return ((BufferedImage) this.charImages.get(new Integer(chb)));
 		else return ((BufferedImage) this.charNameImages.get(this.diffNameMappings.get(new Integer(chb))));
 	}
-	synchronized void setCharImage(int chb, String chn, BufferedImage chi) {
+	Path2D.Float getCharPath(int chb) {
+		if (this.charPaths.containsKey(new Integer(chb)))
+			return ((Path2D.Float) this.charPaths.get(new Integer(chb)));
+		else return ((Path2D.Float) this.charNamePaths.get(this.diffNameMappings.get(new Integer(chb))));
+	}
+	synchronized void setCharImage(int chb, String chn, BufferedImage chi, Path2D.Float chp) {
 		//	TODO also map in-font-program codes to char images on char decoder !!!
 		//	TODO also map in-font-program codes to char UC mappings !!!
 		if (DEBUG_LOAD_FONTS) System.out.println("Font " + this.name + " (" + this + "): char " + chb + " (" + chn + ") got image");
-		if ((chb > 255) && !this.usesCharCode(new Integer(chb))) {
+		if ((chb > MAX_NON_SUBSTITUTE_CHAR_CODE) && !this.usesCharCode(new Integer(chb))) {
 			int mChb = this.getCharCode(chn);
 			if (mChb == 0) {
 				Integer mChbObj = getCharCode(new Character((char) chb), this.encoding, DEBUG_CHAR_HANDLING);
@@ -726,96 +1022,129 @@ public class PdfFont {
 		}
 		this.charImages.put(new Integer(chb), chi);
 		this.charNameImages.put(chn, chi);
+		if (chp != null) {
+			this.charPaths.put(new Integer(chb), chp);
+			this.charNamePaths.put(chn, chp);
+		}
+		
+		Integer chbObj = new Integer(chb);
+		Char ch = ((Char) this.charsByCode.get(chbObj));
+		if (ch == null)
+			ch = new Char(this, chb, chn, null);
+		ch.image = chi;
+		ch.path = chp;
 	}
+//	synchronized void setCharImage(Object glyphKey, BufferedImage chi, Path2D.Float chp) {
+//		//	TODO use this from font decoder
+//		Char ch = ((Char) this.charsByGlyphKey.get(glyphKey));
+//		if (ch != null)
+//			this.setCharImage(ch.code, ch.name, chi, chp);
+//	}
 	
 	float getCharWidth(char ch) {
 		return this.getCharWidth(ch, true);
 	}
 	private float getCharWidth(char ch, boolean isPrimaryLookup) {
-		if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println("Getting width for '" + ch + "' (" + ((int) ch) + ")");
+		if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println("Getting width for '" + ch + "' (" + ((int) ch) + ")");
 		float cw = -1;
 		if (cw == -1) {
 			Float cwObj = ((Float) this.ccWidths.get(new Integer((int) ch)));
 			if (cwObj != null) {
 				cw = cwObj.floatValue();
-				if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println(" - width from own ur-mapping: " + cw);
+				if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println(" - width from own ur-mapping: " + cw);
 			}
 		}
-		if (cw == -1) {
-			Float cwObj = ((Float) this.cWidths.get(new Character(ch)));
-			if (cwObj != null) {
-				cw = cwObj.floatValue();
-				if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println(" - width from own r-mapping: " + cw);
-			}
-		}
+//		if (cw == -1) {
+//			Float cwObj = ((Float) this.cWidths.get(new Character(ch)));
+//			if (cwObj != null) {
+//				cw = cwObj.floatValue();
+//				if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println(" - width from own r-mapping: " + cw);
+//			}
+//		}
 		if ((cw == -1) && (this.charWidths != null) && (this.firstChar <= ch) && (ch <= this.lastChar)) {
 //			cw = this.charWidths[((int) ch) - this.firstChar];
-//			if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println(" - width from base array: " + cw);
+//			if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println(" - width from base array: " + cw);
 			float baCw = this.charWidths[((int) ch) - this.firstChar];
 			if (baCw > 0) {
 				cw = baCw;
-				if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println(" - width from base array: " + cw);
+				if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println(" - width from base array: " + cw);
 			}
 		}
 		if ((cw == -1) && (this.mCharWidth > 0) && this.fontUcMapped.contains(new Integer((int) ch))) {
 			cw = this.mCharWidth;
-			if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println(" - mapped fallback default width: " + cw);
+			if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println(" - mapped fallback default width: " + cw);
 		}
 		if ((cw == -1) && (this.baseFont != null)) {
-			if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println(" - doing base font lookup");
-			Integer chi = new Integer((int) ch);
+			if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println(" - doing base font lookup");
+			Integer chc = new Integer((int) ch);
 			char aCh = ch;
-			if (this.diffMappings.containsKey(chi)) {
-				Character mCh = ((Character) this.diffMappings.get(chi));
-				if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println("   - diff resolved to " + mCh);
+			if (this.diffMappings.containsKey(chc)) {
+				Character mCh = ((Character) this.diffMappings.get(chc));
+				if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println("   - diff resolved to " + mCh);
 				aCh = mCh.charValue();
 			}
 			else if ("AdobeStandardEncoding".equals(this.encoding)) {
-				Character mCh = ((Character) standardAdobeMappings.get(chi));
+				Character mCh = ((Character) standardAdobeMappings.get(chc));
 				if (mCh != null) {
-					if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println("   - Adobe Standard resolved to " + mCh);
+					if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println("   - Adobe Standard resolved to " + mCh);
 					aCh = mCh.charValue();
 				}
 			}
 			else if ("MacRomanEncoding".equals(this.encoding)) {
-				Character mCh = ((Character) macRomanMappings.get(chi));
+				Character mCh = ((Character) macRomanMappings.get(chc));
 				if (mCh != null) {
-					if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println("   - Mac Roman resolved to " + mCh);
+					if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println("   - Mac Roman resolved to " + mCh);
 					aCh = mCh.charValue();
 				}
 			}
 			else if ("MacExpertEncoding".equals(this.encoding)) {
-				Character mCh = ((Character) macExpertMappings.get(chi));
+				Character mCh = ((Character) macExpertMappings.get(chc));
 				if (mCh != null) {
-					if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println("   - Mac Expert resolved to " + mCh);
+					if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println("   - Mac Expert resolved to " + mCh);
+					aCh = mCh.charValue();
+				}
+			}
+			else if ("WinAnsiEncoding".equals(this.encoding)) /* we need this at least for 0x80-0x9F to get actual Unicode char */ {
+				Character mCh = ((Character) winAnsiMappings.get(chc));
+				if (mCh != null) {
+					if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println("   - Win ANSI resolved to " + mCh);
 					aCh = mCh.charValue();
 				}
 			}
 			cw = this.baseFont.getCharWidth(aCh);
-			if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println(" - width from base font (as " + aCh + "): " + cw);
+			if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println(" - width from base font (as " + aCh + "): " + cw);
 		}
 //		if ((cw == 0) && this.rCharMappings.containsKey(new Character((char) ch))) {
 //			Integer rmCh = ((Integer) this.rCharMappings.get(new Character((char) ch)));
 //			if ((rmCh != null) && (rmCh.intValue() != ch)) {
-//				if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println(" - recursing with reverse mapped CID");
+//				if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println(" - recursing with reverse mapped CID");
 //				return this.getCharWidth((char) rmCh.intValue());
 //			}
 //		}
 		if (cw == -1) {
 			cw = this.mCharWidth;
-			if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println(" - fallback missing width: " + cw);
+			if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println(" - fallback missing width: " + cw);
 		}
 		
 		if ((cw == -1) && isPrimaryLookup) {
 			Character mCh = ((Character) this.diffMappings.get(new Integer(ch)));
 			if ((mCh != null) && (mCh.charValue() != ch)) {
 				cw = this.getCharWidth(mCh.charValue(), false);
-				if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println(" - Diff resolved char fallback: " + cw);
+				if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println(" - Diff resolved char fallback: " + cw);
 			}
 		}
-		if (DEBUG_CHAR_HANDLING || (127 < ch)) System.out.println(" --> width is " + cw);
+		if (DEBUG_CHAR_HANDLING || (0x7F < ch)) System.out.println(" --> width is " + cw);
 		
-		return cw;
+//		return cw;
+		return (cw / this.scaleDownFactor); // compensate for narrower glyphs
+	}
+	float getCharWidth(int chc) {
+		Float cwObj = ((Float) this.ccWidths.get(new Integer(chc)));
+		if (cwObj == null)
+			return this.mCharWidth;
+		if (DEBUG_CHAR_HANDLING || (127 < chc)) System.out.println(" - width from own ur-mapping: " + cwObj);
+//		return cwObj.floatValue();
+		return (cwObj.floatValue() / this.scaleDownFactor); // compensate for narrower glyphs
 	}
 	
 	/* set width for unresolved character code */
@@ -823,14 +1152,24 @@ public class PdfFont {
 		this.ccWidths.put(chc, new Float(cw));
 		if (DEBUG_CHAR_HANDLING)
 			System.out.println("Unresolved width for " + chc + " set to " + cw);
+		Char ch = ((Char) this.charsByCode.get(chc));
+		if (ch == null)
+			ch = new Char(this, chc.intValue(), null, null);
+		ch.width = cw;
 	}
-	
-	/* set width for actual character */
-	synchronized void setCharWidth(Character ch, float cw) {
-		this.cWidths.put(ch, new Float(cw));
-		if (DEBUG_CHAR_HANDLING)
-			System.out.println("Resolved width for '" + ch + "' (" + ((int) ch.charValue()) + ") set to " + cw);
-	}
+//	synchronized void setCharWidth(Object glyphKey, float cw) {
+//		//	TODO use this from font decoder
+//		Char ch = ((Char) this.charsByGlyphKey.get(glyphKey));
+//		if (ch != null)
+//			this.setCharWidth(new Integer(ch.code), cw);
+//	}
+//	
+//	/* set width for actual character */
+//	synchronized void setCharWidth(Character ch, float cw) {
+//		this.cWidths.put(ch, new Float(cw));
+//		if (DEBUG_CHAR_HANDLING)
+//			System.out.println("Resolved width for '" + ch + "' (" + ((int) ch.charValue()) + ") set to " + cw);
+//	}
 	
 	float getMeasuredCharWidth(char ch) {
 		if (this.mCcWidths != null) {
@@ -842,36 +1181,49 @@ public class PdfFont {
 	}
 	
 	/* set measured width for unresolved character code */
-	void setMeasuredCharWidth(Integer ch, float cw) {
+	void setMeasuredCharWidth(Integer chc, float cw) {
 		if (this.mCcWidths == null)
 			this.mCcWidths = new HashMap();
-		this.mCcWidths.put(ch, new Float(cw));
-		if (DEBUG_CHAR_HANDLING)
-			System.out.println("Unresolved measured width for " + ch + " set to " + cw);
-	}
-	
-	float getRelativeBaselineShift(char ch) {
-		Float bls = ((Float) this.charBaselineShifts.get(new Character(ch)));
-		return ((bls == null) ? 0 : bls.floatValue());
-	}
-	float getRelativeBaselineShift(String str) {
-		float blsUp = 0;
-		float blsDown = 0;
-		for (int c = 0; c < str.length(); c++) {
-			char ch = str.charAt(c);
-			if (Character.isWhitespace(ch))
-				continue;
-			float chBls = this.getRelativeBaselineShift(ch);
-			if (DEBUG_CHAR_HANDLING && (chBls != 0))
-				System.out.println("Baseline shift for " + ch + " is " + chBls);
-			blsUp = Math.max(blsUp, chBls);
-			blsDown = Math.min(blsDown, chBls);
+		this.mCcWidths.put(chc, new Float(cw));
+		if (DEBUG_CHAR_HANDLING) {
+			System.out.println(this.name + ": unresolved measured width for " + chc + "/" + Integer.toString(chc.intValue(), 16) + " set to " + cw);
+			if (Float.isNaN(cw))
+				(new RuntimeException("GOTCHA")).printStackTrace(System.out);
 		}
-		return ((blsDown == 0) ? blsUp : blsDown);
+		Char ch = ((Char) this.charsByCode.get(chc));
+		if (ch == null)
+			ch = new Char(this, chc.intValue(), null, null);
+		ch.mWidth = cw;
 	}
-	void setRelativeBaselineShift(Character ch, float bls) {
-		this.charBaselineShifts.put(ch, new Float(bls));
-	}
+//	void setMeasuredCharWidth(Object glyphKey, float cw) {
+//		//	TODO use tis from font decoder
+//		Char ch = ((Char) this.charsByGlyphKey.get(glyphKey));
+//		if (ch != null)
+//			this.setMeasuredCharWidth(new Integer(ch.code), cw);
+//	}
+//	
+//	float getRelativeBaselineShift(char ch) {
+//		Float bls = ((Float) this.charBaselineShifts.get(new Character(ch)));
+//		return ((bls == null) ? 0 : bls.floatValue());
+//	}
+//	float getRelativeBaselineShift(String str) {
+//		float blsUp = 0;
+//		float blsDown = 0;
+//		for (int c = 0; c < str.length(); c++) {
+//			char ch = str.charAt(c);
+//			if (Character.isWhitespace(ch))
+//				continue;
+//			float chBls = this.getRelativeBaselineShift(ch);
+//			if (DEBUG_CHAR_HANDLING && (chBls != 0))
+//				System.out.println("Baseline shift for " + ch + " is " + chBls);
+//			blsUp = Math.max(blsUp, chBls);
+//			blsDown = Math.min(blsDown, chBls);
+//		}
+//		return ((blsDown == 0) ? blsUp : blsDown);
+//	}
+//	void setRelativeBaselineShift(Character ch, float bls) {
+//		this.charBaselineShifts.put(ch, new Float(bls));
+//	}
 	
 	synchronized int addCombinedChar(int bChb1, PdfFont bChFont1, int bChb2, PdfFont bChFont2, String cChUc, String cChName) {
 		
@@ -886,16 +1238,17 @@ public class PdfFont {
 				return cc.intValue();
 			}
 		}
-		
-		//	check if we have any unused bytes left
-		if (this.usedCharStats.size() >= 255) {
-			if (DEBUG_CHAR_HANDLING) System.out.println("Cannot create any further chars, no bytes left");
-			return -1;
-		}
+//		
+//		//	check if we have any unused bytes left
+//		//	TODO permit char codes above 255
+//		if (this.usedCharStats.size() >= MAX_CHAR_CODE) {
+//			if (DEBUG_CHAR_HANDLING) System.out.println("Cannot create any further chars, no bytes left");
+//			return -1;
+//		}
 		
 		//	find free char byte
 		int cChb = -1;
-		for (int b = 1; b < 256; b++)
+		for (int b = 1; b <= MAX_CHAR_CODE; b++)
 			if (!this.usedCharStats.containsKey(new Integer(b))) {
 				cChb = b;
 				break;
@@ -909,6 +1262,8 @@ public class PdfFont {
 		//	synthesize char image
 		BufferedImage bChBi1 = bChFont1.getCharImage(bChb1);
 		BufferedImage bChBi2 = bChFont2.getCharImage(bChb2);
+		Path2D.Float bChP1 = bChFont1.getCharPath(bChb1);
+		Path2D.Float bChP2 = bChFont2.getCharPath(bChb2);
 		if ((bChBi1 != null) && (bChBi2 != null)) {
 			BufferedImage cChBi = new BufferedImage((bChBi1.getWidth() + bChBi2.getWidth()), Math.max(bChBi1.getHeight(), bChBi2.getHeight()), BufferedImage.TYPE_BYTE_GRAY);
 			Graphics cChBiGr = cChBi.createGraphics();
@@ -916,20 +1271,26 @@ public class PdfFont {
 			cChBiGr.fillRect(0, 0, cChBi.getWidth(), cChBi.getHeight());
 			cChBiGr.drawImage(bChBi1, 0, 0, null);
 			cChBiGr.drawImage(bChBi2, bChBi1.getWidth(), 0, null);
-			this.setCharImage(cChb, cChName, cChBi);
+			Path2D.Float cChP = null;
+			if ((bChP1 != null) && (bChP2 != null)) {
+				cChP = new Path2D.Float(Path2D.WIND_NON_ZERO);
+				cChP.append(bChP1, false);
+				cChP.append(bChP2, false);
+			}
+			this.setCharImage(cChb, cChName, cChBi, cChP);
 			if (DEBUG_CHAR_HANDLING) System.out.println(" - got combined char image sized " + cChBi.getWidth() + "x" + cChBi.getHeight());
 //			JOptionPane.showMessageDialog(null, "Combined char '" + cChUc + "' created", "Combined Char Created", JOptionPane.INFORMATION_MESSAGE, new ImageIcon(cChBi));
 		}
 		else if (DEBUG_CHAR_HANDLING) System.out.println(" - could not create char image due to at least one missing base char image");
 		
-		//	Unicode map newly added char
-		this.mapUnicode(new Integer(cChb), cChUc, false);
-		if (DEBUG_CHAR_HANDLING) System.out.println(" - Unicode mapped");
-		
 		//	get and store width of newly added char
 		float cChWidth = Math.max(bChFont1.getCharWidth((char) bChb1), bChFont2.getCharWidth((char) bChb2));
 		this.setCharWidth(new Integer(cChb), cChWidth);
 		if (DEBUG_CHAR_HANDLING) System.out.println(" - char width computed as " + cChWidth);
+		
+		//	Unicode map newly added char
+		this.mapUnicode(new Integer(cChb), cChUc, false);
+		if (DEBUG_CHAR_HANDLING) System.out.println(" - Unicode mapped");
 		
 		//	also store newly assigned char code in usage stats, so char doesn't get sorted out
 		CharUsageStats cus = new CharUsageStats(cChb);
@@ -937,37 +1298,41 @@ public class PdfFont {
 		this.usedCharStats.put(new Integer(cChb), cus);
 		if (DEBUG_CHAR_HANDLING) System.out.println(" - char usage stats added");
 		
+		//	store in char object
+		Char ch = ((Char) this.charsByCode.get(new Integer(cChb)));
+		ch.setName(cChName);
+		
 		//	finally ...
 		return cChb;
 	}
 	
-	static Character getChar(Integer chi, String encoding, boolean debug) {
+	static Character getChar(Integer chc, String encoding, boolean debug) {
 		Character ch;
 		
 		//	try default encodings (only bytes less than 256)
 		if ("AdobeStandardEncoding".equals(encoding)) {
-			ch = ((Character) standardAdobeMappings.get(chi));
+			ch = ((Character) standardAdobeMappings.get(chc));
 			if (ch != null) {
 				if (debug) System.out.println(" --> Adobe resolved to " + ch.charValue());
 				return ch;
 			}
 		}
 		else if ("MacRomanEncoding".equals(encoding)) {
-			ch = ((Character) macRomanMappings.get(chi));
+			ch = ((Character) macRomanMappings.get(chc));
 			if (ch != null) {
 				if (debug) System.out.println(" --> MacRoman resolved to " + ch.charValue());
 				return ch;
 			}
 		}
 		else if ("MacExpertEncoding".equals(encoding)) {
-			ch = ((Character) macExpertMappings.get(chi));
+			ch = ((Character) macExpertMappings.get(chc));
 			if (ch != null) {
 				if (debug) System.out.println(" --> MacExpert resolved to " + ch.charValue());
 				return ch;
 			}
 		}
 		else if ("WinAnsiEncoding".equals(encoding) || (encoding == null)) {
-			ch = ((Character) winAnsiMappings.get(chi));
+			ch = ((Character) winAnsiMappings.get(chc));
 			if (ch != null) {
 				if (debug) System.out.println(" --> ANSI resolved to " + ch.charValue());
 				return ch;
@@ -978,7 +1343,7 @@ public class PdfFont {
 		return null;
 	}
 	
-	static Integer getCharCode(Character ch, String encoding, boolean debug) {
+	public static Integer getCharCode(Character ch, String encoding, boolean debug) {
 		Integer chi;
 		
 		//	try default encodings (only bytes less than 256)
@@ -1429,9 +1794,9 @@ public class PdfFont {
 		}
 	}
 	
-	static final boolean DEBUG_LOAD_FONTS = false;
+	static final boolean DEBUG_LOAD_FONTS = true;
 	
-	static PdfFont readFont(Object fnObj, Map fontData, Map objects, boolean needChars, Map charDecoders, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException {
+	static PdfFont readFont(Object fnObj, Map fontData, Library library, Map objects, Map charDecoders, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException {
 		Object ftObj = fontData.get("Subtype");
 		if (ftObj == null) {
 			if (DEBUG_LOAD_FONTS) {
@@ -1441,33 +1806,37 @@ public class PdfFont {
 			return null;
 		}
 		if (DEBUG_LOAD_FONTS) System.out.println("Reading font type " + ftObj);
+		PdfFont pFont = null;
 		
 		if ("Type0".equals(ftObj.toString()))
-			return readFontType0(fontData, objects, charDecoders, charSet, pm);
+			pFont = readFontType0(fontData, library, objects, charSet.cleanUnicodeMapping(), charDecoders, charSet, pm);
 		
 		if ("Type1".equals(ftObj.toString()))
-			return readFontType1(fontData, objects, charDecoders, pm);
+			pFont = readFontType1(fontData, objects, charSet.cleanUnicodeMapping(), charDecoders, pm);
 		
 		if ("Type3".equals(ftObj.toString()))
-			return readFontType3(fnObj, fontData, objects, charDecoders, charSet, pm);
+			pFont = readFontType3(fnObj, fontData, library, objects, charSet.cleanUnicodeMapping(), charDecoders, charSet, pm);
 		
 		if ("TrueType".equals(ftObj.toString()))
-			return readFontTrueType(fontData, objects, charDecoders, pm);
+			pFont = readFontTrueType(fontData, objects, charSet.cleanUnicodeMapping(), charDecoders, pm);
 		
 		if ("CIDFontType0".equals(ftObj.toString()))
-			return readFontCidType0(fontData, objects, needChars, charDecoders, pm);
+			pFont = readFontCidType0(fontData, objects, charSet.cleanUnicodeMapping(), charDecoders, pm);
 		
 		if ("CIDFontType2".equals(ftObj.toString()))
-			return readFontCidType2(fontData, objects, needChars, charDecoders, pm);
+			pFont = readFontCidType2(fontData, objects, charDecoders, pm);
 		
-		if (DEBUG_LOAD_FONTS) {
+		if ((pFont == null) && DEBUG_LOAD_FONTS) {
 			System.out.println("Problem in font " + fontData);
 			System.out.println(" --> unknown font type");
 		}
-		return null;
+		
+		if (pFont != null)
+			pFont.isVectorized = (charSet == PdfFontDecoder.VECTORIZED_OCR_DECODING);
+		return pFont;
 	}
 	
-	private static PdfFont readFontType0(Map fontData, Map objects, Map charDecoders, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException {
+	private static PdfFont readFontType0(Map fontData, Library library, Map objects, boolean cleanUnicodeMapping, Map charDecoders, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException {
 		pm.setInfo("Loading type 0 font");
 		Object dfaObj = PdfParser.dereference(fontData.get("DescendantFonts"), objects);
 		if (!(dfaObj instanceof List) || (((List) dfaObj).size() != 1)) {
@@ -1482,24 +1851,14 @@ public class PdfFont {
 		Object tuObj = PdfParser.dereference(fontData.get("ToUnicode"), objects);
 		HashMap toUnicodeMappings = null;
 		if (tuObj instanceof PStream) {
-			Object filter = ((PStream) tuObj).params.get("Filter");
-			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			try {
-				PdfParser.decode(((filter == null) ? "FlateDecode" : filter), ((PStream) tuObj).bytes, ((PStream) tuObj).params, baos, objects);
-			}
-			catch (Exception e) {
-				if (filter == null)
-					PdfParser.decode(null, ((PStream) tuObj).bytes, ((PStream) tuObj).params, baos, objects);
-				else if (e instanceof IOException)
-					throw ((IOException) e);
-				else if (e instanceof RuntimeException)
-					throw ((RuntimeException) e);
-			}
-			byte[] tuMapData = baos.toByteArray();
-			if (DEBUG_LOAD_FONTS)
+			byte[] tuMapData = decodeToUnicodeCMap(((PStream) tuObj), objects);
+			if (DEBUG_LOAD_FONTS) {
 				System.out.println(" --> to unicode: " + new String(tuMapData));
+				if (tuMapData.length < ((PStream) tuObj).bytes.length)
+					System.out.println(" --> raw (LONGER): " + new String(((PStream) tuObj).bytes));
+			}
 			pm.setInfo(" - got Unicode mapping");
-			toUnicodeMappings = readToUnicodeCMap(tuMapData, true);
+			toUnicodeMappings = readToUnicodeCMap(tuMapData, true, cleanUnicodeMapping);
 			if (DEBUG_LOAD_FONTS)
 				System.out.println(" ==> to unicode: " + toUnicodeMappings);
 		}
@@ -1516,7 +1875,7 @@ public class PdfFont {
 		}
 		System.out.println(" --> descendant font: " + dfObj);
 		
-		PdfFont dFont = readFont(null, ((Map) dfObj), objects, (toUnicodeMappings == null), charDecoders, charSet, pm);
+		PdfFont dFont = readFont(null, ((Map) dfObj), library, objects, charDecoders, charSet, pm);
 		if (dFont == null) {
 			if (DEBUG_LOAD_FONTS) {
 				System.out.println("Problem in font " + dfObj);
@@ -1544,6 +1903,8 @@ public class PdfFont {
 		if (feObj instanceof Map)
 			feObj = PdfParser.dereference(((Map) feObj).get("BaseEncoding"), objects);
 		
+		Encoding encoding = new Encoding(((feObj == null) ? null : feObj.toString()), dFont.charEncoding.keysAreNames);
+		
 		String pFontName = ((String) fontData.get("DerivedFontName")); // use base font name with randomized suffix
 		if (pFontName == null) {
 			//	TODO maybe use hash of font data or font descriptor instead ?!?
@@ -1553,6 +1914,7 @@ public class PdfFont {
 		}
 		
 		PdfFont pFont = new PdfFont(fontData, dFont.descriptor, dFont.firstChar, dFont.lastChar, dFont.charWidths, dFont.mCharWidth, pFontName, ((feObj == null) ? null : feObj.toString()));
+		pFont.charEncoding = encoding;
 		pFont.ascent = dFont.ascent;
 		pFont.descent = dFont.descent;
 		pFont.xHeight = dFont.xHeight;
@@ -1567,10 +1929,10 @@ public class PdfFont {
 			Integer chc = ((Integer) chcit.next());
 			pFont.setCharWidth(chc, ((Float) dFont.ccWidths.get(chc)).floatValue());
 		}
-		for (Iterator chit = dFont.cWidths.keySet().iterator(); chit.hasNext();) {
-			Character ch = ((Character) chit.next());
-			pFont.setCharWidth(ch, ((Float) dFont.cWidths.get(ch)).floatValue());
-		}
+//		for (Iterator chit = dFont.cWidths.keySet().iterator(); chit.hasNext();) {
+//			Character ch = ((Character) chit.next());
+//			pFont.setCharWidth(ch, ((Float) dFont.cWidths.get(ch)).floatValue());
+//		}
 		
 		if (toUnicodeMappings == null) {
 			if (DEBUG_LOAD_FONTS)
@@ -1594,12 +1956,33 @@ public class PdfFont {
 		return pFont;
 	}
 	
-	private static HashMap readToUnicodeCMap(byte[] cMap, boolean isHex) throws IOException {
+	private static byte[] decodeToUnicodeCMap(PStream tu, Map objects) throws IOException {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		Object filter = tu.params.get("Filter");
+		try {
+			PdfParser.decode(((filter == null) ? "FlateDecode" : filter), tu.bytes, tu.params, baos, objects);
+		}
+		catch (Exception e) {
+			if (filter == null) {
+				baos.reset();
+				PdfParser.decode(null, tu.bytes, tu.params, baos, objects);
+			}
+			else if (e instanceof IOException)
+				throw ((IOException) e);
+			else if (e instanceof RuntimeException)
+				throw ((RuntimeException) e);
+		}
+		if ((baos.size() == 0) && (filter == null))
+			PdfParser.decode(null, tu.bytes, tu.params, baos, objects);
+		return baos.toByteArray();
+	}
+	
+	private static HashMap readToUnicodeCMap(byte[] cMap, boolean isHex, boolean clean) throws IOException {
 		
 		//	read mapping into list first
 		ArrayList toUcMappings = new ArrayList();
-		PdfByteInputStream bytes = new PdfByteInputStream(new ByteArrayInputStream(cMap));
-		byte[] lookahead = new byte[12];
+		PdfByteInputStream bytes = new PdfByteInputStream(cMap);
+		byte[] lookahead = new byte[12 /* length of 'beginbfrange' */];
 		while (bytes.peek() != -1) {
 			bytes.skipSpace();
 			int l = bytes.peek(lookahead);
@@ -1613,7 +1996,7 @@ public class PdfFont {
 				bytes.skip("beginbfrange".length());
 				cropBfCharMappingRange(bytes, isHex, toUcMappings);
 			}
-			else {
+			else try {
 				Object skip = PdfParser.cropNext(bytes, true, false);
 				if (skip instanceof PTag) {
 					String skipTag = ((PTag) skip).tag;
@@ -1621,6 +2004,22 @@ public class PdfFont {
 					if (skipTag.length() == 0)
 						break; // nothing sensible to come
 				}
+			}
+			catch (Exception e) {
+				System.out.println("Failed to read Unicode mapping: " + e.getMessage());
+				System.out.print(" - lookahead (DEC):");
+				for (int lb = 0; lb < lookahead.length; lb++)
+					System.out.print(" " + (((int) lookahead[lb]) & 0x000000FF));
+				System.out.println();
+				System.out.print(" - lookahead (HEX):");
+				for (int lb = 0; lb < lookahead.length; lb++)
+					System.out.print(" " + Integer.toString((((int) lookahead[lb]) & 0x000000FF), 16).toUpperCase());
+				System.out.println();
+				System.out.print(" - lookahead (STR):");
+				for (int lb = 0; lb < lookahead.length; lb++)
+					System.out.print(" " + ((char) (((int) lookahead[lb]) & 0x000000FF)));
+				System.out.println();
+				e.printStackTrace(System.out);
 			}
 		}
 		
@@ -1634,72 +2033,74 @@ public class PdfFont {
 		});
 		
 		//	test if we have decoding conflicts
-		int lowerCaseCodeSum = 0;
-		int lowerCaseCount = 0;
-		int upperCaseCodeSum = 0;
-		int upperCaseCount = 0;
-		int identityMappingCount = 0;
-		TreeMap revToUcMapping = new TreeMap();
-		for (int m = 0; m < toUcMappings.size(); m++) {
-			ToUnicodeMapping tucm = ((ToUnicodeMapping) toUcMappings.get(m));
-			revToUcMapping.put(tucm.ucStr, tucm);
-			if (127 < tucm.ch) { /* no use counting out case for anything beyond basic Latin (there is just so many more lower case diacritics than upper case ones in the higher ranges) */ }
-			else if (tucm.isLowerCase()) {
-				lowerCaseCodeSum += tucm.ch;
-				lowerCaseCount++;
-			}
-			else if (tucm.isUpperCase()) {
-				upperCaseCodeSum += tucm.ch;
-				upperCaseCount++;
-			}
-			if (tucm.isIdentity())
-				identityMappingCount++;
-		}
-		
-		//	do we have a decoding conflict?
-		if ((revToUcMapping.size() < toUcMappings.size()) && (lowerCaseCount != 0) && (upperCaseCount != 0)) {
-			if (DEBUG_LOAD_FONTS)
-				System.out.println("Resolving " + (toUcMappings.size() - revToUcMapping.size()) + " to-Unicode mapping conflicts");
-			int avgLowerCaseCode = (lowerCaseCodeSum / lowerCaseCount);
-			if (DEBUG_LOAD_FONTS)
-				System.out.println(" - average lower case code is " + avgLowerCaseCode + " from " + lowerCaseCount + " UC mappings");
-			int avgUpperCaseCode = (upperCaseCodeSum / upperCaseCount);
-			if (DEBUG_LOAD_FONTS)
-				System.out.println(" - average upper case code is " + avgUpperCaseCode + " from " + upperCaseCount + " UC mappings");
-			if (DEBUG_LOAD_FONTS)
-				System.out.println(" - got " + identityMappingCount + " identity mappings out of " + toUcMappings.size() + " UC mappings");
-			boolean upperCaseLow = (avgUpperCaseCode < avgLowerCaseCode);
+		if (clean) {
+			int lowerCaseCodeSum = 0;
+			int lowerCaseCount = 0;
+			int upperCaseCodeSum = 0;
+			int upperCaseCount = 0;
+			int identityMappingCount = 0;
+			TreeMap revToUcMapping = new TreeMap();
 			for (int m = 0; m < toUcMappings.size(); m++) {
 				ToUnicodeMapping tucm = ((ToUnicodeMapping) toUcMappings.get(m));
-				ToUnicodeMapping cTucm = ((ToUnicodeMapping) revToUcMapping.get(tucm.ucStr));
-				if (tucm == cTucm)
-					continue;
-				if (tucm.isLowerCase() && !revToUcMapping.containsKey(tucm.ucStr.toUpperCase())) {
-					if (upperCaseLow) {
-						tucm.ucStr = tucm.ucStr.toUpperCase();
-						if (DEBUG_LOAD_FONTS)
-							System.out.println(" - re-mapped '" + tucm.ch + "' to '" + tucm.ucStr + "'" + ((tucm.ucStr.length() == 1) ? (" (" + ((int) tucm.ucStr.charAt(0)) + ", " + Integer.toString(((int) tucm.ucStr.charAt(0)), 16) + ")") : ""));
-						revToUcMapping.put(tucm.ucStr, tucm);
-					}
-					else {
-						cTucm.ucStr = cTucm.ucStr.toUpperCase();
-						if (DEBUG_LOAD_FONTS)
-							System.out.println(" - re-mapped '" + cTucm.ch + "' to '" + cTucm.ucStr + "'" + ((cTucm.ucStr.length() == 1) ? (" (" + ((int) cTucm.ucStr.charAt(0)) + ", " + Integer.toString(((int) cTucm.ucStr.charAt(0)), 16) + ")") : ""));
-						revToUcMapping.put(cTucm.ucStr, cTucm);
-					}
+				revToUcMapping.put(tucm.ucStr, tucm);
+				if (127 < tucm.ch) { /* no use counting out case for anything beyond basic Latin (there is just so many more lower case diacritics than upper case ones in the higher ranges) */ }
+				else if (tucm.isLowerCase()) {
+					lowerCaseCodeSum += tucm.ch;
+					lowerCaseCount++;
 				}
-				else if (tucm.isUpperCase() && !revToUcMapping.containsKey(tucm.ucStr.toLowerCase())) {
-					if (upperCaseLow) {
-						cTucm.ucStr = cTucm.ucStr.toLowerCase();
-						if (DEBUG_LOAD_FONTS)
-							System.out.println(" - re-mapped '" + cTucm.ch + "' to '" + cTucm.ucStr + "'" + ((cTucm.ucStr.length() == 1) ? (" (" + ((int) cTucm.ucStr.charAt(0)) + ", " + Integer.toString(((int) cTucm.ucStr.charAt(0)), 16) + ")") : ""));
-						revToUcMapping.put(cTucm.ucStr, cTucm);
+				else if (tucm.isUpperCase()) {
+					upperCaseCodeSum += tucm.ch;
+					upperCaseCount++;
+				}
+				if (tucm.isIdentity())
+					identityMappingCount++;
+			}
+			
+			//	do we have a decoding conflict?
+			if ((revToUcMapping.size() < toUcMappings.size()) && (lowerCaseCount != 0) && (upperCaseCount != 0)) {
+				if (DEBUG_LOAD_FONTS)
+					System.out.println("Resolving " + (toUcMappings.size() - revToUcMapping.size()) + " to-Unicode mapping conflicts");
+				int avgLowerCaseCode = (lowerCaseCodeSum / lowerCaseCount);
+				if (DEBUG_LOAD_FONTS)
+					System.out.println(" - average lower case code is " + avgLowerCaseCode + " from " + lowerCaseCount + " UC mappings");
+				int avgUpperCaseCode = (upperCaseCodeSum / upperCaseCount);
+				if (DEBUG_LOAD_FONTS)
+					System.out.println(" - average upper case code is " + avgUpperCaseCode + " from " + upperCaseCount + " UC mappings");
+				if (DEBUG_LOAD_FONTS)
+					System.out.println(" - got " + identityMappingCount + " identity mappings out of " + toUcMappings.size() + " UC mappings");
+				boolean upperCaseLow = (avgUpperCaseCode < avgLowerCaseCode);
+				for (int m = 0; m < toUcMappings.size(); m++) {
+					ToUnicodeMapping tucm = ((ToUnicodeMapping) toUcMappings.get(m));
+					ToUnicodeMapping cTucm = ((ToUnicodeMapping) revToUcMapping.get(tucm.ucStr));
+					if (tucm == cTucm)
+						continue;
+					if (tucm.isLowerCase() && !revToUcMapping.containsKey(tucm.ucStr.toUpperCase())) {
+						if (upperCaseLow) {
+							tucm.ucStr = tucm.ucStr.toUpperCase();
+							if (DEBUG_LOAD_FONTS)
+								System.out.println(" - re-mapped '" + tucm.ch + "' to '" + tucm.ucStr + "'" + ((tucm.ucStr.length() == 1) ? (" (" + ((int) tucm.ucStr.charAt(0)) + ", " + Integer.toString(((int) tucm.ucStr.charAt(0)), 16) + ")") : ""));
+							revToUcMapping.put(tucm.ucStr, tucm);
+						}
+						else {
+							cTucm.ucStr = cTucm.ucStr.toUpperCase();
+							if (DEBUG_LOAD_FONTS)
+								System.out.println(" - re-mapped '" + cTucm.ch + "' to '" + cTucm.ucStr + "'" + ((cTucm.ucStr.length() == 1) ? (" (" + ((int) cTucm.ucStr.charAt(0)) + ", " + Integer.toString(((int) cTucm.ucStr.charAt(0)), 16) + ")") : ""));
+							revToUcMapping.put(cTucm.ucStr, cTucm);
+						}
 					}
-					else {
-						tucm.ucStr = tucm.ucStr.toLowerCase();
-						if (DEBUG_LOAD_FONTS)
-							System.out.println(" - re-mapped '" + tucm.ch + "' to '" + tucm.ucStr + "'" + ((tucm.ucStr.length() == 1) ? (" (" + ((int) tucm.ucStr.charAt(0)) + ", " + Integer.toString(((int) tucm.ucStr.charAt(0)), 16) + ")") : ""));
-						revToUcMapping.put(tucm.ucStr, tucm);
+					else if (tucm.isUpperCase() && !revToUcMapping.containsKey(tucm.ucStr.toLowerCase())) {
+						if (upperCaseLow) {
+							cTucm.ucStr = cTucm.ucStr.toLowerCase();
+							if (DEBUG_LOAD_FONTS)
+								System.out.println(" - re-mapped '" + cTucm.ch + "' to '" + cTucm.ucStr + "'" + ((cTucm.ucStr.length() == 1) ? (" (" + ((int) cTucm.ucStr.charAt(0)) + ", " + Integer.toString(((int) cTucm.ucStr.charAt(0)), 16) + ")") : ""));
+							revToUcMapping.put(cTucm.ucStr, cTucm);
+						}
+						else {
+							tucm.ucStr = tucm.ucStr.toLowerCase();
+							if (DEBUG_LOAD_FONTS)
+								System.out.println(" - re-mapped '" + tucm.ch + "' to '" + tucm.ucStr + "'" + ((tucm.ucStr.length() == 1) ? (" (" + ((int) tucm.ucStr.charAt(0)) + ", " + Integer.toString(((int) tucm.ucStr.charAt(0)), 16) + ")") : ""));
+							revToUcMapping.put(tucm.ucStr, tucm);
+						}
 					}
 				}
 			}
@@ -1772,10 +2173,14 @@ public class PdfFont {
 						}
 						for (int c = 0; c < destStr.length(); c++) {
 							char ucCh = destStr.charAt(c);
-							if ((ucCh < 0xE000) || (0xF8FF < ucCh)) {
-								ucStr = ("" + ucCh);
-								break;
-							}
+//							if ((ucCh < 0xE000) || (0xF8FF < ucCh)) {
+//								ucStr = ("" + ucCh);
+//								break;
+//							}
+							if (isInvalidUnicodeChar(ucCh))
+								continue;
+							ucStr = ("" + ucCh);
+							break;
 						}
 					}
 					else ucStr = dest.toString();
@@ -1784,22 +2189,33 @@ public class PdfFont {
 			else if (destObj instanceof Number)
 				ucStr = ("" + ((char) ((Number) destObj).intValue()));
 			else if ((destObj instanceof String) || (destObj instanceof Name)) {
-				char uch = StringUtils.getCharForName(destObj.toString());
-				if (uch != 0)
-					ucStr = ("" + StringUtils.getNormalForm(uch));
+				char ucCh = StringUtils.getCharForName(destObj.toString());
+				if (ucCh != 0)
+					ucStr = ("" + StringUtils.getNormalForm(ucCh));
 			}
 			
-			if ((ch != null) && (ucStr != null)) {
+			if ((ch == null) || (ucStr == null))
+				continue;
+			if ((ucStr.length() == 1) && isInvalidUnicodeChar(ucStr.charAt(0))) {
 				if (DEBUG_LOAD_FONTS) {
-					System.out.print(" - mapped (s) '" + ch.intValue() + "' to '" + ucStr + "' (");
+					System.out.print(" - not mapping (s) '" + ch.intValue() + "' to control character '" + ucStr + "' (");
 					for (int c = 0; c < ucStr.length(); c++)
 						 System.out.print(((c == 0) ? "" : " ") + ((int) ucStr.charAt(c)));
 					for (int c = 0; c < ucStr.length(); c++)
 						 System.out.print(((c == 0) ? ", " : " ") + Integer.toString(((int) ucStr.charAt(c)), 16));
 					System.out.println(")");
 				}
-				toUcMappings.add(new ToUnicodeMapping(ch.intValue(), ucStr));
+				continue;
 			}
+			if (DEBUG_LOAD_FONTS) {
+				System.out.print(" - mapped (s) '" + ch.intValue() + "' (" + Integer.toString(ch.intValue(), 16) + ") to '" + ucStr + "' (");
+				for (int c = 0; c < ucStr.length(); c++)
+					 System.out.print(((c == 0) ? "" : " ") + ((int) ucStr.charAt(c)));
+				for (int c = 0; c < ucStr.length(); c++)
+					 System.out.print(((c == 0) ? ", " : " ") + Integer.toString(((int) ucStr.charAt(c)), 16));
+				System.out.println(")");
+			}
+			toUcMappings.add(new ToUnicodeMapping(ch.intValue(), ucStr));
 		}
 	}
 	
@@ -1864,6 +2280,11 @@ public class PdfFont {
 			
 			if (mch != -1) {
 				for (int c = fch; c <= lch; c++) {
+					if (isInvalidUnicodeChar((char) mch)) {
+						if (DEBUG_LOAD_FONTS)
+							System.out.println(" - not mapping (r) '" + c + "' to control character '" + ("" + ((char) mch)) + "' (" + ((int) mch) + ", " + Integer.toString(((int) mch), 16) + ")");
+						continue;
+					}
 					if (DEBUG_LOAD_FONTS)
 						System.out.println(" - mapped (r) '" + c + "' to '" + ("" + ((char) mch)) + "' (" + ((int) mch) + ", " + Integer.toString(((int) mch), 16) + ")");
 					toUcMappings.add(new ToUnicodeMapping(c, ("" + ((char) mch++))));
@@ -1886,23 +2307,57 @@ public class PdfFont {
 								dStr = ("" + nCh);
 							}
 						}
-						if (dStr.length() != 0) {
+						if (dStr.length() == 0)
+							continue;
+						if ((dStr.length() == 1) && isInvalidUnicodeChar(dStr.charAt(0))) {
 							if (DEBUG_LOAD_FONTS)
-								System.out.println(" - mapped (as) '" + c + "' to '" + dStr.toString() + "'" + ((dStr.toString().length() == 1) ? (" (" + ((int) dStr.toString().charAt(0)) + ", " + Integer.toString(((int) dStr.toString().charAt(0)), 16) + ")") : ""));
-							toUcMappings.add(new ToUnicodeMapping(c, dStr.toString()));
+								System.out.println(" - not mapping (as) '" + c + "' to control character '" + dStr.toString() + "'" + ((dStr.toString().length() == 1) ? (" (" + ((int) dStr.toString().charAt(0)) + ", " + Integer.toString(((int) dStr.toString().charAt(0)), 16) + ")") : ""));
+							continue;
 						}
+						if (DEBUG_LOAD_FONTS)
+							System.out.println(" - mapped (as) '" + c + "' to '" + dStr.toString() + "'" + ((dStr.toString().length() == 1) ? (" (" + ((int) dStr.toString().charAt(0)) + ", " + Integer.toString(((int) dStr.toString().charAt(0)), 16) + ")") : ""));
+						toUcMappings.add(new ToUnicodeMapping(c, dStr.toString()));
 					}
 					else if (dObj instanceof Number) {
+						char dCh = ((char) ((Number) dObj).intValue());
+						if (isInvalidUnicodeChar(dCh)) {
+							if (DEBUG_LOAD_FONTS)
+								System.out.println(" - not mapping (an) '" + c + "' to control character '" + ("" + dCh) + "'" + " (" + ((int) dCh) + ", " + Integer.toString(((int) dCh), 16) + ")");
+							continue;
+						}
 						if (DEBUG_LOAD_FONTS)
-							System.out.println(" - mapped (an) '" + c + "' to '" + ("" + ((char) ((Number) dObj).intValue())) + "'" + " (" + ((Number) dObj).intValue() + ", " + Integer.toString(((Number) dObj).intValue(), 16) + ")");
-						toUcMappings.add(new ToUnicodeMapping(c, ("" + ((char) ((Number) dObj).intValue()))));
+							System.out.println(" - mapped (an) '" + c + "' to '" + ("" + dCh) + "'" + " (" + ((int) dCh) + ", " + Integer.toString(((int) dCh), 16) + ")");
+						toUcMappings.add(new ToUnicodeMapping(c, ("" + dCh)));
 					}
 				}
 			}
 		}
 	}
 	
-	private static PdfFont readFontCidType0(Map fontData, final Map objects, boolean needChars, Map charDecoders, ProgressMonitor pm) throws IOException {
+	private static boolean isInvalidUnicodeChar(char ucCh) {
+		return (false 
+			|| ((0x0000 <= ucCh) && (ucCh < 0x0020)) // 00-1F control codes
+			|| ((0x007F <= ucCh) && (ucCh < 0x0020)) // 7F-9F control codes
+			|| ((0xD800 <= ucCh) && (ucCh <= 0xDB7F)) // high surrogates
+			|| ((0xDB80 <= ucCh) && (ucCh <= 0xDBFF)) // high private use surrogates
+			|| ((0xDC00 <= ucCh) && (ucCh <= 0xDFFF)) // low lurrogates
+			|| ((0xE000 <= ucCh) && (ucCh <= 0xF8FF)) // private use area
+		);
+	}
+//	
+//	public static void main(String[] args) throws Exception {
+//		File cMapFile = new File("E:/Testdaten/PdfExtract/Adobe-Japan1-UCS2.cmap.txt");
+//		BufferedInputStream cMapIn = new BufferedInputStream(new FileInputStream(cMapFile));
+//		ByteArrayOutputStream cMapBuf = new ByteArrayOutputStream();
+//		byte[] buffer = new byte[2048];
+//		for (int r; (r = cMapIn.read(buffer, 0, buffer.length)) != -1;)
+//			cMapBuf.write(buffer, 0, r);
+//		cMapIn.close();
+//		byte[] cMapBytes = cMapBuf.toByteArray();
+//		readToUnicodeCMap(cMapBytes, false, false);
+//	}
+	
+	private static PdfFont readFontCidType0(Map fontData, final Map objects, boolean cleanUnicodeMapping, Map charDecoders, ProgressMonitor pm) throws IOException {
 		Object fdObj = PdfParser.dereference(fontData.get("FontDescriptor"), objects);
 		if (!(fdObj instanceof Map)) {
 			if (DEBUG_LOAD_FONTS) {
@@ -1929,6 +2384,24 @@ public class PdfFont {
 		if (DEBUG_LOAD_FONTS)
 			System.out.println("Got CID system info: " + siObj);
 		
+		Object sObj = null;
+		if (fdObj instanceof Map) {
+			sObj = PdfParser.dereference(((Map) fdObj).get("CIDSet"), objects);
+			if (DEBUG_LOAD_FONTS)
+				System.out.println("Got CID set: " + sObj);
+			if (sObj instanceof PStream) {
+				PStream cidSet = ((PStream) sObj);
+				ByteArrayOutputStream baos = new ByteArrayOutputStream();
+				PdfParser.decode(cidSet.params.get("Filter"), cidSet.bytes, cidSet.params, baos, objects);
+				byte[] csBytes = baos.toByteArray();
+				for (int b = 0; b < csBytes.length; b++) {
+					System.out.print(" " + Integer.toString((csBytes[b] & 0x000000FF), 16));
+				}
+				System.out.println();
+				System.out.println(" ==> got total of " + csBytes.length + " bytes");
+			}
+		}
+		
 		boolean isSymbolic = false;
 		if (fdObj instanceof Map) {
 			Object fObj = ((Map) fdObj).get("Flags");
@@ -1949,24 +2422,14 @@ public class PdfFont {
 				}
 			Object tuObj = PdfParser.dereference(fontData.get("ToUnicode"), objects);
 			if (tuObj instanceof PStream) {
-				ByteArrayOutputStream baos = new ByteArrayOutputStream();
-				Object filter = ((PStream) tuObj).params.get("Filter");
-				try {
-					PdfParser.decode(((filter == null) ? "FlateDecode" : filter), ((PStream) tuObj).bytes, ((PStream) tuObj).params, baos, objects);
-				}
-				catch (Exception e) {
-					if (filter == null)
-						PdfParser.decode(null, ((PStream) tuObj).bytes, ((PStream) tuObj).params, baos, objects);
-					else if (e instanceof IOException)
-						throw ((IOException) e);
-					else if (e instanceof RuntimeException)
-						throw ((RuntimeException) e);
-				}
-				byte[] tuMapData = baos.toByteArray();
-				if (DEBUG_LOAD_FONTS)
+				byte[] tuMapData = decodeToUnicodeCMap(((PStream) tuObj), objects);
+				if (DEBUG_LOAD_FONTS) {
 					System.out.println(" --> to unicode: " + new String(tuMapData));
+					if (tuMapData.length < ((PStream) tuObj).bytes.length)
+						System.out.println(" --> raw (LONGER): " + new String(((PStream) tuObj).bytes));
+				}
 				pm.setInfo(" - got Unicode mapping");
-				toUnicodeMappings = readToUnicodeCMap(tuMapData, true);
+				toUnicodeMappings = readToUnicodeCMap(tuMapData, true, cleanUnicodeMapping);
 			}
 			else if (DEBUG_LOAD_FONTS) System.out.println(" --> to unicode: " + tuObj);
 		}
@@ -2001,7 +2464,7 @@ public class PdfFont {
 					byte[] tuMapData = baos.toByteArray();
 					if (DEBUG_LOAD_FONTS)
 						System.out.println(" --> to unicode: " + new String(tuMapData));
-					toUnicodeMappings = readToUnicodeCMap(tuMapData, true);
+					toUnicodeMappings = readToUnicodeCMap(tuMapData, true, cleanUnicodeMapping);
 				}
 				else if (DEBUG_LOAD_FONTS) System.out.println(" --> to unicode: " + tuObj);
 				return null;
@@ -2132,9 +2595,18 @@ public class PdfFont {
 			feObj = PdfParser.dereference(((Map) fdObj).get("Encoding"), objects);
 		if (DEBUG_LOAD_FONTS) System.out.println(" --> encoding is " + feObj + " (" + feObj.getClass().getName() + ")");
 		
+		Encoding encoding = new Encoding(((feObj == null) ? null : feObj.toString()), false);
+		if (!"Identity-H".equals(encoding.name) && !"Identity-V".equals(encoding.name) && !"Identity".equals(encoding.name)) {
+			for (Iterator cidit = cidMap.keySet().iterator(); cidit.hasNext();) {
+				Integer cid = ((Integer) cidit.next());
+				encoding.mapCidToGid(cid.intValue(), cidMap.get(cid));
+			}
+		}
+		
 		final PdfFont pFont = new PdfFont(fontData, fd, fc, lc, cws, mcw, fnObj.toString(), ((feObj == null) ? null : feObj.toString()));
 		if (!addLineMetrics(pFont, 0, pm))
 			return null;
+		pFont.charEncoding = encoding;
 		if (DEBUG_LOAD_FONTS) System.out.println("CIDType0 font created");
 		
 		pFont.setBaseFont(baseFont);
@@ -2151,7 +2623,7 @@ public class PdfFont {
 			}
 		
 		if (scw != 0) {
-			pFont.setCharWidth(new Character(' '), scw);
+//			pFont.setCharWidth(new Character(' '), scw);
 			pFont.setCharWidth(new Integer((int) ' '), scw);
 		}
 		
@@ -2174,7 +2646,8 @@ public class PdfFont {
 //					}
 //				}
 //			});
-			CharDecoder chd = ((CharDecoder) charDecoders.get(ff3RefObj.toString()));
+			String chdKey = ("CID0-" + ff3RefObj.toString());
+			CharDecoder chd = ((CharDecoder) charDecoders.get(chdKey));
 			if (chd == null) {
 				chd = new CharDecoder() {
 					public void decodeChars(PdfFont font, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException {
@@ -2193,16 +2666,16 @@ public class PdfFont {
 						font.type = "Cid0C";
 					}
 				};
-				charDecoders.put(ff3RefObj.toString(), chd);
-				if (DEBUG_LOAD_FONTS) System.out.println(" - created char decoder for " + ff3RefObj.toString());
+				charDecoders.put(chdKey, chd);
+				if (DEBUG_LOAD_FONTS) System.out.println(" - created char decoder for " + chdKey);
 			}
-			else if (DEBUG_LOAD_FONTS) System.out.println(" - cache hit for char decoder " + ff3RefObj.toString());
+			else if (DEBUG_LOAD_FONTS) System.out.println(" - cache hit for char decoder " + chdKey);
 			pFont.setCharDecoder(chd);
 		}		
 		return pFont;
 	}
 	
-	private static PdfFont readFontCidType2(Map fontData, final Map objects, boolean needChars, Map charDecoders, ProgressMonitor pm) throws IOException {
+	private static PdfFont readFontCidType2(Map fontData, final Map objects, Map charDecoders, ProgressMonitor pm) throws IOException {
 		if (DEBUG_LOAD_FONTS) System.out.println(" - font data: " + fontData);
 		Object fdObj = PdfParser.dereference(fontData.get("FontDescriptor"), objects);
 		if (!(fdObj instanceof Map)) {
@@ -2320,6 +2793,8 @@ FontFile2=65 0R
 		Object cidsObj = PdfParser.dereference(fd.get("CIDSet"), objects);
 		ArrayList cids = new ArrayList();
 		if (cidsObj instanceof PStream) {
+			if (DEBUG_LOAD_FONTS) 
+				System.out.println("CID set is " + cidsObj);
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
 			Object filter = ((PStream) cidsObj).params.get("Filter");
 			try {
@@ -2338,7 +2813,7 @@ FontFile2=65 0R
 			for (int b = 0; b < csBytes.length; b++) {
 				int bt = convertUnsigned(csBytes[b]);
 				for (int i = 0; i < 8; i++) {
-					if ((bt & 128) != 0) {
+					if ((bt & 0x80) != 0) {
 						if (DEBUG_LOAD_FONTS) 
 							System.out.println(" - CID " + cid + " is set");
 						cids.add(new Integer(cid));
@@ -2377,7 +2852,7 @@ FontFile2=65 0R
 					System.out.println(" - CID " + (b/2) + " mapped to glyph " + gi);
 			}
 		}
-		else System.out.println("Got CID to GID map: " + cidsObj);
+		else System.out.println("Got CID to GID map: " + ctgmObj);
 		
 		Object feObj = PdfParser.dereference(fontData.get("Encoding"), objects);
 		if (feObj instanceof Map)
@@ -2385,9 +2860,19 @@ FontFile2=65 0R
 		else if ((feObj == null) && (fdObj instanceof Map))
 			feObj = PdfParser.dereference(((Map) fdObj).get("Encoding"), objects);
 		
+		Encoding encoding = new Encoding(((feObj == null) ? null : feObj.toString()), false);
+		if (!"Identity-H".equals(encoding.name) && !"Identity-V".equals(encoding.name) && !"Identity".equals(encoding.name)) {
+			for (Iterator gidit = glyphIdsToCids.keySet().iterator(); gidit.hasNext();) {
+				Integer gid = ((Integer) gidit.next());
+				Integer cid = ((Integer) glyphIdsToCids.get(gid));
+				encoding.mapCidToGid(cid.intValue(), gid);
+			}
+		}
+		
 		final PdfFont pFont = new PdfFont(fontData, fd, fc, lc, cws, mcw, fnObj.toString(), ((feObj == null) ? null : feObj.toString()));
 		if (!addLineMetrics(pFont, 0, pm))
 			return null;
+		pFont.charEncoding = encoding;
 		if (DEBUG_LOAD_FONTS) System.out.println("CIDType2 font created");
 		
 		pFont.setBaseFont(baseFont);
@@ -2432,36 +2917,63 @@ FontFile2=65 0R
 //					PdfFontDecoder.readFontTrueType(ffBytes, font, this, (font != pFont), glyphIdsToCids, charSet, pm);
 //				}
 //			});
-			CharDecoder chd = ((CharDecoder) charDecoders.get(ff2RefObj.toString()));
-			if (chd == null) {
-				chd = new CharDecoder() {
-					public void decodeChars(PdfFont font, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException {
-						System.out.println("Got font file 2 from " + pFont.name + " (CID2, " + pFont + ")");
-						System.out.println("  --> argument font is " + font.name + " (" + font + ")");
-						System.out.println("  --> base font mode is " + (font != pFont));
-						System.out.println("  --> params are " + ((PStream) ff2Obj).params);
-						Object filter = ((PStream) ff2Obj).params.get("Filter");
-						System.out.println("  --> filter is " + filter);
-						ByteArrayOutputStream baos = new ByteArrayOutputStream();
-						PdfParser.decode(filter, ((PStream) ff2Obj).bytes, ((PStream) ff2Obj).params, baos, objects);
-						byte[] ffBytes = baos.toByteArray();
-						Object l1Obj = ((PStream) ff2Obj).params.get("Length1");
-						System.out.println("  --> length is " + ffBytes.length + ", length1 is " + l1Obj);
-						PdfFontDecoder.readFontTrueType(ffBytes, font, this, (font != pFont), glyphIdsToCids, charSet, pm);
-						font.type = "Cid2";
-					}
-				};
-				charDecoders.put(ff2RefObj.toString(), chd);
-				if (DEBUG_LOAD_FONTS) System.out.println(" - created char decoder for " + ff2RefObj.toString());
-			}
-			else if (DEBUG_LOAD_FONTS) System.out.println(" - cache hit for char decoder " + ff2RefObj.toString());
-			pFont.setCharDecoder(chd);
+//			//	CANNOT USE CACHING, AS CHAR CODES COME FROM BASE FONT AND CAN DIFFER FOR SAME DESCENDANT FONT
+//			String chdKey = ("CID2-" + ff2RefObj.toString());
+//			CharDecoder chd = ((CharDecoder) charDecoders.get(chdKey));
+//			if (chd == null) {
+//				final StackTraceElement[] createStack = Thread.currentThread().getStackTrace();
+//				chd = new CharDecoder() {
+//					public void decodeChars(PdfFont font, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException {
+//						System.out.println("Got font file 2 from " + pFont.name + " (CID2, " + pFont + ")");
+//						System.out.println("  --> argument font is " + font.name + " (" + font + ")");
+//						System.out.println("  --> base font mode is " + (font != pFont));
+//						System.out.println("  --> params are " + ((PStream) ff2Obj).params);
+//						Object filter = ((PStream) ff2Obj).params.get("Filter");
+//						System.out.println("  --> filter is " + filter);
+//						ByteArrayOutputStream baos = new ByteArrayOutputStream();
+//						PdfParser.decode(filter, ((PStream) ff2Obj).bytes, ((PStream) ff2Obj).params, baos, objects);
+//						byte[] ffBytes = baos.toByteArray();
+//						Object l1Obj = ((PStream) ff2Obj).params.get("Length1");
+//						System.out.println("  --> length is " + ffBytes.length + ", length1 is " + l1Obj);
+//						System.out.println("  --> created from:");
+//						for (int e = 0; e < createStack.length; e++)
+//							System.out.println("      " + createStack[e].toString());
+//						PdfFontDecoder.readFontTrueType(ffBytes, font, this, (font != pFont), glyphIdsToCids, charSet, pm);
+//						font.type = "Cid2";
+//					}
+//				};
+//				charDecoders.put(chdKey, chd);
+//				if (DEBUG_LOAD_FONTS) System.out.println(" - created char decoder for " + chdKey);
+//			}
+//			else if (DEBUG_LOAD_FONTS) System.out.println(" - cache hit for char decoder " + chdKey);
+//			pFont.setCharDecoder(chd);
+			final StackTraceElement[] createStack = Thread.currentThread().getStackTrace();
+			pFont.setCharDecoder(new CharDecoder() {
+				public void decodeChars(PdfFont font, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException {
+					System.out.println("Got font file 2 from " + pFont.name + " (CID2, " + pFont + ")");
+					System.out.println("  --> argument font is " + font.name + " (" + font + ")");
+					System.out.println("  --> base font mode is " + (font != pFont));
+					System.out.println("  --> params are " + ((PStream) ff2Obj).params);
+					Object filter = ((PStream) ff2Obj).params.get("Filter");
+					System.out.println("  --> filter is " + filter);
+					ByteArrayOutputStream baos = new ByteArrayOutputStream();
+					PdfParser.decode(filter, ((PStream) ff2Obj).bytes, ((PStream) ff2Obj).params, baos, objects);
+					byte[] ffBytes = baos.toByteArray();
+					Object l1Obj = ((PStream) ff2Obj).params.get("Length1");
+					System.out.println("  --> length is " + ffBytes.length + ", length1 is " + l1Obj);
+					System.out.println("  --> created from:");
+					for (int e = 0; e < createStack.length; e++)
+						System.out.println("      " + createStack[e].toString());
+					PdfFontDecoder.readFontTrueType(ffBytes, font, this, (font != pFont), glyphIdsToCids, charSet, pm);
+					font.type = "Cid2";
+				}
+			});
 		}
 		
 		return pFont;
 	}
 	
-	private static PdfFont readFontType3(Object fnObj, Map fontData, final Map objects, Map charDecoders, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException {
+	private static PdfFont readFontType3(Object fnObj, Map fontData, final Library library, final Map objects, boolean deDuplicateUcMapping, Map charDecoders, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException {
 		pm.setInfo("Loading type 3 font");
 		Object fdObj = PdfParser.dereference(fontData.get("FontDescriptor"), objects);
 		if (!(fdObj instanceof Map)) {
@@ -2474,24 +2986,14 @@ FontFile2=65 0R
 		Object tuObj = PdfParser.dereference(fontData.get("ToUnicode"), objects);
 		HashMap toUnicodeMappings = null;
 		if (tuObj instanceof PStream) {
-			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			Object filter = ((PStream) tuObj).params.get("Filter");
-			try {
-				PdfParser.decode(((filter == null) ? "FlateDecode" : filter), ((PStream) tuObj).bytes, ((PStream) tuObj).params, baos, objects);
-			}
-			catch (Exception e) {
-				if (filter == null)
-					PdfParser.decode(null, ((PStream) tuObj).bytes, ((PStream) tuObj).params, baos, objects);
-				else if (e instanceof IOException)
-					throw ((IOException) e);
-				else if (e instanceof RuntimeException)
-					throw ((RuntimeException) e);
-			}
-			byte[] tuMapData = baos.toByteArray();
-			pm.setInfo(" - got Unicode mapping");
-			if (DEBUG_LOAD_FONTS)
+			byte[] tuMapData = decodeToUnicodeCMap(((PStream) tuObj), objects);
+			if (DEBUG_LOAD_FONTS) {
 				System.out.println(" --> to unicode: " + new String(tuMapData));
-			toUnicodeMappings = readToUnicodeCMap(tuMapData, true);
+				if (tuMapData.length < ((PStream) tuObj).bytes.length)
+					System.out.println(" --> raw (LONGER): " + new String(((PStream) tuObj).bytes));
+			}
+			pm.setInfo(" - got Unicode mapping");
+			toUnicodeMappings = readToUnicodeCMap(tuMapData, true, deDuplicateUcMapping);
 		}
 		else System.out.println(" --> to unicode: " + tuObj);
 		
@@ -2566,11 +3068,11 @@ FontFile2=65 0R
 			return null;
 		}
 		
-		final Object cpsObj = PdfParser.dereference(fontData.get("CharProcs"), objects);
-		if (!(cpsObj instanceof Map)) {
+		final Object charProcsObj = PdfParser.dereference(fontData.get("CharProcs"), objects);
+		if (!(charProcsObj instanceof Map)) {
 			if (DEBUG_LOAD_FONTS) {
 				System.out.println("Problem in font " + fontData);
-				System.out.println(" --> strange char procs: " + cpsObj);
+				System.out.println(" --> strange char procs: " + charProcsObj);
 			}
 			pm.setInfo(" ==> error in char programs");
 			return null;
@@ -2637,6 +3139,12 @@ FontFile2=65 0R
 		else if ((feObj == null) && (fdObj instanceof Map))
 			feObj = PdfParser.dereference(((Map) fdObj).get("Encoding"), objects);
 		
+		Encoding encoding = new Encoding(((feObj == null) ? null : feObj.toString()), true);
+		for (Iterator ccit = diffEncodingNames.keySet().iterator(); ccit.hasNext();) {
+			Integer chc = ((Integer) ccit.next());
+			encoding.mapDifference(chc, diffEncodingNames.get(chc));
+		}
+		
 		Map fd = ((Map) fdObj);
 		final int fc = ((Number) fcObj).intValue();
 		final int lc = ((Number) lcObj).intValue();
@@ -2660,6 +3168,7 @@ FontFile2=65 0R
 		PdfFont pFont = new PdfFont(fontData, fd, fc, lc, cws, mcw, fnObj.toString(), ((feObj == null) ? null : feObj.toString()));
 		if (!addLineMetrics(pFont, ((fmd < 0) ? -normFactor : normFactor), pm))
 			return null;
+		pFont.charEncoding = encoding;
 		if (DEBUG_LOAD_FONTS) System.out.println("Type3 font created");
 		
 //		pFont.type = 3;
@@ -2677,50 +3186,63 @@ FontFile2=65 0R
 			}
 		
 		//	TODO pass charset to decoder, but union with Unicode mapped chars first
+		final float scaleX = (fma * 1000);
+		final float scaleY = (fmd * 1000);
 		pFont.setCharDecoder(new CharDecoder() {
 			public void decodeChars(PdfFont font, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException {
 				pm.setInfo(" - decoding characters from char programs");
-				if (DEBUG_LOAD_FONTS) System.out.println("Got char procs: " + cpsObj);
+				if (DEBUG_LOAD_FONTS) System.out.println("Got char procs: " + charProcsObj);
 				Font serifFont = PdfFontDecoder.getSerifFont();
 				Font[] serifFonts = new Font[4];
 				Font sansFont = PdfFontDecoder.getSansSerifFont();
 				Font[] sansFonts = new Font[4];
-				Font monoFont = PdfFontDecoder.getSansSerifFont();
+				Font monoFont = PdfFontDecoder.getMonospaceFont();
 				Font[] monoFonts = new Font[4];
 				for (int s = Font.PLAIN; s <= (Font.BOLD | Font.ITALIC); s++) {
 					serifFonts[s] = serifFont.deriveFont(s);
 					sansFonts[s] = sansFont.deriveFont(s);
 					monoFonts[s] = monoFont.deriveFont(s);
 				}
-				Map cps = ((Map) cpsObj);
-				HashMap cache = ((diffEncodings.size() < 10) ? null : new HashMap());
-				boolean hasDescent = false;
-				for (Iterator eit = diffEncodings.keySet().iterator(); eit.hasNext();) {
-					Integer charCode = ((Integer) eit.next());
-					Object charName = diffEncodingNames.get(charCode);
-					if (!font.usesCharCode(charCode)) {
-						pm.setInfo("   - ignoring unused char " + charName);
-						continue;
-					}
-					Object cpObj = PdfParser.dereference(cps.get(charName), objects);
-					if (cpObj instanceof PStream) {
-						pm.setInfo("   - decoding char " + charName);
-						if (DEBUG_LOAD_FONTS) System.out.println("  Got char proc for '" + charName + "': " + ((PStream) cpObj).params);
-						char cpChar = PdfCharDecoder.getChar(font, ((PStream) cpObj), charCode, charName.toString(), charSet, objects, serifFonts, sansFonts, monoFonts, cache, false);
-						if (cpChar != 0) {
-							font.mapUnicode(charCode, ("" + cpChar), false);
-							if (((charCode.intValue() - fc) >= 0) && ((charCode.intValue() - fc) < cws.length))
-								font.setCharWidth(charCode, cws[charCode.intValue() - fc]);
-							hasDescent = (hasDescent || ("Qgjpqy".indexOf(StringUtils.getBaseChar(cpChar)) != -1));
-						}
-//						//	TODO obtain and store font size relative baseline shift
-//						pFont.setRelativeBaselineShift(bsCh, (((float) bestSim.match.shiftBelowBaseline) / bestSim.match.fontSize));
-					}
-					else if (DEBUG_LOAD_FONTS) System.out.println(" --> strange char proc for '" + charName + "': " + cpObj);
-					
-					//	TODO also observe FontFile2 field
+//				Map cps = ((Map) charProcsObj);
+//				HashMap cache = ((diffEncodings.size() < 10) ? null : new HashMap());
+//				boolean hasDescent = false;
+				if (DEBUG_LOAD_FONTS) {
+					System.out.println("Differences are: " + diffEncodings);
+					System.out.println("Difference names are: " + diffEncodingNames);
 				}
-				font.hasDescent = (hasDescent || (font.descent < -0.150));
+//				ImageDisplayDialog idd = (DEBUG_LOAD_FONTS ? new ImageDisplayDialog(font.name) : null);
+//				for (Iterator eit = diffEncodingNames.keySet().iterator(); eit.hasNext();) {
+//					Integer charCode = ((Integer) eit.next());
+//					Object charName = diffEncodingNames.get(charCode);
+//					if (!font.usesCharCode(charCode)) {
+//						pm.setInfo("   - ignoring unused char " + charName);
+//						continue;
+//					}
+//					Object cpObj = PdfParser.dereference(cps.get(charName), objects);
+//					if (cpObj instanceof PStream) {
+//						pm.setInfo("   - decoding char " + charName);
+//						if (DEBUG_LOAD_FONTS) System.out.println("  Got char proc for '" + charName + "': " + ((PStream) cpObj).params);
+//						char cpChar = PdfCharDecoder.getChar(font, ((PStream) cpObj), charCode, charName.toString(), scaleX, scaleY, charSet, objects, serifFonts, sansFonts, monoFonts, cache, idd);
+//						if (cpChar != 0) {
+//							font.mapUnicode(charCode, ("" + cpChar), false);
+//							if (((charCode.intValue() - fc) >= 0) && ((charCode.intValue() - fc) < cws.length))
+//								font.setCharWidth(charCode, cws[charCode.intValue() - fc]);
+//							hasDescent = (hasDescent || ("Qgjpqy".indexOf(StringUtils.getBaseChar(cpChar)) != -1));
+//						}
+////						//	TODO obtain and store font size relative baseline shift
+////						pFont.setRelativeBaselineShift(bsCh, (((float) bestSim.match.shiftBelowBaseline) / bestSim.match.fontSize));
+//					}
+//					else if (DEBUG_LOAD_FONTS) System.out.println(" --> strange char proc for '" + charName + "': " + cpObj);
+//					
+//					//	TODO also observe FontFile2 field
+//				}
+//				if ((idd != null) && (idd.getImageCount() != 0)) {
+//					idd.setSize(400, 400);
+//					idd.setLocationRelativeTo(null);
+//					idd.setVisible(true);
+//				}
+//				font.hasDescent = (hasDescent || (font.descent < -0.150));
+				PdfFontDecoder.readFontType3(font, this, diffEncodings, diffEncodingNames, ((Map) charProcsObj), scaleX, scaleY, charSet, library, objects, pm);
 				font.type = "Type3";
 			}
 		});
@@ -2729,7 +3251,7 @@ FontFile2=65 0R
 		return pFont;
 	}
 	
-	private static PdfFont readFontType1(Map fontData, final Map objects, Map charDecoders, ProgressMonitor pm) throws IOException {
+	private static PdfFont readFontType1(Map fontData, final Map objects, boolean cleanUnicodeMapping, Map charDecoders, ProgressMonitor pm) throws IOException {
 		pm.setInfo("Loading type 1 font");
 		Object fnObj = PdfParser.dereference(fontData.get("BaseFont"), objects);
 		if (fnObj == null) {
@@ -2763,24 +3285,14 @@ FontFile2=65 0R
 				}
 			Object tuObj = PdfParser.dereference(fontData.get("ToUnicode"), objects);
 			if (tuObj instanceof PStream) {
-				ByteArrayOutputStream baos = new ByteArrayOutputStream();
-				Object filter = ((PStream) tuObj).params.get("Filter");
-				try {
-					PdfParser.decode(((filter == null) ? "FlateDecode" : filter), ((PStream) tuObj).bytes, ((PStream) tuObj).params, baos, objects);
-				}
-				catch (Exception e) {
-					if (filter == null)
-						PdfParser.decode(null, ((PStream) tuObj).bytes, ((PStream) tuObj).params, baos, objects);
-					else if (e instanceof IOException)
-						throw ((IOException) e);
-					else if (e instanceof RuntimeException)
-						throw ((RuntimeException) e);
-				}
-				byte[] tuMapData = baos.toByteArray();
-				if (DEBUG_LOAD_FONTS)
+				byte[] tuMapData = decodeToUnicodeCMap(((PStream) tuObj), objects);
+				if (DEBUG_LOAD_FONTS) {
 					System.out.println(" --> to unicode: " + new String(tuMapData));
+					if (tuMapData.length < ((PStream) tuObj).bytes.length)
+						System.out.println(" --> raw (LONGER): " + new String(((PStream) tuObj).bytes));
+				}
 				pm.setInfo(" - got Unicode mapping");
-				toUnicodeMappings = readToUnicodeCMap(tuMapData, true);
+				toUnicodeMappings = readToUnicodeCMap(tuMapData, true, cleanUnicodeMapping);
 			}
 			else if (DEBUG_LOAD_FONTS) System.out.println(" --> to unicode: " + tuObj);
 		}
@@ -2815,13 +3327,14 @@ FontFile2=65 0R
 					byte[] tuMapData = baos.toByteArray();
 					if (DEBUG_LOAD_FONTS)
 						System.out.println(" --> to unicode: " + new String(tuMapData));
-					toUnicodeMappings = readToUnicodeCMap(tuMapData, true);
+					toUnicodeMappings = readToUnicodeCMap(tuMapData, true, cleanUnicodeMapping);
 				}
 				else if (DEBUG_LOAD_FONTS) System.out.println(" --> to unicode: " + tuObj);
 				return null;
 			}
 			else fdObj = baseFont.descriptor;
-			if (DEBUG_LOAD_FONTS) System.out.println("Got font descriptor: " + fdObj);
+			if (DEBUG_LOAD_FONTS)
+				System.out.println("Got font descriptor: " + fdObj);
 		}
 		
 		Object fcObj = fontData.get("FirstChar");
@@ -2939,6 +3452,12 @@ FontFile2=65 0R
 		if ((feObj == null) && (fdObj instanceof Map))
 			feObj = PdfParser.dereference(((Map) fdObj).get("Encoding"), objects);
 		
+		Encoding encoding = new Encoding(((feObj == null) ? null : feObj.toString()), true);
+		for (Iterator ccit = diffEncodingNames.keySet().iterator(); ccit.hasNext();) {
+			Integer chc = ((Integer) ccit.next());
+			encoding.mapDifference(chc, diffEncodingNames.get(chc));
+		}
+		
 		final Map fd = ((Map) fdObj);
 		int fc = ((Number) fcObj).intValue();
 		int lc = ((Number) lcObj).intValue();
@@ -2991,6 +3510,7 @@ FontFile2=65 0R
 		final PdfFont pFont = new PdfFont(fontData, fd, fc, lc, cws, mcw, fnObj.toString(), ((feObj == null) ? null : feObj.toString()));
 		if (!addLineMetrics(pFont, 0, pm))
 			return null;
+		pFont.charEncoding = encoding;
 		if (DEBUG_LOAD_FONTS) System.out.println("Type1 font created");
 		
 		for (Iterator cmit = diffEncodings.keySet().iterator(); cmit.hasNext();) {
@@ -3012,7 +3532,7 @@ FontFile2=65 0R
 		}
 		
 		if (scw != 0) {
-			pFont.setCharWidth(new Character(' '), scw);
+//			pFont.setCharWidth(new Character(' '), scw);
 			pFont.setCharWidth(new Integer((int) ' '), scw);
 		}
 		
@@ -3032,7 +3552,8 @@ FontFile2=65 0R
 //					PdfFontDecoder.readFontType1(baos.toByteArray(), ((PStream) ffObj).params, fd, font, this, charSet, pm);
 //				}
 //			});
-			CharDecoder chd = ((CharDecoder) charDecoders.get(ffRefObj.toString()));
+			String chdKey = ("T1-" + ffRefObj.toString());
+			CharDecoder chd = ((CharDecoder) charDecoders.get(chdKey));
 			if (chd == null) {
 				chd = new CharDecoder() {
 					public void decodeChars(PdfFont font, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException {
@@ -3048,10 +3569,10 @@ FontFile2=65 0R
 						font.type = "Type1";
 					}
 				};
-				charDecoders.put(ffRefObj.toString(), chd);
-				if (DEBUG_LOAD_FONTS) System.out.println(" - created char decoder for " + ffRefObj.toString());
+				charDecoders.put(chdKey, chd);
+				if (DEBUG_LOAD_FONTS) System.out.println(" - created char decoder for " + chdKey);
 			}
-			else if (DEBUG_LOAD_FONTS) System.out.println(" - cache hit for char decoder " + ffRefObj.toString());
+			else if (DEBUG_LOAD_FONTS) System.out.println(" - cache hit for char decoder " + chdKey);
 			pFont.setCharDecoder(chd);
 			isBuiltInFont = false;
 		}
@@ -3075,7 +3596,8 @@ FontFile2=65 0R
 //					}
 //				}
 //			});
-			CharDecoder chd = ((CharDecoder) charDecoders.get(ff3RefObj.toString()));
+			String chdKey = ("T1C-" + ff3RefObj.toString());
+			CharDecoder chd = ((CharDecoder) charDecoders.get(chdKey));
 			if (chd == null) {
 				chd = new CharDecoder() {
 					public void decodeChars(PdfFont font, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException {
@@ -3093,10 +3615,10 @@ FontFile2=65 0R
 						font.type = "Type1C";
 					}
 				};
-				charDecoders.put(ff3RefObj.toString(), chd);
-				if (DEBUG_LOAD_FONTS) System.out.println(" - created char decoder for " + ff3RefObj.toString());
+				charDecoders.put(chdKey, chd);
+				if (DEBUG_LOAD_FONTS) System.out.println(" - created char decoder for " + chdKey);
 			}
-			else if (DEBUG_LOAD_FONTS) System.out.println(" - cache hit for char decoder " + ff3RefObj.toString());
+			else if (DEBUG_LOAD_FONTS) System.out.println(" - cache hit for char decoder " + chdKey);
 			pFont.setCharDecoder(chd);
 			isBuiltInFont = false;
 		}
@@ -3112,7 +3634,7 @@ FontFile2=65 0R
 		return ((b < 0) ? (((int) b) + 256) : b);
 	}
 	
-	private static PdfFont readFontTrueType(Map fontData, final Map objects, Map charDecoders, ProgressMonitor pm) throws IOException {
+	private static PdfFont readFontTrueType(Map fontData, final Map objects, boolean cleanUnicodeMapping, Map charDecoders, ProgressMonitor pm) throws IOException {
 		Object fnObj = PdfParser.dereference(fontData.get("BaseFont"), objects);
 		if (fnObj == null) {
 			if (DEBUG_LOAD_FONTS) {
@@ -3157,7 +3679,7 @@ FontFile2=65 0R
 				}
 				Object tuObj = PdfParser.dereference(fontData.get("ToUnicode"), objects);
 				if (tuObj instanceof PStream)
-					PdfParser.decodeObjectStream(null, ((PStream) tuObj), objects, true, null);
+					PdfParser.decodeObjectStream(null, ((PStream) tuObj), objects, true, null, null);
 				else if (DEBUG_LOAD_FONTS) System.out.println(" --> to unicode: " + tuObj);
 				return null;
 			}
@@ -3183,7 +3705,7 @@ FontFile2=65 0R
 			byte[] tuMapData = baos.toByteArray();
 			if (DEBUG_LOAD_FONTS)
 				System.out.println(" --> to unicode: " + new String(tuMapData));
-			toUnicodeMappings = readToUnicodeCMap(tuMapData, true);
+			toUnicodeMappings = readToUnicodeCMap(tuMapData, true, cleanUnicodeMapping);
 		}
 		else if (DEBUG_LOAD_FONTS) System.out.println(" --> to unicode: " + tuObj);
 		
@@ -3276,6 +3798,12 @@ FontFile2=65 0R
 		if ((feObj == null) && (fdObj instanceof Map))
 			feObj = PdfParser.dereference(((Map) fdObj).get("Encoding"), objects);
 		
+		Encoding encoding = new Encoding(((feObj == null) ? null : feObj.toString()), false);
+		for (Iterator ccit = diffEncodingNames.keySet().iterator(); ccit.hasNext();) {
+			Integer chc = ((Integer) ccit.next());
+			encoding.mapDifference(chc, diffEncodingNames.get(chc));
+		}
+		
 		Map fd = ((Map) fdObj);
 		int fc = ((Number) fcObj).intValue();
 		int lc = ((Number) lcObj).intValue();
@@ -3298,6 +3826,7 @@ FontFile2=65 0R
 		final PdfFont pFont = new PdfFont(fontData, fd, fc, lc, cws, mcw, fnObj.toString(), ((feObj == null) ? null : feObj.toString()));
 		if (!addLineMetrics(pFont, 0, pm))
 			return null;
+		pFont.charEncoding = encoding;
 		if (DEBUG_LOAD_FONTS) System.out.println("TrueType font created");
 		
 		for (Iterator cmit = diffEncodings.keySet().iterator(); cmit.hasNext();) {
@@ -3334,8 +3863,10 @@ FontFile2=65 0R
 //					PdfFontDecoder.readFontTrueType(ffBytes, font, this, (font != pFont), null, charSet, pm);
 //				}
 //			});
-			CharDecoder chd = ((CharDecoder) charDecoders.get(ff2RefObj.toString()));
+			String chdKey = ("TT-" + ff2RefObj.toString());
+			CharDecoder chd = ((CharDecoder) charDecoders.get(chdKey));
 			if (chd == null) {
+				final StackTraceElement[] createStack = Thread.currentThread().getStackTrace();
 				chd = new CharDecoder() {
 					public void decodeChars(PdfFont font, FontDecoderCharset charSet, ProgressMonitor pm) throws IOException {
 						System.out.println("Got font file 2 from " + pFont.name + " (TT, " + pFont + ")");
@@ -3349,14 +3880,18 @@ FontFile2=65 0R
 						byte[] ffBytes = baos.toByteArray();
 						Object l1Obj = ((PStream) ff2Obj).params.get("Length1");
 						System.out.println("  --> length is " + ffBytes.length + ", length1 is " + l1Obj);
-						PdfFontDecoder.readFontTrueType(ffBytes, font, this, (font != pFont), null, charSet, pm);
+						System.out.println("  --> created from:");
+						for (int e = 0; e < createStack.length; e++)
+							System.out.println("      " + createStack[e].toString());
+//						PdfFontDecoder.readFontTrueType(ffBytes, font, this, (font != pFont), null, charSet, pm);
+						PdfFontDecoder.readFontTrueType(ffBytes, font, this, false, null, charSet, pm);
 						font.type = "TrueType";
 					}
 				};
-				charDecoders.put(ff2RefObj.toString(), chd);
-				if (DEBUG_LOAD_FONTS) System.out.println(" - created char decoder for " + ff2RefObj.toString());
+				charDecoders.put(chdKey, chd);
+				if (DEBUG_LOAD_FONTS) System.out.println(" - created char decoder for " + chdKey);
 			}
-			else if (DEBUG_LOAD_FONTS) System.out.println(" - cache hit for char decoder " + ff2RefObj.toString());
+			else if (DEBUG_LOAD_FONTS) System.out.println(" - cache hit for char decoder " + chdKey);
 			pFont.setCharDecoder(chd);
 		}
 		
@@ -3366,7 +3901,9 @@ FontFile2=65 0R
 	private static boolean addLineMetrics(PdfFont pFont, float fbbNormFactor, ProgressMonitor pm) {
 		
 		//	read font bounding box (might be in main font data in Type3 fonts)
-		Object fbbObj = ((pFont.descriptor == null) ? pFont.data : pFont.descriptor).get("FontBBox");
+		Object fbbObj = ((pFont.descriptor == null) ? null : pFont.descriptor.get("FontBBox"));
+		if (fbbObj == null)
+			fbbObj = pFont.data.get("FontBBox");
 		Number fbbLlX = null;
 		Number fbbLlY = null;
 		Number fbbUrX = null;
@@ -3380,6 +3917,9 @@ FontFile2=65 0R
 				fbbUrX = ((Number) ((List) fbbObj).get(2));
 			if (((List) fbbObj).get(3) instanceof Number)
 				fbbUrY = ((Number) ((List) fbbObj).get(3));
+			if ((fbbLlX != null) && (fbbLlY != null) && (fbbUrX != null) && (fbbUrY != null))
+				pFont.bBox = new BoundingBox(fbbLlX.intValue(), fbbUrX.intValue(), fbbUrY.intValue(), fbbLlY.intValue());
+			if (DEBUG_LOAD_FONTS) System.out.println("Got bounding box: " + fbbObj + " ==> " + pFont.bBox);
 		}
 		else {
 			if (DEBUG_LOAD_FONTS) {
@@ -3405,15 +3945,25 @@ FontFile2=65 0R
 				System.out.println(" - descriptor: " + pFont.descriptor);
 				System.out.println(" --> strange ascent and ascender: " + ((pFont.descriptor == null) ? pFont.data : pFont.descriptor).get("Ascent") + ", " + ((pFont.descriptor == null) ? pFont.data : pFont.descriptor).get("Ascender"));
 			}
-			if ((fbbUrY != null) && (0 <= fbbNormFactor)) {
+			if ((fbbUrY != null) && ((0 <= fbbNormFactor) == (0 <= fbbUrY.floatValue()))) {
 				ascent = (((fbbNormFactor == 0) || (fbbNormFactor == 1)) ? fbbUrY : new Float(fbbUrY.floatValue() * fbbNormFactor));
 				if (DEBUG_LOAD_FONTS)
-					System.out.println(" --> fallback from bounding box: " + ascent);
+					System.out.println(" --> fallback from bounding box (UR1): " + ascent);
+			}
+			else if ((fbbLlY != null) && ((fbbNormFactor < 0) == (fbbLlY.floatValue() < 0))) {
+				ascent = new Float(fbbLlY.floatValue() * fbbNormFactor);
+				if (DEBUG_LOAD_FONTS)
+					System.out.println(" --> fallback from bounding box (LL1): " + ascent);
+			}
+			else if ((fbbUrY != null) && (0 <= fbbNormFactor)) {
+				ascent = (((fbbNormFactor == 0) || (fbbNormFactor == 1)) ? fbbUrY : new Float(fbbUrY.floatValue() * fbbNormFactor));
+				if (DEBUG_LOAD_FONTS)
+					System.out.println(" --> fallback from bounding box (UR2): " + ascent);
 			}
 			else if ((fbbLlY != null) && (fbbNormFactor < 0)) {
 				ascent = new Float(fbbLlY.floatValue() * fbbNormFactor);
 				if (DEBUG_LOAD_FONTS)
-					System.out.println(" --> fallback from bounding box: " + ascent);
+					System.out.println(" --> fallback from bounding box (LL2): " + ascent);
 			}
 			else {
 				if (DEBUG_LOAD_FONTS)
@@ -3431,15 +3981,25 @@ FontFile2=65 0R
 				System.out.println(" - descriptor: " + pFont.descriptor);
 				System.out.println(" --> strange descent and descender: " + ((pFont.descriptor == null) ? pFont.data : pFont.descriptor).get("Descent") + ", " + ((pFont.descriptor == null) ? pFont.data : pFont.descriptor).get("Descender"));
 			}
-			if ((fbbLlY != null) && (0 <= fbbNormFactor)) {
+			if ((fbbLlY != null) && ((0 <= fbbNormFactor) == (fbbLlY.floatValue() < 0))) {
 				descent = (((fbbNormFactor == 0) || (fbbNormFactor == 1)) ? fbbLlY : new Float(fbbLlY.floatValue() * fbbNormFactor));
 				if (DEBUG_LOAD_FONTS)
-					System.out.println(" --> fallback from bounding box: " + descent);
+					System.out.println(" --> fallback from bounding box (LL1): " + descent);
+			}
+			else if ((fbbUrY != null) && ((fbbNormFactor < 0) == (0 <= fbbUrY.floatValue()))) {
+				descent = new Float(fbbUrY.floatValue() * fbbNormFactor);
+				if (DEBUG_LOAD_FONTS)
+					System.out.println(" --> fallback from bounding box (UR1): " + descent);
+			}
+			else if ((fbbLlY != null) && (0 <= fbbNormFactor)) {
+				descent = (((fbbNormFactor == 0) || (fbbNormFactor == 1)) ? fbbLlY : new Float(fbbLlY.floatValue() * fbbNormFactor));
+				if (DEBUG_LOAD_FONTS)
+					System.out.println(" --> fallback from bounding box (LL2): " + descent);
 			}
 			else if ((fbbUrY != null) && (fbbNormFactor < 0)) {
 				descent = new Float(fbbUrY.floatValue() * fbbNormFactor);
 				if (DEBUG_LOAD_FONTS)
-					System.out.println(" --> fallback from bounding box: " + descent);
+					System.out.println(" --> fallback from bounding box (UR2): " + descent);
 			}
 			else {
 				if (DEBUG_LOAD_FONTS)
@@ -3467,6 +4027,8 @@ FontFile2=65 0R
 				capHeight = ascender;
 			}
 		}
+		else if ((fbbNormFactor != 0) && (fbbNormFactor != 1) && (fbbNormFactor != -1))
+			capHeight = new Float(capHeight.floatValue() * Math.abs(fbbNormFactor));
 		
 		//	set attributes
 		if (DEBUG_LOAD_FONTS) System.out.println("Font line metrics computed:");
@@ -3485,8 +4047,8 @@ FontFile2=65 0R
 			pFont.descent = Math.min(pFont.descent, (descender.floatValue() / 1000));
 		if (DEBUG_LOAD_FONTS) System.out.println(" - descent is " + pFont.descent);
 		Number underlinePos = getNumber(pFont, "UnderlinePosition");
-		if ((underlinePos != null) && ((underlinePos.floatValue() / 1000) < pFont.descent)) {
-			pFont.descent = (underlinePos.floatValue() / 1000);
+		if ((underlinePos != null) && (((underlinePos.floatValue() * Math.abs(fbbNormFactor)) / 1000) < pFont.descent)) {
+			pFont.descent = ((underlinePos.floatValue() * Math.abs(fbbNormFactor)) / 1000);
 			if (DEBUG_LOAD_FONTS) System.out.println(" - adjusted descent to underline position " + pFont.descent);
 		}
 		
@@ -3495,8 +4057,8 @@ FontFile2=65 0R
 			pFont.capHeight = Math.max(pFont.capHeight, (capHeight.floatValue() / 1000));
 		if (DEBUG_LOAD_FONTS) System.out.println(" - cap height is " + pFont.capHeight);
 		Number xHeight = getNumber(pFont, "XHeight");
-		if ((xHeight != null) && (pFont.capHeight < (xHeight.floatValue() / 1000))) {
-			pFont.capHeight = (xHeight.floatValue() / 1000);
+		if ((xHeight != null) && (pFont.capHeight < ((xHeight.floatValue() * Math.abs(fbbNormFactor)) / 1000))) {
+			pFont.capHeight = ((xHeight.floatValue() * Math.abs(fbbNormFactor)) / 1000);
 			if (DEBUG_LOAD_FONTS) System.out.println(" - adjusted cap height to xHeight " + pFont.capHeight);
 		}
 		
@@ -3527,7 +4089,7 @@ FontFile2=65 0R
 			catch (Exception e) {
 				System.out.println("PdfParser: could not load built-in font '" + fn + "' from resource '" + afmResName + "'");
 				if (e instanceof NullPointerException)
-					System.out.println("  Resource not found"); // that's the usual 'not found' case
+					System.out.println("  Resource not found"); // the usual 'not found' case
 				else e.printStackTrace(System.out);
 				
 //				String baseName = null;
@@ -3686,7 +4248,7 @@ FontFile2=65 0R
 				if (fnObj == null)
 					return null;
 				Object eObj = fd.get("EncodingScheme");
-				Object mcwObj = ((fd == null) ? null : fd.get("CharWidth"));
+				Object mcwObj = fd.get("CharWidth");
 				font = new BaseFont(new HashMap(), fd, ((mcwObj instanceof Number) ? ((Number) mcwObj).floatValue() : 0), fnObj.toString(), ((eObj == null) ? null : eObj.toString()));
 				readCharMetrics(br, font);
 			}
@@ -3783,11 +4345,10 @@ FontFile2=65 0R
 	}
 	
 	private static void readCharMetrics(BufferedReader br, BaseFont font) throws IOException {
-		String line;
 		int fc = -1;
 		int lc = -1;
 		ArrayList encodedCharWidths = new ArrayList();
-		while ((line = br.readLine()) != null) {
+		for (String line; (line = br.readLine()) != null;) {
 			line = line.trim();
 			
 			if ("EndCharMetrics".equals(line))
@@ -3837,8 +4398,7 @@ FontFile2=65 0R
 	}
 	
 	private static void readKernData(BufferedReader br, BaseFont font) throws IOException {
-		String line;
-		while ((line = br.readLine()) != null) {
+		for (String line; (line = br.readLine()) != null;) {
 			line = line.trim();
 			if ("EndKernData".equals(line))
 				break;
@@ -3855,6 +4415,81 @@ FontFile2=65 0R
 	static final int FLAG_AllCaps = (1 << 16);
 	static final int FLAG_SmallCaps = (1 << 17);
 	static final int FLAG_ForceBold = (1 << 18);
+	
+	
+	static Object getCharName(Integer chc, String encoding, boolean debug) {
+		initCharsets();
+		Object glyphKey = null;
+		if ("StandardEncoding".equals(encoding) || "AdobeStandardEncoding".equals(encoding))
+			glyphKey = adobeEncoding.get(chc);
+		else if ("MacRomanEncoding".equals(encoding))
+			glyphKey = macRomanEncoding.get(chc);
+		else if ("WinAnsiEncoding".equals(encoding))
+			glyphKey = winAnsiEncoding.get(chc);
+		else if ("PDFDocEncoding".equals(encoding))
+			glyphKey = pdfDocEncoding.get(chc);
+		else if ("MacExpertEncoding".equals(encoding))
+			glyphKey = macExpertEncoding.get(chc);
+		if (debug && (glyphKey != null))
+			System.out.println(" ==> " + encoding + " resolved to " + glyphKey);
+		return glyphKey;
+	}
+	
+	private static HashMap adobeEncoding = new HashMap();
+	private static HashMap macRomanEncoding = new HashMap();
+	private static HashMap winAnsiEncoding = new HashMap();
+	private static HashMap pdfDocEncoding = new HashMap();
+	private static HashMap macExpertEncoding = new HashMap();
+	
+	private static boolean doneInitCharsets = false;
+	private static synchronized boolean initCharsets() {
+		if (!doneInitCharsets) try {
+			doInitCharsets();
+		}
+		catch (Exception e) {
+			e.printStackTrace(System.out);
+		}
+		return doneInitCharsets;
+	}
+	
+	private static synchronized void doInitCharsets() throws IOException {
+		System.out.println("PdfFont: initializing PDF default charsets ...");
+		
+		//	load charsets and populate encodings
+		//	STD	MAC	WIN	PDF	MXP	name
+		String pfcrn = PdfFont.class.getName().replaceAll("\\.", "/");
+		InputStream csis = StringUtils.class.getClassLoader().getResourceAsStream(pfcrn.substring(0, pfcrn.lastIndexOf('/')) + "/PdfDefaultCharsets.txt");
+		BufferedReader csr = new BufferedReader(new InputStreamReader(csis, "UTF-8"));
+		csr.readLine(); // skip over column headers
+		HashMap[] css = {
+			adobeEncoding,
+			macRomanEncoding,
+			winAnsiEncoding,
+			pdfDocEncoding,
+			macExpertEncoding
+		};
+		for (String csl; (csl = csr.readLine()) != null;) {
+			if (csl.startsWith("//"))
+				continue;
+			String[] cd = csl.split("\\s");
+			if (cd.length != 6)
+				continue;
+			for (int c = 0; c < css.length; c++) try {
+				int chc = Integer.parseInt(cd[c], 16);
+				if (chc != 0)
+					css[c].put(chc, cd[5]);
+			}
+			catch (NumberFormatException nfe) {
+				System.out.println("PdfFont: error parsing charset encoding row '" + csl + "': " + nfe.getMessage());
+			}
+		}
+		csr.close();
+		
+		System.out.println("PdfFont: PDF default charsets initialized.");
+		doneInitCharsets = true;
+	}
+
+	
 //	
 //	public static void main(String[] args) throws Exception {
 //		try {

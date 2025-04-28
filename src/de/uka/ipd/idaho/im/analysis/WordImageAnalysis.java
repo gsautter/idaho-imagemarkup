@@ -40,8 +40,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
-import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -57,11 +59,13 @@ import de.uka.ipd.idaho.gamta.util.ProgressMonitor.SynchronizedProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
 import de.uka.ipd.idaho.im.ImDocument;
+import de.uka.ipd.idaho.im.ImLayoutObject;
 import de.uka.ipd.idaho.im.ImPage;
 import de.uka.ipd.idaho.im.ImRegion;
 import de.uka.ipd.idaho.im.ImWord;
 import de.uka.ipd.idaho.im.analysis.Imaging.AnalysisImage;
 import de.uka.ipd.idaho.im.analysis.Imaging.ImagePartRectangle;
+import de.uka.ipd.idaho.im.analysis.PageImageAnalysis.PageRegionColoring;
 import de.uka.ipd.idaho.im.util.ImFontUtils;
 import de.uka.ipd.idaho.im.util.ImUtils;
 
@@ -96,7 +100,31 @@ public class WordImageAnalysis {
 	 * @param pm a progress monitor to observe the processing
 	 */
 	public static void analyzeFontMetrics(ImDocument doc, boolean useMultipleCores, ProgressMonitor pm) {
+		analyzeFontMetrics(doc, useMultipleCores, pm, true, true, true);
+	}
+	
+	/**
+	 * Analyze font metrics in an Image Markup document. This method relies on
+	 * OCR results for comparison.
+	 * @param doc the document whose font metrics to analyze
+	 * @param useMultipleCores use multiple CPU cores for word image analysis
+	 *            if possible (i.e., if multiple cores available)?
+	 * @param pm a progress monitor to observe the processing
+	 * @param assessBold find and mark words in bold (using width of vertical
+	 *            stems in characters in comparison to document average)
+	 * @param assessItalics find and mark words in italics (using contrast
+	 *            of histograms over number of pixels in columns)
+	 * @param measureFontSize approximate the font sizes of words (based upon
+	 *            line height and scan resolution)
+	 */
+	public static void analyzeFontMetrics(ImDocument doc, boolean useMultipleCores, ProgressMonitor pm, final boolean assessBold, final boolean assessItalics, final boolean measureFontSize) {
 		final SynchronizedProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? ((SynchronizedProgressMonitor) pm) : new SynchronizedProgressMonitor(pm));
+		
+		//	check if we're actually supposed to do anything
+		if (measureFontSize) {}
+		else if (assessBold) {}
+		else if (assessItalics) {}
+		else return; // no measurement selected at all
 		
 		//	collect word images for later collective assessment
 		final ArrayList wordImages = new ArrayList();
@@ -120,7 +148,7 @@ public class WordImageAnalysis {
 				spm.setInfo(" ==> got " + pageWordImages.length + " word images");
 				
 				//	match word images against rendered OCR result for italics detection
-				assessItalicsAndFontSize(pageWordImages, renderedMatchesByWords, wordImageCache);
+				assessItalicsAndFontSize(pageWordImages, renderedMatchesByWords, wordImageCache, assessItalics, measureFontSize);
 				
 				//	add word images to list (order is not really relevant for our analyses)
 				synchronized (wordImages) {
@@ -130,27 +158,33 @@ public class WordImageAnalysis {
 		}, pages.length, (useMultipleCores ? -1 : 1));
 		
 		//	average out font sizes inside paragraphs (should be rather consistent)
-		spm.setStep("Computing paragraph font sizes");
-		spm.setBaseProgress(50);
-		spm.setMaxProgress(75);
-		ParallelJobRunner.runParallelFor(new ParallelFor() {
-			public void doFor(int pg) throws Exception {
-				
-				//	update progress
-				spm.setInfo("Computing font sizes in page " + pg);
-				spm.setProgress((pg * 100) / pages.length);
-				
-				//	work on individual paragraphs
-				ImRegion[] pageParagraphs = pages[pg].getRegions(ImRegion.PARAGRAPH_TYPE);
-				Arrays.sort(pageParagraphs, ImUtils.topDownOrder);
-				for (int p = 0; p < pageParagraphs.length; p++) {
-					if (DEBUG_COMPUTE_FONT_METRICS) System.out.println("Assessing font size in paragraph " + pageParagraphs[p].bounds + " on page " + pages[pg].pageId);
-					ImWord[] paragraphWords = pageParagraphs[p].getWords();
-					if (paragraphWords.length != 0)
-						assessFontSize(paragraphWords);
+		if (measureFontSize) {
+			spm.setStep("Computing paragraph font sizes");
+			spm.setBaseProgress(50);
+			spm.setMaxProgress(75);
+			ParallelJobRunner.runParallelFor(new ParallelFor() {
+				public void doFor(int pg) throws Exception {
+					
+					//	update progress
+					spm.setInfo("Computing font sizes in page " + pg);
+					spm.setProgress((pg * 100) / pages.length);
+					
+					//	work on individual paragraphs
+					ImRegion[] pageParagraphs = pages[pg].getRegions(ImRegion.PARAGRAPH_TYPE);
+					Arrays.sort(pageParagraphs, ImUtils.topDownOrder);
+					for (int p = 0; p < pageParagraphs.length; p++) {
+						if (DEBUG_COMPUTE_FONT_METRICS) System.out.println("Assessing font size in paragraph " + pageParagraphs[p].bounds + " on page " + pages[pg].pageId);
+						ImWord[] paragraphWords = pageParagraphs[p].getWords();
+						if (paragraphWords.length != 0)
+							assessFontSize(paragraphWords);
+					}
 				}
-			}
-		}, pages.length, (useMultipleCores ? -1 : 1));
+			}, pages.length, (useMultipleCores ? -1 : 1));
+		}
+		
+		//	anything left to do?
+		if (!assessBold)
+			return;
 		
 		/* Average out weight differences between font sizes
 		 * - relative weight generally differs between words (ones with no
@@ -166,6 +200,7 @@ public class WordImageAnalysis {
 		spm.setMaxProgress(85);
 		TreeMap fontSizesToWeightRelations = new TreeMap();
 		int weightRelationWordCount = 0;
+		int noFontSizeWordCount = 0;
 		int minFontSize = Integer.MAX_VALUE;
 		int maxFontSize = 0;
 		for (int w = 0; w < wordImages.size(); w++) {
@@ -183,10 +218,12 @@ public class WordImageAnalysis {
 				continue;
 			
 			//	little we can do without font size
-			if (!wi.word.hasAttribute(ImWord.FONT_SIZE_ATTRIBUTE))
+			if (!wi.word.hasAttribute(ImWord.FONT_SIZE_ATTRIBUTE)) {
+				noFontSizeWordCount++;
 				continue;
+			}
 			
-			//	get match to non-bold rendering (mght be italics or not)
+			//	get match to non-bold rendering (might be italics or not)
 			WordImageMatch wim = ((WordImageMatch) renderedMatchesByWords.get(wi.word.getLocalID()));
 			if (wim == null)
 				continue;
@@ -205,6 +242,7 @@ public class WordImageAnalysis {
 			fswr.addWord(wim);
 			weightRelationWordCount++;
 		}
+		if (DEBUG_COMPUTE_FONT_METRICS) System.out.println("Fon sizes range from " + minFontSize + " to " + maxFontSize + ", font size lacking in " + noFontSizeWordCount + " words");
 		
 		//	anything to work with?
 		if (maxFontSize < minFontSize)
@@ -248,7 +286,7 @@ public class WordImageAnalysis {
 			assessBoldFace(wi, ((WordImageMatch) renderedMatchesByWords.get(wi.word.getLocalID())), fontSizeWeightRelations, fontSizeStemWidths, minFontSize, wordImageCache, spm);
 		}
 		
-		//	
+		//	extrapolate bold words
 		pm.setStep("Extrapolating bold words");
 		pm.setBaseProgress(95);
 		pm.setMaxProgress(100);
@@ -309,6 +347,30 @@ public class WordImageAnalysis {
 	 * @param pm a progress monitor to observe the processing
 	 */
 	public static void analyzeFontMetrics(ImRegion region, ProgressMonitor pm) {
+		analyzeFontMetrics(region, pm, true, true, true);
+	}
+	
+	/**
+	 * Analyze font metrics in a single region of an Image Markup document.
+	 * This method relies on OCR results for comparison. It assumes that the
+	 * argument region represents a single block of text, in a single font
+	 * size.
+	 * @param region the region whose font metrics to analyze
+	 * @param pm a progress monitor to observe the processing
+	 * @param assessBold find and mark words in bold (using width of vertical
+	 *            stems in characters in comparison to document average)
+	 * @param assessItalics find and mark words in italics (using contrast
+	 *            of histograms over number of pixels in columns)
+	 * @param measureFontSize approximate the font sizes of words (based upon
+	 *            line height and scan resolution)
+	 */
+	public static void analyzeFontMetrics(ImRegion region, ProgressMonitor pm, boolean assessBold, boolean assessItalics, boolean measureFontSize) {
+		
+		//	check if we're actually supposed to do anything
+		if (measureFontSize) {}
+		else if (assessBold) {}
+		else if (assessItalics) {}
+		else return; // no measurement selected at all
 		
 		//	get words
 		ImWord[] regionWords = region.getWords();
@@ -327,16 +389,22 @@ public class WordImageAnalysis {
 		pm.setInfo(" ==> got " + regionWordImages.length + " word images");
 		
 		//	match word images against rendered OCR result for italics detection
-		assessItalicsAndFontSize(regionWordImages, renderedMatchesByWords, wordImageCache);
+		assessItalicsAndFontSize(regionWordImages, renderedMatchesByWords, wordImageCache, assessItalics, measureFontSize);
 		
 		//	average out font sizes inside paragraphs (should be rather consistent)
-		pm.setStep("Computing paragraph font size");
-		pm.setBaseProgress(50);
-		pm.setMaxProgress(75);
-		if (regionWords.length != 0) {
-			if (DEBUG_COMPUTE_FONT_METRICS) System.out.println("Assessing font size");
-			assessFontSize(regionWords);
+		if (measureFontSize) {
+			pm.setStep("Computing paragraph font size");
+			pm.setBaseProgress(50);
+			pm.setMaxProgress(75);
+			if (regionWords.length != 0) {
+				if (DEBUG_COMPUTE_FONT_METRICS) System.out.println("Assessing font size");
+				assessFontSize(regionWords);
+			}
 		}
+		
+		//	anything left to do?
+		if (!assessBold)
+			return;
 		
 		/* Average out weight differences between font sizes
 		 * - relative weight generally differs between words (ones with no
@@ -372,7 +440,7 @@ public class WordImageAnalysis {
 			if (!wi.word.hasAttribute(ImWord.FONT_SIZE_ATTRIBUTE))
 				continue;
 			
-			//	get match to non-bold rendering (mght be italics or not)
+			//	get match to non-bold rendering (might be italics or not)
 			WordImageMatch wim = ((WordImageMatch) renderedMatchesByWords.get(wi.word.getLocalID()));
 			if (wim == null)
 				continue;
@@ -506,7 +574,7 @@ Also use x-height for line height grouping:
 ==> ... and extrapolate from line above just like x-height (with same blocker criteria as for latter)
 	 */
 	
-	private static void assessItalicsAndFontSize(WordImage[] wordImages, Map renderedMatchesByWords, Map wordImageCache) {
+	private static void assessItalicsAndFontSize(WordImage[] wordImages, Map renderedMatchesByWords, Map wordImageCache, boolean assessItalics, boolean measureFontSize) {
 		
 		//	TODO assess line height distribution
 		ImPage page = wordImages[0].word.getPage();
@@ -594,7 +662,6 @@ Also use x-height for line height grouping:
 			}
 			
 			//	ignore punctuation marks (for now, at least) TODO make sure not to ignore small-print letters
-//			if ((wi.box.getWidth() < (wi.pageImageDpi / 30)) || (wi.box.getHeight() < (wi.pageImageDpi / 20))) {
 			if ((wi.box.getWidth() < (wi.pageImageDpi / 50)) || (wi.box.getHeight() < (wi.pageImageDpi / 25))) {
 				if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" ==> punctuation mark (size), ignored");
 				continue;
@@ -631,34 +698,38 @@ Also use x-height for line height grouping:
 //			wi.word.setFontSize(wim.rendered.fontSize);
 //			if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" ==> font size set to " + wim.rendered.fontSize);
 			
-			//	get plain or italics super-rendering
+			//	get plain or italics super-rendering (need that in every case, as it does the match rendering)
 			float italicsScore = getItalicsScore(wi, wordImageCache, renderedMatchesByWords);
 			if (italicsScore < 0)
-				continue;
+				continue; // something's wrong
 			
 			//	store rendering and adjust word attributes if required
-			wi.word.setAttribute((ImWord.ITALICS_ATTRIBUTE + "Score"), ("" + italicsScore));
-			if (!Gamta.isNumber(wi.str) && ((0.5 <= italicsScore) != wi.word.hasAttribute(ImWord.ITALICS_ATTRIBUTE))) {
-				if (italicsScore < 0.5)
-					wi.word.removeAttribute(ImWord.ITALICS_ATTRIBUTE);
-				else wi.word.setAttribute(ImWord.ITALICS_ATTRIBUTE);
-				wordImages[w] = new WordImage(wi.img, wi.word, wi.baseline, wi.pageImageDpi);
-				if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" ==> italics property adjusted");
+			if (assessItalics) {
+				wi.word.setAttribute((ImWord.ITALICS_ATTRIBUTE + "Score"), ("" + italicsScore));
+				if (!Gamta.isNumber(wi.str) && ((0.5 <= italicsScore) != wi.word.hasAttribute(ImWord.ITALICS_ATTRIBUTE))) {
+					if (italicsScore < 0.5)
+						wi.word.removeAttribute(ImWord.ITALICS_ATTRIBUTE);
+					else wi.word.setAttribute(ImWord.ITALICS_ATTRIBUTE);
+					wordImages[w] = new WordImage(wi.img, wi.word, wi.baseline, wi.pageImageDpi);
+					if (DEBUG_COMPUTE_FONT_METRICS) System.out.println(" ==> italics property adjusted");
+				}
 			}
 			
-			//	TODO compute font size as function of line height instead
-			WordImageMatch wim = ((WordImageMatch) renderedMatchesByWords.get(wi.word.getLocalID()));
-//			wi.word.setFontSize(wim.rendered.fontSize);
-			if (DEBUG_COMPUTE_FONT_METRICS) {
-				System.out.println(" ==> rendered font size is " + wim.rendered.fontSize);
+			//	compute font size as function of line height instead
+			if (measureFontSize && !wi.word.hasAttribute(ImWord.FONT_SIZE_ATTRIBUTE)) {
+				WordImageMatch wim = ((WordImageMatch) renderedMatchesByWords.get(wi.word.getLocalID()));
+				wi.word.setFontSize(wim.rendered.fontSize);
 				float lineHeightFontSizeRaw = ((wi.word.bounds.getHeight() * 72.0f) / wi.pageImageDpi);
 				int lineHeightFontSize = Math.round(lineHeightFontSizeRaw);
-				System.out.println(" ==> line height font size is " + lineHeightFontSize + " (" + lineHeightFontSizeRaw + ")");
+				wi.word.setFontSize(lineHeightFontSize);
+				if (DEBUG_COMPUTE_FONT_METRICS) {
+					System.out.println(" ==> rendered font size is " + ((wim == null) ? -1 : wim.rendered.fontSize));
+					System.out.println(" ==> line height font size is " + lineHeightFontSize + " (" + lineHeightFontSizeRaw + ")");
+				}
 			}
 		}
 	}
 	
-//	private static WordImageMatch getPlainOrItalicsMatch(WordImage wi, Map wordImageCache) {
 	private static float getItalicsScore(WordImage wi, Map wordImageCache, Map renderedMatchesByWords) {
 		
 		//	render word string to word bounds (always try plain and italics)
@@ -1117,7 +1188,7 @@ Also use x-height for line height grouping:
 		//	compute stem width from middle 60% of measured pixel rows
 		int stemPixelCount = wi.pixelCount;
 		
-		//	remove top and bottom 20%, which likely result from horizontal parts of letters, or from tip
+		//	remove top and bottom 20%, which likely result from horizontal parts of letters, or from tips
 		int toRemoveTop = (stemWidths.size() / 5);
 		int toRemoveBottom = (stemWidths.size() / 5);
 		while (toRemoveTop != 0) {
@@ -1235,7 +1306,7 @@ Also use x-height for line height grouping:
 		/** the word image */
 		public final BufferedImage img;
 		/** the bounding rectangle of the actual word, inside the image proper */
-		public final ImagePartRectangle box;
+		public final ImagePartRectangle box; // TODO consider using BoundingBox instead
 		/** the word baseline */
 		public final int baseline;
 		/** the logarithm of the width/height relation of the bounding box */
@@ -1313,17 +1384,42 @@ Also use x-height for line height grouping:
 	}
 	
 	/**
-	 * Extract the images for the words in a document page
+	 * Extract the images for the words in a document page or region.
 	 * @param region the page to extract the word images for
 	 * @return an array holding the word images
 	 */
 	public static WordImage[] getWordImages(ImRegion region) {
+		return getWordImages(region, false, false);
+	}
+	
+	/**
+	 * Extract the images for the words in a document page or region.
+	 * @param region the page to extract the word images for
+	 * @param expandToGlyphs expand word images to include the full characters?
+	 * @return an array holding the word images
+	 */
+	public static WordImage[] getWordImages(ImRegion region, boolean expandToGlyphs) {
+		return getWordImages(region, expandToGlyphs, false);
+	}
+	
+	/**
+	 * Extract the images for the words in a document page or region. Expanding
+	 * to adjacent regions only words if expanding to glyphs is activated.
+	 * @param region the page to extract the word images for
+	 * @param expandToGlyphs expand word images to include the full (printed)
+	 *            characters from the scans?
+	 * @param expandToAdjacent expand word images to include adjacent regions
+	 *            (printed characters) of the same line that are not part of
+	 *            any words at all?
+	 * @return an array holding the word images
+	 */
+	public static WordImage[] getWordImages(ImRegion region, boolean expandToGlyphs, boolean expandToAdjacent) {
 		
 		//	get words
 		ImWord[] regionWords = region.getWords();
 		if (regionWords.length == 0)
 			return new WordImage[0];
-		List wordImages = new ArrayList();
+		ArrayList wordImages = new ArrayList();
 		
 		//	get and wrap page image only once
 		PageImage pageImage = region.getPageImage();
@@ -1339,16 +1435,91 @@ Also use x-height for line height grouping:
 		regionCodeCount++; // account for 0
 		int[] pageRegionSizes = new int[regionCodeCount];
 		Arrays.fill(pageRegionSizes, 0);
+		int[] pageRegionMinX = new int[regionCodeCount];
+		Arrays.fill(pageRegionMinX, pageImage.image.getWidth());
+		int[] pageRegionMaxX = new int[regionCodeCount];
+		Arrays.fill(pageRegionMaxX, 0);
+		int[] pageRegionMinY = new int[regionCodeCount];
+		Arrays.fill(pageRegionMinY, pageImage.image.getHeight());
+		int[] pageRegionMaxY = new int[regionCodeCount];
+		Arrays.fill(pageRegionMaxY, 0);
 		for (int c = 0; c < pageRegionCodes.length; c++)
 			for (int r = 0; r < pageRegionCodes[c].length; r++) {
-				if (pageRegionCodes[c][r] != 0)
-					pageRegionSizes[pageRegionCodes[c][r]]++;
+				if (pageRegionCodes[c][r] == 0)
+					continue;
+				pageRegionSizes[pageRegionCodes[c][r]]++;
+				pageRegionMinX[pageRegionCodes[c][r]] = Math.min(c, pageRegionMinX[pageRegionCodes[c][r]]);
+				pageRegionMaxX[pageRegionCodes[c][r]] = Math.max(c, pageRegionMaxX[pageRegionCodes[c][r]]);
+				pageRegionMinY[pageRegionCodes[c][r]] = Math.min(r, pageRegionMinY[pageRegionCodes[c][r]]);
+				pageRegionMaxY[pageRegionCodes[c][r]] = Math.max(r, pageRegionMaxY[pageRegionCodes[c][r]]);
 			}
 		System.out.println("Got " + regionCodeCount + " disjoint regions");
+		
+		//	assess how many words each region color occurs in (to prevent expanding words along characters mingled across words)
+		int[] pageRegionWordCounts = new int[regionCodeCount];
+		Arrays.fill(pageRegionWordCounts, 0);
+		for (int w = 0; w < regionWords.length; w++) {
+			
+			//	skip over artifacts
+			if (ImWord.TEXT_STREAM_TYPE_ARTIFACT.equals(regionWords[w].getTextStreamType()) || ImWord.TEXT_STREAM_TYPE_DELETED.equals(regionWords[w].getTextStreamType()))
+				continue;
+			
+			//	get original scanned word image for comparison
+			System.out.println("Assessing word '" + regionWords[w].getString() + "' at " + regionWords[w].bounds);
+			int wiMinX = Math.max(0, (regionWords[w].bounds.left - pageImage.leftEdge - 1));
+			int wiMinY = Math.max(0, (regionWords[w].bounds.top - pageImage.topEdge - 1));
+			int wiMaxX = Math.min(pageImage.image.getWidth(), (regionWords[w].bounds.right - pageImage.leftEdge + 1));
+			int wiMaxY = Math.min(pageImage.image.getHeight(), (regionWords[w].bounds.bottom - pageImage.topEdge + 1));
+			
+			//	count out region colors
+			CountingSet wordRegionColors = new CountingSet(new TreeMap());
+			for (int c = wiMinX; c < wiMaxX; c++)
+				for (int r = wiMinY; r < wiMaxY; r++) {
+					if (pageRegionCodes[c][r] != 0)
+						wordRegionColors.add(new Integer(pageRegionCodes[c][r]));
+				}
+			System.out.println(" ==> got " + wordRegionColors.elementCount() + " region colors occupying " + wordRegionColors.size() + " pixels");
+			System.out.println("     " + wordRegionColors);
+			
+			//	count word for region colors
+			for (Iterator wrcit = wordRegionColors.iterator(); wrcit.hasNext();) {
+				Integer wrc = ((Integer) wrcit.next());
+				pageRegionWordCounts[wrc.intValue()]++;
+			}
+		}
 		
 		//	keep font site estimate to speed up adjustment
 		ImRegion[] regionLines = region.getRegions(ImRegion.LINE_ANNOTATION_TYPE);
 		ImRegion regionLine = null;
+		
+		//	assess how many lines each region color occurs in (to prevent expanding words along characters mingled across lines)
+		int[] pageRegionLineCounts = new int[regionCodeCount];
+		Arrays.fill(pageRegionLineCounts, 0);
+		for (int l = 0; l < regionLines.length; l++) {
+			
+			//	get original scanned word image for comparison
+			System.out.println("Assessing line at " + regionLines[l].bounds);
+			int lMinX = Math.max(0, (regionLines[l].bounds.left - pageImage.leftEdge - 1));
+			int lMinY = Math.max(0, (regionLines[l].bounds.top - pageImage.topEdge - 1));
+			int lMaxX = Math.min(pageImage.image.getWidth(), (regionLines[l].bounds.right - pageImage.leftEdge + 1));
+			int lMaxY = Math.min(pageImage.image.getHeight(), (regionLines[l].bounds.bottom - pageImage.topEdge + 1));
+			
+			//	count out region colors
+			CountingSet lineRegionColors = new CountingSet(new TreeMap());
+			for (int c = lMinX; c < lMaxX; c++)
+				for (int r = lMinY; r < lMaxY; r++) {
+					if (pageRegionCodes[c][r] != 0)
+						lineRegionColors.add(new Integer(pageRegionCodes[c][r]));
+				}
+			System.out.println(" ==> got " + lineRegionColors.elementCount() + " region colors occupying " + lineRegionColors.size() + " pixels");
+			System.out.println("     " + lineRegionColors);
+			
+			//	count line for region colors
+			for (Iterator lrcit = lineRegionColors.iterator(); lrcit.hasNext();) {
+				Integer lrc = ((Integer) lrcit.next());
+				pageRegionLineCounts[lrc.intValue()]++;
+			}
+		}
 		
 		//	check individual words
 		Arrays.sort(regionWords, ImUtils.topDownOrder);
@@ -1379,40 +1550,82 @@ Also use x-height for line height grouping:
 					}
 			}
 			
-			//	get original scanned word image for comparison TODO use binary black & white index color model
+			//	get original scanned word image for comparison
 			System.out.println("Doing word '" + wordString + "' at " + regionWords[w].bounds);
 			int wiMinX = Math.max(0, (regionWords[w].bounds.left - pageImage.leftEdge - 1));
 			int wiMinY = Math.max(0, (regionWords[w].bounds.top - pageImage.topEdge - 1));
 			int wiMaxX = Math.min(pageImage.image.getWidth(), (regionWords[w].bounds.right - pageImage.leftEdge + 1));
 			int wiMaxY = Math.min(pageImage.image.getHeight(), (regionWords[w].bounds.bottom - pageImage.topEdge + 1));
+			
+			//	use region coloring to assess which regions are mainly inside the word, and which are not
+			CountingSet wordRegionColors = new CountingSet(new TreeMap());
+			for (int c = wiMinX; c < wiMaxX; c++)
+				for (int r = wiMinY; r < wiMaxY; r++) {
+					if (pageRegionCodes[c][r] != 0)
+						wordRegionColors.add(new Integer(pageRegionCodes[c][r]));
+				}
+			
+			//	sort out regions mainly (over 60%) inside word bounds (for keeping), but only if size is sufficiently large
+			HashSet wordMainRegionColors = new HashSet();
+			int wordRegionCount = wordRegionColors.elementCount();
+			for (Iterator wrcit = wordRegionColors.iterator(); wrcit.hasNext();) {
+				Integer wrc = ((Integer) wrcit.next());
+				if (((wordRegionColors.getCount(wrc) * 50) > pageImage.currentDpi) && ((wordRegionColors.getCount(wrc) * 5) > (pageRegionSizes[wrc.intValue()] * 3))) {
+					wordMainRegionColors.add(wrc);
+					wrcit.remove();
+				}
+			}
+			
+			//	expand word boundaries to cover all the regions we want to retain
+			if (expandToGlyphs) {
+//				int oWiMinX = wiMinX;
+//				int oWiMaxX = wiMaxX;
+//				int oWiMinY = wiMinY;
+//				int oWiMaxY = wiMaxY;
+				for (Iterator wrcit = wordMainRegionColors.iterator(); wrcit.hasNext();) {
+					Integer wrc = ((Integer) wrcit.next());
+					if (pageRegionLineCounts[wrc.intValue()] > 1)
+						continue; // prevent expanding for characters mingled across lines
+					if (pageRegionWordCounts[wrc.intValue()] > 1)
+						continue; // prevent expanding for characters mingled across words in same line
+					if (pageRegionMinX[wrc.intValue()] < wiMinX)
+						wiMinX = pageRegionMinX[wrc.intValue()];
+					if (wiMaxX <= pageRegionMaxX[wrc.intValue()])
+						wiMaxX = (pageRegionMaxX[wrc.intValue()] + 1);
+					if (pageRegionMinY[wrc.intValue()] < wiMinY)
+						wiMinY = pageRegionMinY[wrc.intValue()];
+					if (wiMaxY <= pageRegionMaxY[wrc.intValue()])
+						wiMaxY = (pageRegionMaxY[wrc.intValue()] + 1);
+				}
+//				if ((((wiMaxX - wiMinX) * 2) >= ((oWiMaxX - oWiMinX) * 3)) || (((wiMaxY - wiMinY) * 2) >= ((oWiMaxY - oWiMinY) * 3))) {
+//					BufferedImage pi = new BufferedImage(pageImage.image.getWidth(), pageImage.image.getHeight(), BufferedImage.TYPE_4BYTE_ABGR);
+//					Graphics2D pig = pi.createGraphics();
+//					pig.drawImage(pageImage.image, 0, 0, null);
+//					pig.setColor(Color.GREEN);
+//					pig.drawRect(oWiMinX, oWiMinY, (oWiMaxX - oWiMinX), (oWiMaxY - oWiMinY));
+//					pig.setColor(Color.RED);
+//					pig.drawRect(wiMinX, wiMinY, (wiMaxX - wiMinX), (wiMaxY - wiMinY));
+//					ImageDisplayDialog idd = new ImageDisplayDialog("Word Image out of Bounds");
+//					idd.addImage(pi, regionWords[w].getString());
+//					idd.setSize(800, 1000);
+//					idd.setLocationRelativeTo(null);
+//					idd.setVisible(true);
+//				}
+			}
+			
+			//	render word image TODO use binary black & white index color model
 //			BufferedImage wordImage = pageImage.image.getSubimage(wiMinX, wiMinY, (wiMaxX - wiMinX), (wiMaxY - wiMinY));
 			BufferedImage wordImage = new BufferedImage((wiMaxX - wiMinX), (wiMaxY - wiMinY), pageImage.image.getType());
 			Graphics wordImageGraphics = wordImage.createGraphics();
 			wordImageGraphics.drawImage(pageImage.image.getSubimage(wiMinX, wiMinY, (wiMaxX - wiMinX), (wiMaxY - wiMinY)), 0, 0, null);
 			
-			//	use region coloring to assess which regions are mainly inside the word, and which are not
-			CountingSet wordRegionSizes = new CountingSet(new TreeMap());
-			for (int c = wiMinX; c < wiMaxX; c++)
-				for (int r = wiMinY; r < wiMaxY; r++) {
-					if (pageRegionCodes[c][r] != 0)
-						wordRegionSizes.add(new Integer(pageRegionCodes[c][r]));
-				}
-			
-			//	sort out regions mainly inside word bounds, but only if size is sufficiently large
-			int wordRegionCount = wordRegionSizes.elementCount();
-			for (Iterator wrcit = wordRegionSizes.iterator(); wrcit.hasNext();) {
-				Integer wrc = ((Integer) wrcit.next());
-				if (((wordRegionSizes.getCount(wrc) * 50) > pageImage.currentDpi) && ((wordRegionSizes.getCount(wrc) * 3) > (pageRegionSizes[wrc.intValue()] * 2)))
-					wrcit.remove();
-			}
-			
 			//	truncate regions whose majority of pixels lies outside the word bounds (only if we have at least one region surviving, though)
-			if (wordRegionSizes.elementCount() < wordRegionCount) {
+			if (wordRegionColors.elementCount() < wordRegionCount) {
 				for (int c = wiMinX; c < wiMaxX; c++)
 					for (int r = wiMinY; r < wiMaxY; r++) {
 						if (pageRegionCodes[c][r] == 0) // make sure 'inter-region' area is really white
 							wordImage.setRGB((c - wiMinX), (r - wiMinY), whiteRgb);
-						else if (wordRegionSizes.contains(new Integer(pageRegionCodes[c][r])))
+						else if (wordRegionColors.contains(new Integer(pageRegionCodes[c][r])))
 							wordImage.setRGB((c - wiMinX), (r - wiMinY), whiteRgb);
 					}
 			}
@@ -1435,8 +1648,519 @@ Also use x-height for line height grouping:
 		//	finally ...
 		return ((WordImage[]) wordImages.toArray(new WordImage[wordImages.size()]));
 	}
-	
 	private static final int whiteRgb = Color.WHITE.getRGB();
+	
+	private static void addWordImages(ImRegion line, ImWord[] lineWords, PageRegionColoring regionColors, ArrayList worrImages) {
+		
+	}
+	
+	/**
+	 * A group of words that share a non-white area in a scanned page image,
+	 * including extensive metadata of the conflict.
+	 * 
+	 * @author sautter
+	 */
+	public static class WordConflict {
+		
+		/** the word conflict ID (space-separated concatenation of the local IDs of the conflicting words) */
+		public final String wordConflictId;
+		/** the conflicting words */
+		public final ImWord[] words;
+		/** the underlying page image */
+		public final PageImage pageImage;
+		/** a region coloring of the page image the conflicting words lie in */
+		public final int[][] pageRegionColors;
+		/** the minimum (left-most) X coordinate of every region in the page, indexed by region color */
+		public final int[] pageRegionMinX;
+		/** the maximum (right-most) X coordinate of every region in the page, indexed by region color */
+		public final int[] pageRegionMaxX;
+		/** the minimum (top-most) Y coordinate of every region in the page, indexed by region color */
+		public final int[] pageRegionMinY;
+		/** the maximum (bottom-most) Y coordinate of every region in the page, indexed by region color */
+		public final int[] pageRegionMaxY;
+		/** the convex hull of the conflicting words, expanded to fully contain non-contested regions */
+		public final BoundingBox wordBounds;
+		/** the region colors of the page image areas the words are conflicting over */
+		public final int[] conflictRegionColors;
+		/** the number of pixels from each contested region contained in the individual words */
+		public final int[][] conflictRegionPixelCounts;
+		/** the convex hull of the conflicting colored regions */
+		public final BoundingBox conflictBounds;
+		
+		/**
+		 * @param words the conflicting words
+		 * @param pageDate the word conflict to copy the gape image and region coloring data from
+		 * @param wordBounds the convex hull of the conflicting words, expanded to fully contain non-contested regions
+		 * @param conflictRegionColors the region colors of the page image areas the words are conflicting over
+		 * @param conflictCounds the convex hull of the conflicting colored regions
+		 */
+		public WordConflict(ImWord[] words, WordConflict pageData, BoundingBox wordBounds, int[] conflictRegionColors, BoundingBox conflictBounds) {
+			this(concatenateIDs(words), words, pageData.pageImage, pageData.pageRegionColors, pageData.pageRegionMinX, pageData.pageRegionMaxX, pageData.pageRegionMinY, pageData.pageRegionMaxY, wordBounds, conflictRegionColors, conflictBounds);
+		}
+		
+		WordConflict(String wordConflictId, ImWord[] words, PageImage pageImage, int[][] pageRegionColors, int[] pageRegionMinX, int[] pageRegionMaxX, int[] pageRegionMinY, int[] pageRegionMaxY, BoundingBox wordBounds, int[] conflictRegionColors, BoundingBox conflictBounds) {
+			this.wordConflictId = wordConflictId;
+			this.words = words;
+			this.pageImage = pageImage;
+			this.pageRegionColors = pageRegionColors;
+			this.pageRegionMinX = pageRegionMinX;
+			this.pageRegionMaxX = pageRegionMaxX;
+			this.pageRegionMinY = pageRegionMinY;
+			this.pageRegionMaxY = pageRegionMaxY;
+			this.wordBounds = wordBounds;
+			this.conflictRegionColors = conflictRegionColors;
+			this.conflictRegionPixelCounts = new int[this.words.length][this.conflictRegionColors.length];
+			for (int w = 0; w < this.words.length; w++) /* better to re-count here in case words get adjusted via public constructor */ {
+				CountingSet wordRegionColors = new CountingSet();
+				for (int c = this.words[w].bounds.left; c < this.words[w].bounds.right; c++)
+					for (int r = this.words[w].bounds.top; r < this.words[w].bounds.bottom; r++) {
+						if (this.pageRegionColors[c][r] != 0)
+							wordRegionColors.add(new Integer(this.pageRegionColors[c][r]));
+					}
+				for (int c = 0; c < this.conflictRegionColors.length; c++)
+					this.conflictRegionPixelCounts[w][c] = wordRegionColors.getCount(new Integer(this.conflictRegionColors[c]));
+			}
+			this.conflictBounds = conflictBounds;
+		}
+	}
+	
+	private static String concatenateIDs(ImWord[] words) {
+		StringBuffer wordIDs = new StringBuffer();
+		for (int w = 0; w < words.length; w++) {
+			if (w != 0)
+				wordIDs.append(" ");
+			wordIDs.append(words[w].getLocalID());
+		}
+		return wordIDs.toString();
+	}
+	
+	/**
+	 * Extract groups of words from a document page or region that share a
+	 * non-white area in the underlying page image. Such conflicts can indicate
+	 * highly likely OCR errors, as well as problems in the scan proper.
+	 * @param region the page to extract the word conflicts for
+	 * @return an array holding the word conflicts
+	 */
+	public static WordConflict[] getWordConflicts(ImRegion region) {
+		ImWord[] words = region.getWords();
+		ImRegion[] lines = region.getRegions(ImRegion.LINE_ANNOTATION_TYPE);
+		return getWordConflicts(words, lines, null, null);
+	}
+	
+	/**
+	 * Extract groups of words from a document page or region that share a
+	 * non-white area in the underlying page image. Such conflicts can indicate
+	 * highly likely OCR errors, as well as problems in the scan proper. If the
+	 * argument region coloring of the underlying page is null, this method
+	 * creates one. However, when searching for conflicts in multiple regions of
+	 * a single page, client code is well advised to create and reuse a region
+	 * coloring to reduce computational effort.
+	 * @param region the page to extract the word conflicts for
+	 * @param regionColoring a region coloring of the underlying page
+	 * @return an array holding the word conflicts
+	 */
+	public static WordConflict[] getWordConflicts(ImRegion region, PageRegionColoring regionColoring) {
+		ImWord[] words = region.getWords();
+		ImRegion[] lines = region.getRegions(ImRegion.LINE_ANNOTATION_TYPE);
+		return getWordConflicts(words, lines, null, regionColoring);
+	}
+	
+	/**
+	 * Extract groups of words from a document page or region that share a
+	 * non-white area in the underlying page image. Such conflicts can indicate
+	 * highly likely OCR errors, as well as problems in the scan proper. If the
+	 * words in the argument array are detached, the argument page must not be
+	 * null.
+	 * @param words the words to detect conflicts in
+	 * @param page the page the words belong to
+	 * @return an array holding the word conflicts
+	 */
+	public static WordConflict[] getWordConflicts(ImWord[] words, ImPage page) {
+		return getWordConflicts(words, null, page, null);
+	}
+	
+	/**
+	 * Extract groups of words from a document page or region that share a
+	 * non-white area in the underlying page image. Such conflicts can indicate
+	 * highly likely OCR errors, as well as problems in the scan proper. If the
+	 * words in the argument array are detached, the argument page must not be
+	 * null.
+	 * @param words the words to detect conflicts in
+	 * @param page the page the words belong to
+	 * @param regionColoring a region coloring of the page
+	 * @return an array holding the word conflicts
+	 */
+	public static WordConflict[] getWordConflicts(ImWord[] words, ImPage page, PageRegionColoring regionColoring) {
+		return getWordConflicts(words, null, page, regionColoring);
+	}
+	
+	private static WordConflict[] getWordConflicts(ImWord[] words, ImRegion[] lines, ImPage page, PageRegionColoring regionColoring) {
+		if (words == null)
+			return new WordConflict[0];
+		if (words.length == 0)
+			return new WordConflict[0];
+		if (page == null)
+			page = words[0].getPage();
+		if (page == null)
+			page = words[0].getDocument().getPage(words[0].pageId);
+		if (page == null)
+			return new WordConflict[0];
+		if (regionColoring == null)
+			regionColoring = PageImageAnalysis.getRegionColoring(page, ((byte) 96));
+		if (lines == null) {
+			BoundingBox wordArea = ImLayoutObject.getAggregateBox(words);
+			lines = page.getRegionsInside(ImRegion.LINE_ANNOTATION_TYPE, wordArea, true);
+		}
+		return getWordConflicts(words, lines, page, page.getImage(), regionColoring.pageRegionColors, regionColoring.pageRegionSizes, regionColoring.pageRegionMinX, regionColoring.pageRegionMaxX, regionColoring.pageRegionMinY, regionColoring.pageRegionMaxY);
+	}
+	private static WordConflict[] getWordConflicts(ImWord[] words, ImRegion[] lines, ImPage page, PageImage pageImage, int[][] pageRegionColors, int[] pageRegionSizes, int[] pageRegionMinX, int[] pageRegionMaxX, int[] pageRegionMinY, int[] pageRegionMaxY) {
+		
+		//	sort words
+		ImUtils.sortLeftRightTopDown(words);
+		
+		//	freeze number of region colors
+		int regionColorCount = pageRegionSizes.length;
+		
+		//	assess how many words each region color occurs in (to prevent expanding words along characters mingled across words)
+		Object[] pageRegionWords = new Object[regionColorCount];
+		for (int w = 0; w < words.length; w++) {
+			
+			//	skip over artifacts
+			if (ImWord.TEXT_STREAM_TYPE_ARTIFACT.equals(words[w].getTextStreamType()) || ImWord.TEXT_STREAM_TYPE_DELETED.equals(words[w].getTextStreamType()))
+				continue;
+			
+			//	get original scanned word image for comparison
+//			System.out.println("Assessing word '" + regionWords[w].getString() + "' at " + regionWords[w].bounds);
+//			int wiMinX = Math.max(0, (regionWords[w].bounds.left - pageImage.leftEdge - 1));
+//			int wiMinY = Math.max(0, (regionWords[w].bounds.top - pageImage.topEdge - 1));
+//			int wiMaxX = Math.min(pageImage.image.getWidth(), (regionWords[w].bounds.right - pageImage.leftEdge + 1));
+//			int wiMaxY = Math.min(pageImage.image.getHeight(), (regionWords[w].bounds.bottom - pageImage.topEdge + 1));
+			int wiMinX = Math.max(0, (words[w].bounds.left - pageImage.leftEdge));
+			int wiMinY = Math.max(0, (words[w].bounds.top - pageImage.topEdge));
+			int wiMaxX = Math.min(pageImage.image.getWidth(), (words[w].bounds.right - pageImage.leftEdge));
+			int wiMaxY = Math.min(pageImage.image.getHeight(), (words[w].bounds.bottom - pageImage.topEdge));
+			
+			//	count out region colors
+			CountingSet wordRegionColors = new CountingSet(new TreeMap());
+			for (int c = wiMinX; c < wiMaxX; c++)
+				for (int r = wiMinY; r < wiMaxY; r++) {
+					if (pageRegionColors[c][r] != 0)
+						wordRegionColors.add(new Integer(pageRegionColors[c][r]));
+				}
+//			System.out.println(" ==> got " + wordRegionColors.elementCount() + " region colors occupying " + wordRegionColors.size() + " pixels");
+//			System.out.println("     " + wordRegionColors);
+			
+			//	count word for region colors
+			for (Iterator wrcit = wordRegionColors.iterator(); wrcit.hasNext();) {
+				Integer wrc = ((Integer) wrcit.next());
+				if (wrc.intValue() == 38)
+					System.out.println();
+				if (pageRegionWords[wrc.intValue()] == null)
+					pageRegionWords[wrc.intValue()] = words[w];
+				else if (pageRegionWords[wrc.intValue()] instanceof LinkedHashSet)
+					((LinkedHashSet) pageRegionWords[wrc.intValue()]).add(words[w]);
+				else {
+					LinkedHashSet prws = new LinkedHashSet(4); // actual size will mostly be 2, but this way we save but any resizing
+					prws.add(pageRegionWords[wrc.intValue()]);
+					prws.add(words[w]);
+					pageRegionWords[wrc.intValue()] = prws;
+				}
+			}
+		}
+		
+		//	assess how many lines each region color occurs in (to prevent expanding words along characters mingled across lines)
+		int[] pageRegionLineCounts = new int[regionColorCount];
+		Arrays.fill(pageRegionLineCounts, 0);
+		for (int l = 0; l < lines.length; l++) {
+			
+			//	get original scanned word image for comparison
+//			System.out.println("Assessing line at " + regionLines[l].bounds);
+			int lMinX = Math.max(0, (lines[l].bounds.left - pageImage.leftEdge - 1));
+			int lMinY = Math.max(0, (lines[l].bounds.top - pageImage.topEdge - 1));
+			int lMaxX = Math.min(pageImage.image.getWidth(), (lines[l].bounds.right - pageImage.leftEdge + 1));
+			int lMaxY = Math.min(pageImage.image.getHeight(), (lines[l].bounds.bottom - pageImage.topEdge + 1));
+			
+			//	count out region colors
+			CountingSet lineRegionColors = new CountingSet(new TreeMap());
+			for (int c = lMinX; c < lMaxX; c++)
+				for (int r = lMinY; r < lMaxY; r++) {
+					if (pageRegionColors[c][r] != 0)
+						lineRegionColors.add(new Integer(pageRegionColors[c][r]));
+				}
+//			System.out.println(" ==> got " + lineRegionColors.elementCount() + " region colors occupying " + lineRegionColors.size() + " pixels");
+//			System.out.println("     " + lineRegionColors);
+			
+			//	count line for region colors
+			for (Iterator lrcit = lineRegionColors.iterator(); lrcit.hasNext();) {
+				Integer lrc = ((Integer) lrcit.next());
+				pageRegionLineCounts[lrc.intValue()]++;
+			}
+		}
+		
+		//	check individual colored regions
+		LinkedHashMap conflictWordIDsToRegionColors = new LinkedHashMap();
+		for (int r = 0; r < pageRegionWords.length; r++) {
+			
+			//	any conflicting words to deal with here?
+			if (!(pageRegionWords[r] instanceof LinkedHashSet))
+				continue;
+			
+			//	leave line conflicts alone for now
+			if (pageRegionLineCounts[r] > 1)
+				continue;
+			
+			//	get conflicting words and set up conflict group ID (might concern more than one colored region, e.g. with an 'equals' sign)
+			LinkedHashSet prws = ((LinkedHashSet) pageRegionWords[r]);
+			ImWord[] cWords = ((ImWord[]) prws.toArray(new ImWord[prws.size()]));
+			String cWordIDs = concatenateIDs(cWords);
+			
+			//	index region as conflicting
+			Object cWordColors = conflictWordIDsToRegionColors.get(cWordIDs);
+			if (cWordColors == null)
+				conflictWordIDsToRegionColors.put(cWordIDs, new Integer(r));
+			else if (cWordColors instanceof LinkedHashSet)
+				((LinkedHashSet) cWordColors).add(new Integer(r));
+			else {
+				LinkedHashSet cwcs = new LinkedHashSet(4); // actual size will mostly be 2, but this way we save but any resizing
+				cwcs.add(cWordColors);
+				cwcs.add(new Integer(r));
+				conflictWordIDsToRegionColors.put(cWordIDs, cwcs);
+			}
+		}
+		
+		//	extract conflicting word groups
+		ArrayList wordConflicts = new ArrayList();
+		for (Iterator cwidit = conflictWordIDsToRegionColors.keySet().iterator(); cwidit.hasNext();) {
+			String cwId = ((String) cwidit.next());
+			
+			//	tray up colors of regions words conflict over (_can_ be more than one)
+			Object cwprcs = conflictWordIDsToRegionColors.get(cwId);
+			int[] cWordRegionColors;
+			if (cwprcs instanceof Integer) {
+				cWordRegionColors = new int[1];
+				cWordRegionColors[0] = ((Integer) cwprcs).intValue();
+			}
+			else {
+				LinkedHashSet cwprcSet = ((LinkedHashSet) cwprcs);
+				cWordRegionColors = new int[cwprcSet.size()];
+				int cwrcIndex = 0;
+				for (Iterator prcit = cwprcSet.iterator(); prcit.hasNext();)
+					cWordRegionColors[cwrcIndex++] = ((Integer) prcit.next());
+			}
+			
+			//	get conflicting words proper, and compute convex boundary
+			LinkedHashSet prws = ((LinkedHashSet) pageRegionWords[cWordRegionColors[0]]);
+			ImWord[] cWords = ((ImWord[]) prws.toArray(new ImWord[prws.size()]));
+			BoundingBox cWordArea = ImLayoutObject.getAggregateBox(cWords);
+			
+			//	get word string (for logging)
+			StringBuffer cWordString = new StringBuffer();
+			for (int w = 0; w < cWords.length; w++)
+				cWordString.append(cWords[w].getString());
+			
+			//	get original scanned word image for comparison
+			System.out.println("Doing conflicting words '" + cWordString.toString() + "' at " + cwId);
+			int cwMinX = Math.max(0, (cWordArea.left - pageImage.leftEdge - 1));
+			int cwMinY = Math.max(0, (cWordArea.top - pageImage.topEdge - 1));
+			int cwMaxX = Math.min(pageImage.image.getWidth(), (cWordArea.right - pageImage.leftEdge + 1));
+			int cwMaxY = Math.min(pageImage.image.getHeight(), (cWordArea.bottom - pageImage.topEdge + 1));
+			
+			//	use region coloring to assess which regions are mainly inside the conflicting words, and which are not
+			CountingSet cWordAreaRegionColors = new CountingSet(new TreeMap());
+			for (int c = cwMinX; c < cwMaxX; c++)
+				for (int r = cwMinY; r < cwMaxY; r++) {
+					if (pageRegionColors[c][r] != 0)
+						cWordAreaRegionColors.add(new Integer(pageRegionColors[c][r]));
+				}
+			
+			//	sort out regions mainly (over 60%) inside word bounds (for keeping), but only if size is sufficiently large
+			HashSet cWordAreaMainRegionColors = new HashSet();
+			for (Iterator cwrcit = cWordAreaRegionColors.iterator(); cwrcit.hasNext();) {
+				Integer wrc = ((Integer) cwrcit.next());
+				if (((cWordAreaRegionColors.getCount(wrc) * 50) > pageImage.currentDpi) && ((cWordAreaRegionColors.getCount(wrc) * 5) > (pageRegionSizes[wrc.intValue()] * 3))) {
+					cWordAreaMainRegionColors.add(wrc);
+					cwrcit.remove();
+				}
+			}
+			
+			//	expand word boundaries to cover all the regions we want to retain
+//			int oCwMinX = cwMinX;
+//			int oCwMaxX = cwMaxX;
+//			int oCwMinY = cwMinY;
+//			int oCwMaxY = cwMaxY;
+			for (Iterator wrcit = cWordAreaMainRegionColors.iterator(); wrcit.hasNext();) {
+				Integer wrc = ((Integer) wrcit.next());
+				if (pageRegionLineCounts[wrc.intValue()] > 1)
+					continue; // prevent expanding for characters mingled across lines
+				if (pageRegionWords[wrc.intValue()] == null) { /* whatever */ }
+				else if (pageRegionWords[wrc.intValue()] instanceof ImWord) { /* no conflicts here */ }
+				else if (prws.equals(pageRegionWords[wrc.intValue()])) { /* same conflict set */ }
+				else continue; // prevent expanding for characters mingled with words outside current conflict set
+				if (pageRegionMinX[wrc.intValue()] < cwMinX)
+					cwMinX = pageRegionMinX[wrc.intValue()];
+				if (cwMaxX <= pageRegionMaxX[wrc.intValue()])
+					cwMaxX = (pageRegionMaxX[wrc.intValue()] + 1);
+				if (pageRegionMinY[wrc.intValue()] < cwMinY)
+					cwMinY = pageRegionMinY[wrc.intValue()];
+				if (cwMaxY <= pageRegionMaxY[wrc.intValue()])
+					cwMaxY = (pageRegionMaxY[wrc.intValue()] + 1);
+			}
+//			if ((((wiMaxX - wiMinX) * 2) >= ((oWiMaxX - oWiMinX) * 3)) || (((wiMaxY - wiMinY) * 2) >= ((oWiMaxY - oWiMinY) * 3))) {
+//				BufferedImage pi = new BufferedImage(pageImage.image.getWidth(), pageImage.image.getHeight(), BufferedImage.TYPE_4BYTE_ABGR);
+//				Graphics2D pig = pi.createGraphics();
+//				pig.drawImage(pageImage.image, 0, 0, null);
+//				pig.setColor(Color.GREEN);
+//				pig.drawRect(oWiMinX, oWiMinY, (oWiMaxX - oWiMinX), (oWiMaxY - oWiMinY));
+//				pig.setColor(Color.RED);
+//				pig.drawRect(wiMinX, wiMinY, (wiMaxX - wiMinX), (wiMaxY - wiMinY));
+//				ImageDisplayDialog idd = new ImageDisplayDialog("Word Image out of Bounds");
+//				idd.addImage(pi, regionWords[w].getString());
+//				idd.setSize(800, 1000);
+//				idd.setLocationRelativeTo(null);
+//				idd.setVisible(true);
+//			}
+			
+			//	enlarge conflict area bounds
+			cWordArea = new BoundingBox(cwMinX, cwMaxX, cwMinY, cwMaxY);
+			
+			//	compute bounds of contested regions
+			int crMinX = pageRegionMinX[cWordRegionColors[0]];
+			int crMaxX = pageRegionMaxX[cWordRegionColors[0]];
+			int crMinY = pageRegionMinY[cWordRegionColors[0]];
+			int crMaxY = pageRegionMaxY[cWordRegionColors[0]];
+			for (int c = 1; c < cWordRegionColors.length; c++) {
+				crMinX = Math.min(crMinX, pageRegionMinX[cWordRegionColors[c]]);
+				crMaxX = Math.max(crMaxX, pageRegionMaxX[cWordRegionColors[c]]);
+				crMinY = Math.min(crMinY, pageRegionMinY[cWordRegionColors[c]]);
+				crMaxY = Math.max(crMaxY, pageRegionMaxY[cWordRegionColors[c]]);
+			}
+			
+			//	wrap and store word conflict
+			wordConflicts.add(new WordConflict(cwId, cWords, pageImage, pageRegionColors, pageRegionMinX, pageRegionMaxX, pageRegionMinY, pageRegionMaxY, cWordArea, cWordRegionColors, new BoundingBox(crMinX, (crMaxX+1), crMinY, (crMaxY+1))));
+		}
+		
+		//	finally ...
+		return ((WordConflict[]) wordConflicts.toArray(new WordConflict[wordConflicts.size()]));
+	}
+	
+	/**
+	 * Mark an OCR conflict on a group of words from a document page. Such
+	 * conflicts can indicate highly likely OCR errors, as well as problems in
+	 * the scan proper, or other problems identified by client code.
+	 * @param words the group of words to mark the conflict on
+	 * @return the word conflicts
+	 */
+	public static WordConflict getWordConflict(ImWord[] words) {
+		return getWordConflict(words, null, null, null, null, null, null);
+	}
+	
+	/**
+	 * Mark an OCR conflict on a group of words from a document page. Such
+	 * conflicts can indicate highly likely OCR errors, as well as problems in
+	 * the scan proper, or other problems identified by client code. If the
+	 * argument region coloring of the underlying page is null, this method
+	 * creates one. However, when marking multiple conflicts in a single page,
+	 * client code is well advised to create and reuse a region coloring to
+	 * reduce computational effort.
+	 * @param words the group of words to mark the conflict on
+	 * @param regionColoring a region coloring of the underlying page
+	 * @return the word conflicts
+	 */
+	public static WordConflict getWordConflict(ImWord[] words, PageRegionColoring regionColoring) {
+		return getWordConflict(words,
+				((regionColoring == null) ? null : regionColoring.pageImage),
+				((regionColoring == null) ? null : regionColoring.pageRegionColors),
+				((regionColoring == null) ? null : regionColoring.pageRegionMinX),
+				((regionColoring == null) ? null : regionColoring.pageRegionMaxX),
+				((regionColoring == null) ? null : regionColoring.pageRegionMinY),
+				((regionColoring == null) ? null : regionColoring.pageRegionMaxY)
+			);
+	}
+	
+	/**
+	 * Mark an OCR conflict on a group of words from a document page. Such
+	 * conflicts can indicate highly likely OCR errors, as well as problems in
+	 * the scan proper, or other problems identified by client code. If the
+	 * argument word conflict is not null, its region coloring data will be
+	 * reused. This enables client code to save computational effort when
+	 * marking multiple conflicts in a single page.
+	 * @param words the group of words to mark the conflict on
+	 * @param pageData a word conflict from the same page to reuse data from
+	 * @return the word conflicts
+	 */
+	public static WordConflict getWordConflict(ImWord[] words, WordConflict pageData) {
+		return getWordConflict(words,
+				((pageData == null) ? null : pageData.pageImage),
+				((pageData == null) ? null : pageData.pageRegionColors),
+				((pageData == null) ? null : pageData.pageRegionMinX),
+				((pageData == null) ? null : pageData.pageRegionMaxX),
+				((pageData == null) ? null : pageData.pageRegionMinY),
+				((pageData == null) ? null : pageData.pageRegionMaxY)
+			);
+	}
+	
+	private static WordConflict getWordConflict(ImWord[] words, PageImage pageImage, int[][] pageRegionColors, int[] pageRegionMinX, int[] pageRegionMaxX, int[] pageRegionMinY, int[] pageRegionMaxY) {
+		
+		//	check arguments
+		if (words == null)
+			return null;
+		if (words.length == 0)
+			return null;
+		
+		//	make sure we have a page image and region coloring data
+		if (pageImage == null) {
+			ImDocument doc = words[0].getDocument();
+			ImPage page = doc.getPage(words[0].pageId);
+			pageImage = page.getImage();
+			PageRegionColoring regionColoring = PageImageAnalysis.getRegionColoring(page, ((byte) 96));
+			pageRegionColors = regionColoring.pageRegionColors;
+			pageRegionMinX = regionColoring.pageRegionMinX;
+			pageRegionMaxX = regionColoring.pageRegionMaxX;
+			pageRegionMinY = regionColoring.pageRegionMinY;
+			pageRegionMaxY = regionColoring.pageRegionMaxY;
+		}
+		
+		//	TODO compute conflict boundaries and all region colors
+		BoundingBox wordArea = ImLayoutObject.getAggregateBox(words);
+		HashSet areaRegionColors = new HashSet();
+		for (int c = wordArea.left; c < wordArea.right; c++)
+			for (int r = wordArea.top; r < wordArea.bottom; r++) {
+				if (pageRegionColors[c][r] != 0)
+					areaRegionColors.add(new Integer(pageRegionColors[c][r]));
+			}
+		
+		//	collect region colors of each word
+		HashSet[] wordRegionColors = new HashSet[words.length];
+		for (int w = 0; w < words.length; w++) {
+			wordRegionColors[w] = new HashSet();
+			for (int c = words[w].bounds.left; c < words[w].bounds.right; c++)
+				for (int r = wordArea.top; r < wordArea.bottom; r++) {
+					if (pageRegionColors[c][r] != 0)
+						wordRegionColors[w].add(new Integer(pageRegionColors[c][r]));
+				}
+		}
+		
+		//	collect regions colors not belonging to exactly one word
+		HashSet conflictRegionColorSet = new HashSet();
+		for (Iterator rcit = areaRegionColors.iterator(); rcit.hasNext();) {
+			Integer rc = ((Integer) rcit.next());
+			int rcWordCount = 0;
+			for (int w = 0; w < words.length; w++) {
+				if (wordRegionColors[w].contains(rc))
+					rcWordCount++;
+			}
+			if (rcWordCount != 1)
+				conflictRegionColorSet.add(rc);
+		}
+		int[] conflictRegionColors = new int[conflictRegionColorSet.size()];
+		int crcIndex = 0;
+		for (Iterator prcit = conflictRegionColorSet.iterator(); prcit.hasNext();)
+			conflictRegionColors[crcIndex++] = ((Integer) prcit.next());
+		Arrays.sort(conflictRegionColors);
+		
+		//	finally ...
+		return new WordConflict(concatenateIDs(words), words, pageImage, pageRegionColors, pageRegionMinX, pageRegionMaxX, pageRegionMinY, pageRegionMaxY, wordArea, conflictRegionColors, wordArea);
+	}
 	
 	/**
 	 * Render the string value of a word to fit inside the word's bounds.

@@ -60,6 +60,7 @@ import de.uka.ipd.idaho.im.ImRegion;
 import de.uka.ipd.idaho.im.ImSupplement;
 import de.uka.ipd.idaho.im.ImWord;
 import de.uka.ipd.idaho.im.gamta.ImDocumentRoot;
+import de.uka.ipd.idaho.im.gamta.LazyAnnotation;
 
 /**
  * Error protocol specific for Image Markup documents. The IO facilities
@@ -71,6 +72,9 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 	
 	/** the name (and ID) to use for storing an error protocol as a supplement to an Image Markup document, namely 'errorProtocol.txt' */
 	public static final String errorProtocolSupplementName = "errorProtocol.txt";
+	
+	/** the name of the attribute to put on an error protocol supplement to indicate the last error check precedes the last edit, namely 'errorProtocolStale' */
+	public static final String staleErrorProtocolMarker = "errorProtocolStale";
 	
 	/** the Image Markup document the error protocol pertains to */
 	public final ImDocument subject;
@@ -868,15 +872,16 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 	private static ImObject getErrorSubject(Attributed subject, Attributed parent, String errorType) {
 		if (subject instanceof ImObject)
 			return ((ImObject) subject);
+		if (subject instanceof LazyAnnotation)
+			return ((LazyAnnotation) subject).getImBasisOf((LazyAnnotation) subject);
 		if (subject instanceof Annotation) {
 			Annotation annot = ((Annotation) subject);
 			ImDocumentRoot imDoc;
 			if (parent instanceof ImDocumentRoot)
 				imDoc = ((ImDocumentRoot) parent);
-			else if (annot.getDocument() instanceof ImDocumentRoot)
+			else if (annot.getDocument() instanceof ImDocumentRoot) // also works if parent is lazy annotation, as annotation has wrapped document root as parent
 				imDoc = ((ImDocumentRoot) annot.getDocument());
 			else return null;
-			
 			
 			//	try direct access first
 			ImObject imo = imDoc.basisOf(annot);
@@ -916,13 +921,15 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 			
 			//	handle paragraphs (logical ones are synthetic)
 			if (PARAGRAPH_TYPE.equals(annot.getType())) {
+				ImRegion subjectRegion = null;
 				
 				//	this error is about the paragraph end, use (last) region spanned by logical paragraph
 				if (errorType.endsWith("End")) {
 					ImRegion[] regions = endImw.getDocument().getPage(endImw.pageId).getRegions(ImRegion.PARAGRAPH_TYPE);
 					for (int r = 0; r < regions.length; r++) {
 						if (regions[r].bounds.includes(endImw.bounds, false))
-							return regions[r]; // prefer inmost match (regions come in size order, so smallest comes last)
+//							return regions[r]; // prefer inmost match (regions come in size order, so smallest comes last)
+							subjectRegion = regions[r]; // prefer inmost match (regions come in size order, so smallest comes last)
 					}
 				}
 				
@@ -931,13 +938,22 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 					ImRegion[] regions = startImw.getDocument().getPage(startImw.pageId).getRegions(ImRegion.PARAGRAPH_TYPE);
 					for (int r = 0; r < regions.length; r++) {
 						if (regions[r].bounds.includes(startImw.bounds, false))
-							return regions[r]; // prefer inmost match (regions come in size order, so smallest comes last)
+//							return regions[r]; // prefer inmost match (regions come in size order, so smallest comes last)
+							subjectRegion = regions[r]; // prefer inmost match (regions come in size order, so smallest comes last)
 					}
 				}
+				
+				//	found something, use it
+				if (subjectRegion != null)
+					return subjectRegion;
 			}
 		}
-		if ((subject instanceof Token) && (parent instanceof ImDocumentRoot))
-			return ((ImDocumentRoot) parent).basisOf((Token) subject);
+		if (subject instanceof Token) {
+			if (parent instanceof LazyAnnotation)
+				 return ((LazyAnnotation) parent).getImBasisOf((Token) subject);
+			else if (parent instanceof ImDocumentRoot)
+				 return ((ImDocumentRoot) parent).basisOf((Token) subject);
+		}
 		return null;
 	}
 	
@@ -1033,12 +1049,14 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 		}
 		if (subject instanceof ImDocumentRoot)
 			return ((ImDocumentRoot) subject).document().docId;
+		if (subject instanceof LazyAnnotation)
+			return getTypeInternalErrorSubjectId(((LazyAnnotation) subject).getImBasisOf((LazyAnnotation) subject), parent);
 		if (subject instanceof Annotation) {
 			Annotation annot = ((Annotation) subject);
 			ImDocumentRoot imDoc;
 			if (parent instanceof ImDocumentRoot)
 				imDoc = ((ImDocumentRoot) parent);
-			else if (annot.getDocument() instanceof ImDocumentRoot)
+			else if (annot.getDocument() instanceof ImDocumentRoot) // also works if parent is lazy annotation, as annotation has wrapped document root as parent
 				imDoc = ((ImDocumentRoot) annot.getDocument());
 			else return null;
 			ImWord startImw = imDoc.firstWordOf(annot);
@@ -1050,11 +1068,17 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 			}
 			return (startImw.getLocalID() + "-" + endImw.getLocalID());
 		}
-		if ((subject instanceof Token) && (parent instanceof ImDocumentRoot)) {
-			ImDocumentRoot imDoc = ((ImDocumentRoot) parent);
-			ImWord startImw = imDoc.firstWordOf((Token) subject);
-			ImWord endImw = imDoc.lastWordOf((Token) subject);
-			return (startImw.getLocalID() + "-" + endImw.getLocalID());
+		if (subject instanceof Token) {
+			if (parent instanceof LazyAnnotation) {
+				ImWord startImw = ((LazyAnnotation) parent).getFirstImWordOf((Token) subject);
+				ImWord endImw = ((LazyAnnotation) parent).getLastImWordOf((Token) subject);
+				return (startImw.getLocalID() + "-" + endImw.getLocalID());
+			}
+			else if (parent instanceof ImDocumentRoot) {
+				ImWord startImw = ((ImDocumentRoot) parent).firstWordOf((Token) subject);
+				ImWord endImw = ((ImDocumentRoot) parent).lastWordOf((Token) subject);
+				return (startImw.getLocalID() + "-" + endImw.getLocalID());
+			}
 		}
 		return ("" + subject.hashCode());
 	}
@@ -1072,6 +1096,8 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 			ImWord firstWord = ((ImDocumentRoot) subject).firstWordOf((ImDocumentRoot) subject);
 			return ((firstWord == null) ? -1 : firstWord.pageId);
 		}
+		if (subject instanceof LazyAnnotation)
+			return getErrorSubjectPageId(((LazyAnnotation) subject).getImBasisOf((LazyAnnotation) subject), parent);
 		if (subject instanceof Annotation) {
 			Annotation annot = ((Annotation) subject);
 			if (parent instanceof ImDocumentRoot) {
@@ -1083,7 +1109,7 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 				}
 				return startImw.pageId;
 			}
-			QueriableAnnotation doc = annot.getDocument();
+			QueriableAnnotation doc = annot.getDocument(); // also works if parent is lazy annotation, as annotation has wrapped document root as parent
 			if (doc instanceof ImDocumentRoot) {
 				ImWord startImw = ((ImDocumentRoot) doc).firstWordOf(annot);
 				if (startImw == null) {
@@ -1094,8 +1120,12 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 				return startImw.pageId;
 			}
 		}
-		if ((subject instanceof Token) && (parent instanceof ImDocumentRoot))
-			return ((ImDocumentRoot) parent).firstWordOf((Token) subject).pageId;
+		if (subject instanceof Token) {
+			if (parent instanceof LazyAnnotation)
+				 return ((LazyAnnotation) parent).getFirstImWordOf((Token) subject).pageId;
+			else if (parent instanceof ImDocumentRoot)
+				return ((ImDocumentRoot) parent).firstWordOf((Token) subject).pageId;
+		}
 		Object pidObj = subject.getAttribute(PAGE_ID_ATTRIBUTE);
 		if (pidObj != null) try {
 			return Integer.parseInt(pidObj.toString());
@@ -1121,6 +1151,8 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 			return ((ImAnnotation) subject).getFirstWord();
 		if (subject instanceof ImDocumentRoot)
 			return ((ImDocumentRoot) subject).firstWordOf((ImDocumentRoot) subject);
+		if (subject instanceof LazyAnnotation)
+			return getErrorSubjectFirstWord(((LazyAnnotation) subject).getImBasisOf((LazyAnnotation) subject), parent);
 		if (subject instanceof Annotation) {
 			Annotation annot = ((Annotation) subject);
 			if (parent instanceof ImDocumentRoot) {
@@ -1129,7 +1161,7 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 					return getErrorSubjectFirstWord(((ImDocumentRoot) parent).tokenAt(((QueriableAnnotation) annot).getAbsoluteStartIndex()), parent);
 				return startImw;
 			}
-			QueriableAnnotation doc = annot.getDocument();
+			QueriableAnnotation doc = annot.getDocument(); // also works if parent is lazy annotation, as annotation has wrapped document root as parent
 			if (doc instanceof ImDocumentRoot) {
 				ImWord startImw = ((ImDocumentRoot) doc).firstWordOf(annot);
 				if ((startImw == null) && Token.TOKEN_ANNOTATION_TYPE.equals(annot.getType()) && (annot instanceof QueriableAnnotation))
@@ -1137,8 +1169,12 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 				return startImw;
 			}
 		}
-		if ((subject instanceof Token) && (parent instanceof ImDocumentRoot))
-			return ((ImDocumentRoot) parent).firstWordOf((Token) subject);
+		if (subject instanceof Token) {
+			if (parent instanceof LazyAnnotation)
+				 return ((LazyAnnotation) parent).getFirstImWordOf((Token) subject);
+			else if (parent instanceof ImDocumentRoot)
+				return ((ImDocumentRoot) parent).firstWordOf((Token) subject);
+		}
 		return null;
 	}
 	
@@ -1155,6 +1191,8 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 			ImWord lastWord = ((ImDocumentRoot) subject).lastWordOf((ImDocumentRoot) subject);
 			return ((lastWord == null) ? -1 : lastWord.pageId);
 		}
+		if (subject instanceof LazyAnnotation)
+			return getErrorSubjectLastPageId(((LazyAnnotation) subject).getImBasisOf((LazyAnnotation) subject), parent);
 		if (subject instanceof Annotation) {
 			Annotation annot = ((Annotation) subject);
 			if (parent instanceof ImDocumentRoot) {
@@ -1166,7 +1204,7 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 				}
 				return endImw.pageId;
 			}
-			QueriableAnnotation doc = annot.getDocument();
+			QueriableAnnotation doc = annot.getDocument(); // also works if parent is lazy annotation, as annotation has wrapped document root as parent
 			if (doc instanceof ImDocumentRoot) {
 				ImWord endImw = ((ImDocumentRoot) doc).lastWordOf(annot);
 				if (endImw == null) {
@@ -1177,8 +1215,12 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 				return endImw.pageId;
 			}
 		}
-		if ((subject instanceof Token) && (parent instanceof ImDocumentRoot))
-			return ((ImDocumentRoot) parent).lastWordOf((Token) subject).pageId;
+		if (subject instanceof Token) {
+			if (parent instanceof LazyAnnotation)
+				 return ((LazyAnnotation) parent).getLastImWordOf((Token) subject).pageId;
+			else if (parent instanceof ImDocumentRoot)
+				return ((ImDocumentRoot) parent).lastWordOf((Token) subject).pageId;
+		}
 		Object pidObj = subject.getAttribute(LAST_PAGE_ID_ATTRIBUTE, subject.getAttribute(PAGE_ID_ATTRIBUTE));
 		if (pidObj != null) try {
 			return Integer.parseInt(pidObj.toString());
@@ -1204,6 +1246,8 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 			return ((ImAnnotation) subject).getLastWord();
 		if (subject instanceof ImDocumentRoot)
 			return ((ImDocumentRoot) subject).lastWordOf((ImDocumentRoot) subject);
+		if (subject instanceof LazyAnnotation)
+			return getErrorSubjectLastWord(((LazyAnnotation) subject).getImBasisOf((LazyAnnotation) subject), parent);
 		if (subject instanceof Annotation) {
 			Annotation annot = ((Annotation) subject);
 			if (parent instanceof ImDocumentRoot) {
@@ -1212,7 +1256,7 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 					return getErrorSubjectLastWord(((ImDocumentRoot) parent).tokenAt(((QueriableAnnotation) annot).getAbsoluteStartIndex()), parent);
 				return endImw;
 			}
-			QueriableAnnotation doc = annot.getDocument();
+			QueriableAnnotation doc = annot.getDocument(); // also works if parent is lazy annotation, as annotation has wrapped document root as parent
 			if (doc instanceof ImDocumentRoot) {
 				ImWord endImw = ((ImDocumentRoot) doc).lastWordOf(annot);
 				if ((endImw == null) && Token.TOKEN_ANNOTATION_TYPE.equals(annot.getType()) && (annot instanceof QueriableAnnotation))
@@ -1220,8 +1264,12 @@ public class ImDocumentErrorProtocol extends DocumentErrorProtocol implements Im
 				return endImw;
 			}
 		}
-		if ((subject instanceof Token) && (parent instanceof ImDocumentRoot))
-			return ((ImDocumentRoot) parent).lastWordOf((Token) subject);
+		if (subject instanceof Token) {
+			if (parent instanceof LazyAnnotation)
+				 return ((LazyAnnotation) parent).getLastImWordOf((Token) subject);
+			else if (parent instanceof ImDocumentRoot)
+				return ((ImDocumentRoot) parent).lastWordOf((Token) subject);
+		}
 		return null;
 	}
 //	

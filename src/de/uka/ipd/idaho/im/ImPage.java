@@ -396,9 +396,7 @@ public class ImPage extends ImRegion {
 	 * @see de.uka.ipd.idaho.im.ImLayoutObject#getAttribute(java.lang.String)
 	 */
 	public Object getAttribute(String name) {
-		if (PAGE_IMAGE_ATTRIBUTE.equals(name))
-			return this.getImage();
-		else return super.getAttribute(name);
+		return this.getAttribute(name, null);
 	}
 	
 	/* (non-Javadoc)
@@ -628,6 +626,14 @@ TODO Try switching point access support for IM words in page to single array:
 ==> ... and only one reference per word
 ==> should be similarly fast, as tiles also need linear scan
 		 */
+	}
+	
+	/**
+	 * Retrieve the number of words in the page.
+	 * @return the number of words
+	 */
+	public int getWordCount() {
+		return this.words.size();
 	}
 	
 	/**
@@ -950,6 +956,32 @@ TODO Try switching point access support for IM words in page to single array:
 		ImDocument doc = this.getDocument();
 		if (ImDocument.TRACK_INSTANCES && (doc != null)) doc.accessed();
 		return ((String[]) this.regionsByType.keySet().toArray(new String[this.regionsByType.size()]));
+	}
+	
+	/**
+	 * Retrieve the number of regions present in this page.
+	 * @return the number of regions
+	 */
+	public int getRegionCount() {
+		ImDocument doc = this.getDocument();
+		if (ImDocument.TRACK_INSTANCES && (doc != null)) doc.accessed();
+		return this.regions.size();
+	}
+	
+	/**
+	 * Retrieve the number of regions of a specific type present in this page.
+	 * @param type the region type to check
+	 * @return the number of regions of the argument type
+	 */
+	public int getRegionCount(String type) {
+		ImDocument doc = this.getDocument();
+		if (ImDocument.TRACK_INSTANCES && (doc != null)) doc.accessed();
+		if (type == null)
+			return this.getRegionCount();
+		else if (WORD_ANNOTATION_TYPE.equals(type))
+			return this.getWordCount();
+		ImPageRegionList imrs = this.getRegionList(type, false);
+		return ((imrs == null) ? 0 : imrs.size());
 	}
 	
 	/**

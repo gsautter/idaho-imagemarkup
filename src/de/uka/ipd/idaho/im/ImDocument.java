@@ -39,10 +39,12 @@ import java.util.Iterator;
 import java.util.Locale;
 import java.util.Properties;
 import java.util.TreeMap;
+import java.util.TreeSet;
 
 import de.uka.ipd.idaho.easyIO.util.RandomByteSource;
 import de.uka.ipd.idaho.gamta.AttributeUtils;
 import de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed;
+import de.uka.ipd.idaho.gamta.util.CountingSet;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImageInputStream;
@@ -334,27 +336,23 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 		}
 		public Object getAttribute(String name) {
 			if (TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
-			if (FIRST_WORD_ATTRIBUTE.equals(name))
-				return this.firstWord;
-			if (LAST_WORD_ATTRIBUTE.equals(name))
-				return this.lastWord;
-			return super.getAttribute(name);
+			return this.getAttribute(name, null);
 		}
 		public Object getAttribute(String name, Object def) {
 			if (TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 			if (FIRST_WORD_ATTRIBUTE.equals(name))
 				return ((this.firstWord == null) ? def : this.firstWord);
-			if (LAST_WORD_ATTRIBUTE.equals(name))
+			else if (LAST_WORD_ATTRIBUTE.equals(name))
 				return ((this.lastWord == null) ? def : this.lastWord);
-			return super.getAttribute(name, def);
+			else return super.getAttribute(name, def);
 		}
 		public boolean hasAttribute(String name) {
 			if (TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
 			if (FIRST_WORD_ATTRIBUTE.equals(name))
 				return (this.firstWord != null);
-			if (LAST_WORD_ATTRIBUTE.equals(name))
+			else if (LAST_WORD_ATTRIBUTE.equals(name))
 				return (this.lastWord != null);
-			return super.hasAttribute(name);
+			else return super.hasAttribute(name);
 		}
 		public Object setAttribute(String name, Object value) {
 			if (FIRST_WORD_ATTRIBUTE.equals(name) && (value instanceof ImWord)) {
@@ -362,15 +360,17 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 				this.setFirstWord((ImWord) value);
 				return oldFirstWord;
 			}
-			if (LAST_WORD_ATTRIBUTE.equals(name) && (value instanceof ImWord)) {
+			else if (LAST_WORD_ATTRIBUTE.equals(name) && (value instanceof ImWord)) {
 				ImWord oldLastWord = this.getLastWord();
 				this.setLastWord((ImWord) value);
 				return oldLastWord;
 			}
-			Object oldValue = super.setAttribute(name, value);
-			if (this.doc != null)
-				this.doc.notifyAttributeChanged(this, name, oldValue);
-			return oldValue;
+			else {
+				Object oldValue = super.setAttribute(name, value);
+				if (this.doc != null)
+					this.doc.notifyAttributeChanged(this, name, oldValue);
+				return oldValue;
+			}
 		}
 		public String[] getAttributeNames() {
 			if (TRACK_INSTANCES && (this.doc != null)) this.doc.accessed();
@@ -407,7 +407,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			if (this.removed.remove(annot)) {
 				if (this.annotCount != (this.contained.size() + this.removed.size()))
 					System.out.println("FUCK, array " + this.annotCount + " != (contained " + this.contained.size() + " + removed " + this.removed.size() + ") on adding " + annot.getType());
-				return; // this one is was flagged for removal, but still in the array, no need to add to again (also, addition has been counter before)
+				return; // this one is was flagged for removal, but still in the array, no need to add again (also, addition has been countered before)
 			}
 			if (this.annotCount == this.annots.length) {
 				ImDocumentAnnotation[] annots = new ImDocumentAnnotation[this.annots.length * 2];
@@ -433,9 +433,8 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			if (TRACK_INSTANCES) accessHistory.accessed();
 			if (annot == null)
 				return;
-			if (this.contained.remove(annot)) {
+			if (this.contained.remove(annot))
 				this.removed.add(annot);
-			}
 			if (this.annotCount != (this.contained.size() + this.removed.size()))
 				System.out.println("FUCK, array " + this.annotCount + " != (contained " + this.contained.size() + " + removed " + this.removed.size() + ") on removing " + annot.getType());
 		}
@@ -582,7 +581,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 		public abstract void supplementChanged(String supplementId, ImSupplement oldValue);
 		
 		/**
-		 * Notify the listener that afont has changed in an Image Markup
+		 * Notify the listener that a font has changed in an Image Markup
 		 * document.
 		 * @param fontName the name of the font
 		 * @param oldValue the old font, which was just replaced
@@ -616,6 +615,111 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 		public abstract void annotationRemoved(ImAnnotation annotation);
 	}
 	
+	/**
+	 * Weak reference wrapper for IM document listeners. Client code that needs
+	 * to be eligible for reclaiming by GC despite a sole strong reference to
+	 * it still existing in a listener added to an IM document it wants to
+	 * observe can use this class to add a weak reference link to the actual
+	 * listener.
+	 * 
+	 * @author sautter
+	 */
+	public static class WeakImDocumentListener implements ImDocumentListener {
+		private WeakReference imdlWeakRef;
+		private ImDocument doc;
+		
+		/** Constructor
+		 * @param imdl the IM document listener to wrap
+		 * @param doc the IM document observed by the argument listener
+		 */
+		public WeakImDocumentListener(ImDocumentListener imdl, ImDocument doc) {
+			this.imdlWeakRef = new WeakReference(imdl);
+			this.doc = doc;
+		}
+		
+		private ImDocumentListener getImDocumentListener() {
+			ImDocumentListener imdl = ((ImDocumentListener) this.imdlWeakRef.get());
+			if (imdl == null) {
+				if (this.doc != null)
+					this.doc.removeDocumentListener(this);
+				this.doc = null;
+			}
+			return imdl;
+		}
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.ImDocument.ImDocumentListener#typeChanged(de.uka.ipd.idaho.im.ImObject, java.lang.String)
+		 */
+		public void typeChanged(ImObject object, String oldType) {
+			ImDocumentListener imdl = this.getImDocumentListener();
+			if (imdl != null)
+				imdl.typeChanged(object, oldType);
+		}
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.ImDocument.ImDocumentListener#attributeChanged(de.uka.ipd.idaho.im.ImObject, java.lang.String, java.lang.Object)
+		 */
+		public void attributeChanged(ImObject object, String attributeName, Object oldValue) {
+			ImDocumentListener imdl = this.getImDocumentListener();
+			if (imdl != null)
+				imdl.attributeChanged(object, attributeName, oldValue);
+		}
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.ImDocument.ImDocumentListener#supplementChanged(java.lang.String, de.uka.ipd.idaho.im.ImSupplement)
+		 */
+		public void supplementChanged(String supplementId, ImSupplement oldValue) {
+			ImDocumentListener imdl = this.getImDocumentListener();
+			if (imdl != null)
+				imdl.supplementChanged(supplementId, oldValue);
+		}
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.ImDocument.ImDocumentListener#fontChanged(java.lang.String, de.uka.ipd.idaho.im.ImFont)
+		 */
+		public void fontChanged(String fontName, ImFont oldValue) {
+			ImDocumentListener imdl = this.getImDocumentListener();
+			if (imdl != null)
+				imdl.fontChanged(fontName, oldValue);
+		}
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.ImDocument.ImDocumentListener#regionAdded(de.uka.ipd.idaho.im.ImRegion)
+		 */
+		public void regionAdded(ImRegion region) {
+			ImDocumentListener imdl = this.getImDocumentListener();
+			if (imdl != null)
+				imdl.regionAdded(region);
+		}
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.ImDocument.ImDocumentListener#regionRemoved(de.uka.ipd.idaho.im.ImRegion)
+		 */
+		public void regionRemoved(ImRegion region) {
+			ImDocumentListener imdl = this.getImDocumentListener();
+			if (imdl != null)
+				imdl.regionRemoved(region);
+		}
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.ImDocument.ImDocumentListener#annotationAdded(de.uka.ipd.idaho.im.ImAnnotation)
+		 */
+		public void annotationAdded(ImAnnotation annotation) {
+			ImDocumentListener imdl = this.getImDocumentListener();
+			if (imdl != null)
+				imdl.annotationAdded(annotation);
+		}
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.ImDocument.ImDocumentListener#annotationRemoved(de.uka.ipd.idaho.im.ImAnnotation)
+		 */
+		public void annotationRemoved(ImAnnotation annotation) {
+			ImDocumentListener imdl = this.getImDocumentListener();
+			if (imdl != null)
+				imdl.annotationRemoved(annotation);
+		}
+	}
+	
 	/** the UUID of the document */
 	public final String docId;
 	
@@ -626,6 +730,11 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	private TreeMap supplementsById = new TreeMap();
 	
 	private TreeMap pagesById = new TreeMap();
+	
+	private int wordCount = -1;
+	
+	private CountingSet regionTypeCounts = new CountingSet(new TreeMap());
+	private boolean regionTypesClean = true;
 	
 	private ImWord[] textStreamHeads = null;
 	private ImWord[] textStreamTails = null;
@@ -711,7 +820,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * @return the image of the page with the argument ID
 	 */
 	public PageImageInputStream getPageImageAsStream(int pageId) throws IOException {
-		PageImageInputStream piis = ((this.pageImageSource == null) ? null : this.pageImageSource.getPageImageAsStream(this.docId,  pageId));
+		PageImageInputStream piis = ((this.pageImageSource == null) ? null : this.pageImageSource.getPageImageAsStream(this.docId, pageId));
 		return ((piis == null) ? PageImage.getPageImageAsStream(this.docId, pageId) : piis);
 	}
 	
@@ -719,8 +828,8 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * Store the image of a particular page in the page image store associated
 	 * with this Image Markup document. If no dedicated page image store is
 	 * present, the general storages of page images will be consulted.
-	 * @return pi the page image to store
-	 * @return pageId the ID of the page the image belongs to
+	 * @param pi the page image to store
+	 * @param pageId the ID of the page the image belongs to
 	 * @return the storage name of the page image
 	 */
 	public String storePageImage(PageImage pi, int pageId) throws IOException {
@@ -929,6 +1038,14 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	}
 	
 	/**
+	 * Retrieve the number of fonts present in the document.
+	 * @return the number of fonts
+	 */
+	public int getFontCount() {
+		return this.fontsByName.size();
+	}
+	
+	/**
 	 * Remove a font from the document.
 	 * @param font the font to remove
 	 */
@@ -1003,6 +1120,49 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	}
 	
 	/**
+	 * Retrieve the types of supplements present in this document. The
+	 * supplement types are in lexicographical order.
+	 * @return an array holding the supplement types
+	 */
+	public String[] getSupplementTypes() {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
+		TreeSet imsTypes = new TreeSet();
+		for (Iterator sidit = this.supplementsById.keySet().iterator(); sidit.hasNext();) {
+			ImSupplement ims = ((ImSupplement) this.supplementsById.get(sidit.next()));
+			imsTypes.add(ims.getType());
+		}
+		return ((String[]) imsTypes.toArray(new String[imsTypes.size()]));
+	}
+	
+	/**
+	 * Retrieve the number of supplements present in the document.
+	 * @return the number of supplements
+	 */
+	public int getSupplementCount() {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
+		return this.supplementsById.size();
+	}
+	
+	/**
+	 * Retrieve the number of supplements of a specific type present in this
+	 * document.
+	 * @param type the supplements type to check
+	 * @return the number of supplements of the argument type
+	 */
+	public int getSupplementCount(String type) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
+		if (type == null)
+			return this.getSupplementCount();
+		int count = 0;
+		for (Iterator sidit = this.supplementsById.keySet().iterator(); sidit.hasNext();) {
+			ImSupplement ims = ((ImSupplement) this.supplementsById.get(sidit.next()));
+			if (type.equals(ims.getType()))
+				count++;
+		}
+		return count;
+	}
+	
+	/**
 	 * Remove a supplement from the document.
 	 * @param ims the supplement to remove
 	 */
@@ -1035,6 +1195,8 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	
 	void addPage(ImPage page) {
 		ImPage oldPage = ((ImPage) this.pagesById.put(new Integer(page.pageId), page));
+		this.wordCount = -1;
+		this.regionTypesClean = false;
 		if (oldPage != null) {
 			synchronized (this.objectsByLocalUID) {
 				this.objectsByLocalUID.remove(oldPage.getLocalUID());
@@ -1092,6 +1254,51 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	}
 	
 	/**
+	 * Retrieve the types of regions present in this document. The region types
+	 * are in lexicographical order.
+	 * @return an array holding the region types
+	 */
+	public String[] getRegionTypes() {
+		this.ensureRegionTypeCounts();
+		return ((String[]) this.regionTypeCounts.toArray(new String[this.regionTypeCounts.elementCount()]));
+	}
+	
+	/**
+	 * Retrieve the number of regions present in this document.
+	 * @return the number of regions
+	 */
+	public int getRegionCount() {
+		this.ensureRegionTypeCounts();
+		return this.regionTypeCounts.size();
+	}
+	
+	/**
+	 * Retrieve the number of regions of a specific type present in this
+	 * document.
+	 * @param type the region type to check
+	 * @return the number of regions of the argument type
+	 */
+	public int getRegionCount(String type) {
+		if (type == null)
+			return this.getRegionCount();
+		this.ensureRegionTypeCounts();
+		return this.regionTypeCounts.getCount(type);
+	}
+	
+	private void ensureRegionTypeCounts() {
+		if (this.regionTypesClean)
+			return;
+		this.regionTypeCounts.clear();
+		for (Iterator pit = this.pagesById.keySet().iterator(); pit.hasNext();) {
+			ImPage page = ((ImPage) this.pagesById.get(pit.next()));
+			String[] pRegTypes = page.getRegionTypes();
+			for (int t = 0; t < pRegTypes.length; t++)
+				this.regionTypeCounts.add(pRegTypes[t], page.getRegionCount(pRegTypes[t]));
+		}
+		this.regionTypesClean = true;
+	}
+	
+	/**
 	 * Discard a page with a given ID. The discarded page is disposed and
 	 * cannot be used after this method was called. This method is not intended
 	 * for regular back and forth use, but rather for rare situations during
@@ -1103,8 +1310,11 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 */
 	public void discardPage(int pageId) {
 		ImPage page = ((ImPage) this.pagesById.remove(new Integer(pageId)));
-		if (page != null)
+		if (page != null) {
 			page.dispose();
+			this.wordCount = -1;
+			this.regionTypesClean = false;
+		}
 	}
 	
 	/**
@@ -1704,7 +1914,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * @see de.uka.ipd.idaho.im.ImDocument#cleanupAnnotations()
 	 */
 	public ImAnnotation[] getAnnotationsSpanning(ImWord word) {
-		return this.getAnnotationsSpanning(word, word);
+		return this.getAnnotationsSpanning(null, word, word);
 	}
 	
 	/**
@@ -1717,22 +1927,43 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * @see de.uka.ipd.idaho.im.ImDocument#cleanupAnnotations()
 	 */
 	public ImAnnotation[] getAnnotationsSpanning(ImWord firstWord, ImWord lastWord) {
+		return this.getAnnotationsSpanning(null, firstWord, lastWord);
+	}
+	
+	/**
+	 * Retrieve the annotations of a specific that span a specific word.
+	 * @param type the type of the sought annotations
+	 * @param word the word covered by the sought annotations
+	 * @return an array holding the annotations
+	 * @see de.uka.ipd.idaho.im.ImDocument#cleanupAnnotations()
+	 */
+	public ImAnnotation[] getAnnotationsSpanning(String type, ImWord word) {
+		return this.getAnnotationsSpanning(type, word, word);
+	}
+	
+	/**
+	 * Retrieve the annotations of a specific type that span a specific range
+	 * of words. The two argument words have to belong to the same logical text
+	 * stream for the result of this method to be meaningful.
+	 * @param type the type of the sought annotations
+	 * @param firstWord the first word covered by the sought annotations
+	 * @param lastWord the last word covered by the sought annotations
+	 * @return an array holding the annotations
+	 * @see de.uka.ipd.idaho.im.ImDocument#cleanupAnnotations()
+	 */
+	public ImAnnotation[] getAnnotationsSpanning(String type, ImWord firstWord, ImWord lastWord) {
 		if (this.annotationsByPageId == null)
 			return new ImAnnotation[0];
 		ImAnnotationCollectorList spanningAnnots = new ImAnnotationCollectorList();
 		if ((firstWord.pageId < this.annotationsByPageId.length) && (this.annotationsByPageId[firstWord.pageId] != null))
 			for (int a = 0; a < this.annotationsByPageId[firstWord.pageId].size(); a++) {
 				ImDocumentAnnotation annot = this.annotationsByPageId[firstWord.pageId].getAnnot(a);
+				if ((type != null) && !type.equals(annot.type))
+					continue;
 				if (!firstWord.getTextStreamId().equals(annot.firstWord.getTextStreamId()))
 					continue;
-//				if ((firstWord.pageId == annot.firstWord.pageId) && (firstWord.getTextStreamPos() < annot.firstWord.getTextStreamPos()))
-//					continue;
 				if (firstWord.getTextStreamPos() < annot.firstWord.getTextStreamPos())
 					continue;
-//				if (annot.lastWord.pageId < lastWord.pageId)
-//					continue;
-//				if ((annot.lastWord.pageId == lastWord.pageId) && (annot.lastWord.getTextStreamPos() < lastWord.getTextStreamPos()))
-//					continue;
 				if (annot.lastWord.getTextStreamPos() < lastWord.getTextStreamPos())
 					continue;
 				spanningAnnots.addAnnot(annot);
@@ -1747,7 +1978,7 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * @see de.uka.ipd.idaho.im.ImDocument#cleanupAnnotations()
 	 */
 	public ImAnnotation[] getAnnotationsOverlapping(ImWord word) {
-		return this.getAnnotationsOverlapping(word, word);
+		return this.getAnnotationsOverlapping(null, word, word);
 	}
 	
 	/**
@@ -1760,6 +1991,31 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	 * @see de.uka.ipd.idaho.im.ImDocument#cleanupAnnotations()
 	 */
 	public ImAnnotation[] getAnnotationsOverlapping(ImWord firstWord, ImWord lastWord) {
+		return this.getAnnotationsOverlapping(null, firstWord, lastWord);
+	}
+	
+	/**
+	 * Retrieve the annotations of a specific type that overlap a specific word.
+	 * @param type the type of the sought annotations
+	 * @param word the word covered by the sought annotations
+	 * @return an array holding the annotations
+	 * @see de.uka.ipd.idaho.im.ImDocument#cleanupAnnotations()
+	 */
+	public ImAnnotation[] getAnnotationsOverlapping(String type, ImWord word) {
+		return this.getAnnotationsOverlapping(type, word, word);
+	}
+	
+	/**
+	 * Retrieve the annotations of a specific type that overlap a specific
+	 * range of words. The two argument words have to belong to the same
+	 * logical text stream for the result of this method to be meaningful.
+	 * @param type the type of the sought annotations
+	 * @param firstWord the first word of the range overlapped by the sought annotations
+	 * @param lastWord the last word of the range overlapped by the sought annotations
+	 * @return an array holding the annotations
+	 * @see de.uka.ipd.idaho.im.ImDocument#cleanupAnnotations()
+	 */
+	public ImAnnotation[] getAnnotationsOverlapping(String type, ImWord firstWord, ImWord lastWord) {
 		if (this.annotationsByPageId == null)
 			return new ImAnnotation[0];
 		ImAnnotationCollectorList overlappingAnnots = new ImAnnotationCollectorList();
@@ -1770,14 +2026,12 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 				continue;
 			for (int a = 0; a < this.annotationsByPageId[p].size(); a++) {
 				ImDocumentAnnotation annot = this.annotationsByPageId[p].getAnnot(a);
+				if ((type != null) && !type.equals(annot.type))
+					continue;
 				if (!firstWord.getTextStreamId().equals(annot.firstWord.getTextStreamId()))
 					continue;
-//				if ((firstWord.pageId == annot.lastWord.pageId) && (annot.lastWord.getTextStreamPos() < firstWord.getTextStreamPos()))
-//					continue;
 				if (annot.lastWord.getTextStreamPos() < firstWord.getTextStreamPos())
 					continue;
-//				if ((annot.firstWord.pageId == lastWord.pageId) && (lastWord.getTextStreamPos() < annot.firstWord.getTextStreamPos()))
-//					continue;
 				if (lastWord.getTextStreamPos() < annot.firstWord.getTextStreamPos())
 					continue;
 				overlappingAnnots.addAnnot(annot);
@@ -1819,6 +2073,29 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	public String[] getAnnotationTypes() {
 		if (TRACK_INSTANCES) this.accessHistory.accessed();
 		return ((String[]) this.annotationsByType.keySet().toArray(new String[this.annotationsByType.size()]));
+	}
+	
+	/**
+	 * Retrieve the number of annotations present in this document.
+	 * @return the number of annotations
+	 */
+	public int getAnnotationCount() {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
+		return this.annotations.size();
+	}
+	
+	/**
+	 * Retrieve the number of annotations of a specific type present in this
+	 * document.
+	 * @param type the annotation type to check
+	 * @return the number of annotations of the argument type
+	 */
+	public int getAnnotationCount(String type) {
+		if (TRACK_INSTANCES) this.accessHistory.accessed();
+		if (type == null)
+			return this.getAnnotationCount();
+		ImDocumentAnnotationList typeAnnots = ((ImDocumentAnnotationList) this.annotationsByType.get(type));
+		return ((typeAnnots == null) ? 0 : typeAnnots.size());
 	}
 	
 	/**
@@ -1911,6 +2188,20 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 		return tsts;
 	}
 	
+	/**
+	 * Retrieve the number of words in this document.
+	 * @return the number of words
+	 */
+	public int getWordCount() {
+		if (this.wordCount < 0) {
+			int wc = 0;
+			for (Iterator pit = this.pagesById.keySet().iterator(); pit.hasNext();)
+				wc += ((ImPage) this.pagesById.get(pit.next())).getWordCount();
+			this.wordCount = wc;
+		}
+		return this.wordCount;
+	}
+	
 	void invalidateTextStreamEnds() {
 		this.textStreamHeads = null;
 		this.textStreamTails = null;
@@ -1950,6 +2241,8 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 			return;
 		if (this.listeners == null)
 			this.listeners = new ArrayList(2);
+		else if (this.listeners.contains(dl))
+			return;
 		this.listeners.add(dl);
 	}
 	
@@ -2012,8 +2305,11 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	
 	void notifyRegionAdded(ImRegion region) {
 		if (TRACK_INSTANCES) this.accessHistory.accessed();
-		if (region instanceof ImWord)
+		if (region instanceof ImWord) {
 			this.textStreamModCount++;
+			this.wordCount = -1;
+		}
+		else this.regionTypesClean = false;
 		synchronized (this.objectsByLocalUID) {
 			this.objectsByLocalUID.put(region.getLocalUID(), region);
 		}
@@ -2025,8 +2321,11 @@ public class ImDocument extends AbstractAttributed implements ImObject {
 	
 	void notifyRegionRemoved(ImRegion region) {
 		if (TRACK_INSTANCES) this.accessHistory.accessed();
-		if (region instanceof ImWord)
+		if (region instanceof ImWord) {
 			this.textStreamModCount++;
+			this.wordCount = -1;
+		}
+		else this.regionTypesClean = false;
 		synchronized (this.objectsByLocalUID) {
 			this.objectsByLocalUID.remove(region.getLocalUID());
 		}

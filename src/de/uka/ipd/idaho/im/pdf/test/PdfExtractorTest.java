@@ -78,6 +78,7 @@ public class PdfExtractorTest implements ImagingConstants {
 	public static void main(String[] args) throws Exception {
 		try {
 			UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+			UIManager.put("TabbedPane.selected", new Color(255, 255, 127));
 		} catch (Exception e) {}
 		
 		final File pdfDataPath = new File("E:/Testdaten/PdfExtract/");
@@ -795,6 +796,13 @@ public class PdfExtractorTest implements ImagingConstants {
 //		pdfName = "Zootaxa/zootaxa.4422.1.4.pdf"; // TODOne check blocking in page 0 ==> switched cross split repair to two-round approach, requiring first merger to actually involve multiple columns
 //		pdfName = "Zootaxa/zootaxa.4789.2.8.pdf"; // TODOne check decoding ==> works just fine
 //		pdfName = "Zootaxa/zootaxa.4438.3.11.pdf"; // TODOne check conflation of Latin and Cyrillic letters in italics font ==> refusing synonymization of char codes with different UC mappings now
+//		pdfName = "Zootaxa/phytotaxa.546.1.1.pdf"; // TODOne check fonts in figure and page numbers (e.g. page 5, figure 1) ==> old bug, fixed before, ran through old decoder version
+//		pdfName = "Zootaxa/zootaxa.5154.3.11.pdf"; // TODOne check fonts in page 0 (email addresses) ==> two fonts pointing to same font descriptor and thus same TrueType stream, one sumset of the other, incurring base font mode on decoding ...
+//		pdfName = "Zootaxa/zootaxa.5154.3.11.pdf"; // TODOne figure out way of dealing with duplicate fonts ==> just needed to be somewhat less smart with FontFile2 ...
+//		pdfName = "Zootaxa/phytotaxa.585.3.2.pdf"; // TODOne check figure on page 7, fails to decode ==> 1200 DPI, 88 megapixels ... just a lot to take, but managed to get it decoded
+//		pdfName = "Zootaxa/zootaxa.5274.1.1.pdf"; // TODOne check fonts in graphics on pages 54, 56, 60 ==> fonts completely garbled, but comes out OK with 'decode unmapped'
+//		pdfName = "Zootaxa/phytotaxa.202.1.4.sic.pdf"; // TODOne check decoding this, seems to hang up on some font ==> some Russian article, material sciences or whatever, definitely misplaced
+//		pdfName = "Zootaxa/phytotaxa.202.1.4.sic.pdf"; // TODOne still check font decoding hang-up ==> whole thing seems to be in UTF-16, with intermittend 0 bytes throwing off parser
 		
 		//	... and other trouble
 //		pdfName = "srep7.7378.pdf"; // TODOne fix small-caps in page 2 (UC mapping of those chars is all lower case) ==> resolved via neighborhood analysis
@@ -1068,9 +1076,9 @@ public class PdfExtractorTest implements ImagingConstants {
 		pdfName = "batEcology_3-89.pdf"; // TODO fix embedded OCR handling in pages 7 and 8 (bottom-up tables) ==> 
 //		pdfName = "MONTE-1943-Tingideos_americanos_OCR.pdf"; // TODOne check page image enhancement ==> text only exists as born-digital, scan in four parts ...
 //		pdfName = "MONTE-1943-Tingideos_americanos_Image_OCR.resaved.pdf"; // TODOne check decoding ==> page background in images, text only born-digital ... tough one
-		pdfName = "MONTE-1942-Apontamentos_sobre_Tingitideos.pdf";
+//		pdfName = "MONTE-1942-Apontamentos_sobre_Tingitideos.pdf"; // TODOne check ecoding ==> same as previous two
 //		pdfName = "Range Management Handbook of Kenya.pdf"; // check decoding this one ==> DjVu compressed, fonts contain vectorized char images, hence many duplicate chars, incurring excess of 255 chars
-		pdfName = "Range Management Handbook of Kenya.pdf"; // TODO find way of handling fonts with more than 255 chars ==>
+//		pdfName = "Range Management Handbook of Kenya.pdf"; // TODOne find way of handling fonts with more than 255 chars ==> permitting character codes up to 0xFFFF now
 //		pdfName = "PalaeogeogrPalaeocl.535.e109364.pdf"; // TODOne check decoding this one ==> zero-height bounding box of horizontal line graphics due to rounding error, fixed via adding plausibility check for narror and low bounding boxes
 //		pdfName = "Rio.6.e58030.pdf"; // TODOne check decoding this one ==> odd char rendering hints in one font ,,, and strange page backgrounds on many pages
 //		pdfName = "Rio.6.e58030.pdf"; // TODOne figure out strange page backgrounds (pages 0, ...) ==> implemented pattern color spaces
@@ -1080,7 +1088,134 @@ public class PdfExtractorTest implements ImagingConstants {
 //		pdfName = "InsectaMundi.0292.1-46.pdf"; // TODOne check out figures (pages 26-47), came up black on server ==> come up just fine ...
 //		pdfName = "Geodiversitas.39.4.729-740.pdf"; // TODOne check dedoding this ==> added catch for completely clipped figures
 //		pdfName = "Geodiversitas.39.3.503-531.pdf"; // TODOne check dedoding this ==> works just fine with above catch
-		pdfName = "data.4AED0409B1C01BEF87635A6A5D21A591.cached.pdf"; // TODO check font decoding error ==> 
+//		pdfName = "data.4AED0409B1C01BEF87635A6A5D21A591.cached.pdf"; // TODOne check font decoding error ==> added catch for missing FDSelect entries in CID fonts
+//		pdfName = "LinzerbiolBeitr.44.1.0347-0350.pdf"; // TODOne check why font decoding takes forever ==> actually seems OK ...
+//		pdfName = "LinzerbiolBeitr.42.1.0043-0080.pdf"; // TODOne check why font decoding takes forever ==> actually seems OK ...
+//		pdfName = "LinzerbiolBeitr.42.1.0043-0080.pdf"; // TODOne check figures in page 28 ==> comes up perfectly fine, only difference being zoom in Acrobat ...
+		pdfName = "RevSuisseZool.3.2.299-364.pdf"; // TODO check adjustment of words to page images (e.g. on page 2) ==> 
+//		pdfName = "JZoolSystEvolRes.59.1064-1096.pdf"; // TODOne check font decoding and figures ==> PDF deteriorated by rendering in browser and downloading from there
+//		pdfName = "ContribNatHist.30.1-7.pdf"; // TODOne check type of PDF ==> seems indeed to be scanned, with extremely good embedded OCR, or created with extremely primitive PDF generator
+//		pdfName = "ContribNatHist.29.1-11.pdf"; // TODOne check type of PDF ==> seems indeed to be scanned, with extremely good embedded OCR, or created with extremely primitive PDF generator
+//		pdfName = "ContribNatHist.27.1-26.pdf";
+//		pdfName = "ActaArachnol.69.2.131-132.pdf"; // TODOne check out decoding this one ==> decodes perfectly fine (all of ActaArachnol.69.1.17-21.pdf ActaArachnol.70.1.35-38.pdf ActaArachnol.67.1.49-54.pdf)
+//		pdfName = "ActaArachnol.54.1.1-3.pdf"; // TODOne check out decoding this one ==> fonts messed up beyond repair
+//		pdfName = "RevSuisseZool.5.2.91-99.pdf"; // TODOne check out what disfigures page 0 (word starts eliminated by scan enhancement) ==> adjusted contrast threshold for background elimination
+//		pdfName = "MONTE-1943-Tingideos_americanos_OCR.pdf"; // TODOne properly handle DjVu compression fonts ==> actually normal scanned PDF with embedded OCR
+//		pdfName = "MONTE-1943-Tingideos_americanos_Image_OCR.resaved.pdf"; // TODOne properly handle DjVu compression fonts ==> 
+//		pdfName = "MONTE-1942-Apontamentos_sobre_Tingitideos.pdf"; // TODOne properly handle DjVu compression fonts ==> implemented, getting images from background scan
+//		pdfName = "C671_65-74.pdf"; // TODOne check decoding figure in page 5 ==> introduced alternative color model replacement approach for JPX decoded streams coming up as color images
+//		pdfName = "C671_65-74.pdf"; // TODO Type1C test case for font engine overhaul
+//		pdfName = "11331_Azarkina_&_Logunov_2010_Afr_51_163-182.pdf"; // TODO TrueType test case for font engine overhaul
+//		pdfName = "ActaArachnol.54.1.1-3.pdf"; // TODO use this one for glyph access re-engineering (if this one works, pretty much everything will) ==> 
+//		pdfName = "1_5_Farkac.pdf"; // TODO test for descendant fonts 
+//		pdfName = "ActaArachnol.69.2.131-132.pdf";
+//		pdfName = "Becherer_1956_Florae_Vallesiacae_Supplementum.pdf"; // TODOne check embedded OCR (seems to come out as Chinese) ==> now using char codes byte-wise if font is 0-255 only
+//		pdfName = "hbmw_9_Emballorunidae_334.pdf"; // TODOne check figure decoding (ImageMagick problem) ==> 
+//		pdfName = "44551-Article.Text-47635-51294-10-20220125.pdf"; // TODOne check out font decoding ==> added filter for Unicode mappings to control characters
+//		pdfName = "Zootaxa/zootaxa.5109.1.1.pdf"; // TODOne check font decoding (seems to be mixing up space with period) ==> manually hacked around freak faulty Unicode mapping
+//		pdfName = "VestnikZoologii.53.2.89-106.pdf"; // TODOne check decoding this one ==>  introduced fallback mechanism for filling text with pattern color space
+//		pdfName = "VestnikZoologii.53.2.113-122.pdf"; // TODOne check decoding this one ==> introduced fallback mechanism for filling text with pattern color space
+//		pdfName = "Geodiversitas.44.19.527-562.pdf"; // TODOne check fonts ==> decode just fine
+//		pdfName = "Geodiversitas.44.19.527-562.pdf"; // TODOne check graphics in pages 7-9 ==> added catch for busted pattern color spaces
+//		pdfName = "Geodiversitas.44.20.563-601.pdf"; // TODOne decode this (might be another faulty pattern color space ...) ==> implemented fallback
+//		pdfName = "Geodiversitas.44.27.801-851.pdf"; // TODOne check decoding error ==> added catch for clipping vs. page content flip conflicts
+//		pdfName = "opinionDeclarationICZN.462.pdf"; // TODOne check opening this one ==> loads fine after properly distinguishing Masks from SoftMasks in page image loading
+//		pdfName = "CurrBiol.32.1-10.pdf"; // TODOne check figure in page 16 ==> 1980 DPI !!!, but decoded with 8GB of RAM allowance
+//		pdfName = "Notulae Algarum No. 7.pdf"; // TODOne check font decoding ==> mostly good, some random parts in mostly-caps
+//		pdfName = "Notulae Algarum No. 7.pdf"; // TODOne check out garbled parts ==> turns out char decoder cache wreaks havoc in CID fonts, as encoding (and thus char codes) come from base font
+//		pdfName = "Notulae algarum No. 254.pdf"; // TODOne check font decoding ==> completely scrambled (text copy&pastes nicely from Acrobat, though), looks like Type1C decoding problem
+//		pdfName = "Notulae algarum No. 254.pdf"; // TODOne fix fonts (Type1c) ==> appreciating font program internal custom encodings now
+//		pdfName = "MammalSpeciesofTheWorld.1993.Anomaluridae.757-758.pdf"; // TODOne check word conflations in page 0 ==> pathological speckle extends main block to left, stretching all words that way
+//		pdfName = "MammalSpeciesofTheWorld.1993.Anomaluridae.757-758.pdf"; // TODOne prevent word conflations in page 0 ==> both despeckling and a decreased minimum block margin fix it
+//		pdfName = "MammalSpeciesofTheWorld.1993.Chiroptera.137-241.pdf"; // TODOne check word conflations in pages 18, 27, and 77 ==> same two approaches as above both do the trick
+//		pdfName = "MammalSpeciesofTheWorld.1993.Primates.243-277.pdf"; // TODOne check word conflations in page 15 ==> same two approaches as above both do the trick
+//		pdfName = "MammalSpeciesofTheWorld.1993.Muridae.501-755.pdf"; // TODOne check word conflations in page 226 ==> despeckling does the trick, smaller block margin does not
+//		pdfName = "specimen_4.pdf"; // TODOne check decoding ==> fully fledged Type 3 font, needs proper decoding and style detection
+//		pdfName = "specimen_4.pdf"; // TODOne implements decoding and style detection Type 3 fonts ==> fully supporting rendering of glyphs with PDF native graphics commands now
+//		pdfName = "Schmelz+Collado-2005-Achaeta becki.pdf"; // TODOne older example of Type3 fonts (with bitmap glyphs) ==> integrated in normal rendering and OCR decoding routine
+//		pdfName = "zt02879p040.pdf"; // TODOne older example of Type3 fonts (with bitmap glyphs) ==> integrated in normal rendering and OCR decoding routine (some glyphs will need font reference)
+//		pdfName = "tai.2022.67.465.pdf"; // TODOne check font decoding (CID Type42) ==> fixed decoding of Unicode maping
+//		pdfName = "londt_1982b.pdf"; // TODOne decode this and see if OCR errors batch correctable ==> 
+//		pdfName = "phytochemistry.49.4.1095-1099.pdf";
+//		pdfName = "revuesuissedezoo28schw.449-451.pdf"; // TODOne check decoding (text layer of page image comes up inverted) ==> observing 'Decode' array of soft masks now
+//		pdfName = "Therya.14.1.5-13.pdf"; // TODOne check fonts in bibliography (pages 6, 7, 8) ==> come up perfectly fine
+//		pdfName = "JourMammal.103.1.45-56.pdf"; // TODOne check structure detection in page 0 (page decoration thwarting column split) ==> page decoration close to text thwarts column split
+//		pdfName = "JourMammal.103.1.45-56.pdf"; // TODOne make structure detection ignore graphics in page 0 (page decoration thwarting column split) ==> adding template parameter indicating to ignore graphics in page structure detection does the trick
+//		pdfName = "JourMammal.103.2.316-327.pdf"; // TODOne check structure detection in page 0 (column split working, same journal) ==> works perfectly fine with defaults alone
+//		pdfName = "AfrInvertebr.45.1.1-6.pdf"; // TODOne fix color space lookup error ==> added catch for premature termination of in-line image data (whose remained got mistaken for content tags)
+//		pdfName = "FossilImprint.78.2.451-488.pdf"; // TODOne check out broken dictionary error ==> page 9 utterly corrupted in PDF (error in Acrobat), works fine after fixing in Notepad++
+//		pdfName = "PapAvZool.59.e20195959.pdf"; // TODOne check out mising fill color error ==> decodes just fine now
+//		pdfName = "PapAvZool.62.e202262039.pdf"; // TODOne check out mising fill color error ==> decodes just fine now
+//		pdfName = "SpeciesDiversity.28.1.5-13.pdf"; // TODOne check out encryption error ==> PDF 1.7 not supported by IcePDF ...
+//		pdfName = "zlab095.pdf"; // TODOne check out null pointer exception ==> decodes just fine now
+//		pdfName = "MolPhylogenetEvol.51.595-600.pdf"; // TODOne check out font decoding ==> comes up fine, only 'i' and 'y' with wrong decoding and glyph in AIBNBH+AdvGulliv-R (best to test in pge 4)
+//		pdfName = "MolPhylogenetEvol.51.595-600.pdf"; // TODOne fix 'i' and 'y' in font  AIBNBH+AdvGulliv-R (best to test in page 4) ==> corrected encoding priorization in fonts with both internal and external encoding
+//		pdfName = "JourMammal.102.1.101-122.pdf"; // check split line patterns on page 7 ==> seems to be working now
+//		pdfName = "Phytochemistry.205.113454.pdf"; // TODOne simply decode for tests in GGI
+//		pdfName = "BullSocVaudScNat.68.333-349.pdf"; // TODOne check embedded OCR adjustment in pages 16, 17 ==>
+//		/* - dashes actually OCRed, but sorted out due to 0 width (height is OK)
+//		 * - font is Helvetica, char is emdash (8212, 0x2014) encoded as 151, 0x97
+//		 *   ==> might actually be font problem !!!
+//		 *   font: {BaseFont=Helvetica, Type=Font, Encoding=WinAnsiEncoding, Subtype=Type1}
+//		 *   font descriptor: {EncodingScheme=AdobeStandardEncoding, UnderlinePosition=-100.0, UnderlineThickness=50.0, Encoding=AdobeStandardEncoding, CapHeight=718.0, ItalicAngle=0.0, Ascent=718.0, Descender=-207.0, FontName=Helvetica, IsFixedPitch=false, CharacterSet=ExtendedRoman, Ascender=718.0, XHeight=523.0, Descent=-207.0}
+//		 * - what's going on:
+//		 *   - cher encoded in WinAnsi as 151, 0x97
+//		 *   - basefont encoded in AdobeStandard (code would be 208, 0xD0)
+//		 *   ==> encoded lookup fails
+//		 * ==> actually using windows ancoding now and doing base font lookup via Unicode character
+//		 */
+//		pdfName = "IntJNematol.1.23-30.pdf"; // TODOne check this one, opens neither as text nor as scanned ==> actuallz scanned, but media boxes of pages weirdlz high
+//		pdfName = "IntJNematol.1.23-30.trimmed.pdf"; // TODOne trz opening as PDF printout from original PDF (pages trimmed to A4) ==> works after temporarily deactivating scan sanity check
+//		pdfName = "RecAustMus.57.3.375-446.pdf"; // TODOne check figures in pages 30, 31 ==> whole array of figures rendered as single bitmap and partially overpainted later ...
+//		pdfName = "RecAustMus.57.3.375-446.pdf"; // TODOne prevent figures from getting partially overpainted ==> were not overpainted, but cut to prevent overlap with words (which backfires in this instance)
+//		pdfName = "Phytochemistry.150.23-30.pdf"; // TODOne check decoding of page range dash in bibliograpgy (page 7) ==> only few characters in font, all dashes, impossible to determine vertical position
+//		pdfName = "LEntomologiste.63.1.13-14.pdf"; // TODOne check decoding this one ==> decodes perfectly fine, only (excessive) fonts take forever
+//		pdfName = "LEntomologiste.63.1.13-14.pdf"; // TODOne check font decoding in page 0 ==> fonts decode fine, byte pair aggregation backfires due to excessive font size and resulting presence of high char codes, added some extra scrutiny
+//		pdfName = "Lundiana.15.1.1-6.pdf"; // TODOne check decoding this one ==> seems to have problems finding page resources
+//		pdfName = "Lundiana.15.1.1-6.pdf"; // TODOne implement resource inheritance from page tree ==> works
+//		pdfName = "RafflesBZool.71.553-571.pdf"; // TODOne check out font decoding hang-up ==> embedded PDF ATTACHMENT throws of parser, replacing objects in case of ID collisions
+//		pdfName = "RafflesBZool.71.553-571.pdf"; // TODOne harden parser against keywords from nested PDFs, best using cropNext() for recursive behavior ==> checking stream length now when encountering 'endstream' or 'endobj'
+//		pdfName = "EcolMontenegrina.2.1.42-50.pdf"; // TODOne check decoder hangup ==> fixed unintended swapping around of stream bytes in recently added nested object catcher logic
+//		pdfName = "EcolMontenegrina.1.4.256-267.pdf"; // TODOne check decoder hangup ==> same fix as previous
+//		pdfName = "EcolMontenegrina.2.2.88-92.pdf"; // TODOne check decoder hangup ==> same fix as previous
+//		pdfName = "ContribZool.91.3.166-198.pdf"; // TODOne chec out decoding error ==> doesn't even open in Acrobat
+//		pdfName = "ASAPress.1.217-268-2.pdf"; // TODOne check decoding hangup ==> decodes perfectly fine
+//		pdfName = "Lambillionea.3.219-232.pdf"; // TODOne check decoding page 13 ==> decodes fine by itself, but filtered from whole document for scan being too small and absense of any embedded OCR
+//		pdfName = "Denisia.176.171-214.pdf"; // TODOne check loading of page 3 ==> page has drawing inserted with image mask, and mask usually is text ... repaired in Paint
+//		pdfName = "Denisia.176.171-214.gs.pdf"; // TODOne check loading of page 3 ==> page has drawing inserted with image mask, and mask usually is text ... repaired in Paint
+//		pdfName = "EPHE.9.11-81.pdf"; // slavage page 70 ==> same old mask image issue ... might have to check masks for being solid blocks of black, and in that instance render actual image
+//		pdfName = "NeotropIchthyol.6.2.113-158.pdf"; // TODOne check figure decoding in page 4 ==> grayscale drawn as black with varying alpha (!!!) foils swicth to index color space after JPX decoding
+//		pdfName = "Nauplius.e2020001.pdf"; // TODOne check why whole document turns into label text stream ==> pages vary in width, foiling identification of layout artwork
+//		pdfName = "FoliaFaunSlov.13.8.49-57.pdf"; // TODOne check decoding error ==> decodes just fine, but words out of place in bottom-up table
+//		pdfName = "FoliaFaunSlov.13.8.49-57.pdf"; // TODOne check displayced words in pages 1-5 ==> font indicated ascent and descent way out of bounds
+//		pdfName = "FoliaFaunSlov.13.8.49-57.gs.pdf"; // TODOne check displayced words in pages 1-5 after adjusting font in PDF ==> works as supposed to
+//		pdfName = "TravInstSpeol.34.131-140.pdf"; // TODOne check out decoding this scan ==> scans too irregular to be accepted as such, and page 10 blank, plus, turns out it's hybrid
+//		pdfName = "TravInstSpeol.34.131-140.gs.pdf"; // TODOne try with tailing blank page removed ==> problem is page 9, not page 10
+//		pdfName = "TravInstSpeol.34.131-140.pdf"; // TODOne decoding as hybrid ==> excessive use of fonts (one glyph per char) necessitates decoding on server
+//		pdfName = "AnnMagNatHist.6.69.665-688.pdf"; // TODOne check out decoding this scan ==> decodes perfectly fine, if with high memory effort
+//		pdfName = "KielerMeeresforschungen.8.1.125-133.pdf"; // TODOne check out decoding this scan ==> irregular margins around actual scans have them disqualified as page images, plus, turns out it's hybrid, and decoding as that, meta first page gets in way
+//		pdfName = "KielerMeeresforschungen.8.1.125-133.gs.pdf"; // TODOne decode without first page ==> finally works
+//		pdfName = "CapitaZool.8.61–67.pdf"; // TODOne check black image in page 8 ==> same old mask image problem 
+//		pdfName = "CapitaZool.8.61–67.gs.pdf"; // TODOne fix black image in page 8 ==> removed image mask in source PDF and inserted page 8 into IMD
+//		pdfName = "Austrolebias_wolterstorffi.pdf"; // TODOne decode basis for WADM based import from https://arcadia2.hasdai.org/records/ybb6k-aem93 ==> Austrolebias_wolterstorffi.pdf.cleaned.imf
+//		pdfName = "IchthyolExplorFres.13.3.257-272.pdf"; // TODOne check decoding of page 6 ==> yet another mask image getting in the way ...
+//		pdfName = "IchthyolExplorFres.13.3.257-272.gs.pdf"; // TODOne remove mask of image in page 6 ==> image comes out fine
+//		pdfName = "ActaZoolLilloana.67.2.283-295.pdf"; // TODO check decoding this one ==> fixed by adding catch for height or width 1 images getting scaled down to height or width 0
+//		pdfName = "IntJFishAquatStud.12.1.A.1-12.pdf"; // TODOne check first page coming up as graphics ==> added title banner filtering properties to templates
+//		pdfName = "IntJFishAquatStud.12.1.A.19-25.pdf"; // TODOne
+//		pdfName = "ActaPalaeontolPol.65.2.305-312.pdf"; // TODOne test decoding this one, fails on page 2 ==> added catch for empty blocks in page content flipping
+//		pdfName = "ActaPalaeontolPol.65.1.11-27.pdf"; // TODOne test decoding this one ==> error an fix identical to ActaPalaeontolPol.65.2.305-312.pdf
+//		pdfName = "ActaPalaeontolPol.65.1.167-207.pdf"; // TODOne test decoding this one ==> error and fix identical to ActaPalaeontolPol.65.2.305-312.pdf
+//		pdfName = "ZoolStud.55.4.1-9.pdf"; // TODOne check decoding this one ==> added edge case catch in content decryption (in IcePDF)
+//		pdfName = "ZoolStud.55.5.1-21.pdf"; // TODOne check decoding this one ==> fix for ZoolStud.55.4.1-9.pdf seems to have worked for this one as well
+//		pdfName = "ZoolStud.55.10.1-17.pdf"; // TODOne check decoding this one ==> fix for ZoolStud.55.4.1-9.pdf seems to have worked for this one as well
+//		pdfName = "ActaPalaeontolPol.51.4.606-608.pdf"; // TODOne check decoding this one (seems to hang up on page flip detection) ==> cover page is nothing but graphics (no oriented content to start from), added respective catch
+//		pdfName = "bhlpart154680.pdf"; // TODOne get meta page out of this one ==> works great even in quick mode after adding support for proper UTF-16
+//		pdfName = "CRPalevol.22.17.407-408.pdf"; // TODOne check decoding this one ==> decodes perfectly fine
+//		pdfName = "Laidlaw-1902.jorritpoelen.pdf"; // TODOne check out this one ==> seems to be good for DCL, with viable scans, and resolution intact
+//		pdfName = "Laidlaw-1902.re-extracted.pdf"; // TODOne check out this one ==> good for DCL, byte-for-byte copy of relevant part of full-volume PDF
+		pdfName = "bhlpart214480.pdf"; // TODOne another BHL example ...
+		pdfName = "bhlpart214480.1-9.pdf"; // TODOne another BHL example ...
 		
 		//	TODOne EJT test files for suggestions
 //		pdfName = "EJT/EJT-2_Krapp.pdf"; // TODOne check how fonts decode ==> UC mapping comprehensive and faithful
@@ -1126,6 +1261,8 @@ public class PdfExtractorTest implements ImagingConstants {
 //		pdfName = "EJT/ejt-499_bezdek.pdf"; // TODOne check figures on page 0 ==> added handling for strangely formatted form bounding boxes
 //		pdfName = "EJT/ejt-616_mariaux_georgiev.pdf"; // TODOne check duplicate captions in pages 3, 8, 11, 14, 17, 22, 25 ==> added clipping path check for non-form words (forms might be inlined into to level content)
 //		pdfName = "EJT/ejt-684_haran_beaudin-olivier_benoit.pdf"; // TODOne check decoding figure 6 (page 25) ==> implemented rendering of text displayed via clipping things drawn over its location
+//		pdfName = "EJT/ejt-767_1-39.pdf"; // TODOne check decoding this one ==> too many chars in some font ... really need the 3-digit font char codes
+//		pdfName = "EJT/EJT.2023.891.51-86.pdf"; // TODO check decoding this one ==> works after adding U+200C, U+200D, u+200Em and U+200F to list of spaces
 		
 //		pdfName = "Zootaxa/zt03691p559.pdf"; // TODOne check figure in page 4 ==> comes out just fine, only that it's TWO figures, with one obfuscating the other
 //		pageIDs.add(new Integer(16));
@@ -1137,68 +1274,64 @@ public class PdfExtractorTest implements ImagingConstants {
 		//	use for ad-hoc decoding
 //		pdfName = "Molnar1991hybrid.pdf";
 		
-		//	for embedded OCR adjustment tests TODO finish this crap !!!
-//		pdfName = "Carr1999TyrannosauridaeABBYY.pdf"; // almost too good
-//		pdfName = "z1997n4a12.pdf"; // OCR off upwards in a good few pages (mostly towards bottom), boundaries of italic words short on right
-//		pdfName = "BMZOO_S003_1974_T216_N144.415-418.pdf"; // left and right word boundaries off with italics, lines slightly off
-		//pdfName = "BMZOO_S003_1974_T216_N144.415-418.pdf"; // TODO get rid of frame around reference in page 3 ==> 
-//		pdfName = "coleopterist_bulletin.19.1.1-19.3999299.pdf"; // overall slightly off to the right BUT only in Acrobat, only embedded born-digital text is 'Downloaded from ...' at page bottom
-//		pdfName = "hbmw_9_Vespertilionidae_0004.pdf"; // OCR word boundaries slightly off to top (lower boundary sits on baseline) BUT only in Acrobat, PDF decoder doesn't find embedded OCR
-//		pdfName = "hbmw_9_Vespertilionidae_0005.pdf"; // OCR word boundaries slightly off to top (lower boundary sits on baseline)
-//		pdfName = "Myotinae.pdf";
-//		pdfName = "transactionsprocNewZealandInst.33.1-95.pdf"; // TODO check out decoding and OCR ==> adjusting to words looks pretty OK
-		
 //		//	TODO for font reference generation checks
 //		//	TODOne find size fuck-ups ==> looks like culprits are bitmap based glyphs in Type3 fonts
 //		pdfName = "Zootaxa/zt03353p068.pdf";
 //		pdfName = "Zootaxa/zt03456p035.pdf";
 //		pdfName = "JNATHIST.53.23–24.1401–1420.pdf";
 		
-//		//	TODO make sure to deactivate this unless explicitly required !!!
-//		DocumentStyle.addProvider(new DocumentStyle.Provider() {
-//			public Properties getStyleFor(Attributed doc) {
-//				Properties ds = new Properties();
-////				//	values for RSZ
-////				ds.setProperty("layout.columnAreas", "[299,561,22,788] [41,294,22,792]");
-////				ds.setProperty("layout.columnCount", "2");
-////				ds.setProperty("layout.contentArea", "[36,566,22,794]");
-////				ds.setProperty("layout.minBlockMargin", "8");
-////				ds.setProperty("layout.minColumnMargin", "27");
-//				//	values for Linzer Beitraege
-////				ds.setProperty("layout.caption.aboveTable", "true");
-////				ds.setProperty("layout.caption.belowFigure", "true");
-////				ds.setProperty("layout.caption.besideFigure", "true");
-////				ds.setProperty("layout.caption.figureStartPatterns", "(Figs|Fig|Abb|Map)");
-////				ds.setProperty("layout.caption.fontSize", "9");
-////				ds.setProperty("layout.caption.maxFontSize", "9");
-////				ds.setProperty("layout.caption.minFontSize", "9");
-////				ds.setProperty("layout.columnAreas", "[50,401,75,600]");
-////				ds.setProperty("layout.contentArea", "[50,411,42,624]");
-//				//ds.setProperty("layout.fontSize", "9");
-//				//ds.setProperty("layout.maxFontSize", "9");
-//				ds.setProperty("layout.minBlockMargin", "5");
-//				//ds.setProperty("layout.minFontSize", "9");
-////				ds.setProperty("layout.page.even.headerAreas", "[65,379,35,72]");
-////				ds.setProperty("layout.page.first.headerAreas", "[45,400,72,107]");
-////				ds.setProperty("layout.page.number.area", "[199,255,40,76]");
-////				ds.setProperty("layout.page.number.fontSize", "9");
-////				ds.setProperty("layout.page.number.maxFontSize", "9");
-////				ds.setProperty("layout.page.number.minFontSize", "9");
-////				ds.setProperty("layout.page.number.pattern", "\\d{1,}");
-////				ds.setProperty("layout.page.odd.headerAreas", "[55,381,39,76]");
-//				return ds;
-//			}
-//		});
+//		//	TODOne somethow aggregate graphics in pages 32-133
+//		pdfName = "Zootaxa/zootaxa.5114.1.3.pdf";
+		
 //		pdfName = "zt03790p356.pdf"; // TODOne test mapping of Win-1252 chars (NOT equal to unicode points ...)
 //		pdfName = "Zootaxa/zootaxa.4948.3.1.pdf"; // TODOne check word widths (e.g. in page 10) ==> char codes offset towards 0 in two fonts ...
 //		pdfName = "Zootaxa/zootaxa.4948.3.1.pdf"; // TODOne figure out word widths (e.g. in page 10) ==> width of em-dash encoded in missing-width, and char UC mapped
-//		pdfName = "Zootaxa/zootaxa.4948.3.1.pdf"; // TODOne fix word widths (e.g. in page 10) ==> checking base width array before in missing-width now
+//		pdfName = "Zootaxa/zootaxa.4948.3.1.pdf"; // TODOne fix word widths (e.g. in page 10) ==> checking base width array before missing-width now
+		
+//		pdfName = "Prasse_1979_1.PDF"; // TODO test how current page image cleanup performs (12, 13)
+//		pdfName = "Becherer_1956_Florae_Vallesiacae_Supplementum.pdf"; // TODO test how current page image cleanup performs (147)
+//		pdfName = "Menke_Cerat_1.pdf"; // TODO test how current page image cleanup performs (4, 6)
+//		pdfName = "Forsslund1964.pdf"; // TODO test how current page image cleanup performs (0, 1)
+		
+		//	recent files (move to lists further up when done)
+//		pdfName = "AfrInvertebr.53.1.47-67.pdf"; // TODOne check font decoding ==> some really unfriendly CID0 font there (copy&pastes to Acrobat just as shitty)
+//		pdfName = "AfrInvertebr.53.1.69-77.pdf"; // TODOne check font decoding ==> some really unfriendly CID0 font there (copy&pastes to Acrobat just as shitty)
+		//	==> we NEED that font reference ...
+		
+//		//	TODOne courtesy for CoL
+//		pdfName = "Actual checklist of Tardigrada 41th Edition 16-05-22.pdf";
+		
+		//	for embedded OCR adjustment tests
+//		pdfName = "Carr1999TyrannosauridaeABBYY.pdf"; // almost too good
+//		pdfName = "z1997n4a12.pdf"; // OCR off upwards in a good few pages (mostly towards bottom), boundaries of italic words short on right
+//		pdfName = "BMZOO_S003_1974_T216_N144.415-418.pdf"; // left and right word boundaries off with italics, lines slightly off
+//		//pdfName = "BMZOO_S003_1974_T216_N144.415-418.pdf"; // TODO get rid of frame around reference in page 3 ==> 
+//		pdfName = "coleopterist_bulletin.19.1.1-19.3999299.pdf"; // overall slightly off to the right BUT only in Acrobat, only embedded born-digital text is 'Downloaded from ...' at page bottom
+//		pdfName = "hbmw_9_Vespertilionidae_0004.pdf"; // OCR word boundaries slightly off to top (lower boundary sits on baseline) BUT only in Acrobat, PDF decoder doesn't find embedded OCR
+//		pdfName = "hbmw_9_Vespertilionidae_0005.pdf"; // OCR word boundaries slightly off to top (lower boundary sits on baseline)
+//		pdfName = "Myotinae.pdf";
+//		pdfName = "transactionsprocNewZealandInst.33.1-95.pdf"; // TODOne check out decoding and OCR ==> adjusting to words looks pretty OK
+//		pdfName = "transactionsprocNewZealandInst.33.1-95.pdf"; // TODOne check out decoding of page images (background doesn't eliminate) ==> 
+//		pdfName = "MammalSpeciesofTheWorld.1982.Primates.216-243.pdf"; // TODOne check out decoding of page images (background doesn't eliminate) ==> DO need to replace masked images with masks proper after all ...
+//		pdfName = "MammalSpeciesofTheWorld.1982.Rodentia.504-560.pdf"; // TODOne check decoding of page image in page 23 ==> only a busted page image cache entry
+//		pdfName = "MammalSpeciesofTheWorld.1982.Artiodactyla.315-343.pdf"; // TODOne check OCR adjustment in page 3 ==> fixed
+//		pdfName = "lEntomologiste.47.5.259-268.pdf"; // TODOne check decoding hang-up ==> added endless loop catch in OCR adjustment block merging
+//		pdfName = "ArqEntomol.15.3-15.pdf"; // TODO properly handle modifier letters used in place of combining diacritic markers in page 0 (TrueType fonts) ==> problem seems to be character getting replaces by subsequent character with same glyph ID
+//		pdfName = "ArqEntomol.15.3-15.pdf"; // TODO try retaining _first_ glyph found for given CID (not last) in page 0 (TrueType fonts) ==> 
+//		pdfName = "BullNatlMusNatSciSerA.49.1.7-42.pdf"; // TODO check missing words on page 1 (problem seems to be some Type1C font) ==> journal from Japan, uses Japanese CMap in CID fonts ... at least managed to fix char widths
+//		pdfName = "730_Keyserling_1883_Ver_32_195_226.pdf"; // TODOne check scan decoding (might be ImageMagick failure) ==> new ImageMagick version not changing a thing ...
+//		pdfName = "730_Keyserling_1883_Ver_32_195_226.pdf"; // TODOne figure out what the heck is going on with this one ==> text in fact DjVu encoded, and not loading properly for some reason ...
+//		pdfName = "730_Keyserling_1883_Ver_32_195_226.pdf"; // TODO figure out why DjVu text not loading properly ==> 
+//		pdfName = "730_Keyserling_1883_Ver_32_195_226.gs.pdf"; // TODO test this one instead
+//		pdfName = "1767949i00022008.pdf"; // TODOne random BHL example after changes on their end ==> whatever they changed, this one looks great
+//		pdfName = "lextemy-epar-product-information_en.pdf"; // TODO check this one (needs 'no longer authorized' watermark removed) ==> might need some 'aggressive' mode for watermark removal (words in odd sizes repeating in exact same position on every or but every page)
+//		pdfName = "abevmy-epar-product-information_en.pdf"; // TODO check this one ==> comes up just fine
 		
 		long start = System.currentTimeMillis();
 		int scaleFactor = 1;
 		if (pageIDs.isEmpty())
 			pageIDs = null;
-		aimAtPage = -1; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
+		aimAtPage = 1; // TODO_ne always set this to -1 for JAR export ==> no need to, as long as this main() is not executed
 		if (pageIDs != null)
 			aimAtPage = -1;
 		//	TODO try pages 12, 13, 16, 17, and 21 of Prasse 1979
@@ -1226,8 +1359,6 @@ public class PdfExtractorTest implements ImagingConstants {
 				};
 			}
 		};
-//		File basePath = new File(".");
-//		final PdfExtractor pdfExtractor = new PdfExtractor(basePath, basePath, pis, false);
 		
 //		if (false) {
 //			File pdfFile = new File(pdfDataPath, pdfName);
@@ -1278,6 +1409,53 @@ public class PdfExtractorTest implements ImagingConstants {
 			pdm.setSize(400, 100);
 			pdm.setLocationRelativeTo(null);
 			pdm.popUp(false);
+////			
+////			//	TODO make sure to deactivate this unless explicitly required !!!
+//			DocumentStyle.addProvider(new DocumentStyle.Provider() {
+//				public DocumentStyle getStyleFor(Attributed doc) {
+//					Properties ds = new Properties();
+////					//	values for RSZ
+////					ds.setProperty("layout.columnAreas", "[299,561,22,788] [41,294,22,792]");
+////					ds.setProperty("layout.columnCount", "2");
+////					ds.setProperty("layout.contentArea", "[36,566,22,794]");
+////					ds.setProperty("layout.minBlockMargin", "8");
+////					ds.setProperty("layout.minColumnMargin", "27");
+//					//	values for Linzer Beitraege
+////					ds.setProperty("layout.caption.aboveTable", "true");
+////					ds.setProperty("layout.caption.belowFigure", "true");
+////					ds.setProperty("layout.caption.besideFigure", "true");
+////					ds.setProperty("layout.caption.figureStartPatterns", "(Figs|Fig|Abb|Map)");
+////					ds.setProperty("layout.caption.fontSize", "9");
+////					ds.setProperty("layout.caption.maxFontSize", "9");
+////					ds.setProperty("layout.caption.minFontSize", "9");
+////					ds.setProperty("layout.columnAreas", "[50,401,75,600]");
+////					ds.setProperty("layout.contentArea", "[50,411,42,624]");
+//					//ds.setProperty("layout.fontSize", "9");
+//					//ds.setProperty("layout.maxFontSize", "9");
+////					ds.setProperty("layout.minBlockMargin", "5");
+//					//ds.setProperty("layout.minFontSize", "9");
+////					ds.setProperty("layout.page.even.headerAreas", "[65,379,35,72]");
+////					ds.setProperty("layout.page.first.headerAreas", "[45,400,72,107]");
+////					ds.setProperty("layout.page.number.area", "[199,255,40,76]");
+////					ds.setProperty("layout.page.number.fontSize", "9");
+////					ds.setProperty("layout.page.number.maxFontSize", "9");
+////					ds.setProperty("layout.page.number.minFontSize", "9");
+////					ds.setProperty("layout.page.number.pattern", "\\d{1,}");
+////					ds.setProperty("layout.page.odd.headerAreas", "[55,381,39,76]");
+//					//	values for MSW
+////					ds.setProperty("layout.minBlockMargin", "5");
+//					//	values for Journal of Mammalogy
+////					ds.setProperty("layout.page.first.structureIgnoreGraphics", "true");
+//					//	values for title banner test
+//					ds.setProperty("layout.titleBannerMaxPage", "1");
+//					ds.setProperty("layout.titleBannerArea", "[30,565,50,190]");
+//					return new DocumentStyle(new PropertiesData(ds));
+//					
+////					Settings dsSet = Settings.loadSettings(new File("E:/GoldenGATEv3/Plugins/DocumentStyleManagerData/JourMammal.2015-.journal_article.docStyleSource"));
+////					return new DocumentStyle(new PropertiesData(dsSet.toProperties()));
+//				}
+//				public void documentStyleAssigned(DocumentStyle docStyle, Attributed doc) {}
+//			});
 			
 			int flags = 0;
 			flags |= PdfExtractor.USE_EMBEDDED_OCR;
@@ -1285,9 +1463,8 @@ public class PdfExtractorTest implements ImagingConstants {
 			flags |= PdfExtractor.SINGLE_PAGE_SCANS;
 //			flags |= PdfExtractor.DOUBLE_PAGE_SCANS;
 			flags |= PdfExtractor.ENHANCE_SCANS;
-//			flags |= PdfExtractor.FIX_EMBEDDED_OCR;
-//			flags |= PdfExtractor.ADJUST_EMBEDDED_OCR_NONE;
-			flags |= PdfExtractor.ADJUST_EMBEDDED_OCR_WORDS;
+			flags |= PdfExtractor.ADJUST_EMBEDDED_OCR_NONE;
+//			flags |= PdfExtractor.ADJUST_EMBEDDED_OCR_WORDS;
 //			flags |= PdfExtractor.ADJUST_EMBEDDED_OCR_LINES;
 //			flags |= PdfExtractor.ADJUST_EMBEDDED_OCR_BLOCKS;
 //			flags |= PdfExtractor.ENHANCE_SCANS_INVERT_WHITE_ON_BLACK;
@@ -1295,10 +1472,11 @@ public class PdfExtractorTest implements ImagingConstants {
 			flags |= PdfExtractor.ENHANCE_SCANS_ELIMINATE_BACKGROUND;
 			flags |= PdfExtractor.ENHANCE_SCANS_WHITE_BALANCE;
 			flags |= PdfExtractor.ENHANCE_SCANS_CLEAN_PAGE_EDGES;
-//			flags |= PdfExtractor.ENHANCE_SCANS_REMOVE_SPECKLES;
+			flags |= PdfExtractor.ENHANCE_SCANS_REMOVE_SPECKLES;
 //			flags |= PdfExtractor.ENHANCE_SCANS_CORRECT_ROTATION;
 			flags |= PdfExtractor.ENHANCE_SCANS_CORRECT_SKEW;
-			System.out.println("Flags are " + flags + " (" + Integer.toString(flags, 2) + ")");
+//			flags |= PdfExtractor.ENHANCE_SCANS_LEVEL_GRADIENTS;
+			System.out.println("Flags are " + flags + " (" + Integer.toString(flags, 2) + ", " + Integer.toString(flags, 16) + ")");
 //			doc = pdfExtractor.loadImagePdf(doc, null, bytes, flags, scaleFactor, pdm);
 //			doc = pdfExtractor.loadImagePdf(doc, null, bytes, true, true, scaleFactor, pdm);
 //			doc = pdfExtractor.loadImagePdfBlocks(doc, null, bytes, scaleFactor, pdm);
@@ -1306,11 +1484,13 @@ public class PdfExtractorTest implements ImagingConstants {
 //			doc = pdfExtractor.loadTextPdf(doc, null, bytes, PdfFontDecoder.UNICODE, pageIDs, pdm);
 //			doc = pdfExtractor.loadTextPdf(doc, null, bytes, PdfFontDecoder.LATIN_FULL, pageIDs, pdm);
 //			doc = pdfExtractor.loadTextPdf(doc, null, bytes, PdfFontDecoder.LATIN, pageIDs, pdm);
-			doc = pdfExtractor.loadTextPdf(doc, null, bytes, PdfFontDecoder.FontDecoderCharset.union(PdfFontDecoder.VERIFY_MAPPED, PdfFontDecoder.LATIN), pageIDs, pdm);
+//			doc = pdfExtractor.loadTextPdf(doc, null, bytes, PdfFontDecoder.FontDecoderCharset.union(PdfFontDecoder.VERIFY_MAPPED, PdfFontDecoder.LATIN_FULL), pageIDs, pdm);
 //			doc = pdfExtractor.loadTextPdf(doc, null, bytes, PdfFontDecoder.FontDecoderCharset.union(PdfFontDecoder.DECODE_UNMAPPED, PdfFontDecoder.LATIN_FULL), pageIDs, pdm);
-//			doc = pdfExtractor.loadTextPdf(doc, null, bytes, PdfFontDecoder.RENDER_ONLY, pageIDs, pdm);
+			doc = pdfExtractor.loadTextPdf(doc, null, bytes, PdfFontDecoder.RENDER_ONLY, pageIDs, pdm);
 //			doc = pdfExtractor.loadTextPdf(doc, null, bytes, PdfFontDecoder.NO_DECODING, pageIDs, pdm);
 //			doc = pdfExtractor.loadGenericPdf(doc, null, bytes, scaleFactor, pageIDs, null);
+//			doc = pdfExtractor.loadHybridPdf(doc, null, bytes, flags, false, scaleFactor, pageIDs, pdm); // regular text over scanned page background
+//			doc = pdfExtractor.loadHybridPdf(doc, null, bytes, flags, true, scaleFactor, pageIDs, pdm); // DjVu encoded text over scanned page background
 			
 //			ProcessStatusMonitor psm = new ProcessStatusMonitor() {
 //				public void setStep(String step) {
@@ -1407,7 +1587,7 @@ public class PdfExtractorTest implements ImagingConstants {
 //				continue;
 //			
 			int scaleDown = 1;
-			int displayDpi = (((aimAtPage == -1) && (pages.length > 5)) ? 150 : 300);
+			int displayDpi = (((aimAtPage == -1) && (pages.length > 20)) ? 150 : 300);
 			while ((scaleDown * displayDpi) < pi.currentDpi)
 				scaleDown++;
 			System.out.println("Scaledown for page " + p + " is " + scaleDown);

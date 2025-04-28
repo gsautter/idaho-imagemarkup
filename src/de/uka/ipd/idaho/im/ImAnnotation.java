@@ -42,7 +42,7 @@ public interface ImAnnotation extends ImObject {
 	 * attribute via the generic <code>getAttribute()</code> methods */
 	public static final String FIRST_WORD_ATTRIBUTE = "firstWord";
 	
-	/** the name to use to retrieve the first word in the annotation as a virtual
+	/** the name to use to retrieve the last word in the annotation as a virtual
 	 * attribute via the generic <code>getAttribute()</code> methods */
 	public static final String LAST_WORD_ATTRIBUTE = "lastWord";
 	

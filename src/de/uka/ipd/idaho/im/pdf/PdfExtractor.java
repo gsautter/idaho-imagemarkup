@@ -33,7 +33,6 @@ import java.awt.ComponentOrientation;
 import java.awt.Composite;
 import java.awt.Font;
 import java.awt.Graphics2D;
-import java.awt.Point;
 import java.awt.RenderingHints;
 import java.awt.Shape;
 import java.awt.Stroke;
@@ -86,7 +85,6 @@ import org.icepdf.core.pobjects.Reference;
 import org.icepdf.core.pobjects.Resources;
 import org.icepdf.core.pobjects.filters.ASCII85Decode;
 import org.icepdf.core.pobjects.filters.ASCIIHexDecode;
-import org.icepdf.core.pobjects.filters.CCITTFaxDecoder;
 import org.icepdf.core.pobjects.filters.FlateDecode;
 import org.icepdf.core.pobjects.filters.LZWDecode;
 import org.icepdf.core.pobjects.filters.PredictorDecode;
@@ -98,6 +96,7 @@ import org.jpedal.jbig2.JBIG2Exception;
 import de.uka.ipd.idaho.easyIO.util.HashUtils;
 import de.uka.ipd.idaho.gamta.Gamta;
 import de.uka.ipd.idaho.gamta.MutableAnnotation;
+import de.uka.ipd.idaho.gamta.Token;
 import de.uka.ipd.idaho.gamta.TokenSequence;
 import de.uka.ipd.idaho.gamta.Tokenizer;
 import de.uka.ipd.idaho.gamta.defaultImplementation.RegExTokenizer;
@@ -123,6 +122,7 @@ import de.uka.ipd.idaho.im.ImSupplement.Figure;
 import de.uka.ipd.idaho.im.ImSupplement.Graphics;
 import de.uka.ipd.idaho.im.ImSupplement.Graphics.Path;
 import de.uka.ipd.idaho.im.ImSupplement.Graphics.SubPath;
+import de.uka.ipd.idaho.im.ImSupplement.Scan;
 import de.uka.ipd.idaho.im.ImWord;
 import de.uka.ipd.idaho.im.analysis.Imaging;
 import de.uka.ipd.idaho.im.analysis.Imaging.AnalysisImage;
@@ -130,13 +130,12 @@ import de.uka.ipd.idaho.im.analysis.Imaging.ImagePartRectangle;
 import de.uka.ipd.idaho.im.analysis.PageAnalysis;
 import de.uka.ipd.idaho.im.analysis.PageImageAnalysis;
 import de.uka.ipd.idaho.im.analysis.PageImageAnalysis.Block;
-import de.uka.ipd.idaho.im.analysis.PageImageAnalysis.BlockLine;
 import de.uka.ipd.idaho.im.analysis.PageImageAnalysis.Line;
-import de.uka.ipd.idaho.im.analysis.PageImageAnalysis.LineWord;
 import de.uka.ipd.idaho.im.analysis.PageImageAnalysis.Region;
 import de.uka.ipd.idaho.im.analysis.PageImageAnalysis.TableCell;
 import de.uka.ipd.idaho.im.analysis.PageImageAnalysis.TableRow;
 import de.uka.ipd.idaho.im.analysis.PageImageAnalysis.Word;
+import de.uka.ipd.idaho.im.analysis.RegionColoringTest;
 import de.uka.ipd.idaho.im.analysis.WordImageAnalysis;
 import de.uka.ipd.idaho.im.ocr.OcrEngine;
 import de.uka.ipd.idaho.im.ocr.OcrEngine.OcrInstanceUnavailableException;
@@ -552,10 +551,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		//	fill pages
 		if (isTextPdf) {
 			//	TODO filter invisible words
-			this.addTextPdfPages(doc, pData, objects, spm);
+			this.addTextPdfPages(doc, pData, -1, objects, spm);
 		}
 //		else this.addImagePdfPages(doc, pData, catalog.getPageTree(), objects, true, false, false, -1, (wordInFigureCount > (pageCount * 25)), false, scaleFactor, Imaging.ALL_OPTIONS, spm);
-		else this.addImagePdfPages(doc, pData, catalog.getPageTree(), objects, true, false, false, -1, (wordInFigureCount > (pageCount * 25)), ADJUST_EMBEDDED_OCR_BLOCKS, scaleFactor, Imaging.ALL_OPTIONS, spm);
+		else this.addImagePdfPages(doc, pData, catalog.getPageTree(), objects, pageIDs, true, false, false, -1, (wordInFigureCount > (pageCount * 25)), false, ADJUST_EMBEDDED_OCR_BLOCKS, scaleFactor, Imaging.ALL_OPTIONS, spm);
 		
 		//	finally ...
 		return doc;
@@ -601,10 +600,19 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	
 	private static class PPageImage {
 		final BufferedImage image;
+		final int renderOrderNumber;
 		final Rectangle2D.Float bounds;
-		PPageImage(BufferedImage image, Rectangle2D.Float bounds) {
+		final BufferedImage backgroundImage;
+		final BufferedImage textImage;
+//		PPageImage(BufferedImage image, int renderOrderNumber, Rectangle2D.Float bounds) {
+//			this(image, renderOrderNumber, bounds, null, null);
+//		}
+		PPageImage(BufferedImage image, int renderOrderNumber, java.awt.geom.Rectangle2D.Float bounds, BufferedImage backgroundImage, BufferedImage textImage) {
 			this.image = image;
+			this.renderOrderNumber = renderOrderNumber;
 			this.bounds = bounds;
+			this.backgroundImage = backgroundImage;
+			this.textImage = textImage;
 		}
 		float getRawDpi(Rectangle2D.Float pageBounds, boolean debug) {
 			float dpiRatioWidth = (((float) this.image.getWidth()) / this.bounds.width);
@@ -627,7 +635,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	private static final int getFigures = 0x2;
 	private static final int getPaths = 0x4;
 	private PPageData[] getPdfPageData(ImDocument doc, int getWhat, FontDecoderCharset fontCharSet, boolean wordsAreOcr, Set pageIDs, PageTree pageTree, Map objects, ProgressMonitor pm) throws IOException {
-		Tokenizer tokenizer = ((Tokenizer) doc.getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER));
+//		Tokenizer tokenizer = ((Tokenizer) doc.getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER));
+		Tokenizer tokenizer = ((Tokenizer) doc.getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.getDefaultTokenizer()));
 		return this.getPdfPageData(tokenizer, getWhat, fontCharSet, wordsAreOcr, pageIDs, pageTree, objects, pm);
 	}
 	private PPageData[] getPdfPageData(final Tokenizer tokenizer, final int getWhat, final FontDecoderCharset fontCharSet, final boolean wordsAreOcr, final Set pageIDs, final PageTree pageTree, final Map objects, ProgressMonitor pm) throws IOException {
@@ -645,6 +654,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		spm.setMaxProgress(5);
 		final Page[] pdfPages = new Page[pageTree.getNumberOfPages()];
 		final byte[][] pdfPageContents = new byte[pageTree.getNumberOfPages()][];
+		final Library[] pdfPageLibraries = new Library[pageTree.getNumberOfPages()];
 		final Map[] pdfPageResources = new Map[pageTree.getNumberOfPages()];
 		pf = new ParallelFor() {
 			public void doFor(int p) throws Exception {
@@ -693,9 +703,23 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					}
 					pdfPageContents[p] = baos.toByteArray();
 					
-					Object resourcesObj = PdfParser.getObject(pdfPages[p].getEntries(), "Resources", objects);
-					if (resourcesObj == null)
+					pdfPageLibraries[p] = pdfPages[p].getLibrary();
+					
+					Map resourceSource = pdfPages[p].getEntries();
+					Object resourcesObj = PdfParser.getObject(resourceSource, "Resources", objects);
+					while (resourcesObj == null) {
+						Object resourceParent = PdfParser.getObject(resourceSource, "Parent", objects);
+						if (resourceParent instanceof Map) {
+							resourceSource = ((Map) resourceParent);
+							spm.setInfo(" - ascending to resource parent " + resourceParent);
+							resourcesObj = PdfParser.getObject(resourceSource, "Resources", objects);
+						}
+						else break;
+					}
+					if (resourcesObj == null) {
 						spm.setInfo(" --> resources not found");
+						pdfPageResources[p] = new HashMap();
+					}
 					else {
 						resourcesObj = PdfParser.dereference(resourcesObj, objects);
 						spm.setInfo(" --> resources are " + resourcesObj);
@@ -710,8 +734,11 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		//	check errors
 		checkException(pf);
 		
-		//	assess which chars in which fonts are actually used (no use decoding all the others, that do actually exist in some PDFs)
-		if (((getWhat & getWords) != 0) && (fontCharSet != PdfFontDecoder.NO_DECODING)) {
+		/* assess which chars in which fonts are actually used:
+		 * - no use decoding all the others, that do actually exist in some PDFs
+		 * - need to assess which fonts use UTF-16 (no matter which of the two) to handle usages of 0 as valid char code */
+//		if (((getWhat & getWords) != 0) && (fontCharSet != PdfFontDecoder.NO_DECODING)) {
+		if ((getWhat & getWords) != 0) {
 			spm.setStep("Assessing font char usage");
 			spm.setBaseProgress(5);
 			spm.setProgress(0);
@@ -731,7 +758,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				spm.setInfo(" - page rotation is " + rotate);
 				
 				//	assess char usage
-				PdfParser.getPageWordChars(pdfPages[p].getEntries(), pdfPageContents[p], rotate, pdfPageResources[p], objects, wordsAreOcr, spm);
+				PdfParser.getPageWordChars(pdfPages[p].getEntries(), pdfPageContents[p], rotate, pdfPageLibraries[p], pdfPageResources[p], objects, fontCharSet, wordsAreOcr, spm);
 			}
 //			WE CANNOT RUN THIS IN PARALLEL, FONTS START DOING FUNNY THINGS ...
 //			pf = new ParallelFor() {
@@ -751,9 +778,9 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 //			};
 //			ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pdfPages.length : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
 			spm.setProgress(100);
-			
-			//	check errors
-			checkException(pf);
+//			
+//			//	check errors
+//			checkException(pf);
 		}
 		
 		//	extract page objects
@@ -805,7 +832,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				
 				//	get words only
 				if (getWhat == getWords) {
-					PWord[] pWords = PdfParser.getPageWords(pdfPages[p].getEntries(), pdfPageContents[p], rotate, pdfPageResources[p], objects, tokenizer, wordsAreOcr, spm);
+					PWord[] pWords = PdfParser.getPageWords(pdfPages[p].getEntries(), pdfPageContents[p], rotate, pdfPageLibraries[p], pdfPageResources[p], objects, tokenizer, wordsAreOcr, spm);
 					if (PdfExtractorTest.aimAtPage != -1) {
 						System.out.println(" --> extracted " + pWords.length + " words");
 						for (int w = 0; w < pWords.length; w++)
@@ -819,7 +846,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				
 				//	get words and other content
 				else if ((getWhat & getWords) != 0) {
-					PPageContent pContent = PdfParser.getPageContent(pdfPages[p].getEntries(), pdfPageContents[p], rotate, pdfPageResources[p], objects, tokenizer, fontCharSet, wordsAreOcr, spm);
+					PPageContent pContent = PdfParser.getPageContent(pdfPages[p].getEntries(), pdfPageContents[p], rotate, pdfPageLibraries[p], pdfPageResources[p], objects, tokenizer, fontCharSet, wordsAreOcr, spm);
 					if (PdfExtractorTest.aimAtPage != -1) {
 						System.out.println(" --> extracted " + pContent.words.length + " words, " + pContent.figures.length + " figures, and " + pContent.paths.length + " vector graphics paths");
 						for (int w = 0; w < pContent.words.length; w++)
@@ -837,7 +864,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				
 				//	get bitmap figures only
 				else if (getWhat == getFigures) {
-					PFigure[] pFigures = PdfParser.getPageFigures(pdfPages[p].getEntries(), pdfPageContents[p], rotate, pdfPageResources[p], objects, spm);
+					PFigure[] pFigures = PdfParser.getPageFigures(pdfPages[p].getEntries(), pdfPageContents[p], rotate, pdfPageLibraries[p], pdfPageResources[p], objects, spm);
 					if (PdfExtractorTest.aimAtPage != -1) {
 						System.out.println(" --> extracted " + pFigures.length + " figures");
 						for (int f = 0; f < pFigures.length; f++)
@@ -851,7 +878,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				
 				//	get vector graphics paths only
 				else if (getWhat == getPaths) {
-					PPath[] pPaths = PdfParser.getPagePaths(pdfPages[p].getEntries(), pdfPageContents[p], rotate, pdfPageResources[p], objects, spm);
+					PPath[] pPaths = PdfParser.getPagePaths(pdfPages[p].getEntries(), pdfPageContents[p], rotate, pdfPageLibraries[p], pdfPageResources[p], objects, spm);
 					if (PdfExtractorTest.aimAtPage != -1) {
 						System.out.println(" --> extracted " + pPaths.length + " vector graphics paths");
 						for (int t = 0; t < pPaths.length; t++)
@@ -865,7 +892,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				
 				//	get all visual elements, i.e., both bitmap figures and vector graphics paths
 				else {
-					PPageContent pContent = PdfParser.getPageGraphics(pdfPages[p].getEntries(), pdfPageContents[p], rotate, pdfPageResources[p], objects, spm);
+					PPageContent pContent = PdfParser.getPageGraphics(pdfPages[p].getEntries(), pdfPageContents[p], rotate, pdfPageLibraries[p], pdfPageResources[p], objects, spm);
 					if (PdfExtractorTest.aimAtPage != -1) {
 						System.out.println(" --> extracted " + pContent.figures.length + " figures and " + pContent.paths.length + " vector graphics paths");
 						for (int f = 0; f < pContent.figures.length; f++)
@@ -890,7 +917,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		return pData;
 	}
 	
-	private BufferedImage getFigureImage(ImDocument doc, int pageId, PFigure pFigure, boolean isMainFigure, boolean isSoftMask, Page pdfPage, Rectangle2D.Float pdfPageBox, Map objects, float magnification, Map figureSupplementIDs, BufferedImage[] pdfFigureImage, ProgressMonitor spm) throws IOException {
+	private BufferedImage getFigureImage(ImDocument doc, int pageId, PFigure pFigure, boolean isMainFigure, boolean isMask, boolean isSoftMask, Page pdfPage, Rectangle2D.Float pdfPageBox, Map objects, float magnification, Map figureSupplementIDs, BufferedImage[] pdfFigureImage, ProgressMonitor spm) throws IOException {
 		
 		//	figure consists of sub figures
 		if (pFigure.subFigures != null) {
@@ -907,7 +934,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			for (int s = 0; s < pFigure.subFigures.length; s++) {
 				if (PdfExtractorTest.aimAtPage != -1)
 					System.out.println(" - rendering sub image " + pFigure.subFigures[s].name);
-				pFigureSubImages[s] = this.getFigureImage(null, -1, pFigure.subFigures[s], false, false, pdfPage, pdfPageBox, objects, magnification, null, null, spm);
+				pFigureSubImages[s] = this.getFigureImage(null, -1, pFigure.subFigures[s], false, false, false, pdfPage, pdfPageBox, objects, magnification, null, null, spm);
 				if (pFigureSubImages[s] == null) {
 					if (PdfExtractorTest.aimAtPage != -1)
 						System.out.println("   - sub image failed to decode or is blank");
@@ -995,7 +1022,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		}
 		
 		//	decode PStream to image
-		BufferedImage pFigureImage = this.decodeImage(pdfPage, ((PStream) pFigureData).bytes, ((PStream) pFigureData).params, objects, false, isSoftMask);
+		BufferedImage pFigureImage = this.decodeImage(pdfPage, ((PStream) pFigureData).bytes, ((PStream) pFigureData).params, objects, false, isMask, isSoftMask);
 		if (pFigureImage == null) {
 			spm.setInfo("   --> could not decode figure");
 			return null;
@@ -1347,7 +1374,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			while (pFigureDpi > (5 * this.textPdfPageImageDpi * scaleDown))
 				scaleDown++;
 			spm.setInfo("     - scaling down by factor " + scaleDown);
-			BufferedImage sImage = new BufferedImage((pFigureImage.getWidth() / scaleDown), (pFigureImage.getHeight() / scaleDown), (pFigureImage.getType() == BufferedImage.TYPE_CUSTOM) ? BufferedImage.TYPE_INT_ARGB : pFigureImage.getType());
+			BufferedImage sImage = new BufferedImage(Math.max(1, ((pFigureImage.getWidth() + (scaleDown / 2)) / scaleDown)), Math.max(1, ((pFigureImage.getHeight() + (scaleDown / 2)) / scaleDown)), (pFigureImage.getType() == BufferedImage.TYPE_CUSTOM) ? BufferedImage.TYPE_INT_ARGB : pFigureImage.getType());
 			Graphics2D sImageGraphics = sImage.createGraphics();
 			sImageGraphics.setColor(Color.WHITE);
 			sImageGraphics.fillRect(0, 0, sImage.getWidth(), sImage.getHeight());
@@ -1374,7 +1401,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			for (int sm = 0; sm < pFigure.softMasks.length; sm++) {
 				BoundingBox pFigureSmBox = getBoundingBox(pFigure.softMasks[sm].bounds, pdfPageBox, magnification, rotate);
 				spm.setInfo("       - " + pFigureSmBox + ": " + pFigure.softMasks[sm].name);
-				BufferedImage smImage = this.getFigureImage(null, -1, pFigure.softMasks[sm], true, true, pdfPage, pdfPageBox, objects, magnification, figureSupplementIDs, null, spm);
+				BufferedImage smImage = this.getFigureImage(null, -1, pFigure.softMasks[sm], true, false, true, pdfPage, pdfPageBox, objects, magnification, figureSupplementIDs, null, spm);
 				if (smImage != null)
 					pFigureImage = applySoftMaskImage(pFigureImage, pFigureBox, smImage, pFigureSmBox);
 			}
@@ -1601,6 +1628,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @throws IOException
 	 */
 	public ImDocument loadTextPdf(ImDocument doc, Document pdfDoc, byte[] pdfBytes, FontDecoderCharset fontCharSet, Set pageIDs, ProgressMonitor pm) throws IOException {
+		return this.doLoadTextPdf(doc, pdfDoc, pdfBytes, fontCharSet, -1, pageIDs, pm);
+	}
+	
+	private ImDocument doLoadTextPdf(ImDocument doc, Document pdfDoc, byte[] pdfBytes, FontDecoderCharset fontCharSet, int enhanceScanFlags, Set pageIDs, ProgressMonitor pm) throws IOException {
 		
 		//	check arguments
 		pdfDoc = this.getPdfDocument(pdfDoc, pdfBytes);
@@ -1628,7 +1659,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		PPageData[] pData = this.getPdfPageData(doc, (getWords | getFigures | getPaths), fontCharSet, false, pageIDs, catalog.getPageTree(), objects, spm);
 		
 		//	fill pages
-		this.addTextPdfPages(doc, pData, objects, spm);
+		this.addTextPdfPages(doc, pData, enhanceScanFlags, objects, spm);
 		
 		//	finally ...
 		return doc;
@@ -1682,7 +1713,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		PdfParser.decryptObjects(objects, pdfDoc.getSecurityManager());
 		
 		//	get basic page data (takes progress to 30%)
-		PPageData[] pData = this.getPdfPageData(Gamta.INNER_PUNCTUATION_TOKENIZER, getWords, fontCharSet, false, null, catalog.getPageTree(), objects, spm);
+//		PPageData[] pData = this.getPdfPageData(Gamta.INNER_PUNCTUATION_TOKENIZER, getWords, fontCharSet, false, null, catalog.getPageTree(), objects, spm);
+		PPageData[] pData = this.getPdfPageData(Gamta.getDefaultTokenizer(), getWords, fontCharSet, false, null, catalog.getPageTree(), objects, spm);
 		
 		//	find fonts between PDF objects
 		spm.setStep("Storing custom fonts");
@@ -1727,15 +1759,27 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				imFont.setAttribute("xHeight", ("" + pFont.xHeight));
 			if (pFont.descent != 0)
 				imFont.setAttribute("descent", ("" + pFont.descent));
+			int maxCharCode = 0;
 			for (int c = 0; c < charCodes.length; c++) {
 				String charStr = pFont.getUnicode(charCodes[c]);
 				BufferedImage charImage = pFont.getCharImage(charCodes[c]);
 				if ((charStr != null) && (charStr.length() == 1))
 					charStr = ("" + PdfCharDecoder.getNonCombiningChar(charStr.charAt(0)));
-				imFont.addCharacter(pFont.getCharCode(charCodes[c]), charStr, (((charImage == null) || ((charImage.getWidth() * charImage.getHeight()) == 0)) ? null : ImFont.scaleCharImage(charImage, charImageHeight)));
+//				imFont.addCharacter(pFont.getCharCode(charCodes[c]), charStr, (((charImage == null) || ((charImage.getWidth() * charImage.getHeight()) == 0)) ? null : ImFont.scaleCharImage(charImage, charImageHeight)));
+//				if (PdfExtractorTest.aimAtPage != -1)
+//					System.out.println("   - added char " + charCodes[c] + " (" + pFont.getCharCode(charCodes[c]) + "): '" + charStr + "', image is " + charImage);
+				Path2D.Float charPath = pFont.getCharPath(charCodes[c]);
+				int charCode = pFont.getCharCode(charCodes[c]);
+				imFont.addCharacter(charCode, charStr, (((charImage == null) || ((charImage.getWidth() * charImage.getHeight()) == 0)) ? null : ImFont.scaleCharImage(charImage, charImageHeight)), charPath);
+				maxCharCode = Math.max(maxCharCode, charCode);
 				if (PdfExtractorTest.aimAtPage != -1)
-					System.out.println("   - added char " + charCodes[c] + " (" + pFont.getCharCode(charCodes[c]) + "): '" + charStr + "', image is " + charImage);
+					System.out.println("   - added char " + charCodes[c] + " (" + charCode + "): '" + charStr + "', image is " + charImage);
 			}
+			if (maxCharCode > 0x0FFF)
+				imFont.setCharCodeLength(4);
+			else if (maxCharCode > 0x00FF)
+				imFont.setCharCodeLength(3);
+			
 			if (imFont.getCharacterCount() == 0)
 				spm.setInfo(" ==> no custom characters");
 			else {
@@ -1752,7 +1796,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	
 	private static final boolean DEBUG_EXTRACT_FIGURES = true;
 	private static final boolean DEBUG_MERGE_WORDS = false;
-	private static final boolean ALLOW_FLIP_PAGES = true;
+	private static final boolean ALLOW_FLIP_PAGES = true; // TODO add template and UI switches for this
 	
 	private static class DefaultingMap extends HashMap {
 		public Object get(Object key) {
@@ -1761,11 +1805,12 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		}
 	}
 	
-	private void addTextPdfPages(final ImDocument doc, final PPageData[] pData, final Map objects, final SynchronizedProgressMonitor spm) throws IOException {
+	private void addTextPdfPages(final ImDocument doc, final PPageData[] pData, final int enhanceScanFlags, final Map objects, final SynchronizedProgressMonitor spm) throws IOException {
 		final float magnification = (((float) this.textPdfPageImageDpi) / defaultDpi);
 		
 		//	get tokenizer to check and split words with
-		final Tokenizer tokenizer = ((Tokenizer) doc.getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER));
+//		final Tokenizer tokenizer = ((Tokenizer) doc.getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER));
+		final Tokenizer tokenizer = ((Tokenizer) doc.getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.getDefaultTokenizer()));
 		
 		//	prepare working in parallel
 		ParallelFor pf;
@@ -1807,7 +1852,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				if (pData[p].figures.length != 0) {
 					spm.setInfo("Sanitizing figures in page " + p + " of " + pData.length);
 					int rawCount = pData[p].figures.length;
-					sanitizePageFigures(pData[p]);
+					sanitizePageFigures(pData[p], objects);
 					spm.setInfo(" ==> retained " + pData[p].figures.length + " of " + rawCount + " figures in page " + p + " of " + pData.length);
 				}
 			}
@@ -1889,12 +1934,16 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				spm.setInfo(" - all pages (shapes): " + allPageCountShapes + " of " + allGraphicsPageCount);
 				boolean isAllPageDecorationShapes = ((3 * allPageCountShapes) > (2 * allGraphicsPageCount));
 				boolean sIsAllPageDecorationShapes = ((4 * allPageCountShapes) > (3 * allGraphicsPageCount));
+//				boolean isAllPageDecorationShapes = ((6 * allPageCountShapes) > (5 * allGraphicsPageCount));
+//				boolean sIsAllPageDecorationShapes = ((8 * allPageCountShapes) > (7 * allGraphicsPageCount));
 				spm.setInfo(" ==> decoration on all pages (shapes): " + isAllPageDecorationShapes + " (secure : " + sIsAllPageDecorationShapes + ")");
 				
 				int evenOddPageCountShapes = (((pg % 2) == 0) ? evenPageGraphicSigs : oddPageGraphicSigs).getCount(pData[pg].paths[p].getShapesSignature());
 				spm.setInfo(" - even/odd pages (shapes): " + evenOddPageCountShapes + " of " + evenOddGraphicsPageCount);
 				boolean isEvenOddPageDecorationShapes = ((3 * evenOddPageCountShapes) > (2 * evenOddGraphicsPageCount));
 				boolean sIsEvenOddPageDecorationShapes = ((4 * evenOddPageCountShapes) > (3 * evenOddGraphicsPageCount));
+//				boolean isEvenOddPageDecorationShapes = ((6 * evenOddPageCountShapes) > (5 * evenOddGraphicsPageCount));
+//				boolean sIsEvenOddPageDecorationShapes = ((8 * evenOddPageCountShapes) > (7 * evenOddGraphicsPageCount));
 				spm.setInfo(" ==> decoration on even/odd pages (shapes): " + isEvenOddPageDecorationShapes + " (secure : " + sIsEvenOddPageDecorationShapes + ")");
 				
 				if (sIsAllPageDecorationShapes || sIsEvenOddPageDecorationShapes || (isAllPageDecorationShapes && isEvenOddPageDecorationShapes)) {
@@ -1907,12 +1956,16 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				spm.setInfo(" - all pages (bounds): " + allPageCountBounds + " of " + allGraphicsPageCount);
 				boolean isAllPageDecorationBounds = ((4 * allPageCountBounds) > (3 * allGraphicsPageCount));
 				boolean sIsAllPageDecorationBounds = ((5 * allPageCountBounds) > (4 * allGraphicsPageCount));
+//				boolean isAllPageDecorationBounds = ((8 * allPageCountBounds) > (7 * allGraphicsPageCount));
+//				boolean sIsAllPageDecorationBounds = ((10 * allPageCountBounds) > (9 * allGraphicsPageCount));
 				spm.setInfo(" ==> decoration on all pages (bounds): " + isAllPageDecorationBounds + " (secure : " + sIsAllPageDecorationBounds + ")");
 				
 				int evenOddPageCountBounds = (((pg % 2) == 0) ? evenPageGraphicSigs : oddPageGraphicSigs).getCount(pData[pg].paths[p].getBoundsSignature());
 				spm.setInfo(" - even/odd pages (bounds): " + evenOddPageCountBounds + " of " + evenOddGraphicsPageCount);
 				boolean isEvenOddPageDecorationBounds = ((4 * evenOddPageCountBounds) > (3 * evenOddGraphicsPageCount));
 				boolean sIsEvenOddPageDecorationBounds = ((5 * evenOddPageCountBounds) > (4 * evenOddGraphicsPageCount));
+//				boolean isEvenOddPageDecorationBounds = ((8 * evenOddPageCountBounds) > (7 * evenOddGraphicsPageCount));
+//				boolean sIsEvenOddPageDecorationBounds = ((10 * evenOddPageCountBounds) > (9 * evenOddGraphicsPageCount));
 				spm.setInfo(" ==> decoration on even/odd pages (bounds): " + isEvenOddPageDecorationBounds + " (secure : " + sIsEvenOddPageDecorationBounds + ")");
 				
 				if (sIsAllPageDecorationBounds || sIsEvenOddPageDecorationBounds || (isAllPageDecorationBounds && isEvenOddPageDecorationBounds)) {
@@ -2362,6 +2415,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 							bubBounds = pf.bounds;
 						else bubBounds = bubBounds.createUnion(pf.bounds);
 					}
+					if (bubBounds == null) {
+						spm.setInfo(" ==> cannot check block flip due to lack of content");
+						return;
+					}
 					int bubBlockOrientation = getPageContentObjectOrientation(bubBounds, pData[p].pdfPageContentBox, pData[p].rotate, pPageContentOrientation, 0.67);
 					if (bubBlockOrientation != PWord.BOTTOM_UP_FONT_DIRECTION) {
 						spm.setInfo(" ==> block flip rejected due to too many non-bottom-up parts");
@@ -2395,6 +2452,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						if (tdbBounds == null)
 							tdbBounds = pf.bounds;
 						else tdbBounds = tdbBounds.createUnion(pf.bounds);
+					}
+					if (tdbBounds == null) {
+						spm.setInfo(" ==> cannot check block flip due to lack of content");
+						return;
 					}
 					int bubBlockOrientation = getPageContentObjectOrientation(tdbBounds, pData[p].pdfPageContentBox, pData[p].rotate, pPageContentOrientation, 0.67);
 					if (bubBlockOrientation != PWord.TOP_DOWN_FONT_DIRECTION) {
@@ -2492,7 +2553,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				if (pData[p].figures.length != 0) {
 					spm.setInfo("Storing figures in page " + p + " of " + pData.length);
 					pFigureSupplementIDs[p] = new HashMap();
-					storeFiguresAsSupplements(doc, pData[p]/*, pdfDoc*/, objects, magnification, pFigureSupplementIDs[p], spm);
+//					storeFiguresAsSupplements(doc, pData[p], objects, magnification, pFigureSupplementIDs[p], spm);
+					storeFiguresAsSupplements(((enhanceScanFlags == -1) ? doc : null), pData[p], objects, magnification, pFigureSupplementIDs[p], spm);
 				}
 				
 				//	preserve vector based graphics embedded in pages
@@ -2528,8 +2590,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				if (PdfExtractorTest.aimAtPage != -1)
 					System.out.println("Got page content with " + pData[p].words.length + " words, " + ((pData[p].figures == null) ? 0 : pData[p].figures.length) + " figures, and " + ((pData[p].paths == null) ? 0 : pData[p].paths.length) + " vector based paths");
 				
-				//	collect words that lie inside images
-				if ((pData[p].figures != null) && (pData[p].figures.length != 0)) {
+				//	collect words that lie inside images (unless they are background images)
+				if ((enhanceScanFlags == -1) && (pData[p].figures != null) && (pData[p].figures.length != 0)) {
 					spm.setInfo("Getting in-figure words in page " + p + " of " + pData.length);
 					for (int f = 0; f < pData[p].figures.length; f++) {
 						HashSet inFigureWords = null;
@@ -2757,15 +2819,28 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				imFont.setAttribute("xHeight", ("" + pFont.xHeight));
 			if (pFont.descent != 0)
 				imFont.setAttribute("descent", ("" + pFont.descent));
+			if (pFont.isVectorized)
+				imFont.setAttribute(ImFont.VECTORIZED_ATTRIBUTE);
+			int maxCharCode = 0;
 			for (int c = 0; c < charCodes.length; c++) {
 				String charStr = pFont.getUnicode(charCodes[c]);
 				BufferedImage charImage = pFont.getCharImage(charCodes[c]);
 				if ((charStr != null) && (charStr.length() == 1))
 					charStr = ("" + PdfCharDecoder.getNonCombiningChar(charStr.charAt(0)));
-				imFont.addCharacter(pFont.getCharCode(charCodes[c]), charStr, (((charImage == null) || ((charImage.getWidth() * charImage.getHeight()) == 0)) ? null : ImFont.scaleCharImage(charImage)));
+//				imFont.addCharacter(pFont.getCharCode(charCodes[c]), charStr, (((charImage == null) || ((charImage.getWidth() * charImage.getHeight()) == 0)) ? null : ImFont.scaleCharImage(charImage)));
+//				if (PdfExtractorTest.aimAtPage != -1)
+//					System.out.println("   - added char " + charCodes[c] + " (" + pFont.getCharCode(charCodes[c]) + "): '" + charStr + "', image is " + charImage);
+				Path2D.Float charPath = pFont.getCharPath(charCodes[c]);
+				int charCode = pFont.getCharCode(charCodes[c]);
+				imFont.addCharacter(charCode, charStr, (((charImage == null) || ((charImage.getWidth() * charImage.getHeight()) == 0)) ? null : ImFont.scaleCharImage(charImage)), charPath);
+				maxCharCode = Math.max(maxCharCode, charCode);
 				if (PdfExtractorTest.aimAtPage != -1)
-					System.out.println("   - added char " + charCodes[c] + " (" + pFont.getCharCode(charCodes[c]) + "): '" + charStr + "', image is " + charImage);
+					System.out.println("   - added char " + charCodes[c] + " (" + charCode + "): '" + charStr + "', image is " + charImage);
 			}
+			if (maxCharCode > 0x0FFF)
+				imFont.setCharCodeLength(4);
+			else if (maxCharCode > 0x00FF)
+				imFont.setCharCodeLength(3);
 			
 			if (imFont.getCharacterCount() == 0)
 				spm.setInfo(" ==> no custom characters");
@@ -2819,6 +2894,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		spm.setProgress(0);
 		spm.setMaxProgress(70);
 		final BufferedImage[] pageImages = new BufferedImage[pData.length];
+		final BufferedImage[] pageBackgroundImages = new BufferedImage[pData.length];
 		final String[] imageNames = new String[pData.length];
 		final int[] imageDPIs = new int[pData.length];
 		final BoundingBox[] pageBounds = new BoundingBox[pData.length];
@@ -2846,6 +2922,39 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					else spm.setInfo(" --> could not use page image generated earlier, resolution mismatch at " + pi.currentDpi + " DPI");
 				}
 				
+				//	always render page background image in DjVu mode
+				if (enhanceScanFlags != -1) {
+					
+					//	render figures into page background image
+					ArrayList pageImageParts = getPageImageParts(pData[p], p, objects, spm, null);
+					PPageImage pPageImage = getPageImage(pageImageParts, objects, pData[p].pdfPage, pData[p].pdfPageBox, pData[p].rotate, null, spm);
+					int pPageImageDpi = getNominalDPI(pPageImage.getRawDpi(pData[p].pdfPageBox, (PdfExtractorTest.aimAtPage != -1)));
+					
+					//	store as scan
+					synchronized (doc) {
+						Scan.createScan(doc, p, pPageImage.renderOrderNumber, pPageImageDpi, pPageImage.image);
+					}
+					
+					//	run scan enhancement
+					BufferedImage pageBackgroundImage = pPageImage.image;
+					if (enhanceScanFlags != 0) {
+						AnalysisImage ai = Imaging.wrapImage(pageBackgroundImage, null);
+						spm.setInfo(" - enhancing background image ...");
+						ai = Imaging.correctImage(ai, pPageImageDpi, null, enhanceScanFlags, spm);
+						pageBackgroundImage = ai.getImage();
+					}
+					
+					//	adjust resolution & store background page image
+					BoundingBox pageBox = getBoundingBox(pData[p].pdfPageContentBox, pData[p].pdfPageContentBox, magnification, pData[p].rotate);
+					pageBackgroundImages[p] = new BufferedImage(pageBox.getWidth(), pageBox.getHeight(), BufferedImage.TYPE_INT_RGB);;
+					Graphics2D pbiGr = pageBackgroundImages[p].createGraphics();
+					pbiGr.setColor(Color.WHITE);
+					pbiGr.fillRect(0, 0, pageBackgroundImages[p].getWidth(), pageBackgroundImages[p].getHeight());
+					pbiGr.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+					pbiGr.drawImage(pageBackgroundImage, 0, 0, pageBackgroundImages[p].getWidth(), pageBackgroundImages[p].getHeight(), null);
+					pbiGr.dispose();
+				}
+				
 				//	generate page image
 				if (pageImages[p] == null) {
 					spm.setInfo(" - generating page image");
@@ -2869,7 +2978,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					//	conflate words, figures, and graphics
 					ArrayList pageObjects = new ArrayList();
 					pageObjects.addAll(Arrays.asList(pData[p].words));
-					pageObjects.addAll(Arrays.asList(pData[p].figures));
+					if (enhanceScanFlags == -1)
+						pageObjects.addAll(Arrays.asList(pData[p].figures));
 					pageObjects.addAll(Arrays.asList(pData[p].paths));
 					
 					//	order by increasing render order number
@@ -2881,6 +2991,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					piGr.setColor(Color.WHITE);
 					piGr.fillRect(0, 0, pageImages[p].getWidth(), pageImages[p].getHeight());
 					piGr.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+					if (pageBackgroundImages[p] != null)
+						piGr.drawImage(pageBackgroundImages[p], 0, 0, pageImages[p].getWidth(), pageImages[p].getHeight(), null);
 					for (int o = 0; o < pageObjects.size(); o++) {
 						PObject po = ((PObject) pageObjects.get(o));
 						if (PdfExtractorTest.aimAtPage != -1)
@@ -2903,28 +3015,6 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 								System.out.println(" - " + wb + " in page");
 							
 							//	prepare color, observe background luminosity if we're inside an image or graphics (and in bounds)
-//							Color color = Color.BLACK;
-//							if ((wb.left < 0) || (wb.top < 0)) {}
-//							else if ((wb.getWidth() < 1) || (wb.getHeight() < 1)) {}
-//							else if ((pageImages[p].getWidth() < wb.right) || (pageImages[p].getHeight() < wb.bottom)) {}
-//							else if (((pInFigureWords[p] == null) || !pInFigureWords[p].contains(pw)) && ((pInGraphicsWords[p] == null) || !pInGraphicsWords[p].contains(pw))) {}
-//							else {
-//								if (PdfExtractorTest.aimAtPage != -1)
-//									System.out.println(" - getting background of " + wb);
-//								BufferedImage wi = pageImages[p].getSubimage(wb.left, wb.top, wb.getWidth(), wb.getHeight());
-//								AnalysisImage wai = Imaging.wrapImage(wi, null);
-//								byte[][] brightness = wai.getBrightness();
-//								int brightnessSum = 0;
-//								for (int c = 0; c < brightness.length; c++) {
-//									for (int r = 0; r < brightness[c].length; r++)
-//										brightnessSum += brightness[c][r];
-//								}
-//								int avgBrightness = (brightnessSum / (wb.getWidth() * wb.getHeight()));
-//								if (PdfExtractorTest.aimAtPage != -1)
-//									System.out.println(" - average backing figure or graphics brightness is " + avgBrightness);
-//								if (avgBrightness < 64)
-//									color = Color.WHITE;
-//							}
 							Color color = ((PdfExtractorTest.aimAtPage == -1) ? pw.color : ((pw.color == Color.RED) ? Color.RED : Color.GREEN));
 							piGr.setColor(color);
 							
@@ -3133,7 +3223,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				}
 				
 				//	if we have more pages than we can process in parallel, set array element to null to allow garbage collection
-				if (pageImages.length > Runtime.getRuntime().availableProcessors())
+				if (Runtime.getRuntime().availableProcessors() < pageImages.length)
 					pageImages[p] = null;
 			}
 		};
@@ -3196,7 +3286,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					if ((pData[p].words[w].font != null) && (pData[p].words[w].font.name != null))
 						word.setAttribute(FONT_NAME_ATTRIBUTE, pData[p].words[w].font.name);
 					if (pData[p].words[w].fontSize != -1)
-						word.setFontSize(pData[p].words[w].fontSize);
+//						word.setFontSize(pData[p].words[w].fontSize);
+						word.setFontSize(Math.round(pData[p].words[w].fontSize));
 					if (pData[p].words[w].bold)
 						word.setAttribute(BOLD_ATTRIBUTE);
 					if (pData[p].words[w].italics)
@@ -3204,17 +3295,27 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					
 					//	add font char ID string (using <=255 substitutes for char codes in excess of 255)
 					StringBuffer charCodesHex = new StringBuffer();
-					for (int c = 0; c < pData[p].words[w].charCodes.length(); c++) {
-						String charCodeHex = Integer.toString((((int) pData[p].words[w].charCodes.charAt(c)) & 255), 16).toUpperCase();
-						if (charCodeHex.length() < 2)
-							charCodesHex.append("0");
+//					for (int c = 0; c < pData[p].words[w].charCodes.length(); c++) {
+//						String charCodeHex = Integer.toString((((int) pData[p].words[w].charCodes.charAt(c)) & 255), 16).toUpperCase();
+//						if (charCodeHex.length() < 2)
+//							charCodesHex.append("0");
+//						charCodesHex.append(charCodeHex);
+//					}
+					int charCodeLength = ((pData[p].words[w].font == null) ? 2 : pData[p].words[w].font.getCharCodeLength());
+					for (int c = 0; c < pData[p].words[w].charCodesEnlarged.length(); c++) {
+						int charCode = pData[p].words[w].charCodesEnlarged.charAt(c);
+						if (charCode == 0)
+							continue;
+						String charCodeHex = Integer.toString(charCode, 16).toUpperCase();
+						while (charCodeHex.length() < charCodeLength)
+							charCodeHex = ("0" + charCodeHex);
 						charCodesHex.append(charCodeHex);
 					}
 					word.setAttribute(ImFont.CHARACTER_CODE_STRING_ATTRIBUTE, charCodesHex.toString());
 					if (PdfExtractorTest.aimAtPage != -1) {
 						System.out.print("Got word '" + pData[p].words[w].str + "' with char codes '");
-						for (int c = 0; c < pData[p].words[w].charCodes.length(); c++)
-							System.out.print(((c == 0) ? "" : " ") + Integer.toString(((int) pData[p].words[w].charCodes.charAt(c)), 16));
+						for (int c = 0; c < pData[p].words[w].charCodesEnlarged.length(); c++)
+							System.out.print(((c == 0) ? "" : " ") + Integer.toString(((int) pData[p].words[w].charCodesEnlarged.charAt(c)), 16));
 						System.out.println("' ==> " + charCodesHex);
 					}
 					
@@ -3254,6 +3355,9 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			pageBounds[p] = null;
 			pData[p] = null;
 		}
+		
+		//	check how many pages to observe title banner in
+		final int titleBannerMaxPage = (coverPageCount + docLayout.getIntProperty("titleBannerMaxPage", -1));
 		
 		//	analyze page structure
 		spm.setStep("Analyzing page structure");
@@ -3326,6 +3430,9 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				}
 				int avgWordHeight = ((wordHeightCount == 0) ? 0 : (wordHeightSum / wordHeightCount));
 				
+				//	TODO get title banner area if applicable
+				BoundingBox titleBannerArea = ((p < titleBannerMaxPage) ? docLayout.getBoxProperty("titleBannerArea", null, imageDPIs[p]) : null);
+				
 				//	collect page figures and graphics
 				ImSupplement[] pageSupplements;
 				synchronized (doc) { // need to synchronize accessing supplements
@@ -3334,8 +3441,14 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				ArrayList figureList = new ArrayList();
 				ArrayList graphicsList = new ArrayList();
 				for (int s = 0; s < pageSupplements.length; s++) {
-					if (pageSupplements[s] instanceof Figure)
+					if (pageSupplements[s] instanceof Figure) {
+						if (titleBannerArea != null) /* ignore title banner where required */ {
+							BoundingBox figureArea = ((Figure) pageSupplements[s]).getBounds();
+							if (titleBannerArea.includes(figureArea, false))
+								continue;
+						}
 						figureList.add(pageSupplements[s]);
+					}
 					else if (pageSupplements[s] instanceof Graphics)
 						graphicsList.add(pageSupplements[s]);
 				}
@@ -3370,6 +3483,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						gbb = gbb.intersect(pageGraphics[g].getClipBounds());
 						if (PdfExtractorTest.aimAtPage != -1)
 							System.out.println(" - graphics visible area is " + gbb);
+						if (gbb == null)
+							continue; // completely clipped
 					}
 					if ((pFlipContentBox[p] == null) && !contentArea.includes(gbb, true))
 						continue; // unless we have flipped content, omit graphics whose center is outside content bounds
@@ -3535,7 +3650,13 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					analyzeRegionStructure(pData[p], (p - coverPageCount), pages[p], pContentBox, imageDPIs[p], magnification, docLayout, ((Graphics) pTextBoxGraphics.get(g)), wordsByBoxes, pWatermarkWords[p], pInTextBoxWordBounds, null, spm);
 				
 				//	add regions created from figure and graphics supplements, converting any contained words to labels
-				addFiguresAndGraphics(pages[p], pContentBox, pageImage, pageFigures, pageGraphics);
+//				addFiguresAndGraphics(pages[p], pContentBox, pageImage, pageFigures, pageGraphics);
+				if (enhanceScanFlags == -1)
+					addFiguresAndGraphics(pages[p], pContentBox, pageImage, pageFigures, pageGraphics);
+				else {
+					addFiguresAndGraphics(pages[p], pContentBox, pageImage, new Figure[0], pageGraphics);
+					addBackgroundRenderedFigures((p - coverPageCount), pageBounds[p], pageBackgroundImages[p], imageDPIs[p], doc, docLayout, pages[p], spm);
+				}
 				
 				//	adjust bounding boxes
 				shrinkToChildren(pages[p], LINE_ANNOTATION_TYPE, WORD_ANNOTATION_TYPE, -1);
@@ -3914,22 +4035,22 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		HashSet pWordHashes = new HashSet();
 		ArrayList pWords = new ArrayList();
 		void add(PWord word) {
-			String wh = (word.charCodes + "@" + word.font.name);
+			String wh = (word.charCodesEnlarged + "@" + word.font.name);
 			this.pWordHashes.add(wh);
-			String whp = (word.charCodes + "@" + word.font.name + "@" + word.bounds);
+			String whp = (word.charCodesEnlarged + "@" + word.font.name + "@" + word.bounds);
 			this.pWordHashes.add(whp);
 			this.pWords.add(word);
 		}
 		boolean contains(PWord word) {
-			String wh = (word.charCodes + "@" + word.font.name);
+			String wh = (word.charCodesEnlarged + "@" + word.font.name);
 			if (!this.pWordHashes.contains(wh))
 				return false;
-			String whp = (word.charCodes + "@" + word.font.name + "@" + word.bounds);
+			String whp = (word.charCodesEnlarged + "@" + word.font.name + "@" + word.bounds);
 			if (this.pWordHashes.contains(whp))
 				return true;
 			for (int w = 0; w < this.pWords.size(); w++) {
 				PWord cWord = ((PWord) this.pWords.get(w));
-				if (!cWord.charCodes.equals(word.charCodes))
+				if (!cWord.charCodesEnlarged.equals(word.charCodesEnlarged))
 					continue;
 				if (!cWord.font.name.equals(word.font.name))
 					continue;
@@ -4202,6 +4323,183 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		for (int i = 0; i < pageStructImages.length; i++) {
 			if ((pageStructImageCoverage[i] * 5) > (((pageStructImages[i].bounds.right - pageStructImages[i].bounds.left) * (pageStructImages[i].bounds.bottom - pageStructImages[i].bounds.top)) * 4))
 				page.removeRegion(pageStructImages[i]);
+		}
+	}
+	
+//	private static void addBackgroundRenderedFigures(PPageData pData, int pageIndex, BoundingBox pageBounds, int pageImageDpi, float magnification, ImDocument doc, ImDocumentStyle docLayout, ImPage page, Map pFigureSupplementIDs, ProgressMonitor spm) throws IOException {
+	private static void addBackgroundRenderedFigures(int pageIndex, BoundingBox pageBounds, BufferedImage pageBackgroundImage, int pageImageDpi, ImDocument doc, ImDocumentStyle docLayout, ImPage page, ProgressMonitor spm) throws IOException {
+//		
+//		//	render them all in a single loop
+//		BufferedImage pageBackgroundImage = new BufferedImage(pageBounds.getWidth(), pageBounds.getHeight(), BufferedImage.TYPE_INT_ARGB);
+//		Graphics2D pbiGr = pageBackgroundImage.createGraphics();
+//		pbiGr.setColor(Color.WHITE);
+//		pbiGr.fillRect(0, 0, pageBackgroundImage.getWidth(), pageBackgroundImage.getHeight());
+//		pbiGr.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+//		for (int f = 0; f < pData.figures.length; f++) {
+//			PFigure pf = pData.figures[f];
+//			if (PdfExtractorTest.aimAtPage != -1)
+//				System.out.println("Rendering " + pf);
+//			
+//			//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
+//			BoundingBox fb = getBoundingBox(pf.bounds, pData.pdfPageContentBox, magnification, pData.rotate);
+//			if (PdfExtractorTest.aimAtPage != -1) {
+//				System.out.println(" - bounds are " + pf.bounds);
+//				System.out.println(" - " + fb + " in page");
+//			}
+//			
+//			//	load and render figure image
+//			ImSupplement.Figure figureSupplement = ((ImSupplement.Figure) doc.getSupplement((String) pFigureSupplementIDs.get(pf)));
+//			if (figureSupplement != null) try {
+//				BufferedImage fbi = ImageIO.read(figureSupplement.getInputStream());
+//				Shape preClip = pbiGr.getClip();
+//				AffineTransform preAt = pbiGr.getTransform();
+//				Composite preComp = pbiGr.getComposite();
+//				
+//				//	use white-neutral blend mode composite for mask images
+//				Composite maskComp = null;
+//				if ((pf.refOrData instanceof PStream) && ((PStream) pf.refOrData).params.containsKey("ImageMask"))
+//					maskComp = BlendComposite.getInstance("Multiply");
+//				
+//				//	observe clipping
+//				if (pf.clipPaths != null) {
+//					BoundingBox cb = getBoundingBox(pf.visibleBounds, pData.pdfPageContentBox, magnification, pData.rotate);
+//					pbiGr.clipRect(cb.left, cb.top, cb.getWidth(), cb.getHeight());
+//					if (PdfExtractorTest.aimAtPage != -1) {
+//						System.out.println(" - clip bounds are " + pf.visibleBounds);
+//						System.out.println(" - clipped to " + cb + " in page");
+//					}
+//				}
+//				
+//				//	render image
+//				pbiGr.translate(fb.left, fb.top);
+//				if (maskComp != null)
+//					pbiGr.setComposite(maskComp);
+//				pbiGr.drawImage(fbi, 0, 0, fb.getWidth(), fb.getHeight(), null);
+//				
+//				//	reset graphics
+//				pbiGr.setComposite(preComp);
+//				pbiGr.setTransform(preAt);
+//				pbiGr.setClip(preClip);
+//			}
+//			catch (RuntimeException re) {
+//				System.out.println("Error rendering figure at " + figureSupplement.getBounds() + ": " + re.getMessage());
+//				re.printStackTrace(System.out);
+//			}
+//		}
+		if (PdfExtractorTest.aimAtPage != -1) {
+			ImageDisplayDialog idd = new ImageDisplayDialog("Background Image for Page");
+			idd.addImage(pageBackgroundImage, "_");
+			idd.setSize(600, 800);
+			idd.setLocationRelativeTo(null);
+			idd.setVisible(true);
+		}
+		
+		//	wrap image for structure analysis
+		//	TODOne run image enhancement to tease out actual figures  (background elimination, white balance, edge cleanup)
+//		AnalysisImage apbi = Imaging.wrapImage(pageBackgroundImage, null);
+//		Imaging.correctImage(apbi, pageImageDpi, (0
+//				| Imaging.ELIMINATE_BACKGROUND
+//				| Imaging.WHITE_BALANCE
+//				| Imaging.CLEAN_PAGE_EDGES
+//			), spm);
+		
+		//	get column and block margin layout hints (defaulting to kind of universal ball park figures)
+		int minBlockMargin = docLayout.getIntProperty("minBlockMargin", (pageImageDpi / 10), pageImageDpi);
+		int minColumnMargin = docLayout.getIntProperty("minColumnMargin", (pageImageDpi / 10), pageImageDpi);
+		
+		//	get (or compute) column areas to correct erroneous column splits (only for main text, though, as text boxes may differ)
+		BoundingBox[] columnAreas;
+		columnAreas = docLayout.getBoxListProperty("columnAreas", null, pageImageDpi);
+		columnAreas = docLayout.getBoxListProperty("page.columnAreas", columnAreas, pageImageDpi);
+		if ((pageIndex % 2) == 0)
+			columnAreas = docLayout.getBoxListProperty("page.odd.columnAreas", columnAreas, pageImageDpi);
+		else columnAreas = docLayout.getBoxListProperty("page.even.columnAreas", columnAreas, pageImageDpi);
+		if (pageIndex == 0)
+			columnAreas = docLayout.getBoxListProperty("page.first.columnAreas", columnAreas, pageImageDpi);
+		
+		//	get minimum column width to prevent column splits resulting in too narrow columns
+		int minColumnWidth = docLayout.getIntProperty("minColumnWidth", -1, pageImageDpi);
+		
+		//	obtain visual structure
+		AnalysisImage apbi = Imaging.wrapImage(pageBackgroundImage, null);
+		Region rootRegion = PageImageAnalysis.getPageRegion(apbi, pageImageDpi, minColumnMargin, minBlockMargin, columnAreas, minColumnWidth, false, spm);
+		
+		//	add page content to document
+//		return addRegionStructure(page, null, pageRootRegion, wordsByBoxes, pageStructImageRegions, spm);
+		
+		//	TODO mark any blocks as images that don't contain words
+		ArrayList imageRegions = new ArrayList();
+		imageRegions.add(rootRegion);
+		Graphics2D pbiGr = null;
+		for (int r = 0; r < imageRegions.size(); r++) {
+			Region region = ((Region) imageRegions.get(r));
+			BoundingBox bounds = region.getBoundingBox();
+			if (PdfExtractorTest.aimAtPage != -1)
+				System.out.println("Checking for background figure " + bounds);
+			
+			//	check dimensions
+			if (bounds.getWidth() < pageImageDpi) {
+				if (PdfExtractorTest.aimAtPage != -1)
+					System.out.println(" ==> too narrow");
+				continue;
+			}
+			if (bounds.getHeight() < pageImageDpi) {
+				if (PdfExtractorTest.aimAtPage != -1)
+					System.out.println(" ==> too low");
+				continue;
+			}
+			
+			//	check position on page (require at least overlap with central 3/4 either way)
+			//	TODO or central 80% ?!? either way?
+			if ((bounds.right * 8) < (pageBounds.getWidth() * 1)) {
+				if (PdfExtractorTest.aimAtPage != -1)
+					System.out.println(" ==> too far left");
+				continue;
+			}
+			if ((bounds.left * 8) > (pageBounds.getWidth() * 7)) {
+				if (PdfExtractorTest.aimAtPage != -1)
+					System.out.println(" ==> too far right");
+				continue;
+			}
+			if ((bounds.bottom * 8) < (pageBounds.getHeight() * 1)) {
+				if (PdfExtractorTest.aimAtPage != -1)
+					System.out.println(" ==> too far up");
+				continue;
+			}
+			if ((bounds.top * 8) > (pageBounds.getHeight() * 7)) {
+				if (PdfExtractorTest.aimAtPage != -1)
+					System.out.println(" ==> too far down");
+				continue;
+			}
+			
+			//	add sub regions for later inspection
+			for (int sr = 0; sr < region.getSubRegionCount(); sr++)
+				imageRegions.add(region.getSubRegion(sr));
+			
+			//	check for textual content
+			ImWord[] words = page.getWordsInside(bounds);
+			if (words.length != 0) {
+				if (PdfExtractorTest.aimAtPage != -1)
+					System.out.println(" ==> found " + words.length + " words");
+				continue;
+			}
+			
+			//	this one looks good
+			ImRegion image = new ImRegion(page, bounds, ImRegion.IMAGE_TYPE);
+			if (PdfExtractorTest.aimAtPage != -1) {
+				System.out.println(" ==> marked image at " + image.bounds);
+				if (pbiGr == null)
+					pbiGr = pageBackgroundImage.createGraphics();
+				pbiGr.setColor(Color.RED);
+				pbiGr.drawRect(bounds.left, bounds.top, bounds.getWidth(), bounds.getHeight());
+			}
+		}
+		if (PdfExtractorTest.aimAtPage != -1) {
+			ImageDisplayDialog idd = new ImageDisplayDialog("Background Image for Page (with Image Regions)");
+			idd.addImage(pageBackgroundImage, "_");
+			idd.setSize(600, 800);
+			idd.setLocationRelativeTo(null);
+			idd.setVisible(true);
 		}
 	}
 	
@@ -4990,9 +5288,9 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			}
 			if (PdfExtractorTest.aimAtPage != -1) {
 				System.out.println(" - splitting " + pData.words[w].str);
-				System.out.print("   - char codes are " + pData.words[w].charCodes + " (");
-				for (int c = 0; c < pData.words[w].charCodes.length(); c++)
-					 System.out.print(((c == 0) ? "" : " ") + Integer.toString(((int) pData.words[w].charCodes.charAt(c)), 16));
+				System.out.print("   - char codes are " + pData.words[w].charCodesEnlarged + " (");
+				for (int c = 0; c < pData.words[w].charCodesEnlarged.length(); c++)
+					 System.out.print(((c == 0) ? "" : " ") + Integer.toString(((int) pData.words[w].charCodesEnlarged.charAt(c)), 16));
 				System.out.println(")");
 			}
 			
@@ -5016,25 +5314,28 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			}
 			
 			//	perform word split
-			int charCodeCharPos = 0;
-			char charCodeChar = ((char) 0);
-			int charCodeCharRepeatLeft = 0;
+//			int charCodeCharPos = 0;
+//			char charCodeChar = ((char) 0);
+//			int charCodeCharRepeatLeft = 0;
 			for (int s = 0; s < splitTokens.length; s++) {
 				
 				//	split character codes according to tokens
-				splitTokens[s] = pWordTokens.valueAt(s);
-				splitCharCodes[s] = ""; // have to do it this way, as char code string might have different length than Unicode string
-				for (int splitCharCodeLength = 0; splitCharCodeLength < splitTokens[s].length();) {
-					if (charCodeCharRepeatLeft == 0) {
-						charCodeChar = pData.words[w].charCodes.charAt(charCodeCharPos++);
-						charCodeCharRepeatLeft = (((int) charCodeChar) / 256);
-					}
-					int splitCharCodeRest = (splitTokens[s].length() - splitCharCodeLength);
-					int splitCharCodeCharRepeat = Math.min(charCodeCharRepeatLeft, splitCharCodeRest);
-					charCodeCharRepeatLeft -= splitCharCodeCharRepeat;
-					splitCharCodes[s] += ((char) ((splitCharCodeCharRepeat * 256) | (((int) charCodeChar) & 255)));
-					splitCharCodeLength += splitCharCodeCharRepeat;
-				}
+//				splitTokens[s] = pWordTokens.valueAt(s);
+//				splitCharCodes[s] = ""; // have to do it this way, as char code string might have different length than Unicode string
+//				for (int splitCharCodeLength = 0; splitCharCodeLength < splitTokens[s].length();) {
+//					if (charCodeCharRepeatLeft == 0) {
+//						charCodeChar = pData.words[w].charCodes.charAt(charCodeCharPos++);
+//						charCodeCharRepeatLeft = (((int) charCodeChar) / 256);
+//					}
+//					int splitCharCodeRest = (splitTokens[s].length() - splitCharCodeLength);
+//					int splitCharCodeCharRepeat = Math.min(charCodeCharRepeatLeft, splitCharCodeRest);
+//					charCodeCharRepeatLeft -= splitCharCodeCharRepeat;
+//					splitCharCodes[s] += ((char) ((splitCharCodeCharRepeat * 256) | (((int) charCodeChar) & 255)));
+//					splitCharCodeLength += splitCharCodeCharRepeat;
+//				}
+				Token pWordToken = pWordTokens.tokenAt(s);
+				splitTokens[s] = pWordToken.getValue();
+				splitCharCodes[s] = pData.words[w].charCodesEnlarged.substring(pWordToken.getStartOffset(), pWordToken.getEndOffset()); // char code string now has same length as Unicode string
 				
 				//	apply simple equidistant split for monospaced fonts
 				if (pWordFont == null)
@@ -5071,9 +5372,9 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					splitTokenLeft += splitTokenWidth;
 					if (PdfExtractorTest.aimAtPage != -1) {
 						System.out.println("   --> split word part " + spWord.str + ", bounds are " + spWord.bounds);
-						System.out.print("     - char codes are " + spWord.charCodes + " (");
-						for (int c = 0; c < spWord.charCodes.length(); c++)
-							 System.out.print(((c == 0) ? "" : " ") + Integer.toString(((int) spWord.charCodes.charAt(c)), 16));
+						System.out.print("     - char codes are " + spWord.charCodesEnlarged + " (");
+						for (int c = 0; c < spWord.charCodesEnlarged.length(); c++)
+							 System.out.print(((c == 0) ? "" : " ") + Integer.toString(((int) spWord.charCodesEnlarged.charAt(c)), 16));
 						System.out.println(")");
 					}
 				}
@@ -5102,9 +5403,9 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					splitTokenLeft += splitTokenWidth;
 					if (PdfExtractorTest.aimAtPage != -1) {
 						System.out.println("   --> split word part " + spWord.str + ", bounds are " + spWord.bounds);
-						System.out.print("     - char codes are " + spWord.charCodes + " (");
-						for (int c = 0; c < spWord.charCodes.length(); c++)
-							 System.out.print(((c == 0) ? "" : " ") + Integer.toString(((int) spWord.charCodes.charAt(c)), 16));
+						System.out.print("     - char codes are " + spWord.charCodesEnlarged + " (");
+						for (int c = 0; c < spWord.charCodesEnlarged.length(); c++)
+							 System.out.print(((c == 0) ? "" : " ") + Integer.toString(((int) spWord.charCodesEnlarged.charAt(c)), 16));
 						System.out.println(")");
 					}
 				}
@@ -5133,9 +5434,9 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					splitTokenLeft -= splitTokenWidth;
 					if (PdfExtractorTest.aimAtPage != -1) {
 						System.out.println("   --> split word part " + spWord.str + ", bounds are " + spWord.bounds);
-						System.out.print("     - char codes are " + spWord.charCodes + " (");
-						for (int c = 0; c < spWord.charCodes.length(); c++)
-							 System.out.print(((c == 0) ? "" : " ") + Integer.toString(((int) spWord.charCodes.charAt(c)), 16));
+						System.out.print("     - char codes are " + spWord.charCodesEnlarged + " (");
+						for (int c = 0; c < spWord.charCodesEnlarged.length(); c++)
+							 System.out.print(((c == 0) ? "" : " ") + Integer.toString(((int) spWord.charCodesEnlarged.charAt(c)), 16));
 						System.out.println(")");
 					}
 				}
@@ -5404,13 +5705,15 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				break;
 			}
 		}
-		System.out.println("Overall word space stats:");
-		for (Iterator wsit = pWordSpaceStats.iterator(); wsit.hasNext();) {
-			Float ws = ((Float) wsit.next());
-			System.out.println(" - " + ws + " (" + pWordSpaceStats.getCount(ws) + ")");
+		if (DEBUG_MERGE_WORDS) {
+			System.out.println("Overall word space stats:");
+			for (Iterator wsit = pWordSpaceStats.iterator(); wsit.hasNext();) {
+				Float ws = ((Float) wsit.next());
+				System.out.println(" - " + ws + " (" + pWordSpaceStats.getCount(ws) + ")");
+			}
+			System.out.println(" ==> average is " + pWordSpaceStats.getAverageWordSpace());
+			System.out.println(" ==> median is " + pWordSpaceStats.getMedianWordSpace());
 		}
-		System.out.println(" ==> average is " + pWordSpaceStats.getAverageWordSpace());
-		System.out.println(" ==> median is " + pWordSpaceStats.getMedianWordSpace());
 		
 		/* merge or join subsequent words less than DPI/60 apart, as they are
 		 * likely separated due to implicit spaces or font changes (at 10 pt,
@@ -5435,12 +5738,12 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				lpWord = pData.words[w];
 				lpWordLineSpaceStats = ((LineWordSpaceStatistics) pWordLineSpaceStatistics.get(lpWord));
 				lpWordTokens = pWordTokens;
-				System.out.println(" - different lines by statistics objects at '" + pData.words[w].str + "'"); // TODO debug flag this after tests
+				if (DEBUG_MERGE_WORDS) System.out.println(" - different lines by statistics objects at '" + pData.words[w].str + "'");
 				float lineDensityByAverage = (lpWordLineSpaceStats.getAverageWordSpace() / pWordSpaceStats.getAverageWordSpace());
 				float lineDensityByMedian = (lpWordLineSpaceStats.getMedianWordSpace() / pWordSpaceStats.getMedianWordSpace());
-				System.out.println(" - line density is " + lineDensityByAverage + " (avg), " + lineDensityByMedian + " (med)"); // TODO debug flag this after tests
+				if (DEBUG_MERGE_WORDS) System.out.println(" - line density is " + lineDensityByAverage + " (avg), " + lineDensityByMedian + " (med)");
 				lineDensityCompFactor = Math.min(1, Math.max(lineDensityByAverage, lineDensityByMedian));
-				System.out.println(" --> line density compensation factor is " + lineDensityCompFactor); // TODO debug flag this after tests
+				if (DEBUG_MERGE_WORDS) System.out.println(" --> line density compensation factor is " + lineDensityCompFactor);
 				continue;
 			}
 			if (DEBUG_MERGE_WORDS) System.out.println(" - checking words '" + lpWord.str + "'@" + lpWord.bounds + " and '" + pData.words[w].str + "'@" + pData.words[w].bounds);
@@ -5451,12 +5754,12 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				lpWord = pData.words[w];
 				lpWordLineSpaceStats = pWordLineSpaceStats;
 				lpWordTokens = pWordTokens;
-				System.out.println(" - different lines by statistics objects at '" + pData.words[w].str + "'"); // TODO debug flag this after tests
+				if (DEBUG_MERGE_WORDS) System.out.println(" - different lines by statistics objects at '" + pData.words[w].str + "'");
 				float lineDensityByAverage = (pWordLineSpaceStats.getAverageWordSpace() / pWordSpaceStats.getAverageWordSpace());
 				float lineDensityByMedian = (pWordLineSpaceStats.getMedianWordSpace() / pWordSpaceStats.getMedianWordSpace());
-				System.out.println(" - line density is " + lineDensityByAverage + " (avg), " + lineDensityByMedian + " (med)"); // TODO debug flag this after tests
+				if (DEBUG_MERGE_WORDS) System.out.println(" - line density is " + lineDensityByAverage + " (avg), " + lineDensityByMedian + " (med)");
 				lineDensityCompFactor = Math.min(1, Math.max(lineDensityByAverage, lineDensityByMedian));
-				System.out.println(" --> line density compensation factor is " + lineDensityCompFactor); // TODO debug flag this after tests
+				if (DEBUG_MERGE_WORDS) System.out.println(" --> line density compensation factor is " + lineDensityCompFactor);
 				continue;
 			}
 			
@@ -5478,7 +5781,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				else if ((overlap.getHeight() * 10) < (lpWord.bounds.getHeight() * 9)) {}
 				else if ((overlap.getHeight() * 10) < (pData.words[w].bounds.getHeight() * 9)) {}
 				else {
-					System.out.println(" --> eliminated overlapping word duplicte '" + pData.words[w].str + "' at " + pData.words[w].bounds); // TODO debug flag this after tests
+					spm.setInfo(" --> eliminated overlapping word duplicte '" + pData.words[w].str + "' at " + pData.words[w].bounds);
 					pData.words[w] = null;
 					if (pWordList == null)
 						pWordList = new ArrayList();
@@ -5540,7 +5843,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			}
 			
 			//	create merged word
-			PWord mpWord = new PWord(Math.min(lpWord.renderOrderNumber, pData.words[w].renderOrderNumber), (lpWord.charCodes + pData.words[w].charCodes), (lpWord.str + pData.words[w].str), mpWordBaseline, mpWordBounds, lpWord.color, lpWord.fontSize, lpWord.fontDirection, mpWordFont);
+			PWord mpWord = new PWord(Math.min(lpWord.renderOrderNumber, pData.words[w].renderOrderNumber), (lpWord.charCodesEnlarged + pData.words[w].charCodesEnlarged), (lpWord.str + pData.words[w].str), mpWordBaseline, mpWordBounds, lpWord.color, lpWord.fontSize, lpWord.fontDirection, mpWordFont);
 			spm.setInfo(" --> merged words " + lpWord.str + " and " + pData.words[w].str + " to '" + mpWord.str + "'@" + mpWord.bounds);
 			
 			//	store merged word
@@ -5836,7 +6139,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	
 	private static LineWordSpaceStatistics computeLineWordSpaceStatistics(PWord[] pWords, int lStart, int lEnd, int fd) {
 		LineWordSpaceStatistics lineWordSpaces = new LineWordSpaceStatistics();
-		System.out.println("Computing word space stats for line starting with '" + pWords[lStart].str + "':");
+		if (DEBUG_MERGE_WORDS) System.out.println("Computing word space stats for line starting with '" + pWords[lStart].str + "':");
 		for (int w = (lStart + 1); w < lEnd; w++) {
 			float pWordSpace;
 			
@@ -5861,16 +6164,20 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			
 			//	normalize to font size 10 to overcome bias in pages with strong font size variations
 			float pWordSpace10pt = (pWordSpace * (10 + 10)) / (pWords[w-1].fontSize + pWords[w].fontSize);
-			System.out.println(" - '" + pWords[w-1].str + "' -> '" + pWords[w].str + "': " + pWordSpace10pt + "(" + pWordSpace + ")");
+			if (DEBUG_MERGE_WORDS) System.out.println(" - '" + pWords[w-1].str + "' -> '" + pWords[w].str + "': " + pWordSpace10pt + "(" + pWordSpace + ")");
+			if (pWordSpace10pt <= 0)
+				continue; // no use counting this one, only dillutes statistics
 			lineWordSpaces.addWordSpace(pWordSpace10pt);
 		}
-		System.out.println("Word space stats for line starting with '" + pWords[lStart].str + "':");
-		for (Iterator wsit = lineWordSpaces.iterator(); wsit.hasNext();) {
-			Float ws = ((Float) wsit.next());
-			System.out.println(" - " + ws + " (" + lineWordSpaces.getCount(ws) + ")");
+		if (DEBUG_MERGE_WORDS) {
+			System.out.println("Word space stats for line starting with '" + pWords[lStart].str + "':");
+			for (Iterator wsit = lineWordSpaces.iterator(); wsit.hasNext();) {
+				Float ws = ((Float) wsit.next());
+				System.out.println(" - " + ws + " (" + lineWordSpaces.getCount(ws) + ")");
+			}
+			System.out.println(" ==> average is " + lineWordSpaces.getAverageWordSpace());
+			System.out.println(" ==> median is " + lineWordSpaces.getMedianWordSpace());
 		}
-		System.out.println(" ==> average is " + lineWordSpaces.getAverageWordSpace());
-		System.out.println(" ==> median is " + lineWordSpaces.getMedianWordSpace());
 		return lineWordSpaces;
 	}
 	
@@ -5926,9 +6233,16 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				return false;
 			}
 			
+			//	inversion
+			if (pWord.bounds.getMinX() < lpWord.bounds.getMinX()) {
+				if (DEBUG_MERGE_WORDS) System.out.println(" --> left edge inversion");
+				return false;
+			}
+			
 			//	too far a gap
-			if ((pWord.bounds.getMinX() < lpWord.bounds.getMinX()) || ((pWord.bounds.getMinX() - lpWord.bounds.getMaxX()) > maxMergeMargin)) {
-				if (DEBUG_MERGE_WORDS) System.out.println(" --> too far apart");
+			double dist = (pWord.bounds.getMinX() - lpWord.bounds.getMaxX());
+			if (dist > maxMergeMargin) {
+				if (DEBUG_MERGE_WORDS) System.out.println(" --> too far apart at " + dist);
 				return false;
 			}
 			
@@ -5951,9 +6265,16 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				return false;
 			}
 			
+			//	inversion
+			if (pWord.bounds.getMinY() < lpWord.bounds.getMinY()) {
+				if (DEBUG_MERGE_WORDS) System.out.println(" --> bottom edge inversion");
+				return false;
+			}
+			
 			//	too far a gap
-			if ((pWord.bounds.getMinY() < lpWord.bounds.getMinY()) || ((pWord.bounds.getMinY() - lpWord.bounds.getMaxY()) > maxMergeMargin)) {
-				if (DEBUG_MERGE_WORDS) System.out.println(" --> too far apart");
+			double dist = (pWord.bounds.getMinY() - lpWord.bounds.getMaxY());
+			if (dist > maxMergeMargin) {
+				if (DEBUG_MERGE_WORDS) System.out.println(" --> too far apart at " + dist);
 				return false;
 			}
 			
@@ -5976,9 +6297,16 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				return false;
 			}
 			
+			//	inversion
+			if (pWord.bounds.getMaxY() > lpWord.bounds.getMaxY()) {
+				if (DEBUG_MERGE_WORDS) System.out.println(" --> top edge inversion");
+				return false;
+			}
+			
 			//	too far a gap
-			if ((pWord.bounds.getMaxY() > lpWord.bounds.getMaxY()) || ((lpWord.bounds.getMinY() - pWord.bounds.getMaxY()) > maxMergeMargin)) {
-				if (DEBUG_MERGE_WORDS) System.out.println(" --> too far apart");
+			double dist = (lpWord.bounds.getMinY() - pWord.bounds.getMaxY());
+			if (dist > maxMergeMargin) {
+				if (DEBUG_MERGE_WORDS) System.out.println(" --> too far apart at " + dist);
 				return false;
 			}
 			
@@ -6001,9 +6329,16 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				return false;
 			}
 			
+			//	inversion
+			if (pWord.bounds.getMaxX() > lpWord.bounds.getMaxX()) {
+				if (DEBUG_MERGE_WORDS) System.out.println(" --> right edge inversion");
+				return false;
+			}
+			
 			//	too far a gap
-			if ((pWord.bounds.getMaxX() > lpWord.bounds.getMaxX()) || ((lpWord.bounds.getMinX() - pWord.bounds.getMaxX()) > maxMergeMargin)) {
-				if (DEBUG_MERGE_WORDS) System.out.println(" --> too far apart");
+			double dist = (lpWord.bounds.getMinX() - pWord.bounds.getMaxX());
+			if (dist > maxMergeMargin) {
+				if (DEBUG_MERGE_WORDS) System.out.println(" --> too far apart at " + dist);
 				return false;
 			}
 			
@@ -6045,7 +6380,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			spm.setInfo("   - " + pFigure);
 			
 			//	get image
-			BufferedImage pFigureImage = this.getFigureImage(doc, pData.p, pFigure, true, false, pData.pdfPage, pData.pdfPageContentBox, /*xObjects, */objects, magnification, figureSupplements, pdfFigureImage, spm);
+			BufferedImage pFigureImage = this.getFigureImage(doc, pData.p, pFigure, true, false, false, pData.pdfPage, pData.pdfPageContentBox, objects, magnification, figureSupplements, pdfFigureImage, spm);
 			
 			//	display figures if testing
 			if ((fdd != null) && (pFigureImage != null)) {
@@ -6054,14 +6389,14 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					spm.setInfo("     - figure bounds are " + pFigure.bounds);
 				spm.setInfo("     - rendering bounds are " + pFigureBox);
 				fdd.addImage(pFigureImage, (pFigureBox.toString() + ": " + pFigure.toString()));
-				if (pdfFigureImage[0] != pFigureImage)
+				if ((pdfFigureImage[0] != pFigureImage) && (pdfFigureImage[0] != null))
 					fdd.addImage(pdfFigureImage[0], ("raw " + pFigureBox.toString() + ": " + pFigure.toString()));
 				
 				Object pFigureDataObj = PdfParser.dereference(pFigure.refOrData, objects);
 				Object sMaskObj = ((pFigureDataObj instanceof PStream) ? PdfParser.dereference(((PStream) pFigureDataObj).params.get("SMask"), objects) : null);
 				if (sMaskObj instanceof PStream) {
 					PStream sMask = ((PStream) sMaskObj);
-					BufferedImage sMaskImage = this.decodeImage(pData.pdfPage, sMask.bytes, sMask.params, objects, false, true);
+					BufferedImage sMaskImage = this.decodeImage(pData.pdfPage, sMask.bytes, sMask.params, objects, false, false, true);
 					if (sMaskImage != null)
 						fdd.addImage(sMaskImage, (pFigureBox.toString() + "-MASK: " + pFigure.toString()));
 				}
@@ -7200,16 +7535,43 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		}
 	}
 	
-	private static void sanitizePageFigures(PPageData pData) {
+	private static void sanitizePageFigures(PPageData pData, Map objects) {
+		ArrayList figures = new ArrayList(Arrays.asList(pData.figures));
 		
-		//	little to merge with fewer than two figures
-		if (pData.figures.length < 2)
-			return;
+		//	remove figures sized 0 in either dimension
+		for (int f = 0; f < figures.size(); f++) {
+			PFigure pf = ((PFigure) figures.get(f));
+			
+			//	check raw bounds
+			if ((pf.bounds.getWidth() == 0) || (pf.bounds.getHeight() == 0)) {
+				figures.remove(f--);
+				continue;
+			}
+			
+			//	get actual image object
+			Object pfDataObj = PdfParser.dereference(pf.refOrData, objects);
+			PStream pfData;
+			if (pfDataObj instanceof PStream)
+				pfData = ((PStream) pfDataObj);
+			else {
+				figures.remove(f--);
+				continue;
+			}
+			
+			//	check dimensions on page
+			int width = ((Number) pfData.params.get("Width")).intValue();
+			int height = ((Number) pfData.params.get("Height")).intValue();
+			float dpiRatio = ((float) ((((float) width) / pf.bounds.getWidth()) + (((float) height) / pf.bounds.getHeight())) / 2);
+			BoundingBox pfBb = getBoundingBox(pf.bounds, pData.pdfPageContentBox, dpiRatio, pData.rotate);
+			if (pfBb.getArea() == 0) {
+				figures.remove(f--);
+				continue;
+			}
+		}
 		
 		/* combine figures that are adjacent in one dimension and identical in
 		 * the other, and do so recursively, both top-down and left-right, to
 		 * also catch weirdly tiled images */
-		ArrayList figures = new ArrayList(Arrays.asList(pData.figures));
 		while (figures.size() > 1) {
 			int figureCount = figures.size();
 			
@@ -7379,9 +7741,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		//	flood all still-white pixels with surrounding orientation (also record round to use for weighting above)
 		System.out.println("Computing overall page content orientation via flooding ...");
 		int round = 0;
+		int blankPixelCount = Integer.MAX_VALUE;
 		for (boolean blankPixelsRemaining = true; blankPixelsRemaining;) {
 			blankPixelsRemaining = false;
-			int blankPixelCount = 0;
+			int remainingBlankPixelCount = 0;
 			round++;
 //			System.out.println(" - round " + round);
 			
@@ -7407,11 +7770,11 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						pPageContentOrientationWeight[c][r] = ((byte) Math.max(0, (pPageContentOrientationWeight[c][r+1] - 1)));
 					}
 					else {
-						blankPixelCount++;
+						remainingBlankPixelCount++;
 						blankPixelsRemaining = true;
 					}
 				}
-//			System.out.println("   ==> " + blankPixelCount + " blank pixels remaining");
+//			System.out.println("   ==> " + remainingBlankPixelCount + " blank pixels remaining");
 			
 			//	un-mark just-filled pixels
 			for (int c = 0; c < pPageContentOrientation.length; c++)
@@ -7421,8 +7784,13 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					if (pPageContentOrientation[c][r] < PWord.UPSIDE_DOWN_FONT_DIRECTION)
 						pPageContentOrientation[c][r] += 16;
 				}
+			
+			//	did we color anything at all?
+			if (remainingBlankPixelCount < blankPixelCount)
+				blankPixelCount = remainingBlankPixelCount;
+			else break;
 		}
-		System.out.println("Page content orientation flooded in " + round + " rounds");
+		System.out.println("Page content orientation flooded in " + round + " rounds, " + blankPixelCount + " blank pixels remaining");
 		
 		//	display result to make sure
 		if (PdfExtractorTest.aimAtPage != -1) {
@@ -7754,7 +8122,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 				fwFontDirection -= 4;
 			else if (fwFontDirection < PWord.UPSIDE_DOWN_FONT_DIRECTION)
 				fwFontDirection += 4;
-			PWord pWord = new PWord(pData.words[w].renderOrderNumber, pData.words[w].charCodes, pData.words[w].str, fWbl, fWb, pData.words[w].color, pData.words[w].fontSize, fwFontDirection, pData.words[w].font);
+			PWord pWord = new PWord(pData.words[w].renderOrderNumber, pData.words[w].charCodesEnlarged, pData.words[w].str, fWbl, fWb, pData.words[w].color, pData.words[w].fontSize, fwFontDirection, pData.words[w].font);
 			pWord.joinWithNext = pData.words[w].joinWithNext;
 			flippedObjects.put(pWord, pData.words[w]);
 			pData.words[w] = pWord;
@@ -7989,7 +8357,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			}
 			if (((adjustedTop - adjustedBottom) < (top - bottom)) && (((top - adjustedTop) > 0.25) || ((adjustedBottom - bottom) > 0.25))) {
 				Rectangle2D.Float pwBox = new Rectangle2D.Float(left, adjustedBottom, (right - left), (adjustedTop - adjustedBottom));
-				PWord spWord = new PWord(pWord.renderOrderNumber, pWord.charCodes, pWord.str, pWord.baseline, pwBox, pWord.color, pWord.fontSize, pWord.fontDirection, pWord.font);
+				PWord spWord = new PWord(pWord.renderOrderNumber, pWord.charCodesEnlarged, pWord.str, pWord.baseline, pwBox, pWord.color, pWord.fontSize, pWord.fontDirection, pWord.font);
 				spWord.joinWithNext = pWord.joinWithNext;
 				pWord = spWord;
 				if (PdfExtractorTest.aimAtPage != -1)
@@ -8027,7 +8395,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			}
 			if (((adjustedTop - adjustedBottom) < (top - bottom)) && (((adjustedTop - top) > 0.25) || ((bottom - adjustedBottom) > 0.25))) {
 				Rectangle2D.Float pwBox = new Rectangle2D.Float(adjustedTop, left, (adjustedBottom - adjustedTop), (right - left));
-				PWord spWord = new PWord(pWord.renderOrderNumber, pWord.charCodes, pWord.str, pWord.baseline, pwBox, pWord.color, pWord.fontSize, pWord.fontDirection, pWord.font);
+				PWord spWord = new PWord(pWord.renderOrderNumber, pWord.charCodesEnlarged, pWord.str, pWord.baseline, pwBox, pWord.color, pWord.fontSize, pWord.fontDirection, pWord.font);
 				spWord.joinWithNext = pWord.joinWithNext;
 				pWord = spWord;
 				if (PdfExtractorTest.aimAtPage != -1)
@@ -8065,7 +8433,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			}
 			if (((adjustedTop - adjustedBottom) < (top - bottom)) && (((top - adjustedTop) > 0.25) || ((adjustedBottom - bottom) > 0.25))) {
 				Rectangle2D.Float pwBox = new Rectangle2D.Float(adjustedBottom, right, (adjustedTop - adjustedBottom), (left - right));
-				PWord spWord = new PWord(pWord.renderOrderNumber, pWord.charCodes, pWord.str, pWord.baseline, pwBox, pWord.color, pWord.fontSize, pWord.fontDirection, pWord.font);
+				PWord spWord = new PWord(pWord.renderOrderNumber, pWord.charCodesEnlarged, pWord.str, pWord.baseline, pwBox, pWord.color, pWord.fontSize, pWord.fontDirection, pWord.font);
 				spWord.joinWithNext = pWord.joinWithNext;
 				pWord = spWord;
 				if (PdfExtractorTest.aimAtPage != -1)
@@ -8103,7 +8471,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			}
 			if (((adjustedTop - adjustedBottom) < (top - bottom)) && (((adjustedTop - top) > 0.25) || ((bottom - adjustedBottom) > 0.25))) {
 				Rectangle2D.Float pwBox = new Rectangle2D.Float(right, adjustedTop, (left - right), (adjustedBottom - adjustedTop));
-				PWord spWord = new PWord(pWord.renderOrderNumber, pWord.charCodes, pWord.str, pWord.baseline, pwBox, pWord.color, pWord.fontSize, pWord.fontDirection, pWord.font);
+				PWord spWord = new PWord(pWord.renderOrderNumber, pWord.charCodesEnlarged, pWord.str, pWord.baseline, pwBox, pWord.color, pWord.fontSize, pWord.fontDirection, pWord.font);
 				spWord.joinWithNext = pWord.joinWithNext;
 				pWord = spWord;
 				if (PdfExtractorTest.aimAtPage != -1)
@@ -8199,15 +8567,31 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		HashMap wordsByBoxes = new HashMap();
 		
 		//	initialize page structure image (grayscale is enough for structure detection)
-//		BufferedImage pageImage = getPageStructureImage(pData, page, pageObjects, magnification, textBox, pageWordsByBoxes, wordsByBoxes, pWatermarkWords, pInTextBoxWordBounds, spm);
 		BufferedImage pageImage = new BufferedImage(page.bounds.getWidth(), page.bounds.getHeight(), BufferedImage.TYPE_BYTE_GRAY);
 		Graphics2D piGr = pageImage.createGraphics();
 		piGr.setColor(Color.WHITE);
 		piGr.fillRect(0, 0, pageImage.getWidth(), pageImage.getHeight());
 		piGr.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 		
+		//	get rendering parameters
+		boolean ignoreGraphics = docLayout.getBooleanProperty("structureIgnoreGraphics", false);
+		ignoreGraphics = docLayout.getBooleanProperty("page.structureIgnoreGraphics", ignoreGraphics);
+		if ((pageIndex % 2) == 0)
+			ignoreGraphics = docLayout.getBooleanProperty("page.odd.structureIgnoreGraphics", ignoreGraphics);
+		else ignoreGraphics = docLayout.getBooleanProperty("page.even.structureIgnoreGraphics", ignoreGraphics);
+		if (pageIndex == 0)
+			ignoreGraphics = docLayout.getBooleanProperty("page.first.structureIgnoreGraphics", ignoreGraphics);
+		//	TODO consider observing graphics ignoring areas as well (for more fine-grained control)
+		boolean includeFigures = docLayout.getBooleanProperty("structureIncludeFigures", false);
+		includeFigures = docLayout.getBooleanProperty("page.structureIncludeFigures", includeFigures);
+		if ((pageIndex % 2) == 0)
+			includeFigures = docLayout.getBooleanProperty("page.odd.structureIncludeFigures", includeFigures);
+		else includeFigures = docLayout.getBooleanProperty("page.even.structureIncludeFigures", includeFigures);
+		if (pageIndex == 0)
+			includeFigures = docLayout.getBooleanProperty("page.first.structureIncludeFigures", includeFigures);
+		
 		//	set up shrinking figure images
-		//byte[][] pageImageBrightness = null;
+		byte[][] pageImageBrightness = null;
 		
 		//	render them all in a single loop (grayscale is enough for structure detection)
 		for (int o = 0; o < pageObjects.size(); o++) {
@@ -8265,21 +8649,21 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			//	omit figures altogether
 			//	TODO_not render figure (we do need figures, as they can (a) connect graphics blocks and (b) influence text blocking order)
 			//	==> we re-assemble multi-figure graphics blocks later in merging routine, and also pull in any label text
-			else if (po instanceof PFigure) {
-//				if (textBox != null)
-//					continue; // no figures needed for text box content
-//				PFigure pf = ((PFigure) po);
-//				BoundingBox fb = getBoundingBox(pf.visibleBounds, pData.pdfPageContentBox, magnification, pData.rotate);
-//				if (pageImageBrightness == null) {
-//					PageImage pi = page.getImage();
-//					AnalysisImage api = Imaging.wrapImage(pi.image, null);
-//					pageImageBrightness = api.getBrightness();
-//				}
-//				fb = shrinkToContent(fb, pageImageBrightness);
-//				if (fb == null)
-//					continue;
-//				piGr.setColor(Color.GRAY);
-//				piGr.fillRect(fb.left, fb.top, fb.getWidth(), fb.getHeight());
+			else if ((po instanceof PFigure) && includeFigures) {
+				if (textBox != null)
+					continue; // no figures needed for text box content
+				PFigure pf = ((PFigure) po);
+				BoundingBox fb = getBoundingBox(pf.visibleBounds, pData.pdfPageContentBox, magnification, pData.rotate);
+				if (pageImageBrightness == null) {
+					PageImage pi = page.getImage();
+					AnalysisImage api = Imaging.wrapImage(pi.image, null);
+					pageImageBrightness = api.getBrightness();
+				}
+				fb = shrinkToContent(fb, pageImageBrightness);
+				if (fb == null)
+					continue;
+				piGr.setColor(Color.GRAY);
+				piGr.fillRect(fb.left, fb.top, fb.getWidth(), fb.getHeight());
 			}
 			
 			//	render path (safe for what we skipped above, i.e., out of page paths, bright on white paths, etc.)
@@ -8288,6 +8672,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					continue; // filter graphics for word-only testing
 				if (textBox != null)
 					continue; // no graphics needed for text box content
+				if (ignoreGraphics)
+					continue; // graphics switched off (page decoration _can_ interfere with blocking)
 				PPath pp = ((PPath) po);
 				if (pp.isPageDecoration())
 					continue; // omit page decoration
@@ -8393,11 +8779,9 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		if (textBox == null) {
 			columnAreas = docLayout.getBoxListProperty("columnAreas", null, pageImageDpi);
 			columnAreas = docLayout.getBoxListProperty("page.columnAreas", columnAreas, pageImageDpi);
-//			if ((page.pageId % 2) == 0)
 			if ((pageIndex % 2) == 0)
 				columnAreas = docLayout.getBoxListProperty("page.odd.columnAreas", columnAreas, pageImageDpi);
 			else columnAreas = docLayout.getBoxListProperty("page.even.columnAreas", columnAreas, pageImageDpi);
-//			if (page.pageId == 0)
 			if (pageIndex == 0)
 				columnAreas = docLayout.getBoxListProperty("page.first.columnAreas", columnAreas, pageImageDpi);
 			if (columnAreas == null) {
@@ -9197,6 +9581,95 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		}
 	};
 	
+	/**
+	 * Load a document from an OCR PDF whose text layer has been replaced by a
+	 * character based representation, either a vectorized representation of
+	 * the original text layer (e.g. via DjVu), or the OCR result rendered on
+	 * top of the page background by means of regular PDF fonts. Page images,
+	 * including the rendered OCR, are stored in the page image store handed to
+	 * the constructor. The document structure is stored in the returned image
+	 * markup document, including word bounding boxes.
+	 * @param doc the document to store the structural information in
+	 * @param pdfDoc the PDF document to parse
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param flags control flags for decoding behavior
+	 * @param ocrVectorized does the digitized text layer consist of vectorized
+	 *            page contents instead of actual font-bound characters?
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadHybridPdf(byte[] pdfBytes, int flags, boolean ocrVectorized, ProgressMonitor pm) throws IOException {
+		return this.loadHybridPdf(null, null, pdfBytes, flags, ocrVectorized, 1, null, pm);
+	}
+	
+	/**
+	 * Load a document from an OCR PDF whose text layer has been replaced by a
+	 * character based representation, either a vectorized representation of
+	 * the original text layer (e.g. via DjVu), or the OCR result rendered on
+	 * top of the page background by means of regular PDF fonts. Page images,
+	 * including the rendered OCR, are stored in the page image store handed to
+	 * the constructor. The document structure is stored in the returned image
+	 * markup document, including word bounding boxes.
+	 * @param doc the document to store the structural information in
+	 * @param pdfDoc the PDF document to parse
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param flags control flags for decoding behavior
+	 * @param ocrVectorized does the digitized text layer consist of vectorized
+	 *            page contents instead of actual font-bound characters?
+	 * @param pageIDs a set containing the IDs of the pages to decode
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadHybridPdf(byte[] pdfBytes, int flags, boolean ocrVectorized, Set pageIDs, ProgressMonitor pm) throws IOException {
+		return this.loadHybridPdf(null, null, pdfBytes, flags, ocrVectorized, 1, pageIDs, pm);
+	}
+	
+	/**
+	 * Load a document from an OCR PDF whose text layer has been replaced by a
+	 * character based representation, either a vectorized representation of
+	 * the original text layer (e.g. via DjVu), or the OCR result rendered on
+	 * top of the page background by means of regular PDF fonts. Page images,
+	 * including the rendered OCR, are stored in the page image store handed to
+	 * the constructor. The document structure is stored in the argument image
+	 * markup document, including word bounding boxes. The scale factor helps
+	 * with PDFs whose page boundaries (media boxes) are set too small. This
+	 * can be recognized in any PDF viewer by the fact that the document is
+	 * tiny and the writing very small at 100% size display. It can also be
+	 * detected automatically, e.g. by means of examining the average height of
+	 * lines in comparison to the DPI number. If the argument ImDocument is
+	 * null, this method creates a new one with the MD5 checksum of the
+	 * argument PDF bytes as the ID.
+	 * @param doc the document to store the structural information in
+	 * @param pdfDoc the PDF document to parse
+	 * @param pdfBytes the raw binary data the the PDF document was parsed from
+	 * @param flags control flags for decoding behavior
+	 * @param ocrVectorized does the digitized text layer consist of vectorized
+	 *            page contents instead of actual font-bound characters?
+	 * @param scaleFactor the scale factor for image PDFs, to correct PDFs that
+	 *            are set too small (DPI number is divided by this factor)
+	 * @param pageIDs a set containing the IDs of the pages to decode
+	 * @param pm a monitor object for reporting progress, e.g. to a UI
+	 * @return the argument image markup document
+	 * @throws IOException
+	 */
+	public ImDocument loadHybridPdf(ImDocument doc, Document pdfDoc, byte[] pdfBytes, int flags, boolean ocrVectorized, int scaleFactor, Set pageIDs, ProgressMonitor pm) throws IOException {
+		if (ocrVectorized)
+			return this.doLoadImagePdf(doc, pdfDoc, pdfBytes, flags, true, scaleFactor, pageIDs, pm);
+		else {
+			boolean enhanceScans = ((flags & ENHANCE_SCANS) != 0);
+			int enhanceScanFlags = (enhanceScans ? ((flags >>> 8) & Imaging.ALL_OPTIONS) : 0);
+			enhanceScanFlags &= (0
+					| Imaging.ELIMINATE_BACKGROUND
+					| Imaging.WHITE_BALANCE
+					| Imaging.CLEAN_PAGE_EDGES
+					| Imaging.CORRECT_SKEW
+				);
+			return this.doLoadTextPdf(doc, pdfDoc, pdfBytes, PdfFontDecoder.RENDER_ONLY, enhanceScanFlags, pageIDs, pm);
+		}
+	}
+	
 	/** control flag switching on or off use of embedded OCR in scanned PDF decoding */
 	public static final int USE_EMBEDDED_OCR = 0x01;
 	
@@ -9222,10 +9695,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	public static final int ADJUST_EMBEDDED_OCR_BLOCKS = 0x00;
 	
 	/** control flag pair indicating to adjust embedded OCR to lines and words (deactivates scaling to page image blocks) */
-	public static final int ADJUST_EMBEDDED_OCR_LINES = 0x40;
+	public static final int ADJUST_EMBEDDED_OCR_LINES = 0x40; // flag means 'fix words horizontally'
 	
 	/** control flag pair indicating to adjust embedded OCR to words (deactivates scaling to page image blocks and lines) */
-	public static final int ADJUST_EMBEDDED_OCR_WORDS = 0x80;
+	public static final int ADJUST_EMBEDDED_OCR_WORDS = 0x80; // flag means 'fix lines vertically'
 	
 	/** control flag pair indicating switching off embedded OCR adjustment (deactivates scaling to page image blocks, lines, and words) */
 	public static final int ADJUST_EMBEDDED_OCR_NONE = 0xC0;
@@ -9253,6 +9726,9 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	
 	/** control flag switching on or off detection and correction of small deviations (<2°) from the upright (use strongly recommended, only meaningful if scan enhancement is activated) */
 	public static final int ENHANCE_SCANS_CORRECT_SKEW = (Imaging.CORRECT_SKEW << 8);
+	
+	/** control flag switching on or off leveling out brightness gradients in background removal and edge cleanup */
+	public static final int ENHANCE_SCANS_LEVEL_GRADIENTS = (Imaging.LEVEL_GRADIENTS << 8);
 	
 	/** control flag combination switching on all scan enhancement steps in scanned PDF decoding */
 	public static final int ENHANCE_SCANS_ALL_OPTIONS = (Imaging.ALL_OPTIONS << 8);
@@ -9522,6 +9998,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdf(ImDocument doc, Document pdfDoc, byte[] pdfBytes, int flags, int scaleFactor, Set pageIDs, ProgressMonitor pm) throws IOException {
+		return this.doLoadImagePdf(doc, pdfDoc, pdfBytes, flags, false, scaleFactor, pageIDs, pm);
+	}
+	
+	private ImDocument doLoadImagePdf(ImDocument doc, Document pdfDoc, byte[] pdfBytes, int flags, boolean ocrVectorized, int scaleFactor, Set pageIDs, ProgressMonitor pm) throws IOException {
 		
 		//	check arguments
 		pdfDoc = this.getPdfDocument(pdfDoc, pdfBytes);
@@ -9535,7 +10015,8 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		
 		//	decode flags
 		System.out.println("Flags are " + flags + " (" + Integer.toString(flags, 2) + ")");
-		boolean useEmbeddedOCR = ((flags & USE_EMBEDDED_OCR) != 0);
+//		boolean useEmbeddedOCR = ((flags & USE_EMBEDDED_OCR) != 0);
+		boolean useEmbeddedOCR = (ocrVectorized || ((flags & USE_EMBEDDED_OCR) != 0));
 		System.out.println(" - use embedded OCR is " + useEmbeddedOCR);
 		boolean metaPages = ((flags & META_PAGES) != 0);
 		System.out.println(" - meta pages is " + metaPages);
@@ -9549,11 +10030,12 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		System.out.println(" - scan enhacement flags are " + enhanceScanFlags);
 		boolean useFixedDpi = ((flags & USE_FIXED_RESOLUTION) != 0);
 		System.out.println(" - custom resolution is " + useFixedDpi);
-		int fixedDpi = (useFixedDpi ? ((flags >>> 16) & 0xFFFF) : -1);
+		int fixedDpi = (useFixedDpi ? ((flags >>> 20) & 0x0FFF) : -1);
 		System.out.println(" - fixed resolution is " + fixedDpi);
 //		boolean fixEmbeddedOCR = (useEmbeddedOCR ? ((flags & FIX_EMBEDDED_OCR) != 0) : false);
 //		System.out.println(" - fix embedded OCR is " + fixEmbeddedOCR);
-		int embeddedOcrMode = (useEmbeddedOCR ? (flags & ADJUST_EMBEDDED_OCR_NONE) : ADJUST_EMBEDDED_OCR_BLOCKS);
+//		int embeddedOcrMode = (useEmbeddedOCR ? (flags & ADJUST_EMBEDDED_OCR_NONE) : ADJUST_EMBEDDED_OCR_BLOCKS);
+		int embeddedOcrMode = (ocrVectorized ? ADJUST_EMBEDDED_OCR_NONE : (useEmbeddedOCR ? (flags & ADJUST_EMBEDDED_OCR_NONE) : ADJUST_EMBEDDED_OCR_BLOCKS));
 		System.out.println(" - embedded OCR mode is " + Integer.toString(embeddedOcrMode, 16));
 		
 		//	test if we can OCR
@@ -9574,16 +10056,90 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		PdfParser.decryptObjects(objects, pdfDoc.getSecurityManager());
 		
 		//	get basic page data (takes progress to 30%)
-		PPageData[] pData = this.getPdfPageData(doc, (getFigures | (useEmbeddedOCR ? getWords : 0)), PdfFontDecoder.NO_DECODING, true, pageIDs, pageTree, objects, spm);
+//		PPageData[] pData = this.getPdfPageData(doc, (getFigures | (useEmbeddedOCR ? getWords : 0)), PdfFontDecoder.NO_DECODING, true, pageIDs, pageTree, objects, spm);
+		PPageData[] pData = this.getPdfPageData(doc, (getFigures | (useEmbeddedOCR ? getWords : 0)), (ocrVectorized ? PdfFontDecoder.VECTORIZED_OCR_DECODING : PdfFontDecoder.NO_DECODING), true, pageIDs, pageTree, objects, spm);
+//		PPageData[] pData = this.getPdfPageData(doc, (getFigures | (useEmbeddedOCR ? getWords : 0)), (isDjVu ? PdfFontDecoder.RENDER_ONLY : PdfFontDecoder.NO_DECODING), true, pageIDs, pageTree, objects, spm);
+//		if (true)
+//			throw new RuntimeException("ENOUGH");
 		
 		//	add page content
-		this.addImagePdfPages(doc, pData, pageTree, objects, metaPages, singlePages, doublePages, fixedDpi, useEmbeddedOCR, embeddedOcrMode, scaleFactor, enhanceScanFlags, spm);
+		this.addImagePdfPages(doc, pData, pageTree, objects, pageIDs, metaPages, singlePages, doublePages, fixedDpi, useEmbeddedOCR, ocrVectorized, embeddedOcrMode, scaleFactor, enhanceScanFlags, spm);
+		
+		//	store fonts if in vectorized OCR mode (e.g. DjVu)
+		if (ocrVectorized) {
+			spm.setStep("Storing custom fonts");
+			ArrayList fonts = new ArrayList();
+			CountingSet fontNames = new CountingSet(new TreeMap());
+			for (Iterator okit = objects.keySet().iterator(); okit.hasNext();) {
+				Object obj = objects.get(okit.next());
+				if (obj instanceof PdfFont) {
+					fonts.add((PdfFont) obj);
+					fontNames.add(((PdfFont) obj).name);
+				}
+			}
+			for (int f = 0; f < fonts.size(); f++) {
+				PdfFont pFont = ((PdfFont) fonts.get(f));
+				spm.setInfo("Doing font " + pFont.name + " (" + pFont + ")");
+				int[] charCodes = pFont.getUsedCharCodes();
+				if (charCodes.length == 0) {
+					spm.setInfo(" ==> empty font");
+					continue;
+				}
+				spm.setInfo(" - got " + charCodes.length + " characters");
+				if (fontNames.getCount(pFont.name) > 1) {
+					pFont.name = (pFont.name + "-" + f);
+					spm.setInfo(" - renamed to " + pFont.name + " to resolve collision");
+				}
+				ImFont imFont = new ImFont(doc, pFont.name, pFont.bold, pFont.italics, pFont.serif, pFont.monospaced);
+				if (pFont.type != null)
+					imFont.setAttribute("type", pFont.type);
+				if (pFont.encoding != null)
+					imFont.setAttribute("encoding", pFont.encoding);
+				if (pFont.ascent != 0)
+					imFont.setAttribute("ascent", ("" + pFont.ascent));
+				if (pFont.capHeight != 0)
+					imFont.setAttribute("capHeight", ("" + pFont.capHeight));
+				if (pFont.xHeight != 0)
+					imFont.setAttribute("xHeight", ("" + pFont.xHeight));
+				if (pFont.descent != 0)
+					imFont.setAttribute("descent", ("" + pFont.descent));
+				if (pFont.isVectorized)
+					imFont.setAttribute(ImFont.VECTORIZED_ATTRIBUTE);
+				int maxCharCode = 0;
+				for (int c = 0; c < charCodes.length; c++) {
+					String charStr = pFont.getUnicode(charCodes[c]);
+					BufferedImage charImage = pFont.getCharImage(charCodes[c]);
+					if ((charStr != null) && (charStr.length() == 1))
+						charStr = ("" + PdfCharDecoder.getNonCombiningChar(charStr.charAt(0)));
+//					imFont.addCharacter(pFont.getCharCode(charCodes[c]), charStr, (((charImage == null) || ((charImage.getWidth() * charImage.getHeight()) == 0)) ? null : ImFont.scaleCharImage(charImage)));
+//					if (PdfExtractorTest.aimAtPage != -1)
+//						System.out.println("   - added char " + charCodes[c] + " (" + pFont.getCharCode(charCodes[c]) + "): '" + charStr + "', image is " + charImage);
+					Path2D.Float charPath = pFont.getCharPath(charCodes[c]);
+					int charCode = pFont.getCharCode(charCodes[c]);
+					imFont.addCharacter(charCode, charStr, (((charImage == null) || ((charImage.getWidth() * charImage.getHeight()) == 0)) ? null : ImFont.scaleCharImage(charImage)), charPath);
+					maxCharCode = Math.max(maxCharCode, charCode);
+					if (PdfExtractorTest.aimAtPage != -1)
+						System.out.println("   - added char " + charCodes[c] + " (" + charCode + "): '" + charStr + "', image is " + charImage);
+				}
+				if (maxCharCode > 0x0FFF)
+					imFont.setCharCodeLength(4);
+				else if (maxCharCode > 0x00FF)
+					imFont.setCharCodeLength(3);
+				
+				if (imFont.getCharacterCount() == 0)
+					spm.setInfo(" ==> no custom characters");
+				else {
+					doc.addFont(imFont);
+					spm.setInfo(" ==> font stored");
+				}
+			}
+		}
 		
 		//	finally ...
 		return doc;
 	}
 	
-	private PPageData[] addImagePdfPages(ImDocument doc, PPageData[] pData, PageTree pageTree, Map objects, boolean metaPages, boolean singlePages, boolean doublePages, int fixedDpi, boolean useEmbeddedOCR, int embeddedOcrMode, int scaleFactor, int enhanceScanFlags, SynchronizedProgressMonitor spm) throws IOException {
+	private PPageData[] addImagePdfPages(ImDocument doc, PPageData[] pData, PageTree pageTree, Map objects, Set pageIDs, boolean metaPages, boolean singlePages, boolean doublePages, int fixedDpi, boolean useEmbeddedOCR, boolean renderEmbeddedOcr, int embeddedOcrMode, int scaleFactor, int enhanceScanFlags, SynchronizedProgressMonitor spm) throws IOException {
 		
 		//	test if we can OCR
 		if ((this.ocrEngine == null) && !useEmbeddedOCR)
@@ -9614,7 +10170,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		spm.setBaseProgress(0);
 		spm.setProgress(0);
 		spm.setMaxProgress(30);
-		pData = this.addImagePdfPages(doc, pData, pageTree, objects, metaPages, singlePages, doublePages, fixedDpi, scaleFactor, enhanceScanFlags, useEmbeddedOCR, new SynchronizedProgressMonitor(new CascadingProgressMonitor(spm)), pageImageCache);
+		pData = this.addImagePdfPages(doc, pData, pageTree, objects, pageIDs, metaPages, singlePages, doublePages, fixedDpi, scaleFactor, enhanceScanFlags, useEmbeddedOCR, renderEmbeddedOcr, new SynchronizedProgressMonitor(new CascadingProgressMonitor(spm)), pageImageCache);
 		
 		//	cache higher level page structure as well
 		Map pageRegionCache = Collections.synchronizedMap(new HashMap());
@@ -9624,7 +10180,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		spm.setBaseProgress(30);
 		spm.setProgress(0);
 		spm.setMaxProgress(70);
-		this.addImagePdfPageBlocks(doc, (useEmbeddedOCR ? pData : null), embeddedOcrMode, new CascadingProgressMonitor(spm), pageImageCache, pageRegionCache);
+		this.addImagePdfPageBlocks(doc, (useEmbeddedOCR ? pData : null), embeddedOcrMode, renderEmbeddedOcr, new CascadingProgressMonitor(spm), pageImageCache, pageRegionCache);
 		
 		//	analyze block structure and layout
 		spm.setStep("Analyzing page text structure");
@@ -9638,7 +10194,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		spm.setBaseProgress(90);
 		spm.setProgress(0);
 		spm.setMaxProgress(100);
-		boolean analyzeFontMetrics = true;
+//		boolean analyzeFontMetrics = true;
+		boolean assessBold = true;
+		boolean assessItalics = true;
+		boolean measureFontSize = true;
 		if (useEmbeddedOCR && (pData != null)) {
 			int pWordCount = 0;
 			int pWordCountBold = 0;
@@ -9662,7 +10221,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					if (pData[pages[p].pageId].words[w].font.italics)
 						pWordCountItalics++;
 					pWordFontNames.add(pData[pages[p].pageId].words[w].font.name);
-					pWordFontSizes.add(new Integer(pData[pages[p].pageId].words[w].fontSize));
+					pWordFontSizes.add(new Integer(Math.round(pData[pages[p].pageId].words[w].fontSize)));
 				}
 			}
 			System.out.println("Counted " + pWordCount + " words, " + pWordCountBold + " in bold, " + pWordCountItalics + " in italics");
@@ -9670,17 +10229,27 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			System.out.println(" ==> " + pWordFontNames.size() + " ones present, " + pWordFontNames.elementCount() + " distinct ones");
 			System.out.println("Font sizes are " + pWordFontSizes);
 			System.out.println(" ==> " + pWordFontSizes.size() + " ones present, " + pWordFontSizes.elementCount() + " distinct ones");
-			if ((pWordCount != 0) && ((pWordCountBold != 0) && (pWordCountBold < pWordCount)))
-				analyzeFontMetrics = false;
-			else if ((pWordCount != 0) && ((pWordCountItalics != 0) && (pWordCountItalics < pWordCount)))
-				analyzeFontMetrics = false;
-//			else if ((pWordFontNames.size() != 0) && (pWordFontNames.elementCount() > 1))
+//			if ((pWordCount != 0) && (pWordCountBold != 0) && (pWordCountBold < pWordCount))
 //				analyzeFontMetrics = false;
-//			else if ((pWordFontSizes.size() != 0) && (pWordFontSizes.elementCount() > 1))
+//			else if ((pWordCount != 0) && (pWordCountItalics != 0) && (pWordCountItalics < pWordCount))
 //				analyzeFontMetrics = false;
+////			else if ((pWordFontNames.size() != 0) && (pWordFontNames.elementCount() > 1))
+////				analyzeFontMetrics = false;
+////			else if ((pWordFontSizes.size() != 0) && (pWordFontSizes.elementCount() > 1))
+////				analyzeFontMetrics = false;
+			if (pWordCount != 0) {
+				if ((pWordCountBold != 0) && (pWordCountBold < pWordCount))
+					assessBold = false; // we have some bold, but not everything, should be measingful in input
+				if ((pWordCountItalics != 0) && (pWordCountItalics < pWordCount))
+					assessItalics = false; // we have some italics, but not everything, should be meaningfur in input
+				if ((pWordFontSizes.elementCount() > 1) && ((pWordCount * 3) < (pWordFontSizes.size() * 4)))
+					measureFontSize = false; // font sizes distinguished, and present in more than 75% of words, should be meaningfur in input
+			}
+			System.out.println(" ==> assess bold: " + assessBold + ", assess italics: " + assessItalics + ", measure font size: " + measureFontSize);
 		}
-		if (analyzeFontMetrics) // TODO revisit this with HBMW !!!
-			WordImageAnalysis.analyzeFontMetrics(doc, this.useMultipleCores, new CascadingProgressMonitor(spm));
+//		if (analyzeFontMetrics) // TODO revisit this with HBMW !!!
+//			WordImageAnalysis.analyzeFontMetrics(doc, this.useMultipleCores, new CascadingProgressMonitor(spm));
+		WordImageAnalysis.analyzeFontMetrics(doc, this.useMultipleCores, new CascadingProgressMonitor(spm), assessBold, assessItalics, measureFontSize);
 		
 		//	finally ...
 		return pData;
@@ -10071,6 +10640,10 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 	 * @throws IOException
 	 */
 	public ImDocument loadImagePdfBlocks(ImDocument doc, Document pdfDoc, byte[] pdfBytes, int flags, int scaleFactor, Set pageIDs, ProgressMonitor pm) throws IOException {
+		return this.doLoadImagePdfBlocks(doc, pdfDoc, pdfBytes, flags, false, scaleFactor, pageIDs, pm);
+	}
+	
+	private ImDocument doLoadImagePdfBlocks(ImDocument doc, Document pdfDoc, byte[] pdfBytes, int flags, boolean isDjVu, int scaleFactor, Set pageIDs, ProgressMonitor pm) throws IOException {
 		
 		//	check arguments
 		pdfDoc = this.getPdfDocument(pdfDoc, pdfBytes);
@@ -10080,16 +10653,18 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 			pm = ProgressMonitor.dummy;
 		
 		//	decode flags
-		boolean useEmbeddedOCR = ((flags & USE_EMBEDDED_OCR) != 0);
+//		boolean useEmbeddedOCR = ((flags & USE_EMBEDDED_OCR) != 0);
+		boolean useEmbeddedOCR = (isDjVu || ((flags & USE_EMBEDDED_OCR) != 0));
 		boolean metaPages = ((flags & META_PAGES) != 0);
 		boolean singlePages = ((flags & SINGLE_PAGE_SCANS) != 0);
 		boolean doublePages = ((flags & DOUBLE_PAGE_SCANS) != 0);
 		boolean enhanceScans = ((flags & ENHANCE_SCANS) != 0);
 		int enhanceScanFlags = (enhanceScans ? ((flags >>> 8) & Imaging.ALL_OPTIONS) : 0);
 		boolean useFixedDpi = ((flags & USE_FIXED_RESOLUTION) != 0);
-		int fixedDpi = (useFixedDpi ? ((flags >>> 16) & 0xFFFF) : -1);
+		int fixedDpi = (useFixedDpi ? ((flags >>> 20) & 0x0FFF) : -1);
 //		boolean fixEmbeddedOCR = (useEmbeddedOCR ? ((flags & FIX_EMBEDDED_OCR) != 0) : false);
-		int embeddedOcrMode = (useEmbeddedOCR ? (flags & ADJUST_EMBEDDED_OCR_NONE) : ADJUST_EMBEDDED_OCR_BLOCKS);
+//		int embeddedOcrMode = (useEmbeddedOCR ? (flags & ADJUST_EMBEDDED_OCR_NONE) : ADJUST_EMBEDDED_OCR_BLOCKS);
+		int embeddedOcrMode = (isDjVu ? ADJUST_EMBEDDED_OCR_NONE : (useEmbeddedOCR ? (flags & ADJUST_EMBEDDED_OCR_NONE) : ADJUST_EMBEDDED_OCR_BLOCKS));
 		
 		//	test if we can OCR
 		if ((this.ocrEngine == null) && !useEmbeddedOCR)
@@ -10135,7 +10710,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		pm.setBaseProgress(0);
 		pm.setProgress(0);
 		pm.setMaxProgress(40);
-		pData = this.addImagePdfPages(doc, pData, pageTree, objects, metaPages, singlePages, doublePages, fixedDpi, scaleFactor, enhanceScanFlags, useEmbeddedOCR, spm, pageImageCache);
+		pData = this.addImagePdfPages(doc, pData, pageTree, objects, pageIDs, metaPages, singlePages, doublePages, fixedDpi, scaleFactor, enhanceScanFlags, useEmbeddedOCR, isDjVu, spm, pageImageCache);
 		
 		//	preserve source PDF in supplement
 		ImSupplement.Source.createSource(doc, "application/pdf", pdfBytes);
@@ -10146,19 +10721,20 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		pm.setProgress(0);
 		pm.setMaxProgress(100);
 //		this.addImagePdfPageBlocks(doc, (useEmbeddedOCR ? pData : null), fixEmbeddedOCR, spm, pageImageCache, null);
-		this.addImagePdfPageBlocks(doc, (useEmbeddedOCR ? pData : null), embeddedOcrMode, spm, pageImageCache, null);
+		this.addImagePdfPageBlocks(doc, (useEmbeddedOCR ? pData : null), embeddedOcrMode, isDjVu, spm, pageImageCache, null);
 		
 		//	finally ...
 		return doc;
 	}
 	
-	private void addImagePdfPageBlocks(final ImDocument doc, final PPageData[] pData, final int embeddedOcrMode, ProgressMonitor pm, final Map pageImageCache, final Map pageRegionCache) throws IOException {
+	private void addImagePdfPageBlocks(final ImDocument doc, final PPageData[] pData, final int embeddedOcrMode, final boolean fontBindEmbeddedOcr, ProgressMonitor pm, final Map pageImageCache, final Map pageRegionCache) throws IOException {
 		
 		//	build progress monitor with synchronized methods instead of synchronizing in-code
 		final ProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? pm : new SynchronizedProgressMonitor(pm));
 		
 		//	get tokenizer to check and split words with
-		final Tokenizer tokenizer = ((Tokenizer) doc.getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER));
+//		final Tokenizer tokenizer = ((Tokenizer) doc.getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER));
+		final Tokenizer tokenizer = ((Tokenizer) doc.getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.getDefaultTokenizer()));
 		final Tokenizer numberTokenizer;
 		
 		//	set up running in parallel
@@ -10296,12 +10872,13 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						
 						//	use embedded OCR as is (add word to page right away)
 						ImWord word;
-//						if (fixEmbeddedOCR) {
 						if (embeddedOcrMode == ADJUST_EMBEDDED_OCR_NONE) {
 							word = new ImWord(pages[p], wb, pData[pages[p].pageId].words[w].str);
 							
 							//	add baseline attribute, so OCR overlay rendering stays in bounds (descender tends to be 25-30%, so 27% should do for an estimate)
-							word.setAttribute(BASELINE_ATTRIBUTE, ("" + (wb.bottom - Math.round(((float) (wb.getHeight() * 27)) / 100))));
+//							word.setAttribute(BASELINE_ATTRIBUTE, ("" + (wb.bottom - Math.round(((float) (wb.getHeight() * 27)) / 100))));
+//							word.setAttribute(BASELINE_ATTRIBUTE, ("" + (wb.bottom - Math.round((wb.getHeight() * (pData[pages[p].pageId].words[w].baseline - ((float) pData[pages[p].pageId].words[w].bounds.getMinY()))) / pData[pages[p].pageId].words[w].bounds.height)))); // use measured word baseline
+							word.setBaseline(wb.bottom - Math.round((wb.getHeight() * (pData[pages[p].pageId].words[w].baseline - ((float) pData[pages[p].pageId].words[w].bounds.getMinY()))) / pData[pages[p].pageId].words[w].bounds.height)); // use measured word baseline
 						}
 						
 						//	only prepare embedded OCR word for adjustment to page image (we'll compute the baseline below)
@@ -10314,25 +10891,67 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 //						if ((pData[pages[p].pageId].words[w].font != null) && (pData[pages[p].pageId].words[w].font.name != null))
 //							word.setAttribute(FONT_NAME_ATTRIBUTE, pData[pages[p].pageId].words[w].font.name);
 						if (pData[pages[p].pageId].words[w].fontSize != -1)
-							word.setAttribute(FONT_SIZE_ATTRIBUTE, ("" + pData[pages[p].pageId].words[w].fontSize));
+							word.setAttribute(FONT_SIZE_ATTRIBUTE, ("" + Math.round(pData[pages[p].pageId].words[w].fontSize)));
 						if (pData[pages[p].pageId].words[w].bold)
 							word.setAttribute(BOLD_ATTRIBUTE);
 						if (pData[pages[p].pageId].words[w].italics)
 							word.setAttribute(ITALICS_ATTRIBUTE);
+						
+						//	add font name and char ID string in case of DjVu font (to facilitate centralized correction of Unicode transcript)
+						if (fontBindEmbeddedOcr && (pData[pages[p].pageId].words[w].font != null) && (pData[pages[p].pageId].words[w].font.name != null)) {
+							word.setAttribute(FONT_NAME_ATTRIBUTE, pData[pages[p].pageId].words[w].font.name);
+							StringBuffer charCodesHex = new StringBuffer();
+							int charCodeLength = ((pData[pages[p].pageId].words[w].font == null) ? 2 : pData[pages[p].pageId].words[w].font.getCharCodeLength());
+							for (int c = 0; c < pData[pages[p].pageId].words[w].charCodesEnlarged.length(); c++) {
+								int charCode = pData[pages[p].pageId].words[w].charCodesEnlarged.charAt(c);
+								if (charCode == 0)
+									continue;
+								String charCodeHex = Integer.toString(charCode, 16).toUpperCase();
+								while (charCodeHex.length() < charCodeLength)
+									charCodeHex = ("0" + charCodeHex);
+								charCodesHex.append(charCodeHex);
+							}
+							word.setAttribute(ImFont.CHARACTER_CODE_STRING_ATTRIBUTE, charCodesHex.toString());
+							if (PdfExtractorTest.aimAtPage != -1) {
+								System.out.print("Got word '" + pData[pages[p].pageId].words[w].str + "' with char codes '");
+								for (int c = 0; c < pData[pages[p].pageId].words[w].charCodesEnlarged.length(); c++)
+									System.out.print(((c == 0) ? "" : " ") + Integer.toString(((int) pData[pages[p].pageId].words[w].charCodesEnlarged.charAt(c)), 16));
+								System.out.println("' ==> " + charCodesHex);
+							}
+						}
 					}
 					
 					//	adjust embedded OCR to page and add it only afterwards
-//					if (!fixEmbeddedOCR) {
-//						adjustEmbeddedOcr(doc, pages[p].pageId, pi, pWords, minColumnMargin, minBlockMargin, columnAreas, minColumnWidth, tokenizer, numberTokenizer, spm);
-					if (embeddedOcrMode != ADJUST_EMBEDDED_OCR_NONE) {
-						adjustEmbeddedOcr(doc, pages[p].pageId, pi, pWords, embeddedOcrMode, minColumnMargin, minBlockMargin, columnAreas, minColumnWidth, tokenizer, numberTokenizer, spm);
+//					if (embeddedOcrMode != ADJUST_EMBEDDED_OCR_NONE) {
+//						adjustEmbeddedOcr(doc, pages[p].pageId, pi, pWords, embeddedOcrMode, minColumnMargin, minBlockMargin, columnAreas, minColumnWidth, tokenizer, numberTokenizer, spm);
+//						
+//						//	add adjusted words to page
+//						for (int w = 0; w < pWords.size(); w++)
+//							pages[p].addWord((ImWord) pWords.get(w));
+//					}
+					if ((embeddedOcrMode & ADJUST_EMBEDDED_OCR_WORDS) == 0) {
+						boolean adjustToWords = (embeddedOcrMode != ADJUST_EMBEDDED_OCR_LINES);
+						ImWord[] pageWords = ((ImWord[]) pWords.toArray(new ImWord[pWords.size()]));
+						pageWords = PageImageAnalysis.adjustOcrWordsToBlocks(doc, pageWords, pages[p], pi, minColumnMargin, minBlockMargin, columnAreas, minColumnWidth, adjustToWords, spm);
+						pWords.clear();
 						
 						//	add adjusted words to page
-						for (int w = 0; w < pWords.size(); w++)
-							pages[p].addWord((ImWord) pWords.get(w));
+						for (int w = 0; w < pageWords.length; w++) {
+							pages[p].addWord(pageWords[w]);
+							pWords.add(pageWords[w]);
+						}
 					}
 					
+					/*
+TODO Perform OCR adjustment on text mask image alone if scans layered:
+- naturally eliminates background (along with any drawing, etc.)
+- should vastly improve accuracy
+- also, try and improve background elimination for overall page images
+- TEST: transactionsprocNewZealandInst.33.1-95.pdf (yellow-brownish page background)
+					 */
+					
 					//	wrap page image for analysis
+					//	TODO use background and text images here if available
 					AnalysisImage api = Imaging.wrapImage(pi.image, null);
 					
 					//	draw embedded words on page image (or into brightness array) to make sure they are observed in blocking
@@ -10346,12 +10965,38 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 					}
 					
 					//	obtain higher level page structure
+					//	TODO use background and text images here if available
 					Region pageRootRegion = PageImageAnalysis.getPageRegion(api, pi.currentDpi, minColumnMargin, minBlockMargin, columnAreas, minColumnWidth, false, spm);
 					addRegionBlocks(pages[p], pageRootRegion, pi.currentDpi, spm);
 					if (pageRegionCache != null)
 						synchronized (pageRegionCache) {
 							pageRegionCache.put(pages[p], pageRootRegion);
 						}
+					
+					//	adjust words to glyphs in word-only mode
+					if (embeddedOcrMode == ADJUST_EMBEDDED_OCR_WORDS) {
+						
+						//	adjust and add words block by block
+						ImRegion[] pageBlocks = pages[p].getRegions(ImRegion.BLOCK_ANNOTATION_TYPE);
+						for (int b = 0; b < pageBlocks.length; b++) {
+							ArrayList bWords = new ArrayList();
+							for (int w = 0; w < pWords.size(); w++) {
+								ImWord pWord = ((ImWord) pWords.get(w));
+								if (pageBlocks[b].bounds.includes(pWord.bounds, true)) {
+									bWords.add(pWord);
+									pWords.remove(w--);
+								}
+							}
+							ImWord[] blockWords = ((ImWord[]) bWords.toArray(new ImWord[bWords.size()]));
+							blockWords = PageImageAnalysis.adjustOcrWordsToPageWords(blockWords, pages[p], pi, pageBlocks[b].bounds, spm);
+							for (int w = 0; w < blockWords.length; w++)
+								pages[p].addWord(blockWords[w]);
+						}
+						
+						//	add adjusted words to page
+						for (int w = 0; w < pWords.size(); w++)
+							pages[p].addWord((ImWord) pWords.get(w));
+					}
 				}
 				
 				//	do OCR if (a) none embedded or (b) asked to do so
@@ -10365,6 +11010,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						System.out.println("pData[p].words.length is " + pData[pages[p].pageId].words.length);
 					
 					//	obtain higher level page structure
+					//	TODO use background and text images here if available
 					AnalysisImage api = Imaging.wrapImage(pi.image, null);
 					Region pageRootRegion = PageImageAnalysis.getPageRegion(api, pi.currentDpi, minColumnMargin, minBlockMargin, columnAreas, minColumnWidth, false, spm);
 					addRegionBlocks(pages[p], pageRootRegion, pi.currentDpi, spm);
@@ -10374,6 +11020,7 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 						}
 					
 					//	do OCR (might have to try multiple times if for some reason OCR instance pool is smaller than number of parallel threads trying to use it)
+					//	TODO use text image here if available
 					spm.setInfo(" - doing OCR");
 					for (int attempts = 0; attempts < 16; attempts++) try {
 						ocrEngine.doBlockOcr(pages[p], pi, new CascadingProgressMonitor(spm));
@@ -10397,1091 +11044,6 @@ public class PdfExtractor implements ImagingConstants, TableConstants {
 		
 		//	check errors
 		checkException(pf);
-	}
-	
-	private static void adjustEmbeddedOcr(ImDocument doc, int pageId, PageImage pi, ArrayList words, int mode, int minColumnMargin, int minBlockMargin, BoundingBox[] columnAreas, int minColumnWidth, Tokenizer tokenizer, Tokenizer numberTokenizer, ProgressMonitor spm) {
-		BufferedImage vbi = null;
-		Graphics2D vbiGr = null;
-		if (PdfExtractorTest.aimAtPage != -1) {
-			vbi = new BufferedImage(pi.image.getWidth(), pi.image.getHeight(), BufferedImage.TYPE_INT_ARGB);
-			vbiGr = vbi.createGraphics();
-			vbiGr.setColor(Color.WHITE);
-			vbiGr.fillRect(0, 0, vbi.getWidth(), vbi.getHeight());
-			vbiGr.drawImage(pi.image, 0, 0, pi.image.getWidth(), pi.image.getHeight(), null);
-		}
-		
-		AnalysisImage api = Imaging.wrapImage(pi.image, null);
-		Region apiRootRegion = PageImageAnalysis.getPageRegion(api, pi.currentDpi, minColumnMargin, minBlockMargin, columnAreas, minColumnWidth, false, spm);
-		Region[] apiBlocks = getAtomicRegions(apiRootRegion);
-		
-		PageBlock[] apiPageBlocks = new PageBlock[apiBlocks.length];
-		boolean separateLines = (mode == ADJUST_EMBEDDED_OCR_BLOCKS);
-		boolean regroupWords = ((mode == ADJUST_EMBEDDED_OCR_BLOCKS) || (mode == ADJUST_EMBEDDED_OCR_LINES));
-		for (int b = 0; b < apiBlocks.length; b++) {
-			BlockLine[] apiBlockLines = PageImageAnalysis.getBlockLinesAndWords(api, pi.currentDpi, apiBlocks[b].getBoundingBox(), separateLines, regroupWords, spm, vbi);
-			apiPageBlocks[b] = new PageBlock(apiBlockLines);
-		}
-		
-		/* TODO Also offer adjustment via Tools menu for whole document
-==> helps adjust IMFs decoded earlier
-  ==> better OCR overlay
-Also offer adjustment for click inside block or selected block in scanned IMF
-==> helps adjust IMFs om block by block basis
-
-Also use adjustment to line for write-through in OCR line editor ...
-... including amended proportion split:
-- try and use word block local adjustment to gaps to amend reference font based proportional split, through
-  - if any region shared between words, try and adjust boundaries to minimize cutoff ...
-  - ... but avoid incurring new cutoffs (some parentheses just do wrap around letters next to them)
-==> improves word splits
-
-Also, make sure to render OCR overlay to line height in display panel:
-- use line metrics instead of font layout ...
-- ... or simply append "HqXp" to OCR string for height adjustment
-- render to baseline, not bottom
-		 */
-		
-		BufferedImage obi = new BufferedImage(pi.image.getWidth(), pi.image.getHeight(), BufferedImage.TYPE_BYTE_GRAY);
-		Graphics2D obiGr = obi.createGraphics();
-		obiGr.setColor(Color.WHITE);
-		obiGr.fillRect(0, 0, obi.getWidth(), obi.getHeight());
-		obiGr.setColor(Color.BLACK);
-		for (int w = 0; w < words.size(); w++) {
-			ImWord word = ((ImWord) words.get(w));
-			obiGr.fillRect(word.bounds.left, word.bounds.top, word.bounds.getWidth(), word.bounds.getHeight());
-		}
-		AnalysisImage aoi = Imaging.wrapImage(obi, null);
-		Region aoiRootRegion = PageImageAnalysis.getPageRegion(aoi, pi.currentDpi, minColumnMargin, minBlockMargin, columnAreas, minColumnWidth, false, spm);
-		Region[] aoiBlocks = getAtomicRegions(aoiRootRegion);
-		
-		//	assign OCR words to blocks
-		ArrayList ocrBlocks = new ArrayList(aoiBlocks.length);
-		ArrayList ocrWords = new ArrayList(words);
-		for (int b = 0; b < aoiBlocks.length; b++) {
-			OcrBlock ob = new OcrBlock(aoiBlocks[b].bounds);
-			BoundingBox obb = aoiBlocks[b].getBoundingBox();
-			for (int w = 0; w < ocrWords.size(); w++) {
-				if (obb.includes(((ImWord) ocrWords.get(w)).bounds, true))
-					ob.words.add(ocrWords.remove(w--));
-			}
-			if (ob.words.isEmpty())
-				continue;
-			ocrBlocks.add(ob);
-			if (PdfExtractorTest.aimAtPage != -1)
-				System.out.println("Got OCR block at " + ob.getBounds() + " with " + ob.words.size() + " words");
-		}
-		System.out.println(ocrWords.size() + " of " + words.size() + " OCR words remaining");
-		obiGr.setColor(Color.GRAY);
-		for (int w = 0; w < ocrWords.size(); w++) {
-			ImWord word = ((ImWord) ocrWords.get(w));
-			obiGr.fillRect(word.bounds.left, word.bounds.top, word.bounds.getWidth(), word.bounds.getHeight());
-		}
-		obiGr.dispose();
-		
-		//	pair up blocks (merge multiple OCR blocks if in same page block)
-		int emptyApiBlockCount = 0;
-		for (int pb = 0; pb < apiPageBlocks.length; pb++) {
-			if (PdfExtractorTest.aimAtPage != -1)
-				System.out.println("Populating page block " + apiPageBlocks[pb].getBounds());
-			int obCount = 0; 
-			for (int ob = 0; ob < ocrBlocks.size(); ob++) {
-				Point obc = ((OcrBlock) ocrBlocks.get(ob)).getCenter();
-				if (apiPageBlocks[pb].contains(obc)) {
-					apiPageBlocks[pb].addOcrBlock((OcrBlock) ocrBlocks.remove(ob--));
-					obCount++;
-				}
-			}
-			if (PdfExtractorTest.aimAtPage != -1)
-				System.out.println(" ==> added " + obCount + " OCR blocks");
-			if (apiPageBlocks[pb].ocrBlock == null)
-				emptyApiBlockCount++;
-			else if (PdfExtractorTest.aimAtPage != -1) {
-				System.out.println(" ==> OCR block bounds are " + apiPageBlocks[pb].ocrBlock.getBounds());
-				System.out.println(" ==> added " + apiPageBlocks[pb].ocrBlock.words.size() + " OCR words");
-			}
-		}
-		System.out.println(ocrBlocks.size() + " OCR blocks and " + emptyApiBlockCount + " page blocks remaining");
-		
-		//	merge page blocks that are in same OCR block, and re-get lines those
-		if (emptyApiBlockCount != 0) {
-			ArrayList apiPageBlockList = new ArrayList(Arrays.asList(apiPageBlocks));
-			for (int b = 0; b < apiPageBlockList.size(); b++) {
-				PageBlock apiPageBlock = ((PageBlock) apiPageBlockList.get(b));
-				if (apiPageBlock.ocrBlock != null)
-					continue; // taken care of above ...
-				if (PdfExtractorTest.aimAtPage != -1)
-					System.out.println("Attempting to attach empty page block " + apiPageBlock.getBounds());
-				Point pbc = apiPageBlock.getCenter();
-				System.out.println(" - center is " + pbc);
-				for (int cb = 0; cb < apiPageBlockList.size(); cb++) {
-					if (cb == b)
-						continue; // little we cound do here
-					PageBlock cApiPageBlock = ((PageBlock) apiPageBlockList.get(cb));
-					if (PdfExtractorTest.aimAtPage != -1)
-						System.out.println(" - checking " + cApiPageBlock.getBounds());
-					if (cApiPageBlock.ocrBlock == null)
-						continue; // another empty block won't help ...
-					if (PdfExtractorTest.aimAtPage != -1)
-						System.out.println(" - OCR bounds are " + cApiPageBlock.ocrBlock.getBounds());
-					if (!cApiPageBlock.ocrBlock.contains(pbc))
-						continue;
-					BoundingBox mApiBlockBounds = cApiPageBlock.getBounds().union(apiPageBlock.getBounds());
-					BlockLine[] mApiBlockLines = PageImageAnalysis.getBlockLinesAndWords(api, pi.currentDpi, mApiBlockBounds, separateLines, regroupWords, spm, vbi);
-					if (PdfExtractorTest.aimAtPage != -1)
-						System.out.println(" ==> attached to " + cApiPageBlock.getBounds());
-					PageBlock mApiPageBlock = new PageBlock(mApiBlockLines);
-					if (PdfExtractorTest.aimAtPage != -1)
-						System.out.println(" ==> bounds are " + mApiPageBlock.getBounds());
-					mApiPageBlock.addOcrBlock(cApiPageBlock.ocrBlock);
-					apiPageBlockList.set(cb, mApiPageBlock);
-					apiPageBlockList.remove(b--);
-					break;
-				}
-			}
-			if (apiPageBlockList.size() < apiPageBlocks.length)
-				apiPageBlocks = ((PageBlock[]) apiPageBlockList.toArray(new PageBlock[apiPageBlockList.size()]));
-		}
-		
-		//	sort block words into lines (only now that we've merged any OCR blocks lying in same page block, and vice versa)
-		for (int b = 0; b < apiPageBlocks.length; b++) {
-			if (apiPageBlocks[b].ocrBlock == null)
-				continue; // empty block ...
-			if (PdfExtractorTest.aimAtPage != -1)
-				System.out.println("Structuring page block " + apiPageBlocks[b].getBounds());
-			ImUtils.sortLeftRightTopDown(apiPageBlocks[b].ocrBlock.words);
-			OcrLine ol = null;
-			ImWord lastWord = null;
-			for (int w = 0; w < apiPageBlocks[b].ocrBlock.words.size(); w++) {
-				ImWord word = ((ImWord) apiPageBlocks[b].ocrBlock.words.get(w));
-				if ((lastWord == null) || ImUtils.areTextFlowBreak(lastWord, word)) {
-					if ((PdfExtractorTest.aimAtPage != -1) && (ol != null)) {
-						System.out.print("  - got line at " + ol.getPageBounds() + " with " + ol.words.size() + " words:");
-						for (int lw = 0; lw < ol.words.size(); lw++)
-							System.out.print(" " + ((OcrWord) ol.words.get(lw)).word.getString());
-						System.out.println();
-					}
-					ol = new OcrLine(apiPageBlocks[b].ocrBlock);
-				}
-				ol.addWord(word);
-				lastWord = word;
-			}
-			if ((PdfExtractorTest.aimAtPage != -1) && (ol != null)) {
-				System.out.print("  - got line at " + ol.getPageBounds() + " with " + ol.words.size() + " words:");
-				for (int lw = 0; lw < ol.words.size(); lw++)
-					System.out.print(" " + ((OcrWord) ol.words.get(lw)).word.getString());
-				System.out.println();
-			}
-			if (PdfExtractorTest.aimAtPage != -1)
-				System.out.println("  ==> got " + apiPageBlocks[b].ocrBlock.lines.size() + " lines");
-		}
-		
-		//	adjust OCR block to page block (limiting shift and stretch, though, as especially single-line blocks can be missing leading or tailing words)
-		//	TODO handle cases with differing numbers of lines !!!
-		for (int b = 0; b < apiPageBlocks.length; b++) {
-			if (apiPageBlocks[b].ocrBlock == null)
-				continue; // empty block ...
-			if (PdfExtractorTest.aimAtPage != -1) {
-				System.out.println("Adjusting lines in page block " + apiPageBlocks[b].getBounds());
-				System.out.println(" - got " + apiPageBlocks[b].blockLines.length + " block lines and " + apiPageBlocks[b].ocrBlock.lines.size() + " OCR lines");
-				System.out.println(" - OCR block is " + apiPageBlocks[b].ocrBlock.getBounds());
-			}
-			int widthDelta = Math.abs((apiPageBlocks[b].right - apiPageBlocks[b].left) - (apiPageBlocks[b].ocrBlock.right - apiPageBlocks[b].ocrBlock.left));
-			int pbWidthPercent = ((widthDelta * 100) / (apiPageBlocks[b].right - apiPageBlocks[b].left));
-			int obWidthPercent = ((widthDelta * 100) / (apiPageBlocks[b].ocrBlock.right - apiPageBlocks[b].ocrBlock.left));
-			if (PdfExtractorTest.aimAtPage != -1)
-				System.out.println(" - width difference is " + widthDelta + " (" + pbWidthPercent + "% of page block, " + obWidthPercent + "% of OCR block)");
-			if ((pbWidthPercent < 50) && (obWidthPercent < 50)) {
-				apiPageBlocks[b].ocrBlock.shiftHorizontally(apiPageBlocks[b].left - apiPageBlocks[b].ocrBlock.left);
-				apiPageBlocks[b].ocrBlock.stretchHorizontally(apiPageBlocks[b].right - apiPageBlocks[b].ocrBlock.right);
-			}
-			else if (PdfExtractorTest.aimAtPage != -1)
-				System.out.println("   ==> horizontal adjustment rejected");
-			int heightDelta = Math.abs((apiPageBlocks[b].bottom - apiPageBlocks[b].top) - (apiPageBlocks[b].ocrBlock.bottom - apiPageBlocks[b].ocrBlock.top));
-			int pbHeightPercent = ((heightDelta * 100) / (apiPageBlocks[b].bottom - apiPageBlocks[b].top));
-			int obHeightPercent = ((heightDelta * 100) / (apiPageBlocks[b].ocrBlock.bottom - apiPageBlocks[b].ocrBlock.top));
-			if (PdfExtractorTest.aimAtPage != -1)
-				System.out.println(" - heigth difference is " + heightDelta + " (" + pbHeightPercent + "% of page block, " + obHeightPercent + "% of OCR block)");
-			if ((pbHeightPercent < 50) && (obHeightPercent < 50)) {
-				apiPageBlocks[b].ocrBlock.shiftVertically(apiPageBlocks[b].top - apiPageBlocks[b].ocrBlock.top);
-				apiPageBlocks[b].ocrBlock.stretchVertically(apiPageBlocks[b].bottom - apiPageBlocks[b].ocrBlock.bottom);
-			}
-			else if (PdfExtractorTest.aimAtPage != -1)
-				System.out.println("   ==> vertical adjustment rejected");
-		}
-		
-		//	adjust word boundaries, transfer baselines, and collect words
-		ArrayList pageWords = new ArrayList();
-		for (int b = 0; b < apiPageBlocks.length; b++) {
-			if (apiPageBlocks[b].ocrBlock == null)
-				continue; // empty block ...
-			if (PdfExtractorTest.aimAtPage != -1)
-				System.out.println("Evaluating page block " + apiPageBlocks[b].getBounds());
-			ArrayList[] combWords = new ArrayList[apiPageBlocks[b].blockLines.length];
-			
-			//	pair up lines inside block
-			int lastMatchOl = -1;
-			for (int bl = 0; bl < apiPageBlocks[b].blockLines.length; bl++) {
-				BoundingBox blBb = apiPageBlocks[b].blockLines[bl].getPageBounds();
-				if (PdfExtractorTest.aimAtPage != -1)
-					System.out.println(" - line " + blBb + " with " + apiPageBlocks[b].blockLines[bl].getWordCount() + " words");
-				combWords[bl] = new ArrayList();
-				for (int lw = 0; lw < apiPageBlocks[b].blockLines[bl].getWordCount(); lw++)
-					combWords[bl].add(new CombinedWord(apiPageBlocks[b].blockLines[bl], apiPageBlocks[b].blockLines[bl].getWord(lw)));
-				HashSet emptyCombWords = new HashSet();
-				HashSet matchedOcrWords = new HashSet();
-				
-				//	pair up page image line with OCR line
-				for (int ol = (lastMatchOl + 1); ol < apiPageBlocks[b].ocrBlock.lines.size(); ol++) {
-					OcrLine ocrLine = ((OcrLine) apiPageBlocks[b].ocrBlock.lines.get(ol));
-					BoundingBox olBb = ocrLine.getPageBounds();
-					if (!blBb.includes(olBb, true))
-						continue;
-					if (PdfExtractorTest.aimAtPage != -1)
-						System.out.println("   - matched to OCR line " + olBb + " with " + ocrLine.words.size() + " words");
-					
-					//	pair up words
-					int lastMatchOw = -1;
-					for (int cw = 0; cw < combWords[bl].size(); cw++) {
-						CombinedWord combWord = ((CombinedWord) combWords[bl].get(cw));
-						if (PdfExtractorTest.aimAtPage != -1)
-							System.out.println("     - word " + combWord.getPageBounds());
-						for (int ow = (lastMatchOw + 1); ow < ocrLine.words.size(); ow++) {
-							OcrWord ocrWord = ((OcrWord) ocrLine.words.get(ow));
-							if (!combWord.containsOcrWord(ocrWord) && !combWord.liesInOcrWord(ocrWord))
-								continue;
-							combWord.addOcrWord(ocrWord);
-							matchedOcrWords.add(ocrWord);
-							lastMatchOw = ow;
-						}
-						if (combWord.ocrWords.isEmpty())
-							emptyCombWords.add(combWord);
-						if (PdfExtractorTest.aimAtPage != -1)
-							System.out.println("       ==> OCR is " + combWord.getOcr());
-					}
-					lastMatchOl = ol;
-					if (emptyCombWords.isEmpty() && (matchedOcrWords.size() == ocrLine.words.size()))
-						break; // all words matched on both sides, we're done with this line
-					
-					//	merge line words contained in same OCR word
-					if (PdfExtractorTest.aimAtPage != -1)
-						System.out.println("   - handling (1) " + emptyCombWords.size() + " empty line words and " + (ocrLine.words.size() - matchedOcrWords.size()) + " unassigned OCR words");
-					for (int cw = 1; cw < combWords[bl].size(); cw++) {
-						CombinedWord lCombWord = ((CombinedWord) combWords[bl].get(cw-1));
-						CombinedWord rCombWord = ((CombinedWord) combWords[bl].get(cw));
-						if (!lCombWord.ocrContainsCombinedWord(rCombWord) && !rCombWord.ocrContainsCombinedWord(lCombWord))
-							continue; // no shared contents
-						if (PdfExtractorTest.aimAtPage != -1)
-							System.out.println("     - merged " + lCombWord.getPageBounds() + " and " + rCombWord.getPageBounds() + " for OCR overlap");
-						lCombWord.absorbCombinedWord(rCombWord);
-						emptyCombWords.remove(lCombWord);
-						emptyCombWords.remove(rCombWord);
-						combWords[bl].remove(cw--);
-					}
-					
-					//	match unassigned OCR words by maximum page word overlap
-					if (PdfExtractorTest.aimAtPage != -1)
-						System.out.println("   - handling (2) " + emptyCombWords.size() + " empty line words and " + (ocrLine.words.size() - matchedOcrWords.size()) + " unassigned OCR words");
-					for (int ow = 0; ow < ocrLine.words.size(); ow++) {
-						OcrWord ocrWord = ((OcrWord) ocrLine.words.get(ow));
-						if (matchedOcrWords.contains(ocrWord))
-							continue; // already assigned
-						if (PdfExtractorTest.aimAtPage != -1)
-							System.out.println("     - OCR word " + ocrWord.getPageBounds() + ": " + ocrWord.word.getString());
-						for (int cw = 0; cw < combWords[bl].size(); cw++) {
-							CombinedWord combWord = ((CombinedWord) combWords[bl].get(cw));
-							if (!combWord.overlapsOcrWord(ocrWord))
-								continue;
-							if ((cw+1) < combWords[bl].size()) /* check for more overlap with next word */ {
-								CombinedWord nCombWord = ((CombinedWord) combWords[bl].get(cw+1));
-								if (nCombWord.overlapsOcrWord(ocrWord)) {
-									int lOverlap = (combWord.right - ocrWord.getPageLeft());
-									int rOverlap = (ocrWord.getPageRight() - nCombWord.left);
-									if (lOverlap < rOverlap)
-										continue;
-								}
-							}
-							combWord.addOcrWord(ocrWord);
-							matchedOcrWords.add(ocrWord);
-							emptyCombWords.remove(combWord);
-							if (PdfExtractorTest.aimAtPage != -1)
-								System.out.println("       ==> matched to " + combWord.getPageBounds() + ", OCR is " + combWord.getOcr());
-						}
-					}
-					if (emptyCombWords.isEmpty() && (matchedOcrWords.size() == ocrLine.words.size()))
-						break; // all words matched on both sides, we're done with this line
-					
-					//	merge away empty page words
-					if (PdfExtractorTest.aimAtPage != -1)
-						System.out.println("   - handling (3) " + emptyCombWords.size() + " empty line words and " + (ocrLine.words.size() - matchedOcrWords.size()) + " unassigned OCR words");
-					for (int cw = 0; cw < combWords[bl].size(); cw++) {
-						CombinedWord combWord = ((CombinedWord) combWords[bl].get(cw));
-						if (combWord.ocrWords.size() != 0)
-							continue; // this one has its OCR
-						CombinedWord lCombWord;
-						int lDist;
-						if (cw == 0) {
-							lCombWord = null;
-							lDist = Short.MAX_VALUE; // avoid arithmetic overflow below
-						}
-						else {
-							lCombWord = ((CombinedWord) combWords[bl].get(cw-1));
-							lDist = (combWord.left - lCombWord.right);
-						}
-						CombinedWord rCombWord;
-						int rDist;
-						if ((cw+1) == combWords[bl].size()) {
-							rCombWord = null;
-							rDist = Short.MAX_VALUE; // avoid arithmetic overflow below
-						}
-						else {
-							rCombWord = ((CombinedWord) combWords[bl].get(cw+1));
-							rDist = (rCombWord.left - combWord.right);
-						}
-						if (Math.abs(lDist - rDist) < 2)
-							continue; // too ambiguous
-						
-						int minDist = Math.min(lDist, rDist);
-						if ((minDist * 3) > apiPageBlocks[b].blockLines[bl].getHeight())
-							continue; // looks like a regular space
-						if (minDist == lDist) {
-							System.out.println("     - merged " + lCombWord.getPageBounds() + " and empty " + combWord.getPageBounds() + " at distance " + lDist);
-							lCombWord.absorbCombinedWord(combWord);
-							combWords[bl].remove(cw--);
-						}
-						else if (minDist == rDist) {
-							System.out.println("     - merged empty " + combWord.getPageBounds() + " and " + rCombWord.getPageBounds() + " at distance " + rDist);
-							combWord.absorbCombinedWord(rCombWord);
-							combWords[bl].set((cw+1), combWord);
-							combWords[bl].remove(cw--);
-						}
-						emptyCombWords.remove(combWord);
-					}
-					if (emptyCombWords.isEmpty() && (matchedOcrWords.size() == ocrLine.words.size()))
-						break; // all words matched on both sides, we're done with this line
-					
-					//	match any unassigned OCR words by maximum page word overlap again (we might have merged page words)
-					if (PdfExtractorTest.aimAtPage != -1)
-						System.out.println("   - handling (4) " + emptyCombWords.size() + " empty line words and " + (ocrLine.words.size() - matchedOcrWords.size()) + " unassigned OCR words");
-					for (int ow = 0; ow < ocrLine.words.size(); ow++) {
-						OcrWord ocrWord = ((OcrWord) ocrLine.words.get(ow));
-						if (matchedOcrWords.contains(ocrWord))
-							continue; // already assigned
-						if (PdfExtractorTest.aimAtPage != -1)
-							System.out.println("     - OCR word " + ocrWord.getPageBounds() + ": " + ocrWord.word.getString());
-						for (int cw = 0; cw < combWords[bl].size(); cw++) {
-							CombinedWord combWord = ((CombinedWord) combWords[bl].get(cw));
-							if (!combWord.overlapsOcrWord(ocrWord))
-								continue;
-							if ((cw+1) < combWords[bl].size()) /* check for more overlap with next word */ {
-								CombinedWord nCombWord = ((CombinedWord) combWords[bl].get(cw+1));
-								if (nCombWord.overlapsOcrWord(ocrWord)) {
-									int lOverlap = (combWord.right - ocrWord.getPageLeft());
-									int rOverlap = (ocrWord.getPageRight() - nCombWord.left);
-									if (lOverlap < rOverlap)
-										continue;
-								}
-							}
-							combWord.addOcrWord(ocrWord);
-							matchedOcrWords.add(ocrWord);
-							emptyCombWords.remove(combWord);
-							if (PdfExtractorTest.aimAtPage != -1)
-								System.out.println("       ==> matched to " + combWord.getPageBounds() + ", OCR is " + combWord.getOcr());
-						}
-					}
-					if (emptyCombWords.isEmpty() && (matchedOcrWords.size() == ocrLine.words.size()))
-						break; // all words matched on both sides, we're done with this line
-					
-					//	match any unassigned OCR words by proximity to page words
-					if (PdfExtractorTest.aimAtPage != -1)
-						System.out.println("   - handling (5) " + emptyCombWords.size() + " empty line words and " + (ocrLine.words.size() - matchedOcrWords.size()) + " unassigned OCR words");
-					for (int ow = 0; ow < ocrLine.words.size(); ow++) {
-						OcrWord ocrWord = ((OcrWord) ocrLine.words.get(ow));
-						if (matchedOcrWords.contains(ocrWord))
-							continue; // already assigned
-						if (PdfExtractorTest.aimAtPage != -1)
-							System.out.println("     - OCR word " + ocrWord.getPageBounds() + ": " + ocrWord.word.getString());
-						int minDist = Short.MAX_VALUE;
-						CombinedWord minDistCombWord = null;
-						for (int cw = 0; cw < combWords[bl].size(); cw++) {
-							CombinedWord combWord = ((CombinedWord) combWords[bl].get(cw));
-							int lDist = (ocrWord.getPageLeft() - combWord.right);
-							if ((0 <= lDist) && (lDist < minDist)) {
-								minDist = lDist;
-								minDistCombWord = combWord;
-							}
-							int rDist = (combWord.left - ocrWord.getPageRight());
-							if ((0 <= rDist) && (rDist < minDist)) {
-								minDist = rDist;
-								minDistCombWord = combWord;
-							}
-						}
-						if (minDistCombWord == null)
-							continue; // nothing to work with
-						if ((minDist * 3) > apiPageBlocks[b].blockLines[bl].getHeight())
-							continue; // looks like a regular space
-						minDistCombWord.addOcrWord(ocrWord);
-						matchedOcrWords.add(ocrWord);
-						emptyCombWords.remove(minDistCombWord);
-						if (PdfExtractorTest.aimAtPage != -1)
-							System.out.println("       ==> matched to " + minDistCombWord.getPageBounds() + " at distance " + minDist + ", OCR is " + minDistCombWord.getOcr());
-					}
-					if (emptyCombWords.isEmpty() && (matchedOcrWords.size() == ocrLine.words.size()))
-						break; // all words matched on both sides, we're done with this line
-					
-					if (PdfExtractorTest.aimAtPage != -1)
-						System.out.println("   - handling (6) " + emptyCombWords.size() + " empty line words and " + (ocrLine.words.size() - matchedOcrWords.size()) + " unassigned OCR words");
-					break;
-				}
-				
-				//	merge page words that overlap each others' OCR words
-				for (int cw = 1; cw < combWords[bl].size(); cw++) {
-					CombinedWord lCombWord = ((CombinedWord) combWords[bl].get(cw-1));
-					CombinedWord rCombWord = ((CombinedWord) combWords[bl].get(cw));
-					if (!lCombWord.ocrOverlapsCombinedWord(rCombWord) && !rCombWord.ocrOverlapsCombinedWord(lCombWord))
-						continue; // no shared contents
-					int dist = (rCombWord.left - lCombWord.right);
-					if ((dist * 3) > apiPageBlocks[b].blockLines[bl].getHeight())
-						continue; // looks like a regular space
-					int pageDist = (rCombWord.left - lCombWord.right);
-					if (PdfExtractorTest.aimAtPage != -1)
-						System.out.println("   - OCR overlap merged " + lCombWord.getPageBounds() + " and " + rCombWord.getPageBounds() + " (distance in page " + pageDist + ", " + ((pageDist * 100) / apiPageBlocks[b].blockLines[bl].getHeight()) + "%), OCR is " + lCombWord.getOcr() + rCombWord.getOcr());
-					lCombWord.absorbCombinedWord(rCombWord);
-					emptyCombWords.remove(lCombWord);
-					emptyCombWords.remove(rCombWord);
-					combWords[bl].remove(cw--);
-				}
-				
-				//	merge page words whose assigned OCR words are too close for a space
-				for (int cw = 1; cw < combWords[bl].size(); cw++) {
-					CombinedWord lCombWord = ((CombinedWord) combWords[bl].get(cw-1));
-					if (lCombWord.ocrWords.isEmpty())
-						continue; // nothing to work with, despite all efforts
-					CombinedWord rCombWord = ((CombinedWord) combWords[bl].get(cw));
-					if (rCombWord.ocrWords.isEmpty())
-						continue; // nothing to work with, despite all efforts
-					int ocrDist = (rCombWord.ocrLeft - lCombWord.ocrRight);
-					if ((ocrDist * 6) > apiPageBlocks[b].blockLines[bl].getHeight())
-						continue; // looks like a regular space
-					
-					//	check characters
-					String lCombWordLast = lCombWord.getLastString();
-					String lCombWordEnd = (((lCombWordLast == null) || (lCombWordLast.length() == 0)) ? "" : lCombWordLast.substring(lCombWordLast.length() - 1));
-					String rCombWordFirst = rCombWord.getFirstString();
-					String rCombWordStart = (((rCombWordFirst == null) || (rCombWordFirst.length() == 0)) ? "" : rCombWordFirst.substring(0, 1));
-					if (Gamta.isPunctuation(lCombWordEnd) && !Gamta.spaceBefore(lCombWordEnd) && Gamta.spaceAfter(lCombWordEnd))
-						continue; // block right merging words that have space after, but not before (periods, colons, etc., and closing brackets)
-					if (Gamta.isPunctuation(rCombWordStart) && Gamta.spaceBefore(rCombWordStart) && !Gamta.spaceAfter(rCombWordStart))
-						continue; // block left merging words that have space before, but not after (opening brackets)
-					if (Character.isLetter(rCombWordStart.charAt(0)) && Character.isUpperCase(rCombWordStart.charAt(0)))
-						continue; // block left merging words starting with capital letter
-					if (Character.isLetter(lCombWordEnd.charAt(0)) && Character.isLetter(rCombWordStart.charAt(0)))
-						continue; // block merging between two letters (words hardly ever break up)
-					if (Character.isDigit(lCombWordEnd.charAt(0)) && (lCombWordEnd.charAt(0) != '1') && Character.isDigit(rCombWordStart.charAt(0)) && (rCombWordStart.charAt(0) != '1'))
-						continue; // block merging between two digits unless at least one '1' involved (digits tend to be same width, incurring surplus space around '1's)
-					
-					//	check page image word distance
-					int pageDist = (rCombWord.left - lCombWord.right);
-					if ("1".equals(lCombWordEnd)) // account for smaller width of '1' with same advance as other digits 
-						pageDist -= (apiPageBlocks[b].blockLines[bl].getHeight() / 20);
-					if ("1".equals(rCombWordStart)) // account for smaller width of '1' with same advance as other digits
-						pageDist -= (apiPageBlocks[b].blockLines[bl].getHeight() / 20);
-					if ((pageDist * 4) > apiPageBlocks[b].blockLines[bl].getHeight())
-						continue; // looks like a regular space (somewhat more conservative, as OCR didn't seem to see one)
-					
-					//	perform merger
-					if (PdfExtractorTest.aimAtPage != -1)
-						System.out.println("   - OCR distance merged " + lCombWord.getPageBounds() + " and " + rCombWord.getPageBounds() + " at distance " + ocrDist + " (" + pageDist + " in page, " + ((pageDist * 100) / apiPageBlocks[b].blockLines[bl].getHeight()) + "%), OCR is " + lCombWord.getOcr() + rCombWord.getOcr());
-					lCombWord.absorbCombinedWord(rCombWord);
-					emptyCombWords.remove(lCombWord);
-					emptyCombWords.remove(rCombWord);
-					combWords[bl].remove(cw--);
-				}
-				
-				//	merge page words closer than half the line average apart (might be super stretched due to justification)
-				CountingSet combWordDists = new CountingSet(new TreeMap());
-				CountingSet relCombWordDists = new CountingSet(new TreeMap());
-				for (int cw = 1; cw < combWords[bl].size(); cw++) {
-					CombinedWord lCombWord = ((CombinedWord) combWords[bl].get(cw-1));
-					CombinedWord rCombWord = ((CombinedWord) combWords[bl].get(cw));
-					int dist = (rCombWord.left - lCombWord.right);
-					combWordDists.add(new Integer(dist));
-					dist = Math.min(dist, (apiPageBlocks[b].blockLines[bl].getHeight() / 2));
-					relCombWordDists.add(new Integer((dist * 100) / apiPageBlocks[b].blockLines[bl].getHeight()));
-				}
-				if (PdfExtractorTest.aimAtPage != -1)
-					System.out.println("   - distances are " + combWordDists);
-				int avgCombWordDist = getAverageMid60(combWordDists, 0, Integer.MAX_VALUE);
-				if (PdfExtractorTest.aimAtPage != -1) {
-					System.out.println("     average distance is " + getAverage(combWordDists, 0, Integer.MAX_VALUE) + ", on mid 60% " + avgCombWordDist);
-					System.out.println("   - relative distances are " + relCombWordDists);
-					System.out.println("     average relative distance is " + getAverage(relCombWordDists, 0, Integer.MAX_VALUE) + ", on mid 60% " + getAverageMid60(relCombWordDists, 0, Integer.MAX_VALUE));
-				}
-				if (avgCombWordDist != -1)
-					for (int cw = 1; cw < combWords[bl].size(); cw++) {
-						CombinedWord lCombWord = ((CombinedWord) combWords[bl].get(cw-1));
-						CombinedWord rCombWord = ((CombinedWord) combWords[bl].get(cw));
-						int dist = (rCombWord.left - lCombWord.right);
-						if (avgCombWordDist < (dist * 2))
-							continue;
-						if (PdfExtractorTest.aimAtPage != -1)
-							System.out.println("   - narrow distance merged " + lCombWord.getPageBounds() + " and " + rCombWord.getPageBounds() + " for distance " + dist + " with average at " + avgCombWordDist + ", OCR is " + lCombWord.getOcr() + rCombWord.getOcr());
-						lCombWord.absorbCombinedWord(rCombWord);
-						emptyCombWords.remove(lCombWord);
-						emptyCombWords.remove(rCombWord);
-						combWords[bl].remove(cw--);
-					}
-				
-				//	what do we got?
-				if (PdfExtractorTest.aimAtPage != -1) {
-					System.out.println("   ==> got " + combWords[bl].size() + " words");
-					System.out.print("   ==> OCR is");
-					for (int cw = 0; cw < combWords[bl].size(); cw++)
-						System.out.print(" " + ((CombinedWord) combWords[bl].get(cw)).getOcr());
-					System.out.println();
-				}
-			}
-			
-			//	add words to list
-			for (int bl = 0; bl < combWords.length; bl++)
-				for (int cw = 0; cw < combWords[bl].size(); cw++) {
-					CombinedWord combWord = ((CombinedWord) combWords[bl].get(cw));
-					String combWordOcr = combWord.getOcr();
-					if (combWordOcr.length() == 0)
-						combWordOcr = "TODO"; // TODO add switch for this one
-					ImWord pageWord = new ImWord(doc, pageId, combWord.getPageBounds(), combWordOcr);
-					if (combWord.isBold())
-						pageWord.setAttribute(BOLD_ATTRIBUTE);
-					if (combWord.isItalics())
-						pageWord.setAttribute(ITALICS_ATTRIBUTE);
-					if (combWord.getFontSize() != -1)
-						pageWord.setAttribute(FONT_SIZE_ATTRIBUTE, ("" + combWord.getFontSize()));
-					pageWord.setAttribute(BASELINE_ATTRIBUTE, ("" + combWord.line.getPageBaseline()));
-					if (combWord.getCapHeight() != -1)
-						pageWord.setAttribute("capHeight", ("" + combWord.getCapHeight()));
-					if (combWord.getXHeight() != -1)
-						pageWord.setAttribute("xHeight", ("" + combWord.getXHeight()));
-					addOcrWord(doc, pageId, pageWord, tokenizer, numberTokenizer, pageWords, spm);
-				}
-		}
-		
-		if (vbi != null) {
-			BufferedImage cbi = new BufferedImage(pi.image.getWidth(), pi.image.getHeight(), BufferedImage.TYPE_INT_ARGB);
-			Graphics2D cbiGr = cbi.createGraphics();
-			cbiGr.setColor(Color.WHITE);
-			cbiGr.fillRect(0, 0, cbi.getWidth(), cbi.getHeight());
-			cbiGr.drawImage(pi.image, 0, 0, pi.image.getWidth(), pi.image.getHeight(), null);
-			cbiGr.setColor(Color.BLACK);
-			for (int w = 0; w < words.size(); w++) {
-				ImWord word = ((ImWord) words.get(w));
-				cbiGr.fillRect(word.bounds.left, word.bounds.top, word.bounds.getWidth(), word.bounds.getHeight());
-			}
-			AnalysisImage aci = Imaging.wrapImage(cbi, null);
-			Region aciRootRegion = PageImageAnalysis.getPageRegion(aci, pi.currentDpi, minColumnMargin, minBlockMargin, columnAreas, minColumnWidth, false, spm);
-			Region[] aciBlocks = getAtomicRegions(aciRootRegion);
-			
-			vbiGr.setColor(new Color(255, 0, 0, 64));
-			for (int w = 0; w < words.size(); w++) {
-				ImWord word = ((ImWord) words.get(w));
-				vbiGr.fillRect(word.bounds.left, word.bounds.top, word.bounds.getWidth(), word.bounds.getHeight());
-			}
-			vbiGr.setColor(new Color(0, 0, 255, 64));
-			for (int b = 0; b < apiPageBlocks.length; b++) {
-				if (apiPageBlocks[b].ocrBlock == null)
-					continue; // empty block ...
-				for (int l = 0; l < apiPageBlocks[b].ocrBlock.lines.size(); l++) {
-					OcrLine ol = ((OcrLine) apiPageBlocks[b].ocrBlock.lines.get(l));
-					for (int w = 0; w < ol.words.size(); w++) {
-						OcrWord ow = ((OcrWord) ol.words.get(w));
-						BoundingBox owbb = ow.getPageBounds();
-						vbiGr.fillRect(owbb.left, owbb.top, owbb.getWidth(), owbb.getHeight());
-					}
-				}
-			}
-			
-			vbiGr.setStroke(new BasicStroke(3));
-			vbiGr.setColor(new Color(0, 255, 0, 128));
-			for (int b = 0; b < apiBlocks.length; b++) {
-				BoundingBox apiBb = apiBlocks[b].getBoundingBox();
-				vbiGr.drawRect(apiBb.left, apiBb.top, apiBb.getWidth(), apiBb.getHeight());
-			}
-//			vbiGr.setStroke(new BasicStroke(1));
-//			for (int b = 0; b < apiBlocks.length; b++) {
-//				if (apiBlockLines[b] == null)
-//					continue;
-//				for (int l = 0; l < apiBlockLines[b].length; l++)
-//					vbiGr.drawRect(apiBlockLines[b][l].getLeftCol(), apiBlockLines[b][l].getTopRow(), apiBlockLines[b][l].getWidth(), apiBlockLines[b][l].getHeight());
-//			}
-			vbiGr.setStroke(new BasicStroke(3));
-			vbiGr.setColor(new Color(255, 0, 0, 128));
-			for (int b = 0; b < aoiBlocks.length; b++) {
-				BoundingBox aoiBb = aoiBlocks[b].getBoundingBox();
-				vbiGr.drawRect(aoiBb.left, aoiBb.top, aoiBb.getWidth(), aoiBb.getHeight());
-			}
-			vbiGr.setColor(new Color(0, 0, 255, 128));
-			for (int b = 0; b < aciBlocks.length; b++) {
-				BoundingBox aciBb = aciBlocks[b].getBoundingBox();
-				vbiGr.drawRect(aciBb.left, aciBb.top, aciBb.getWidth(), aciBb.getHeight());
-			}
-			
-			ImageDisplayDialog idd = new ImageDisplayDialog("OCR relative to page images");
-			idd.addImage(vbi, ("Page " + pageId + " Lines"));
-			idd.addImage(pi.image, ("Page " + pageId + " Scan"));
-			idd.addImage(obi, ("Page " + pageId + " OCR"));
-			idd.setSize(800, 800);
-			idd.setLocationRelativeTo(null);
-			idd.setVisible(true);
-		}
-		
-		//	generate and return words
-		words.clear();
-		words.addAll(pageWords);
-	}
-	
-	private static Region[] getAtomicRegions(Region theRegion) {
-		ArrayList regions = new ArrayList();
-		addAtomicRegions(theRegion, regions);
-		return ((Region[]) regions.toArray(new Region[regions.size()]));
-	}
-	private static void addAtomicRegions(Region theRegion, ArrayList regions) {
-		if (theRegion.isAtomic() || theRegion.isImage())
-			regions.add(theRegion);
-		else for (int s = 0; s < theRegion.getSubRegionCount(); s++)
-			addAtomicRegions(theRegion.getSubRegion(s), regions);
-	}
-	
-	private static int getAverage(CountingSet cs, int minToCount, int maxToCount) {
-		if (cs.isEmpty())
-			return -1;
-		int count = 0;
-		int sum = 0;
-		for (Iterator it = cs.iterator(); it.hasNext();) {
-			Integer i = ((Integer) it.next());
-			if (i.intValue() < minToCount)
-				continue;
-			if (maxToCount < i.intValue())
-				break;
-			count += cs.getCount(i);
-			sum += (i.intValue() * cs.getCount(i));
-		}
-		return ((count == 0) ? -1 : ((sum + (count / 2)) / count));
-	}
-	private static int getAverageMid60(CountingSet cs, int minToCount, int maxToCount) {
-		if (cs.isEmpty())
-			return -1;
-		int checkCount = 0;
-		int count = 0;
-		int sum = 0;
-		for (Iterator it = cs.iterator(); it.hasNext();) {
-			Integer i = ((Integer) it.next());
-			if ((cs.size() * 80) < (checkCount * 100))
-				break; // beyond 80%
-			int iCount = cs.getCount(i);
-			checkCount += iCount;
-			if (i.intValue() < minToCount)
-				continue;
-			if (maxToCount < i.intValue())
-				break;
-			if ((cs.size() * (100 - 80)) < (checkCount * 100)) /* we're beyond smallest 20% */ {
-				count += iCount;
-				sum += (i.intValue() * iCount);
-			}
-		}
-		return ((count == 0) ? -1 : ((sum + (count / 2)) / count));
-	}
-	
-	private static void addOcrWord(ImDocument doc, int pageId, ImWord word, Tokenizer tokenizer, Tokenizer numberTokenizer, ArrayList pageWords, ProgressMonitor spm) {
-		
-		//	check tokenization
-		TokenSequence wordTokens = (Gamta.isNumber(word.getString()) ? numberTokenizer : tokenizer).tokenize(word.getString());
-		
-		//	ensure minimum word width of 4
-		if (wordTokens.size() < 2) {
-			if (word.bounds.getWidth() < 4) {
-				int left = word.bounds.left;
-				int right = word.bounds.right;
-				if ((right - left) < 4)
-					right++;
-				if ((right - left) < 4)
-					left--;
-				if ((right - left) < 4)
-					right++;
-				if ((right - left) < 4)
-					left--;
-				ImWord xWord = new ImWord(doc, pageId, new BoundingBox(left, right, word.bounds.top, word.bounds.bottom), word.getString());
-				if (word.hasAttribute(BOLD_ATTRIBUTE))
-					xWord.setAttribute(BOLD_ATTRIBUTE);
-				if (word.hasAttribute(ITALICS_ATTRIBUTE))
-					xWord.setAttribute(ITALICS_ATTRIBUTE);
-				if (word.getFontSize() != -1)
-					xWord.setAttribute(FONT_SIZE_ATTRIBUTE, word.getAttribute(FONT_SIZE_ATTRIBUTE));
-				xWord.setAttribute(BASELINE_ATTRIBUTE, word.getAttribute(BASELINE_ATTRIBUTE));
-				word = xWord;
-			}
-			pageWords.add(word);
-			return;
-		}
-		if (PdfExtractorTest.aimAtPage != -1)
-			System.out.println(" - splitting " + word.getString());
-		
-		//	get width for each token at word font size
-		String[] splitTokens = new String[wordTokens.size()];
-		float[] splitTokenWidths = new float[wordTokens.size()];
-		float splitTokenWidthSum = 0;
-		
-		//	perform proportional word split (using default serif font)
-		Font pWordFont = getFont("Serif", Font.PLAIN, true, false, 12);
-		for (int s = 0; s < splitTokens.length; s++) {
-			splitTokens[s] = wordTokens.valueAt(s);
-			TextLayout tl = new TextLayout(splitTokens[s], pWordFont, new FontRenderContext(null, false, true));
-			splitTokenWidths[s] = ((float) tl.getBounds().getWidth());
-			splitTokenWidthSum += splitTokenWidths[s];
-		}
-		
-		//	ensure minimum word width of 4
-		float splitTokenMinWidth = ((splitTokenWidthSum * 4) / word.bounds.getWidth());
-		splitTokenWidthSum = 0;
-		for (int s = 0; s < splitTokens.length; s++) {
-			if (splitTokenWidths[s] < splitTokenMinWidth)
-				splitTokenWidths[s] = splitTokenMinWidth;
-			splitTokenWidthSum += splitTokenWidths[s];
-		}
-		
-		//	store split result, splitting word bounds accordingly
-		//	TODO back this up with region coloring (way more accurate) !!!
-		float splitTokenLeft = word.bounds.left;
-		for (int s = 0; s < splitTokens.length; s++) {
-			float splitTokenWidth = ((word.bounds.getWidth() * splitTokenWidths[s]) / splitTokenWidthSum);
-			BoundingBox splitWordBounds = new BoundingBox(Math.round(splitTokenLeft), Math.round(splitTokenLeft + splitTokenWidth), word.bounds.top, word.bounds.bottom);
-			ImWord splitWord = new ImWord(doc, pageId, splitWordBounds, splitTokens[s]);
-			if (word.hasAttribute(BOLD_ATTRIBUTE))
-				splitWord.setAttribute(BOLD_ATTRIBUTE);
-			if (word.hasAttribute(ITALICS_ATTRIBUTE))
-				splitWord.setAttribute(ITALICS_ATTRIBUTE);
-			if (word.getFontSize() != -1)
-				splitWord.setAttribute(FONT_SIZE_ATTRIBUTE, word.getAttribute(FONT_SIZE_ATTRIBUTE));
-			splitWord.setAttribute(BASELINE_ATTRIBUTE, word.getAttribute(BASELINE_ATTRIBUTE));
-			splitWord.setAttribute("xHeight", word.getAttribute("xHeight"));
-			splitWord.setAttribute("capHeight", word.getAttribute("capHeight"));
-			pageWords.add(splitWord);
-			splitTokenLeft += splitTokenWidth;
-			if (PdfExtractorTest.aimAtPage != -1)
-				System.out.println("   --> split word part " + splitWord.getString() + ", bounds are " + splitWord.bounds);
-		}
-	}
-	
-	private static class PageBlock {
-		BlockLine[] blockLines;
-		int left = Integer.MAX_VALUE;
-		int right = Integer.MIN_VALUE;
-		int top = Integer.MAX_VALUE;
-		int bottom = Integer.MIN_VALUE;
-		OcrBlock ocrBlock = null;
-//		ArrayList ocrWords = new ArrayList();
-//		ArrayList ocrLines = new ArrayList();
-		PageBlock(BlockLine[] blockLines) {
-			this.blockLines = blockLines;
-			for (int l = 0; l < this.blockLines.length; l++) {
-				this.left = Math.min(this.left, this.blockLines[l].getPageLeft());
-				this.right = Math.max(this.right, this.blockLines[l].getPageRight());
-				this.top = Math.min(this.top, this.blockLines[l].getPageTop());
-				this.bottom = Math.max(this.bottom, this.blockLines[l].getPageBottom());
-			}
-		}
-		BoundingBox getBounds() {
-			return new BoundingBox(this.left, this.right, this.top, this.bottom);
-		}
-		Point getCenter() {
-			return new Point(((this.left + this.right) / 2), ((this.top + this.bottom) / 2));
-		}
-		boolean contains(Point p) {
-			if (p.x < this.left)
-				return false;
-			else if (this.right <= p.x)
-				return false;
-			else if (p.y < this.top)
-				return false;
-			else if (this.bottom <= p.y)
-				return false;
-			else return true;
-		}
-//		void addWords(OcrBlock ob) {
-//			this.ocrWords.addAll(ob.words);
-//		}
-		void addOcrBlock(OcrBlock ob) {
-			if (this.ocrBlock == null)
-				this.ocrBlock = ob;
-			else this.ocrBlock.include(ob);
-		}
-//		void include(PageBlock pb) {
-//			if (pb == this)
-//				return;
-//			this.left = Math.min(this.left, pb.left);
-//			this.right = Math.max(this.right, pb.right);
-//			this.top = Math.min(this.top, pb.top);
-//			this.bottom = Math.max(this.bottom, pb.bottom);
-//		}
-	}
-	
-	private static class OcrBlock {
-		int left;
-		int right;
-		int top;
-		int bottom;
-		ArrayList lines = new ArrayList();
-		ArrayList words = new ArrayList();
-		OcrBlock(ImagePartRectangle bounds) {
-			this.left = bounds.getLeftCol();
-			this.right = bounds.getRightCol();
-			this.top = bounds.getTopRow();
-			this.bottom = bounds.getBottomRow();
-		}
-		BoundingBox getBounds() {
-			return new BoundingBox(this.left, this.right, this.top, this.bottom);
-		}
-		Point getCenter() {
-			return new Point(((this.left + this.right) / 2), ((this.top + this.bottom) / 2));
-		}
-		boolean contains(Point p) {
-			if (p.x < this.left)
-				return false;
-			else if (this.right <= p.x)
-				return false;
-			else if (p.y < this.top)
-				return false;
-			else if (this.bottom <= p.y)
-				return false;
-			else return true;
-		}
-		void include(OcrBlock ob) {
-			if (ob == this)
-				return;
-			this.words.addAll(ob.words);
-			this.left = Math.min(this.left, ob.left);
-			this.right = Math.max(this.right, ob.right);
-			this.top = Math.min(this.top, ob.top);
-			this.bottom = Math.max(this.bottom, ob.bottom);
-		}
-		void shiftHorizontally(int by) {
-			if (PdfExtractorTest.aimAtPage != -1)
-				System.out.println(" - shifting horizontally by " + by + ", " + ((by * 100) / (this.right - this.left)) + "%");
-			this.left += by;
-			this.right += by;
-		}
-		void stretchHorizontally(int by) {
-			if (PdfExtractorTest.aimAtPage != -1)
-				System.out.println(" - stretching horizontally by " + by + ", " + ((by * 100) / (this.right - this.left)) + "%");
-			for (int l = 0; l < this.lines.size(); l++) {
-				OcrLine ol = ((OcrLine) this.lines.get(l));
-				int lols = ((by * ol.left) / (this.right - this.left));
-				ol.left += lols;
-				int rols = ((by * ol.right) / (this.right - this.left));
-				ol.right += rols;
-				if (lols != rols)
-					ol.stretchHorizontally(rols - lols);
-			}
-		}
-		void shiftVertically(int by) {
-			if (PdfExtractorTest.aimAtPage != -1)
-				System.out.println(" - shifting vertically by " + by + ", " + ((by * 100) / (this.bottom - this.top)) + "%");
-			this.top += by;
-			this.bottom += by;
-		}
-		void stretchVertically(int by) {
-			if (PdfExtractorTest.aimAtPage != -1)
-				System.out.println(" - stretching vertically by " + by + ", " + ((by * 100) / (this.bottom - this.top)) + "%");
-			for (int l = 0; l < this.lines.size(); l++) {
-				OcrLine ol = ((OcrLine) this.lines.get(l));
-				int olc = ((ol.top + ol.bottom) / 2);
-				int ols = ((by * olc) / (this.bottom - this.top));
-				ol.top += ols;
-				ol.bottom += ols;
-			}
-			this.bottom += by;
-		}
-	}
-	private static class OcrLine {
-		OcrBlock block;
-		int left = Integer.MAX_VALUE; // relative to parent block for easier whole-block bulk shift
-		int right = Integer.MIN_VALUE; // relative to parent block for easier whole-block bulk shift
-		int top = Integer.MAX_VALUE; // relative to parent block for easier whole-block bulk shift
-		int bottom = Integer.MIN_VALUE; // relative to parent block for easier whole-block bulk shift
-		ArrayList words = new ArrayList();
-		OcrLine(OcrBlock block) {
-			this.block = block;
-			this.block.lines.add(this);
-		}
-		void addWord(ImWord word) {
-			this.left = Math.min(this.left, (word.bounds.left - this.block.left));
-			this.right = Math.max(this.right, (word.bounds.right - this.block.left));
-			this.top = Math.min(this.top, (word.bounds.top - this.block.top));
-			this.bottom = Math.max(this.bottom, (word.bounds.bottom - this.block.top));
-			this.words.add(new OcrWord(word, this));
-		}
-//		BoundingBox getBlockBounds() {
-//			return new BoundingBox(this.left, this.right, this.top, this.bottom);
-//		}
-		BoundingBox getPageBounds() {
-			return new BoundingBox((this.left + this.block.left), (this.right + this.block.left), (this.top + this.block.top), (this.bottom + this.block.top));
-		}
-		void stretchHorizontally(int by) {
-			for (int w = 0; w < this.words.size(); w++) {
-				OcrWord ow = ((OcrWord) this.words.get(w));
-				int lows = ((by * ow.left) / (this.right - this.left));
-				ow.left += lows;
-				int rows = ((by * ow.right) / (this.right - this.left));
-				ow.right += rows;
-			}
-		}
-	}
-	private static class OcrWord implements Comparable {
-		final ImWord word;
-		OcrLine line;
-		int left; // relative to parent line for easier whole-line bulk shift
-		int right; // relative to parent line for easier whole-line bulk shift
-		OcrWord(ImWord word, OcrLine line) {
-			this.word = word;
-			this.line = line;
-			this.left = (this.word.bounds.left - this.line.left - this.line.block.left);
-			this.right = (this.word.bounds.right - this.line.left - this.line.block.left);
-		}
-//		BoundingBox getLineBounds() {
-//			return new BoundingBox(this.left, this.right, 0, (this.line.bottom - this.line.top));
-//		}
-//		BoundingBox getBlockBounds() {
-//			return new BoundingBox((this.left + this.line.left), (this.right + this.line.left), this.line.top, this.line.bottom);
-//		}
-		int getPageLeft() {
-			return (this.left + this.line.left + this.line.block.left);
-		}
-		int getPageRight() {
-			return (this.right + this.line.left + this.line.block.left);
-		}
-		BoundingBox getPageBounds() {
-			return new BoundingBox((this.left + this.line.left + this.line.block.left), (this.right + this.line.left + this.line.block.left), (this.line.top + this.line.block.top), (this.line.bottom + this.line.block.top));
-		}
-		public int compareTo(Object obj) {
-			return ImUtils.leftRightOrder.compare(this.word, ((OcrWord) obj).word);
-		}
-	}
-	
-	private static class CombinedWord {
-		BlockLine line;
-		int left;
-		int right;
-		ArrayList ocrWords = new ArrayList(2);
-		boolean ocrWordsSorted = true;
-		int ocrLeft = Integer.MAX_VALUE;
-		int ocrRight = Integer.MIN_VALUE;
-		int ocrChars = 0;
-		int ocrBoldChars = 0;
-		int ocrItalicsChars = 0;
-		int ocrFontSizeCount = 0;
-		int ocrFontSizeSum = 0;
-		CombinedWord(BlockLine line, LineWord word) {
-			this.line = line;
-			this.left = word.getPageLeft();
-			this.right = word.getPageRight();
-		}
-		boolean containsOcrWord(OcrWord ow) {
-			int owc = ((ow.getPageLeft() + ow.getPageRight()) / 2);
-			return ((this.left <= owc) && (owc <= this.right));
-		}
-		boolean liesInOcrWord(OcrWord ow) {
-			int cwc = ((this.left + this.right) / 2);
-			return ((ow.getPageLeft() <= cwc) && (cwc <= ow.getPageRight()));
-		}
-		boolean overlapsOcrWord(OcrWord ow) {
-			return ((this.left < ow.getPageRight()) && (ow.getPageLeft() < this.right));
-		}
-		void addOcrWord(OcrWord ow) {
-			this.ocrWords.add(ow);
-			this.ocrWordsSorted = false;
-			
-			this.ocrLeft = Math.min(this.ocrLeft, ow.getPageLeft());
-			this.ocrRight = Math.max(this.ocrRight, ow.getPageRight());
-			
-			this.ocrChars += ow.word.getString().length();
-			this.ocrBoldChars += (ow.word.hasAttribute(BOLD_ATTRIBUTE) ? ow.word.getString().length() : 0);
-			this.ocrItalicsChars += (ow.word.hasAttribute(ITALICS_ATTRIBUTE) ? ow.word.getString().length() : 0);
-			if (ow.word.getFontSize() != -1) {
-				this.ocrFontSizeCount += ow.word.getString().length();
-				this.ocrFontSizeSum += (ow.word.getString().length() * ow.word.getFontSize());
-			}
-		}
-		boolean ocrContainsCombinedWord(CombinedWord cw) {
-			int cwc = ((cw.left + cw.right) / 2);
-			return ((this.ocrLeft <= cwc) && (cwc <= this.ocrRight));
-		}
-		boolean ocrOverlapsCombinedWord(CombinedWord cw) {
-			return ((this.ocrLeft < cw.right) && (cw.left < this.ocrRight));
-		}
-		void absorbCombinedWord(CombinedWord cw) {
-			this.left = Math.min(this.left, cw.left);
-			this.right = Math.max(this.right, cw.right);
-			
-			this.ocrWords.addAll(cw.ocrWords);
-			this.ocrWordsSorted = false;
-			
-			this.ocrLeft = Math.min(this.ocrLeft, cw.ocrLeft);
-			this.ocrRight = Math.max(this.ocrRight, cw.ocrRight);
-			
-			this.ocrChars += cw.ocrChars;
-			this.ocrBoldChars += cw.ocrBoldChars;
-			this.ocrItalicsChars += cw.ocrItalicsChars;
-			
-			this.ocrFontSizeCount += cw.ocrFontSizeCount;
-			this.ocrFontSizeSum += cw.ocrFontSizeSum;
-		}
-//		BoundingBox getLineBounds() {
-//			return new BoundingBox(this.left, this.right, 0, this.line.getHeight());
-//		}
-//		BoundingBox getBlockBounds() {
-//			return new BoundingBox((this.left + this.line.getBlockLeft()), (this.right + this.line.getBlockLeft()), this.line.getBlockTop(), this.line.getBlockBottom());
-//		}
-		BoundingBox getPageBounds() {
-			return new BoundingBox(this.left, this.right, this.line.getPageTop(), this.line.getPageBottom());
-		}
-		void ensureOcrWordsSorted() {
-			if (this.ocrWordsSorted)
-				return;
-			if (this.ocrWords.size() > 1)
-				Collections.sort(this.ocrWords);
-			this.ocrWordsSorted = true;
-		}
-		String getOcr() {
-			this.ensureOcrWordsSorted();
-			StringBuffer ocr = new StringBuffer();
-			for (int w = 0; w < this.ocrWords.size(); w++)
-				ocr.append(((OcrWord) this.ocrWords.get(w)).word.getString().trim());
-			return ocr.toString();
-		}
-		String getFirstString() {
-			if (this.ocrWords.isEmpty())
-				return null;
-			this.ensureOcrWordsSorted();
-			return ((OcrWord) this.ocrWords.get(0)).word.getString();
-		}
-		String getLastString() {
-			if (this.ocrWords.isEmpty())
-				return null;
-			this.ensureOcrWordsSorted();
-			return ((OcrWord) this.ocrWords.get(this.ocrWords.size()-1)).word.getString();
-		}
-		boolean isBold() {
-			return ((this.ocrChars == 0) ? false : (this.ocrChars < (this.ocrBoldChars * 2)));
-		}
-		boolean isItalics() {
-			return ((this.ocrChars == 0) ? false : (this.ocrChars < (this.ocrItalicsChars * 2)));
-		}
-		int getFontSize() {
-			return ((this.ocrFontSizeCount == 0) ? -1 : ((this.ocrFontSizeSum + (this.ocrFontSizeCount / 2)) / this.ocrFontSizeCount));
-		}
-		int getCapHeight() {
-			return this.line.getCapHeight();
-		}
-		int getXHeight() {
-			return this.line.getXHeight();
-		}
 	}
 	
 	private static void addRegionBlocks(ImPage page, Region theRegion, int dpi, ProgressMonitor pm) {
@@ -11815,14 +11377,14 @@ Also, make sure to render OCR overlay to line height in display panel:
 		boolean enhanceScans = ((flags & ENHANCE_SCANS) != 0);
 		int enhanceScanFlags = (enhanceScans ? ((flags >>> 8) & Imaging.ALL_OPTIONS) : 0);
 		boolean useFixedDpi = ((flags & USE_FIXED_RESOLUTION) != 0);
-		int fixedDpi = (useFixedDpi ? ((flags >>> 16) & 0xFFFF) : -1);
+		int fixedDpi = (useFixedDpi ? ((flags >>> 20) & 0x0FFF) : -1);
 		
 		//	load pages
 		pm.setStep("Loading document page images");
 		pm.setBaseProgress(0);
 		pm.setProgress(0);
 		pm.setMaxProgress(100);
-		this.addImagePdfPages(doc, pdfDoc, pdfBytes, metaPages, singlePages, doublePages, fixedDpi, scaleFactor, pageIDs, enhanceScanFlags, false, pm, null);
+		this.addImagePdfPages(doc, pdfDoc, pdfBytes, metaPages, singlePages, doublePages, fixedDpi, scaleFactor, pageIDs, enhanceScanFlags, false, false, pm, null);
 		
 		//	preserve source PDF in supplement
 		ImSupplement.Source.createSource(doc, "application/pdf", pdfBytes);
@@ -11839,31 +11401,27 @@ Also, make sure to render OCR overlay to line height in display panel:
 		final PMatrix transform;
 		final PStream data;
 		final boolean isMask;
+		final boolean hasSoftMask;
 		final float rawDpi;
+		final int renderOrderNumber;
 		final BoundingBox bounds;
-//		PImagePart(int pageId, String name, Rectangle2D.Float pdfBounds, double pdfRotation, PStream data, boolean isMask, float rawDpi, BoundingBox bounds) {
-//			this.pageId = pageId;
-//			this.name = name;
-//			this.pdfBounds = pdfBounds;
-//			this.pdfRotation = pdfRotation;
-//			this.data = data;
-//			this.isMask = isMask;
-//			this.rawDpi = rawDpi;
-//			this.bounds = bounds;
-//		}
-		PImagePart(int pageId, String name, Rectangle2D.Float pdfBounds, PMatrix transform, PStream data, boolean isMask, float rawDpi, BoundingBox bounds) {
+		final String label;
+		PImagePart(int pageId, String name, Rectangle2D.Float pdfBounds, PMatrix transform, PStream data, boolean isMask, boolean hasSoftMask, float rawDpi, int renderOrderNumber, BoundingBox bounds, String label) {
 			this.pageId = pageId;
 			this.name = name;
 			this.pdfBounds = pdfBounds;
 			this.transform = transform;
 			this.data = data;
 			this.isMask = isMask;
+			this.hasSoftMask = hasSoftMask;
 			this.rawDpi = rawDpi;
+			this.renderOrderNumber = renderOrderNumber;
 			this.bounds = bounds;
+			this.label = label;
 		}
 	}
 	
-	private void addImagePdfPages(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, boolean singlePages, boolean doublePages, int fixedDpi, int scaleFactor, Set pageIDs, int enhanceScanFlags, boolean scanForWatermarks, ProgressMonitor pm, Map pageImageCache) throws IOException {
+	private void addImagePdfPages(ImDocument doc, Document pdfDoc, byte[] pdfBytes, boolean metaPages, boolean singlePages, boolean doublePages, int fixedDpi, int scaleFactor, Set pageIDs, int enhanceScanFlags, boolean scanForWatermarks, boolean renderEmbeddedOcr, ProgressMonitor pm, Map pageImageCache) throws IOException {
 		
 		//	build progress monitor with synchronized methods instead of synchronizing in-code
 		SynchronizedProgressMonitor spm = ((pm instanceof SynchronizedProgressMonitor) ? ((SynchronizedProgressMonitor) pm) : new SynchronizedProgressMonitor(pm));
@@ -11882,7 +11440,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 		PPageData[] pData = this.getPdfPageData(doc, getFigures, PdfFontDecoder.NO_DECODING, true, pageIDs, pageTree, objects, spm);
 		
 		//	add page images
-		pData = this.addImagePdfPages(doc, pData, pageTree, objects, metaPages, singlePages, doublePages, fixedDpi, scaleFactor, enhanceScanFlags, scanForWatermarks, spm, pageImageCache);
+		pData = this.addImagePdfPages(doc, pData, pageTree, objects, pageIDs, metaPages, singlePages, doublePages, fixedDpi, scaleFactor, enhanceScanFlags, scanForWatermarks, renderEmbeddedOcr, spm, pageImageCache);
 	}
 	
 	private static int getNominalDPI(float rawDpi) {
@@ -11893,7 +11451,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 		return (Math.round(rawDpi / 10) * 10);
 	}
 	
-	private PPageData[] addImagePdfPages(final ImDocument doc, final PPageData[] pData, final PageTree pageTree, final Map objects, boolean metaPages, boolean singlePages, boolean doublePages, int fixedDpi, int scaleFactor, int enhanceScanFlags, boolean sanitizeEmbeddedOCR, final SynchronizedProgressMonitor spm, Map pageImageCache) throws IOException {
+	private PPageData[] addImagePdfPages(final ImDocument doc, final PPageData[] pData, final PageTree pageTree, final Map objects, Set pageIDs, boolean metaPages, boolean singlePages, boolean doublePages, int fixedDpi, int scaleFactor, int enhanceScanFlags, boolean sanitizeEmbeddedOCR, boolean renderEmbeddedOcr, final SynchronizedProgressMonitor spm, Map pageImageCache) throws IOException {
 		
 		//	extract page objects
 		spm.setInfo("Getting page objects");
@@ -11938,16 +11496,17 @@ Also, make sure to render OCR overlay to line height in display panel:
 				
 				//	sanitize page figures before any further processing
 				spm.setInfo("Sanitizing figures in page " + p + " of " + pData.length);
-				sanitizePageFigures(pData[p]);
+				sanitizePageFigures(pData[p], objects);
 				
 				//	collect all page figures
-				pageImageParts[p] = new ArrayList();
-				
-				//	store figures / figure parts
-				for (int f = 0; f < pData[p].figures.length; f++) {
-					spm.setInfo("   - " + pData[p].figures[f]);
-					this.addPageImagePart(p, pData[p].pdfPageBox, pData[p].rotate, pData[p].figures[f], false, pageImageParts[p], spm);
-				}
+				pageImageParts[p] = getPageImageParts(pData[p], p, objects, spm, idd);
+//				pageImageParts[p] = new ArrayList();
+//				
+//				//	store figures / figure parts
+//				for (int f = 0; f < pData[p].figures.length; f++) {
+//					spm.setInfo("   - " + pData[p].figures[f]);
+//					this.addPageImagePart(p, pData[p].pdfPageBox, pData[p].rotate, pData[p].figures[f], false, pageImageParts[p], spm);
+//				}
 				
 				//	assess extent and area of page image parts
 				pageImagePartMinX[p] = ((float) pData[p].pdfPageBox.getMaxX());
@@ -11971,64 +11530,64 @@ Also, make sure to render OCR overlay to line height in display panel:
 					pageImageParts[p] = null;
 				}
 			}
-			
-			private void addPageImagePart(int pageId, Rectangle2D.Float pageBounds, int rotate, PFigure pFigure, boolean isMask, ArrayList pImageParts, ProgressMonitor pm) throws IOException {
-				
-				//	get actual image object
-				Object pFigureDataObj = PdfParser.dereference(pFigure.refOrData, objects);
-				pm.setInfo("     - figure data is " + pFigureDataObj);
-				if (!(pFigureDataObj instanceof PStream)) {
-					pm.setInfo("   --> strange figure data");
-					return;
-				}
-				PStream pFigureData = ((PStream) pFigureDataObj);
-				
-				//	catch forms, which also come as XObject
-				if ((pFigureData.params.get("Subtype") != null) && !"Image".equals(pFigureData.params.get("Subtype").toString())){
-					pm.setInfo("   --> not an image");
-					return;
-				}
-				
-				//	compute image resolution
-				spm.setInfo("     - figure bounds are " + pFigure.bounds);
-				int width = ((Number) pFigureData.params.get("Width")).intValue();
-				int height = ((Number) pFigureData.params.get("Height")).intValue();
-				float dpiRatio = ((float) ((((float) width) / pFigure.bounds.getWidth()) + (((float) height) / pFigure.bounds.getHeight())) / 2);
-				float pFigureRawDpi = dpiRatio * defaultDpi;
-				int pFigureDpi = getNominalDPI(pFigureRawDpi);
-				pm.setInfo("     - resolution computed as " + pFigureDpi + " DPI (" + pFigureRawDpi + ")");
-				
-				//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
-				BoundingBox pFigureBounds = getBoundingBox(pFigure.bounds, pageBounds, dpiRatio, rotate);
-				
-				//	store figure for selection and further processing
-				PImagePart pip = new PImagePart(pageId, pFigure.name, pFigure.bounds, pFigure.transform, pFigureData, isMask, pFigureRawDpi, pFigureBounds);
-				if (isMask)
-					pImageParts.set((pImageParts.size() - 1), pip);
-				else pImageParts.add(pip);
-				
-				//	show image if testing
-				if (idd != null) {
-//					PPageImage rPip = getPageImagePart(new PImagePart(pageId, pFigure.name, pFigure.bounds, pFigure.rotation, pFigureData, isMask, pFigureRawDpi, pFigureBounds), objects, pdfDoc, pdfDoc.getPageTree().getPage(PdfExtractorTest.aimAtPage, ""), spm);
-//					PPageImage rPip = getPageImagePart(pip, objects, pdfDoc, pdfDoc.getPageTree().getPage(PdfExtractorTest.aimAtPage, ""), spm);
-//					PPageImage rPip = getPageImagePart(pip, objects, pageTree.getPage(PdfExtractorTest.aimAtPage), spm);
-					PPageImage rPip = getPageImagePart(pip, objects, pdfPages[PdfExtractorTest.aimAtPage], spm);
-					idd.addImage(rPip.image, pFigure.name);
-				}
-				
-				//	get mask images as well if given (simply recurse)
-				//	==> more often than never, text comes as (binary) stencil mask overlaid on top of page
-				if (pFigureData.params.containsKey("Mask")) {
-					String pMaskFigureName = (pFigure.name + "_mask");
-					pm.setInfo("   - adding mask figure");
-					this.addPageImagePart(pageId, pageBounds, rotate, new PFigure(pFigure.renderOrderNumber, pMaskFigureName, pFigure.bounds, pFigure.clipPaths, null, pFigureData.params.get("Mask"), pFigure.transform), true, pImageParts, pm);
-				}
-				if (pFigureData.params.containsKey("SMask")) {
-					String pMaskFigureName = (pFigure.name + "_smask");
-					pm.setInfo("   - adding smask figure");
-					this.addPageImagePart(pageId, pageBounds, rotate, new PFigure(pFigure.renderOrderNumber, pMaskFigureName, pFigure.bounds, pFigure.clipPaths, null, pFigureData.params.get("SMask"), pFigure.transform), true, pImageParts, pm);
-				}
-			}
+//			
+//			private void addPageImagePart(int pageId, Rectangle2D.Float pageBounds, int rotate, PFigure pFigure, boolean isMask, ArrayList pImageParts, ProgressMonitor pm) throws IOException {
+//				
+//				//	get actual image object
+//				Object pFigureDataObj = PdfParser.dereference(pFigure.refOrData, objects);
+//				pm.setInfo("     - figure data is " + pFigureDataObj);
+//				if (!(pFigureDataObj instanceof PStream)) {
+//					pm.setInfo("   --> strange figure data");
+//					return;
+//				}
+//				PStream pFigureData = ((PStream) pFigureDataObj);
+//				
+//				//	catch forms, which also come as XObject
+//				if ((pFigureData.params.get("Subtype") != null) && !"Image".equals(pFigureData.params.get("Subtype").toString())){
+//					pm.setInfo("   --> not an image");
+//					return;
+//				}
+//				
+//				//	compute image resolution
+//				spm.setInfo("     - figure bounds are " + pFigure.bounds);
+//				int width = ((Number) pFigureData.params.get("Width")).intValue();
+//				int height = ((Number) pFigureData.params.get("Height")).intValue();
+//				float dpiRatio = ((float) ((((float) width) / pFigure.bounds.getWidth()) + (((float) height) / pFigure.bounds.getHeight())) / 2);
+//				float pFigureRawDpi = dpiRatio * defaultDpi;
+//				int pFigureDpi = getNominalDPI(pFigureRawDpi);
+//				pm.setInfo("     - resolution computed as " + pFigureDpi + " DPI (" + pFigureRawDpi + ")");
+//				
+//				//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
+//				BoundingBox pFigureBounds = getBoundingBox(pFigure.bounds, pageBounds, dpiRatio, rotate);
+//				
+//				//	store figure for selection and further processing
+//				PImagePart pip = new PImagePart(pageId, pFigure.name, pFigure.bounds, pFigure.transform, pFigureData, isMask, pFigureRawDpi, pFigureBounds);
+//				if (isMask)
+//					pImageParts.set((pImageParts.size() - 1), pip);
+//				else pImageParts.add(pip);
+//				
+//				//	show image if testing
+//				if (idd != null) {
+////					PPageImage rPip = getPageImagePart(new PImagePart(pageId, pFigure.name, pFigure.bounds, pFigure.rotation, pFigureData, isMask, pFigureRawDpi, pFigureBounds), objects, pdfDoc, pdfDoc.getPageTree().getPage(PdfExtractorTest.aimAtPage, ""), spm);
+////					PPageImage rPip = getPageImagePart(pip, objects, pdfDoc, pdfDoc.getPageTree().getPage(PdfExtractorTest.aimAtPage, ""), spm);
+////					PPageImage rPip = getPageImagePart(pip, objects, pageTree.getPage(PdfExtractorTest.aimAtPage), spm);
+//					PPageImage rPip = getPageImagePart(pip, objects, pdfPages[PdfExtractorTest.aimAtPage], spm);
+//					idd.addImage(rPip.image, pFigure.name);
+//				}
+//				
+//				//	get mask images as well if given (simply recurse)
+//				//	==> more often than never, text comes as (binary) stencil mask overlaid on top of page
+//				if (pFigureData.params.containsKey("Mask")) {
+//					String pMaskFigureName = (pFigure.name + "_mask");
+//					pm.setInfo("   - adding mask figure");
+//					this.addPageImagePart(pageId, pageBounds, rotate, new PFigure(pFigure.renderOrderNumber, pMaskFigureName, pFigure.bounds, pFigure.clipPaths, null, pFigureData.params.get("Mask"), pFigure.transform), true, pImageParts, pm);
+//				}
+//				if (pFigureData.params.containsKey("SMask")) {
+//					String pMaskFigureName = (pFigure.name + "_smask");
+//					pm.setInfo("   - adding smask figure");
+//					this.addPageImagePart(pageId, pageBounds, rotate, new PFigure(pFigure.renderOrderNumber, pMaskFigureName, pFigure.bounds, pFigure.clipPaths, null, pFigureData.params.get("SMask"), pFigure.transform), true, pImageParts, pm);
+//				}
+//			}
 		};
 		ParallelJobRunner.runParallelFor(pf, ((PdfExtractorTest.aimAtPage < 0) ? 0 : PdfExtractorTest.aimAtPage), ((PdfExtractorTest.aimAtPage < 0) ? pData.length : (PdfExtractorTest.aimAtPage + 1)), (this.useMultipleCores ? -1 : 1));
 		spm.setProgress(100);
@@ -12058,6 +11617,8 @@ Also, make sure to render OCR overlay to line height in display panel:
 		HashSet noImagePageIDs = new HashSet();
 		for (int p = 0; p < pdfPages.length; p++) {
 			if ((PdfExtractorTest.aimAtPage != -1) && (PdfExtractorTest.aimAtPage != p))
+				continue;
+			if ((pageIDs != null) && !pageIDs.contains(new Integer(p)))
 				continue;
 			if (pageImageParts[p] == null) {
 				noImagePageIDs.add(new Integer(p));
@@ -12188,14 +11749,85 @@ Also, make sure to render OCR overlay to line height in display panel:
 		//	extract & save page images
 		PPageData[] spData;
 		if (doublePages)
-			spData = this.addImagePdfPagesDouble(doc, scaleFactor, enhanceScanFlags, pdfPages, pdfPageBoxes, fixedDpi, sPdfPageBoxes, pData, pageImageParts, noImagePageIDs, objects, pageImageCache, spm);
-		else spData = this.addImagePdfPagesSingle(doc, scaleFactor, enhanceScanFlags, pdfPages, pdfPageBoxes, fixedDpi, sPdfPageBoxes, pData, pageImageParts, noImagePageIDs, objects, pageImageCache, spm);
+			spData = this.addImagePdfPagesDouble(doc, scaleFactor, enhanceScanFlags, renderEmbeddedOcr, pdfPages, pdfPageBoxes, fixedDpi, sPdfPageBoxes, pData, pageImageParts, noImagePageIDs, objects, pageImageCache, spm);
+		else spData = this.addImagePdfPagesSingle(doc, scaleFactor, enhanceScanFlags, renderEmbeddedOcr, pdfPages, pdfPageBoxes, fixedDpi, sPdfPageBoxes, pData, pageImageParts, noImagePageIDs, objects, pageImageCache, spm);
 		
 		//	garbage collect page images
 		System.gc();
 		
 		//	finally ...
 		return spData;
+	}
+	
+	private ArrayList getPageImageParts(PPageData pData, int pageId, Map objects, ProgressMonitor spm, ImageDisplayDialog idd) throws IOException {
+		ArrayList pageImageParts = new ArrayList();
+		for (int f = 0; f < pData.figures.length; f++) {
+			spm.setInfo("   - " + pData.figures[f]);
+			this.addPageImagePart(pData.pdfPage, pageId, pData.pdfPageBox, pData.rotate, pData.figures[f], false, pageImageParts, objects, spm, idd);
+		}
+		return pageImageParts;
+	}
+	
+	private void addPageImagePart(Page pdfPage, int pageId, Rectangle2D.Float pageBounds, int rotate, PFigure pFigure, boolean isMask, ArrayList pImageParts, Map objects, ProgressMonitor spm, ImageDisplayDialog idd) throws IOException {
+		
+		//	get actual image object
+		Object pFigureDataObj = PdfParser.dereference(pFigure.refOrData, objects);
+		spm.setInfo("     - figure data is " + pFigureDataObj);
+		if (!(pFigureDataObj instanceof PStream)) {
+			spm.setInfo("   --> strange figure data");
+			return;
+		}
+		PStream pFigureData = ((PStream) pFigureDataObj);
+		
+		//	catch forms, which also come as XObject
+		if ((pFigureData.params.get("Subtype") != null) && !"Image".equals(pFigureData.params.get("Subtype").toString())){
+			spm.setInfo("   --> not an image");
+			return;
+		}
+		
+		//	compute image resolution
+		spm.setInfo("     - figure bounds are " + pFigure.bounds);
+		int width = ((Number) pFigureData.params.get("Width")).intValue();
+		int height = ((Number) pFigureData.params.get("Height")).intValue();
+		float dpiRatio = ((float) ((((float) width) / pFigure.bounds.getWidth()) + (((float) height) / pFigure.bounds.getHeight())) / 2);
+		float pFigureRawDpi = dpiRatio * defaultDpi;
+		int pFigureDpi = getNominalDPI(pFigureRawDpi);
+		spm.setInfo("     - resolution computed as " + pFigureDpi + " DPI (" + pFigureRawDpi + ")");
+		
+		//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
+		BoundingBox pFigureBounds = getBoundingBox(pFigure.bounds, pageBounds, dpiRatio, rotate);
+		
+		//	store figure for selection and further processing
+		PImagePart pip = new PImagePart(pageId, pFigure.name, pFigure.bounds, pFigure.transform, pFigureData, isMask, pFigureData.params.containsKey("SMask"), pFigureRawDpi, pFigure.renderOrderNumber, pFigureBounds, pFigure.toString());
+//		if (isMask)
+//			pImageParts.set((pImageParts.size() - 1), pip);
+//		else pImageParts.add(pip);
+//		==> better NOT REPLACE IMAGE WITH MASK, figures often in page background
+//		pImageParts.add(pip);
+//		==> AND THEN, actually DO REPLACE IMAGE WITH MASK, as mask hides everything else anyway
+		if (isMask)
+			pImageParts.set((pImageParts.size() - 1), pip);
+		else pImageParts.add(pip);
+		
+		//	show image if testing
+		if (idd != null) {
+			PPageImage rPip = this.getPageImagePart(pip, objects, pdfPage, spm);
+			BoundingBox rPipBox = getBoundingBox(pFigure.bounds, pageBounds, dpiRatio, rotate);
+			idd.addImage(rPip.image, (rPipBox.toString() + ": " + pFigure.toString()));
+		}
+		
+		//	get mask images as well if given (simply recurse)
+		//	==> more often than never, text comes as (binary) stencil mask overlaid on top of page
+		if (pFigureData.params.containsKey("Mask")) {
+			String pMaskFigureName = (pFigure.name + "_mask");
+			spm.setInfo("   - adding mask figure");
+			this.addPageImagePart(pdfPage, pageId, pageBounds, rotate, new PFigure(pFigure.renderOrderNumber, pMaskFigureName, pFigure.bounds, pFigure.clipPaths, null, pFigureData.params.get("Mask"), pFigure.transform), true, pImageParts, objects, spm, idd);
+		}
+//		if (pFigureData.params.containsKey("SMask")) {
+//			String pMaskFigureName = (pFigure.name + "_smask");
+//			spm.setInfo("   - adding smask figure");
+//			this.addPageImagePart(pdfPage, pageId, pageBounds, rotate, new PFigure(pFigure.renderOrderNumber, pMaskFigureName, pFigure.bounds, pFigure.clipPaths, null, pFigureData.params.get("SMask"), pFigure.transform), false, true, pImageParts, objects, spm, idd);
+//		}
 	}
 	
 	private static void assessPageImageParts(PPageData[] pData, ArrayList[] pageImageParts, float[] pipMinX, float[] pipMaxX, float[] pipMinY, float[] pipMaxY, float[] pipAreaSum, ProgressMonitor spm) {
@@ -12271,6 +11903,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 		//	identify actual scans
 		int scanBySizeCount = 0;
 		int scanByRegularityCount = 0;
+		int scanByWordsCount = 0;
 		for (int p = 0; p < pData.length; p++) {
 			if (pageImageParts[p] == null)
 				continue;
@@ -12392,8 +12025,11 @@ Also, make sure to render OCR overlay to line height in display panel:
 						continue;
 					inPipWordCount++;
 				}
-				if ((inPipWordCount * 20) > (pData[p].words.length * 19))
+				spm.setInfo(" ==> score by contained words is " + inPipWordCount + " of " + pData[p].words.length);
+				if ((inPipWordCount * 20) > (pData[p].words.length * 19)) {
+					scanByWordsCount++;
 					continue;
+				}
 			}
 			
 			//	no way this page has a scan in it
@@ -12401,10 +12037,13 @@ Also, make sure to render OCR overlay to line height in display panel:
 		}
 		
 		//	show final tally
-		spm.setInfo(" ==> found " + scanBySizeCount + " scans by size, " + scanByRegularityCount + " scans by regularity");
+		spm.setInfo(" ==> found " + scanBySizeCount + " scans by size, " + scanByRegularityCount + " scans by regularity, " + scanByWordsCount + " scans by contained words");
 	}
 	
-	private PPageData[] addImagePdfPagesSingle(final ImDocument doc, final int scaleFactor, final int enhanceScanFlags, final Page[] pdfPages, final Rectangle2D.Float[] pdfPageBoxes, final int fixedDpi, final Rectangle2D.Float[] sPdfPageBoxes, final PPageData[] pData, final ArrayList[] pageImageParts, final Set noImagePageIDs, final Map objects, final Map pageImageCache, final SynchronizedProgressMonitor spm) throws IOException {
+	private PPageData[] addImagePdfPagesSingle(final ImDocument doc, final int scaleFactor, final int enhanceScanFlags, final boolean renderEmbeddedOcr, final Page[] pdfPages, final Rectangle2D.Float[] pdfPageBoxes, final int fixedDpi, final Rectangle2D.Float[] sPdfPageBoxes, final PPageData[] pData, final ArrayList[] pageImageParts, final Set noImagePageIDs, final Map objects, final Map pageImageCache, final SynchronizedProgressMonitor spm) throws IOException {
+		
+		//	compute page ID delta (if we have meta pages at start of document, they are continuous)
+		final int pDelta = (noImagePageIDs.contains(new Integer(0)) ? noImagePageIDs.size() : 0);
 		
 		//	extract & save page images
 		final BoundingBox[] pageBoxes = new BoundingBox[pdfPages.length];
@@ -12423,7 +12062,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 				//	adjust to ignore meta pages
 				if (noImagePageIDs.contains(new Integer(p)))
 					return;
-				int pDelta = (noImagePageIDs.contains(new Integer(0)) ? noImagePageIDs.size() : 0);
+//				int pDelta = (noImagePageIDs.contains(new Integer(0)) ? noImagePageIDs.size() : 0);
 				
 				//	image already extracted
 				int exPageImageDpi = -1;
@@ -12443,16 +12082,19 @@ Also, make sure to render OCR overlay to line height in display panel:
 				}
 				
 				//	get raw image
-				PPageImage pPageImage = getPageImage(pageImageParts[p], objects, pdfPages[p], pdfPageBoxes[p], spm);
+				PPageImage pPageImage = getPageImage(pageImageParts[p], objects, pdfPages[p], pdfPageBoxes[p], pData[p].rotate, (renderEmbeddedOcr ? pData[p].words : null), spm);
 				if (pPageImage == null) {
 					spm.setInfo(" --> page image generation failed");
 					throw new IOException("Could not generate image for page " + p);
 				}
 				spm.setInfo(" - got page image sized " + pPageImage.image.getWidth() + " x " + pPageImage.image.getHeight());
 				spm.setInfo(" - figure bounds are " + pPageImage.bounds);
+				spm.setInfo(" - content box is " + pData[p].pdfPageContentBox);
 				
 				//	get page image and resolution
 				BufferedImage pageImage = pPageImage.image;
+				BufferedImage pageBackgroundImage = pPageImage.backgroundImage;
+				BufferedImage pageTextImage = pPageImage.textImage;
 				float rawDpi;
 				int dpi;
 				
@@ -12509,11 +12151,25 @@ Also, make sure to render OCR overlay to line height in display panel:
 					while ((dpi / scaleDownFactor) >= minScaleDownDpi)
 						scaleDownFactor++;
 					spm.setInfo(" - scaling page image to " + (dpi / scaleDownFactor) + " DPI");
-					BufferedImage sPageImage = new BufferedImage((pageImage.getWidth() / scaleDownFactor), (pageImage.getHeight() / scaleDownFactor), pageImage.getType());
-					Graphics2D spig = sPageImage.createGraphics();
-					spig.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-					spig.drawImage(pageImage, 0, 0, sPageImage.getWidth(), sPageImage.getHeight(), Color.WHITE, null);
+					BufferedImage sPageImage = new BufferedImage(Math.max(1, ((pageImage.getWidth() + (scaleDownFactor / 2)) / scaleDownFactor)), Math.max(1, ((pageImage.getHeight() + (scaleDownFactor / 2)) / scaleDownFactor)), pageImage.getType());
+					Graphics2D spiGg = sPageImage.createGraphics();
+					spiGg.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+					spiGg.drawImage(pageImage, 0, 0, sPageImage.getWidth(), sPageImage.getHeight(), Color.WHITE, null);
 					pageImage = sPageImage;
+					if (pageBackgroundImage != null) {
+						BufferedImage sPageBackgroundImage = new BufferedImage(Math.max(1, ((pageImage.getWidth() + (scaleDownFactor / 2)) / scaleDownFactor)), Math.max(1, ((pageImage.getHeight() + (scaleDownFactor / 2)) / scaleDownFactor)), pageBackgroundImage.getType());
+						Graphics2D spbiGr = sPageBackgroundImage.createGraphics();
+						spbiGr.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+						spbiGr.drawImage(pageBackgroundImage, 0, 0, sPageBackgroundImage.getWidth(), sPageBackgroundImage.getHeight(), Color.WHITE, null);
+						pageBackgroundImage = sPageBackgroundImage;
+					}
+					if (pageTextImage != null) {
+						BufferedImage sPageTextImage = new BufferedImage(Math.max(1, ((pageImage.getWidth() + (scaleDownFactor / 2)) / scaleDownFactor)), Math.max(1, ((pageImage.getHeight() + (scaleDownFactor / 2)) / scaleDownFactor)), pageTextImage.getType());
+						Graphics2D sptiGr = sPageTextImage.createGraphics();
+						sptiGr.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+						sptiGr.drawImage(pageTextImage, 0, 0, sPageTextImage.getWidth(), sPageTextImage.getHeight(), Color.WHITE, null);
+						pageTextImage = sPageTextImage;
+					}
 					pData[p].rawPageImageDpi = (rawDpi / scaleDownFactor);
 					dpi = (dpi / scaleDownFactor);
 					spm.setInfo(" - page image scaled to " + dpi + " DPI");
@@ -12542,7 +12198,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 				
 				//	enhance image (cannot use cache here, as image might change during correction)
 				if (enhanceScanFlags != 0) {
-					AnalysisImage ai = Imaging.wrapImage(pageImage, null);
+					AnalysisImage ai = Imaging.wrapImage(pageImage, pageBackgroundImage, pageTextImage, null);
 					spm.setInfo(" - enhancing image ...");
 					BoundingBox[] ocrWordBounds = null;
 					BoundingBox[] checkOcrWordBounds = null;
@@ -12572,6 +12228,14 @@ Also, make sure to render OCR overlay to line height in display panel:
 						}
 					}
 					pageImage = ai.getImage();
+					
+					if (PdfExtractorTest.aimAtPage != -1) {
+						ImageDisplayDialog idd = new ImageDisplayDialog("Page Image");
+						idd.addImage(pageImage, "Page");
+						idd.setSize(Math.min(1600, pageImage.getWidth()), Math.min(1000, pageImage.getHeight()));
+						idd.setLocationRelativeTo(null);
+						idd.setVisible(true);
+					}
 				}
 				
 				//	store image
@@ -12599,7 +12263,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 		checkException(pf);
 		
 		//	assemble document and shift pages
-		int pDelta = (noImagePageIDs.contains(new Integer(0)) ? noImagePageIDs.size() : 0);
+//		int pDelta = (noImagePageIDs.contains(new Integer(0)) ? noImagePageIDs.size() : 0);
 		PPageData[] spData = ((pDelta == 0) ? pData : new PPageData[pData.length - pDelta]);
 		for (int p = 0; p < pdfPageBoxes.length; p++) {
 			if ((PdfExtractorTest.aimAtPage != -1) && (PdfExtractorTest.aimAtPage != p))
@@ -12625,7 +12289,10 @@ Also, make sure to render OCR overlay to line height in display panel:
 		return spData;
 	}
 	
-	private PPageData[] addImagePdfPagesDouble(final ImDocument doc, final int scaleFactor, final int enhanceScanFlags, final Page[] pdfPages, final Rectangle2D.Float[] pdfPageBoxes, final int fixedDpi, final Rectangle2D.Float[] sPdfPageBoxes, final PPageData[] pData, final ArrayList[] pageImageParts, final Set noImagePageIDs, final Map objects, final Map pageImageCache, final SynchronizedProgressMonitor spm) throws IOException {
+	private PPageData[] addImagePdfPagesDouble(final ImDocument doc, final int scaleFactor, final int enhanceScanFlags, final boolean renderEmbeddedOcr, final Page[] pdfPages, final Rectangle2D.Float[] pdfPageBoxes, final int fixedDpi, final Rectangle2D.Float[] sPdfPageBoxes, final PPageData[] pData, final ArrayList[] pageImageParts, final Set noImagePageIDs, final Map objects, final Map pageImageCache, final SynchronizedProgressMonitor spm) throws IOException {
+		
+		//	compute page ID delta (if we have meta pages at start of document, they are continuous)
+		final int ppDelta = (noImagePageIDs.contains(new Integer(0)) ? noImagePageIDs.size() : 0);
 		
 		//	extract & save page images
 		final BoundingBox[] pageBoxes = new BoundingBox[pdfPages.length * 2];
@@ -12644,7 +12311,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 				//	adjust to ignore meta pages
 				if (noImagePageIDs.contains(new Integer(pp)))
 					return;
-				int ppDelta = (noImagePageIDs.contains(new Integer(0)) ? noImagePageIDs.size() : 0);
+//				int ppDelta = (noImagePageIDs.contains(new Integer(0)) ? noImagePageIDs.size() : 0);
 				
 				//	images already extracted
 				int exPageDoubleImageDpi = -1;
@@ -12668,7 +12335,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 				}
 				
 				//	get raw image
-				PPageImage pDoublePageImage = getPageImage(pageImageParts[pp], objects, pdfPages[pp], pdfPageBoxes[pp], spm);
+				PPageImage pDoublePageImage = getPageImage(pageImageParts[pp], objects, pdfPages[pp], pdfPageBoxes[pp], pData[pp].rotate, (renderEmbeddedOcr ? pData[pp].words : null), spm);
 				if (pDoublePageImage == null) {
 					spm.setInfo(" --> page image generation failed");
 					throw new IOException("Could not generate image for double page " + pp);
@@ -12678,6 +12345,8 @@ Also, make sure to render OCR overlay to line height in display panel:
 				
 				//	get double page image and resolution
 				BufferedImage doublePageImage = pDoublePageImage.image;
+				BufferedImage doublePageBackgroundImage = pDoublePageImage.backgroundImage;
+				BufferedImage doublePageTextImage = pDoublePageImage.textImage;
 				float rawDpi;
 				int dpi;
 				
@@ -12734,11 +12403,25 @@ Also, make sure to render OCR overlay to line height in display panel:
 					while ((dpi / scaleDownFactor) >= minScaleDownDpi)
 						scaleDownFactor++;
 					spm.setInfo(" - scaling double page image to " + (dpi / scaleDownFactor) + " DPI");
-					BufferedImage sDoublePageImage = new BufferedImage((doublePageImage.getWidth() / scaleDownFactor), (doublePageImage.getHeight() / scaleDownFactor), doublePageImage.getType());
-					Graphics2D spig = sDoublePageImage.createGraphics();
-					spig.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-					spig.drawImage(doublePageImage, 0, 0, sDoublePageImage.getWidth(), sDoublePageImage.getHeight(), Color.WHITE, null);
+					BufferedImage sDoublePageImage = new BufferedImage(Math.max(1, ((doublePageTextImage.getWidth() + (scaleDownFactor / 2)) / scaleDownFactor)), Math.max(1, ((doublePageTextImage.getHeight() + (scaleDownFactor / 2)) / scaleDownFactor)), doublePageImage.getType());
+					Graphics2D sdpiGr = sDoublePageImage.createGraphics();
+					sdpiGr.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+					sdpiGr.drawImage(doublePageImage, 0, 0, sDoublePageImage.getWidth(), sDoublePageImage.getHeight(), Color.WHITE, null);
 					doublePageImage = sDoublePageImage;
+					if (doublePageBackgroundImage != null) {
+						BufferedImage sDoublePageBackgroundImage = new BufferedImage(Math.max(1, ((doublePageTextImage.getWidth() + (scaleDownFactor / 2)) / scaleDownFactor)), Math.max(1, ((doublePageTextImage.getHeight() + (scaleDownFactor / 2)) / scaleDownFactor)), doublePageBackgroundImage.getType());
+						Graphics2D sdpbiGr = sDoublePageBackgroundImage.createGraphics();
+						sdpbiGr.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+						sdpbiGr.drawImage(doublePageBackgroundImage, 0, 0, sDoublePageBackgroundImage.getWidth(), sDoublePageBackgroundImage.getHeight(), Color.WHITE, null);
+						doublePageBackgroundImage = sDoublePageBackgroundImage;
+					}
+					if (doublePageTextImage != null) {
+						BufferedImage sDoublePageTextImage = new BufferedImage(Math.max(1, ((doublePageTextImage.getWidth() + (scaleDownFactor / 2)) / scaleDownFactor)), Math.max(1, ((doublePageTextImage.getHeight() + (scaleDownFactor / 2)) / scaleDownFactor)), doublePageTextImage.getType());
+						Graphics2D sdptiGr = sDoublePageTextImage.createGraphics();
+						sdptiGr.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+						sdptiGr.drawImage(doublePageTextImage, 0, 0, sDoublePageTextImage.getWidth(), sDoublePageTextImage.getHeight(), Color.WHITE, null);
+						doublePageTextImage = sDoublePageTextImage;
+					}
 					pData[pp].rawPageImageDpi = (rawDpi / scaleDownFactor);
 					dpi = (dpi / scaleDownFactor);
 					spm.setInfo(" - double page image scaled to " + dpi + " DPI");
@@ -12746,7 +12429,13 @@ Also, make sure to render OCR overlay to line height in display panel:
 				
 				//	cut double page image into two single pages
 				BufferedImage pageImageLeft = doublePageImage.getSubimage(0, 0, (doublePageImage.getWidth() / 2), doublePageImage.getHeight());
+				BufferedImage pageBackgroundImageLeft = ((doublePageBackgroundImage == null) ? null : doublePageBackgroundImage.getSubimage(0, 0, (doublePageImage.getWidth() / 2), doublePageImage.getHeight()));
+				BufferedImage pageTextImageLeft = ((doublePageTextImage == null) ? null : doublePageTextImage.getSubimage(0, 0, (doublePageImage.getWidth() / 2), doublePageImage.getHeight()));
+				PPageImage pPageImageLeft = new PPageImage(pageImageLeft, pDoublePageImage.renderOrderNumber, new Rectangle2D.Float(pDoublePageImage.bounds.x, pDoublePageImage.bounds.y, (pDoublePageImage.bounds.width / 2), pDoublePageImage.bounds.height), pageBackgroundImageLeft, pageTextImageLeft);
 				BufferedImage pageImageRight = doublePageImage.getSubimage((doublePageImage.getWidth() / 2), 0, (doublePageImage.getWidth() / 2), doublePageImage.getHeight());
+				BufferedImage pageBackgroundImageRight = ((doublePageBackgroundImage == null) ? null : doublePageBackgroundImage.getSubimage((doublePageImage.getWidth() / 2), 0, (doublePageImage.getWidth() / 2), doublePageImage.getHeight()));
+				BufferedImage pageTextImageRight = ((doublePageTextImage == null) ? null : doublePageTextImage.getSubimage((doublePageImage.getWidth() / 2), 0, (doublePageImage.getWidth() / 2), doublePageImage.getHeight()));
+				PPageImage pPageImageRight = new PPageImage(pageImageRight, pDoublePageImage.renderOrderNumber, new Rectangle2D.Float((pDoublePageImage.bounds.x + (pDoublePageImage.bounds.width / 2)), pDoublePageImage.bounds.y, (pDoublePageImage.bounds.width / 2), pDoublePageImage.bounds.height), pageBackgroundImageRight, pageTextImageRight);
 				
 				//	store offset in right page, for positioning embedded OCR
 				pData[pp].rightPageOffset = (doublePageImage.getWidth() / 2);
@@ -12767,7 +12456,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 				if (enhanceScanFlags != 0) {
 					float magnification = (((float) dpi) / defaultDpi);
 					
-					AnalysisImage aiLeft = Imaging.wrapImage(pageImageLeft, null);
+					AnalysisImage aiLeft = Imaging.wrapImage(pageImageLeft, pageBackgroundImageLeft, pageTextImageLeft, null);
 					spm.setInfo(" - enhancing left image half ...");
 					BoundingBox[] ocrWordBoundsLeft = null;
 					BoundingBox[] checkOcrWordBoundsLeft = null;
@@ -12799,7 +12488,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 					}
 					pageImageLeft = aiLeft.getImage();
 					
-					AnalysisImage aiRight = Imaging.wrapImage(pageImageRight, null);
+					AnalysisImage aiRight = Imaging.wrapImage(pageImageRight, pageBackgroundImageRight, pageTextImageRight, null);
 					spm.setInfo(" - enhancing right image half ...");
 					BoundingBox[] ocrWordBoundsRight = null;
 					BoundingBox[] checkOcrWordBoundsRight = null;
@@ -12832,6 +12521,15 @@ Also, make sure to render OCR overlay to line height in display panel:
 						}
 					}
 					pageImageRight = aiRight.getImage();
+					
+					if (PdfExtractorTest.aimAtPage != -1) {
+						ImageDisplayDialog idd = new ImageDisplayDialog("Page Images");
+						idd.addImage(pageImageLeft, "Left");
+						idd.addImage(pageImageRight, "Left");
+						idd.setSize(Math.min(1600, pageImageLeft.getWidth()), Math.min(1000, pageImageLeft.getHeight()));
+						idd.setLocationRelativeTo(null);
+						idd.setVisible(true);
+					}
 				}
 				
 				//	store image halves
@@ -12883,7 +12581,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 			//	adjust to ignore meta pages
 			if (noImagePageIDs.contains(new Integer(pp)))
 				continue;
-			int ppDelta = (noImagePageIDs.contains(new Integer(0)) ? noImagePageIDs.size() : 0);
+//			int ppDelta = (noImagePageIDs.contains(new Integer(0)) ? noImagePageIDs.size() : 0);
 			
 			//	create pages
 			ImPage pageLeft = new ImPage(doc, ((pp * 2) - ppDelta), pageBoxes[pp * 2]);
@@ -12898,7 +12596,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 				if (pData[pp].words[w].bounds.getMaxX() < (pData[pp].pdfPageBox.getWidth() / 2))
 					wordsLeft.add(pData[pp].words[w]);
 				else if (pData[pp].words[w].bounds.getMinX() > (pData[pp].pdfPageBox.getWidth() / 2))
-					wordsRight.add(new PWord(pData[pp].words[w].renderOrderNumber, pData[pp].words[w].charCodes, pData[pp].words[w].str, pData[pp].words[w].baseline, new Rectangle2D.Float(
+					wordsRight.add(new PWord(pData[pp].words[w].renderOrderNumber, pData[pp].words[w].charCodesEnlarged, pData[pp].words[w].str, pData[pp].words[w].baseline, new Rectangle2D.Float(
 							((float) (pData[pp].words[w].bounds.getMinX() - (pData[pp].pdfPageBox.getWidth() / 2))),
 							((float) pData[pp].words[w].bounds.getMinY()),
 							((float) pData[pp].words[w].bounds.getWidth()),
@@ -12970,7 +12668,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 		return spData;
 	}
 	
-	private PPageImage getPageImage(ArrayList pageImageParts, Map objects, Page pdfPage, Rectangle2D.Float pdfPageBox, ProgressMonitor spm) throws IOException {
+	private PPageImage getPageImage(ArrayList pageImageParts, Map objects, Page pdfPage, Rectangle2D.Float pdfPageBox, int rotate, PWord[] ocrWords, ProgressMonitor spm) throws IOException {
 		
 		//	sort out figures overpainted later
 		for (int p = 0; p < pageImageParts.size(); p++) {
@@ -12979,6 +12677,8 @@ Also, make sure to render OCR overlay to line height in display panel:
 				PImagePart cpip = ((PImagePart) pageImageParts.get(cp));
 				if (cpip.isMask)
 					continue; // mask images don't overpaint
+				if (cpip.hasSoftMask)
+					continue; // soft masked images don't overpaint too much, either
 				if (overpaints(cpip.pdfBounds, pip.pdfBounds)) {
 					pageImageParts.remove(p--);
 					spm.setInfo("Excluded page image part for being overpainted by " + cpip.name + "@" + cpip.pdfBounds + ": " + pip.name + "@" + pip.pdfBounds);
@@ -12986,12 +12686,13 @@ Also, make sure to render OCR overlay to line height in display panel:
 				}
 			}
 		}
-		
-		//	single full page image (at least 99% of page size), use it as it is
-		if ((pageImageParts.size() == 1) && ((getSize(((PImagePart) pageImageParts.get(0)).pdfBounds) * 100) > (getSize(pdfPageBox) * 99))) {
-			spm.setInfo("Using single full-page image");
-			return this.getPageImagePart(((PImagePart) pageImageParts.get(0)), objects, pdfPage, spm);
-		}
+//		
+//		//	single full page image (at least 99% of page size), use it as it is
+//		if ((pageImageParts.size() == 1) && ((getSize(((PImagePart) pageImageParts.get(0)).pdfBounds) * 100) > (getSize(pdfPageBox) * 99))) {
+//			spm.setInfo("Using single full-page image");
+//			return this.getPageImagePart(((PImagePart) pageImageParts.get(0)), objects, pdfPage, spm);
+//		}
+//		==> CANNOT DO THIS WITH EMBEDDED OCR, BOUNDARIES BEHAVE DIFFERENTLY
 		
 		//	compute rendering resolution and aggregate bounds
 		float maxPipDpi = 0;
@@ -12999,6 +12700,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 		float rawMaxX = -Float.MAX_VALUE;
 		float rawMinY = Float.MAX_VALUE;
 		float rawMaxY = -Float.MAX_VALUE;
+		boolean gotTextMaskImage = false;
 		for (int p = 0; p < pageImageParts.size(); p++) {
 			PImagePart pip = ((PImagePart) pageImageParts.get(p));
 			float pipDpi = pip.rawDpi;
@@ -13011,6 +12713,8 @@ Also, make sure to render OCR overlay to line height in display panel:
 			rawMaxX = Math.max(rawMaxX, ((float) pip.pdfBounds.getMaxX()));
 			rawMinY = Math.min(rawMinY, ((float) pip.pdfBounds.getMinY()));
 			rawMaxY = Math.max(rawMaxY, ((float) pip.pdfBounds.getMaxY()));
+			if ((pip.isMask || pip.hasSoftMask) && ((getSize(pip.pdfBounds) * 100) > (getSize(pdfPageBox) * 99)))
+				gotTextMaskImage = true;
 		}
 		spm.setInfo("Rendering resolution computed as " + maxPipDpi + " DPI from " + pageImageParts.size() + " page image parts");
 		Rectangle2D.Float piPdfBounds = new Rectangle2D.Float(rawMinX, rawMinY, (rawMaxX - rawMinX), (rawMaxY - rawMinY));
@@ -13019,34 +12723,143 @@ Also, make sure to render OCR overlay to line height in display panel:
 		//	create base image
 		int piWidth = Math.round(Math.abs(pdfPageBox.width * maxPipDpi) / defaultDpi);
 		int piHeight = Math.round(Math.abs(pdfPageBox.height * maxPipDpi) / defaultDpi);
-		spm.setInfo("Rendering page image sized " + piWidth + "x" + piHeight);
+		spm.setInfo("Rendering page image sized " + piWidth + "x" + piHeight + ", mask image mode is " + gotTextMaskImage);
 		BufferedImage pageImage = new BufferedImage(piWidth, piHeight, BufferedImage.TYPE_INT_ARGB);
-		Graphics2D piGraphics = pageImage.createGraphics();
-		piGraphics.setColor(Color.WHITE);
-		piGraphics.fillRect(0, 0, piWidth, piHeight);
-		piGraphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+		Graphics2D piGr = pageImage.createGraphics();
+		piGr.setColor(Color.WHITE);
+		piGr.fillRect(0, 0, piWidth, piHeight);
+		piGr.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+		BufferedImage pageBackgroundImage = null;
+		Graphics2D pbiGr = null;
+		BufferedImage pageTextImage = null;
+		Graphics2D ptiGr = null;
+		if (gotTextMaskImage || (ocrWords != null)) {
+			pageBackgroundImage = new BufferedImage(piWidth, piHeight, BufferedImage.TYPE_INT_ARGB);
+			pbiGr = pageBackgroundImage.createGraphics();
+			pbiGr.setColor(Color.WHITE);
+			pbiGr.fillRect(0, 0, piWidth, piHeight);
+			pbiGr.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+			pageTextImage = new BufferedImage(piWidth, piHeight, BufferedImage.TYPE_BYTE_BINARY);
+			ptiGr = pageTextImage.createGraphics();
+			ptiGr.setColor(Color.WHITE);
+			ptiGr.fillRect(0, 0, piWidth, piHeight);
+			ptiGr.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+		}
+		
+		ImageDisplayDialog idd = ((PdfExtractorTest.aimAtPage == -1) ? null : new ImageDisplayDialog("Image for Page " + PdfExtractorTest.aimAtPage));
 		
 		//	render remaining figures
+		int minRenderOrderNumber = Integer.MAX_VALUE;
 		for (int p = 0; p < pageImageParts.size(); p++) {
 			PImagePart pip = ((PImagePart) pageImageParts.get(p));
 			if (pip.rawDpi < (defaultDpi / 2)) {
 				spm.setInfo(" - skipping low resolution page image part sized " + (pip.bounds.right - pip.bounds.left) + "x" + (pip.bounds.bottom - pip.bounds.top) + " at " + pip.rawDpi);
 				continue;
 			}
-			AffineTransform at = piGraphics.getTransform();
+			minRenderOrderNumber = Math.min(minRenderOrderNumber, pip.renderOrderNumber);
 			BoundingBox pipBounds = getBoundingBox(pip.pdfBounds, pdfPageBox, (maxPipDpi / defaultDpi), 0);
-			piGraphics.translate(pipBounds.left, pipBounds.top);
-			if (Math.abs(pip.rawDpi - maxPipDpi) > 0.001 /* cut scaling a fraction of slack */)
-				piGraphics.scale((((double) maxPipDpi) / pip.rawDpi), (((double) maxPipDpi) / pip.rawDpi));
-			spm.setInfo(" - rendering page image part sized " + (pip.bounds.right - pip.bounds.left) + "x" + (pip.bounds.bottom - pip.bounds.top) + " at " + pip.rawDpi + " DPI scaled by " + (((double) maxPipDpi) / pip.rawDpi));
 			PPageImage rPip = this.getPageImagePart(pip, objects, pdfPage, spm);
-			piGraphics.drawImage(rPip.image, 0, 0, null);
-			piGraphics.setTransform(at);
+			spm.setInfo(" - rendering page image part sized " + (pip.bounds.right - pip.bounds.left) + "x" + (pip.bounds.bottom - pip.bounds.top) + " at " + pip.rawDpi + " DPI scaled by " + (((double) maxPipDpi) / pip.rawDpi) + ", mask is " + pip.isMask);
+			//	TODO use mask images as such, even if meaning we need to draw pixel by pixel !!!
+			renderPageImagePart(pip, rPip, maxPipDpi, pipBounds, piGr);
+			if ((pip.isMask || pip.hasSoftMask) && (ptiGr != null) && (ocrWords == null) /* if text is DjVu, masks are likely line drawings and such */)
+				renderPageImagePart(pip, rPip, maxPipDpi, pipBounds, ptiGr);
+			else if (pbiGr != null)
+				renderPageImagePart(pip, rPip, maxPipDpi, pipBounds, pbiGr);
+			if (idd != null)
+				idd.addImage(rPip.image, ("Part " + p + ": " + pip.label));
+		}
+		
+		if (ocrWords != null) {
+			float magnification = (((float) maxPipDpi) / defaultDpi);
+			for (int w = 0; w < ocrWords.length; w++) {
+				PWord pw = ocrWords[w];
+				if (PdfExtractorTest.aimAtPage != -1)
+					System.out.println("Rendering " + pw);
+				
+				//	convert bounds, as PDF Y coordinate is bottom-up, whereas Java, JavaScript, etc. Y coordinate is top-down
+				BoundingBox wb = getBoundingBox(pw.bounds, pdfPageBox, magnification, rotate);
+				if (PdfExtractorTest.aimAtPage != -1)
+					System.out.println(" - " + wb + " in page");
+				
+				//	prepare color, observe background luminosity if we're inside an image or graphics (and in bounds)
+				Color color = ((PdfExtractorTest.aimAtPage == -1) ? pw.color : ((pw.color == Color.RED) ? Color.RED : Color.BLACK));
+				
+				//	render word
+				renderOcrWord(pw, magnification, wb, color, piGr);
+				renderOcrWord(pw, magnification, wb, color, ptiGr);
+			}
+//			
+//			//	render text image on top of overall page image
+//			//	==> CANNOT DO THIS, would overpaint background
+//			piGr.drawImage(pageTextImage, 0, 0, null);
 		}
 		
 		//	finally ...
-		piGraphics.dispose();
-		return new PPageImage(pageImage, pdfPageBox);
+		piGr.dispose();
+		if (pbiGr != null)
+			pbiGr.dispose();
+		if (ptiGr != null)
+			ptiGr.dispose();
+		if (PdfExtractorTest.aimAtPage != -1)
+			RegionColoringTest.testImage(pageImage, Math.round(maxPipDpi));
+		if (idd != null) {
+			idd.addImage(pageImage, "PageImage");
+			if (pageBackgroundImage != null)
+				idd.addImage(pageBackgroundImage, "Background");
+			if (pageTextImage != null)
+				idd.addImage(pageTextImage, "Text");
+			idd.setSize(1000, 1000);
+			idd.setLocationRelativeTo(null);
+			idd.setVisible(true);
+		}
+		return new PPageImage(pageImage, minRenderOrderNumber, pdfPageBox, pageBackgroundImage, pageTextImage);
+	}
+	
+	private static void renderPageImagePart(PImagePart pip, PPageImage rPip, float maxPipDpi, BoundingBox pipBounds, Graphics2D gr) {
+		AffineTransform at = gr.getTransform();
+		gr.translate(pipBounds.left, pipBounds.top);
+		if (Math.abs(pip.rawDpi - maxPipDpi) > 0.001 /* cut scaling a fraction of slack */)
+			gr.scale((((double) maxPipDpi) / pip.rawDpi), (((double) maxPipDpi) / pip.rawDpi));
+		gr.drawImage(rPip.image, 0, 0, null);
+		gr.setTransform(at);
+	}
+	
+	private static void renderOcrWord(PWord pw, float magnification, BoundingBox wb, Color color, Graphics2D gr) {
+		
+		//	adjust color
+		Color preColor = gr.getColor();
+		gr.setColor(color);
+		
+		//	adjust word size and position
+		AffineTransform preAt = gr.getTransform();
+		gr.translate(wb.left, wb.bottom); // move to bottom left of word (text render upwards)
+		if (pw.fontDirection == PWord.BOTTOM_UP_FONT_DIRECTION)
+			gr.rotate((Math.PI / 2), (((float) wb.getWidth()) / 2), -(((float) wb.getWidth()) / 2));
+		else if (pw.fontDirection == PWord.TOP_DOWN_FONT_DIRECTION)
+			gr.rotate((-Math.PI / 2), (((float) wb.getHeight()) / 2), -(((float) wb.getHeight()) / 2));
+		else if (pw.fontDirection == PWord.UPSIDE_DOWN_FONT_DIRECTION)
+			gr.rotate(Math.PI, (((float) wb.getWidth()) / 2), -(((float) wb.getHeight()) / 2));
+		if (PdfExtractorTest.aimAtPage != -1)
+			System.out.println("Rendering " + pw.str + ((pw.str.length() == 1) ? (" " + Integer.toString(((int) pw.str.charAt(0)), 16)) : "") + " with " + pw.charCodesEnlarged.length() + " chars of font " + pw.font.name + " at scale " + magnification);
+		gr.scale(magnification, -magnification); // need to go upwards with increasing PDF coordinates, opposite to Java
+		gr.translate(0, (pw.baseline - ((float) pw.bounds.getMinY()))); // move upwards to measured word baseline
+		gr.scale((((float) pw.fontSize) / 1000), (((float) pw.fontSize) / 1000)); // PDF text space is in 1/1000 unit integers
+		for (int c = 0; c < pw.charCodesEnlarged.length(); c++) {
+			int charCode = pw.charCodesEnlarged.charAt(c);
+			if (charCode == 0)
+				continue;
+			Path2D.Float charPath = pw.font.getCharPath(charCode);
+			if (PdfExtractorTest.aimAtPage != -1)
+				System.out.println(" - path for " + charCode + " is " + charPath);
+			if (charPath != null)
+				gr.fill(charPath);
+			gr.translate(pw.font.getCharWidth(charCode), 0); // advance in font direction by actual width of char
+		}
+		
+		//	reset graphics
+		gr.setTransform(preAt);
+		gr.setColor(preColor);
 	}
 	
 	private static final boolean overpaints(Rectangle2D overpainting, Rectangle2D overpainted) {
@@ -13083,7 +12896,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 	private PPageImage getPageImagePart(PImagePart pip, Map objects, Page pdfPage, ProgressMonitor spm) throws IOException {
 		
 		//	decode PStream to image
-		BufferedImage pipBi = decodeImage(pdfPage, pip.data.bytes, pip.data.params, objects, false, false);
+		BufferedImage pipBi = this.decodeImage(pdfPage, pip.data.bytes, pip.data.params, objects, false, pip.isMask, false);
 		if (pipBi == null) {
 			spm.setInfo("   --> could not decode figure");
 			return null;
@@ -13197,7 +13010,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 //		}
 		
 		//	finally ...
-		return new PPageImage(pipBi, pip.pdfBounds);
+		return new PPageImage(pipBi, pip.renderOrderNumber, pip.pdfBounds, null, null);
 	}
 	
 	private static void checkException(ParallelFor pf) throws IOException, RuntimeException {
@@ -13211,7 +13024,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 		}
 	}
 	
-	private BufferedImage decodeImage(Page pdfPage, byte[] data, Map params, Map objects, boolean forceUseIcePdf, boolean isSoftMask) throws IOException {
+	private BufferedImage decodeImage(Page pdfPage, byte[] data, Map params, Map objects, boolean forceUseIcePdf, boolean isMask, boolean isSoftMask) throws IOException {
 		if (PdfExtractorTest.aimAtPage != -1) {
 			System.out.println(" ==> read " + data.length + " bytes");
 			System.out.println(" ==> Lenght parameter is " + params.get("Length"));
@@ -13272,6 +13085,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 		List colorSpaceData = null;
 		String altColorSpace = null;
 		String separationColorSpaceComponent = null;
+		String indexedBaseColorSpace = null;
 		if (colorSpaceObj instanceof List) {
 			colorSpaceData = ((List) colorSpaceObj);
 			if (colorSpaceData.size() != 0)
@@ -13323,6 +13137,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 				//	if we have an indexed color space, we need to make bitmap into byte stream and decode via index byte by byte
 				else if ("Indexed".equals(colorSpace)) {
 					if (d == 1) {
+						indexedBaseColorSpace = csdObj.toString();
 						if (PdfExtractorTest.aimAtPage != -1)
 							System.out.println("     ==> base color space is (V) " + csdObj);
 					}
@@ -13430,20 +13245,20 @@ Also, make sure to render OCR overlay to line height in display panel:
 			Map xObject = ((Map) PdfParser.dereference(resources.get("XObject"), objects));
 			if (PdfExtractorTest.aimAtPage != -1)
 				System.out.println(" ==> getting XObject figures from " + xObject);
-			PFigure[] xpFigures = PdfParser.getPageFigures(pdfPage.getEntries(), data, rotate, resources, objects, ProgressMonitor.dummy);
+			PFigure[] xpFigures = PdfParser.getPageFigures(pdfPage.getEntries(), data, rotate, pdfPage.getLibrary(), resources, objects, ProgressMonitor.dummy);
 			for (int f = 0; f < xpFigures.length; f++) {
 				if (PdfExtractorTest.aimAtPage != -1)
 					System.out.println("   - " + xpFigures[f].name + " @" + xpFigures[f].bounds);
 				Object xpFigureObj = PdfParser.getObject(xObject, xpFigures[f].name, objects);
 				if (xpFigureObj instanceof PStream)
-					return this.decodeImage(pdfPage, ((PStream) xpFigureObj).bytes, ((PStream) xpFigureObj).params, objects, forceUseIcePdf, isSoftMask);
+					return this.decodeImage(pdfPage, ((PStream) xpFigureObj).bytes, ((PStream) xpFigureObj).params, objects, forceUseIcePdf, isMask, isSoftMask);
 			}
 			return null;
 		}
 		
 		//	decode other image
 		BufferedImage bi;
-		if ((filter != null) && "JPXDecode".equals(filter.toString())) {
+		if ("JPXDecode".equals(filter)) {
 			if (PdfExtractorTest.aimAtPage != -1)
 				System.out.println(" ==> decoding JPX");
 //			bi = this.decodeJPX(data, ((separationColorSpaceComponent == null) ? colorSpace : ("Separation" + separationColorSpaceComponent)), altColorSpace, decodeInverted);
@@ -13451,24 +13266,27 @@ Also, make sure to render OCR overlay to line height in display panel:
 			bi = this.decodeJPX(data, ((separationColorSpaceComponent == null) ? colorSpace : ("Separation" + separationColorSpaceComponent)), altColorSpace, (isImageMask ? decodeInverted : false));
 			//	no need to check for inversion (again) here, ImageMagick wrapper does so based upon color space
 		}
-		else if ((filter != null) && "JBIG2Decode".equals(filter.toString())) {
+		else if ("JBIG2Decode".equals(filter)) {
 			if (PdfExtractorTest.aimAtPage != -1)
 				System.out.println(" ==> decoding JBIG2");
 			//	JPedal seems to be the one ...
 			bi = this.decodeJBig2(data, params, objects);
-			//	no need to check for inversion here, JBIG2 is fixed
+			//	no need to check for inversion here, JBIG2 is fixed ...
+			//	... unless we have a mask or soft mask with Decode=[1,0] !!!
+			if (decodeInverted)
+				invertBrightness(bi);
 		}
-		else if ((filter != null) && "FlateDecode".equals(filter.toString())) {
+		else if ("FlateDecode".equals(filter)) {
 			if (PdfExtractorTest.aimAtPage != -1)
 				System.out.println(" ==> decoding Flate");
 			//	TODO_why use java.util.zip.GZIPInputStream instead of IcePDF
-			bi = this.decodeFlate(data, params, colorSpaceObj, pdfPage.getLibrary(), pdfPage.getResources(), objects, forceUseIcePdf, decodeInverted, isSoftMask);
+			bi = this.decodeFlate(data, params, colorSpaceObj, pdfPage.getLibrary(), pdfPage.getResources(), objects, forceUseIcePdf, decodeInverted, isMask, isSoftMask);
 			
 			//	check for inversion if we have a (primary) 'Separation' color space specifying intensity of colorant 'Black'
 			if ("Black".equals(separationColorSpaceComponent))
 				checkForInvertedImage(bi);
 		}
-		else if ((filter != null) && "DCTDecode".equals(filter.toString())) {
+		else if ("DCTDecode".equals(filter)) {
 			if (PdfExtractorTest.aimAtPage != -1)
 				System.out.println(" ==> decoding JPEG (DCT)");
 			bi = this.decodeJpeg(data, ((separationColorSpaceComponent == null) ? colorSpace : ("Separation" + separationColorSpaceComponent)), altColorSpace, decodeInverted);
@@ -13477,7 +13295,8 @@ Also, make sure to render OCR overlay to line height in display panel:
 		else {
 			if (PdfExtractorTest.aimAtPage != -1)
 				System.out.println(" ==> decoding other");
-			bi = this.decodeOther(data, params, filter, colorSpaceObj, pdfPage.getLibrary(), pdfPage.getResources(), objects, forceUseIcePdf, decodeInverted, isSoftMask);
+//			bi = this.decodeOther(data, params, filter, colorSpaceObj, pdfPage.getLibrary(), pdfPage.getResources(), objects, forceUseIcePdf, decodeInverted, isSoftMask);
+			bi = PdfUtils.decodeOther(data, params, filter, colorSpaceObj, pdfPage.getLibrary(), pdfPage.getResources(), objects, forceUseIcePdf, decodeInverted, isMask, isSoftMask);
 			
 			//	check for inversion if we have a (primary) 'Separation' color space specifying intensity of colorant 'Black'
 			if ("Black".equals(separationColorSpaceComponent))
@@ -13503,12 +13322,13 @@ Also, make sure to render OCR overlay to line height in display panel:
 //		} else
 		
 		//	re-interpret JPX and DCT decoded image for index color space
-		if ((filter != null) && ("JPXDecode".equals(filter.toString()) || "DCTDecode".equals(filter.toString())) && "Indexed".equals(colorSpace) && (colorSpaceData != null) && (colorSpaceData.size() >= 4)) try {
+		if (("JPXDecode".equals(filter) || "DCTDecode".equals(filter)) && "Indexed".equals(colorSpace) && (colorSpaceData != null) && (colorSpaceData.size() >= 4)) try {
 			if (PdfExtractorTest.aimAtPage != -1) {
 				System.out.println(" ==> color space decoding pre-decoded bitmap");
 				System.out.println("   - image type is " + bi.getType());
 				System.out.println("   - color model is " + bi.getColorModel().getClass().getName());
 				System.out.println("   - color model is " + bi.getColorModel());
+				System.out.println("   - raster is " + bi.getRaster());
 			}
 			
 			PdfColorSpace cs = (isImageMask ? PdfColorSpace.getImageMaskColorSpace(params, objects) : PdfColorSpace.getColorSpace(colorSpaceObj, objects));
@@ -13531,7 +13351,6 @@ Also, make sure to render OCR overlay to line height in display panel:
 				argb[c] = color.getRGB();
 				if (PdfExtractorTest.aimAtPage != -1)
 					System.out.println("     - color " + c + " (" + Integer.toString(c, 16) + ") is " + Integer.toString((color.getRGB() & 0x00FFFFFF), 16).toUpperCase() + " with alpha " + Integer.toString(color.getAlpha(), 16).toUpperCase());
-				argb[c] &= 0x00FFFFFF;
 				stack.clear();
 			}
 			if (PdfExtractorTest.aimAtPage != -1)
@@ -13539,14 +13358,42 @@ Also, make sure to render OCR overlay to line height in display panel:
 			IndexColorModel ibiCm = new IndexColorModel(bi.getColorModel().getPixelSize(), colorCount, argb, 0, true, -1, DataBuffer.TYPE_BYTE);
 			
 			BufferedImage ibi = new BufferedImage(bi.getWidth(), bi.getHeight(), BufferedImage.TYPE_BYTE_INDEXED, ibiCm);
-			for (int c = 0; c < bi.getWidth(); c++)
-				for (int r = 0; r < bi.getHeight(); r++) {
-					int index = (bi.getRGB(c, r) & 0xFF);
-					if (colorCount <= index)
-						index = (colorCount -1);
-					ibi.setRGB(c, r, argb[index]);
-				}
-			bi = ibi;
+			if ((bi.getColorModel() instanceof IndexColorModel) && (bi.getColorModel().getNumColorComponents() > 1)) {
+				if (PdfExtractorTest.aimAtPage != -1)
+					System.out.println("   - replacing multi-component index color space via color values");
+				for (int c = 0; c < bi.getWidth(); c++)
+					for (int r = 0; r < bi.getHeight(); r++) {
+						int rgb = bi.getRGB(c, r);
+						//	original image seemingly comes up as negative in such case, but cannot negate in ImageMagick, as latter will distort color space
+						if ("DeviceCMYK".equals(indexedBaseColorSpace))
+							rgb = (0xFF000000 | (~rgb & 0x00FFFFFF));
+						ibi.setRGB(c, r, rgb);
+					}
+				bi = ibi;
+			}
+			else {
+////				CountingSet rawRgbCounts = new CountingSet(new TreeMap());
+////				CountingSet rawIndexCounts = new CountingSet(new TreeMap());
+////				CountingSet indexCounts = new CountingSet(new TreeMap());
+//				if (PdfExtractorTest.aimAtPage != -1)
+//					System.out.println("   - re-interpreting byte values as color indices");
+//				for (int c = 0; c < bi.getWidth(); c++)
+//					for (int r = 0; r < bi.getHeight(); r++) {
+////						rawRgbCounts.add(Integer.toString(bi.getRGB(c, r), 16));
+//						int index = (bi.getRGB(c, r) & 0xFF);
+////						rawIndexCounts.add(new Integer(index));
+//						if (colorCount <= index)
+//							index = (colorCount - 1);
+//						ibi.setRGB(c, r, argb[index]);
+////						indexCounts.add(new Integer(index));
+//					}
+//				bi = ibi;
+////				if (PdfExtractorTest.aimAtPage != -1) {
+////					System.out.println("     ==> raw RGB frequencies: " + rawRgbCounts);
+////					System.out.println("     ==> raw index frequencies: " + rawIndexCounts);
+////					System.out.println("     ==> index frequencies: " + indexCounts);
+////				}
+			}
 			if (PdfExtractorTest.aimAtPage != -1)
 				System.out.println("   ==> color space replaced");
 		}
@@ -13561,7 +13408,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 			System.out.println("   ==> SMask is " + sMaskObj);
 		if (sMaskObj instanceof PStream) {
 			PStream sMask = ((PStream) sMaskObj);
-			BufferedImage sMaskBi = this.decodeImage(pdfPage, sMask.bytes, sMask.params, objects, false, true);
+			BufferedImage sMaskBi = this.decodeImage(pdfPage, sMask.bytes, sMask.params, objects, false, false, true);
 			if (sMaskBi != null) {
 				if (PdfExtractorTest.aimAtPage != -1)
 					System.out.println("   ==> got SMask image sized " + sMaskBi.getWidth() + "x" + sMaskBi.getHeight());
@@ -13796,9 +13643,9 @@ Also, make sure to render OCR overlay to line height in display panel:
 		}
 	}
 	
-	private BufferedImage decodeFlate(byte[] data, Map params, Object csObj, Library library, Resources resources, Map objects, boolean forceUseIcePdf, boolean decodeInverted, boolean isSoftMask) throws IOException {
+	private BufferedImage decodeFlate(byte[] data, Map params, Object csObj, Library library, Resources resources, Map objects, boolean forceUseIcePdf, boolean decodeInverted, boolean isMask, boolean isSoftMask) throws IOException {
 		if (!forceUseIcePdf) {
-			BufferedImage bitmapBi = this.decodeBitmap(data, params, "FlateDecode", csObj, library, resources, objects, decodeInverted, isSoftMask);
+			BufferedImage bitmapBi = PdfUtils.decodeBitmap(data, params, "FlateDecode", csObj, library, objects, decodeInverted, isMask, isSoftMask);
 			if (bitmapBi != null)
 				return bitmapBi;
 		}
@@ -13806,7 +13653,7 @@ Also, make sure to render OCR overlay to line height in display panel:
 		SeekableInputConstrainedWrapper streamInputWrapper = new SeekableInputConstrainedWrapper(new SeekableByteArrayInputStream(data), 0, data.length);
 		ImageStream str = new ImageStream(library, new HashMap(params), streamInputWrapper);
 		try {
-			Color biBackgroundColor = getBackgroundColor(params);
+			Color biBackgroundColor = PdfUtils.getMaskImageBackgroundColor(params);
 			BufferedImage bi = str.getImage(biBackgroundColor, resources);
 			if (PdfExtractorTest.aimAtPage != -1) {
 				if (bi != null)
@@ -13830,253 +13677,251 @@ Also, make sure to render OCR overlay to line height in display panel:
 			return null;
 		}
 	}
-	
-//	private BufferedImage decodeOther(byte[] data, Hashtable params, String filter, Object csObj, Library library, Resources resources, Map objects, boolean forceUseIcePdf, boolean decodeInverted) throws IOException {
-	private BufferedImage decodeOther(byte[] data, Map params, String filter, Object csObj, Library library, Resources resources, Map objects, boolean forceUseIcePdf, boolean decodeInverted, boolean isSoftMask) throws IOException {
-		if (!forceUseIcePdf) {
-			BufferedImage bitmapBi = this.decodeBitmap(data, params, filter, csObj, library, resources, objects, decodeInverted, isSoftMask);
-			if (bitmapBi != null)
-				return bitmapBi;
-		}
-		
-		SeekableInputConstrainedWrapper streamInputWrapper = new SeekableInputConstrainedWrapper(new SeekableByteArrayInputStream(data), 0, data.length);
-		ImageStream str = new ImageStream(library, new HashMap(params), streamInputWrapper);
-		try {
-			Color biBackgroundColor = getBackgroundColor(params);
-			BufferedImage bi = str.getImage(biBackgroundColor, resources);
-			if (PdfExtractorTest.aimAtPage != -1) {
-				if (bi != null)
-					System.out.println(" ==> got image, size is " + bi.getWidth() + " x " + bi.getHeight());
-				else System.out.println(" ==> Could not decode image");
-			}
-			return bi;
-		}
-		catch (Exception e) {
-			System.out.println(" ==> Could not decode image: " + e.getMessage());
-			e.printStackTrace(System.out);
-			return null;
-		}
-	}
-	
-//	private BufferedImage decodeBitmap(byte[] data, Hashtable params, String filter, Object csObj, Library library, Resources resources, Map objects, boolean decodeInverted) throws IOException {
-	private BufferedImage decodeBitmap(byte[] data, Map params, String filter, Object csObj, Library library, Resources resources, Map objects, boolean decodeInverted, boolean isSoftMask) throws IOException {
-		if (PdfExtractorTest.aimAtPage != -1)
-			System.out.println(" ==> decoding bitmap");
-		
-		//	check whether or not we're dealing with an image mask
-		Object isImageMaskObj = params.get("ImageMask");
-		boolean isImageMask = ((isImageMaskObj != null) && Boolean.parseBoolean(isImageMaskObj.toString()));
-		if (PdfExtractorTest.aimAtPage != -1)
-			System.out.println("   - image mask is " + isImageMask + " (for " + isImageMaskObj + ")");
-		
-		//	test if we can handle this one (image mask or not)
-		PdfColorSpace cs = (isImageMask ? PdfColorSpace.getImageMaskColorSpace(params, objects) : PdfColorSpace.getColorSpace(csObj, objects));
-		if (cs == null)
-			return null;
-		if (PdfExtractorTest.aimAtPage != -1)
-			System.out.println("   - color space is " + cs.name + " (" + cs.numComponents + " components)");
-		
-		//	get and TODO_not observe decode parameter dictionary ==> looks like wrecking more havoc than doing good
-		//	TODO interpret array of decode parameters as dedicated to an equally long sequence of decoding filters (once we have an example ...)
-		Object decodeParamsObj = PdfParser.dereference(params.get("DecodeParms"), objects);
-		Map decodeParams;
-		if (decodeParamsObj instanceof Map)
-			decodeParams = ((Map) decodeParamsObj);
-		else if (decodeParamsObj instanceof List) {
-			decodeParams = new HashMap();
-			for (int d = 0; d < ((List) decodeParamsObj).size(); d++) {
-				Object subDecodeParamsObj = PdfParser.dereference(((List) decodeParamsObj).get(d), objects);
-				if (subDecodeParamsObj instanceof Map)
-					decodeParams.putAll((Map) subDecodeParamsObj);
-			}
-		}
-		else decodeParams = new HashMap();
-		if (PdfExtractorTest.aimAtPage != -1)
-			System.out.println("   - decode parameters are " + decodeParams);
-		
-		//	get image size
-		int width;
-//		if (decodeParams == null) {
-			Object widthObj = params.get("Width");
-			if (widthObj instanceof Number)
-				width = ((Number) widthObj).intValue();
-			else return null;
+//	
+//	private static BufferedImage decodeOther(byte[] data, Map params, String filter, Object csObj, Library library, Resources resources, Map objects, boolean forceUseIcePdf, boolean decodeInverted, boolean isSoftMask) throws IOException {
+//		if (!forceUseIcePdf) {
+//			BufferedImage bitmapBi = PdfUtils.decodeBitmap(data, params, filter, csObj, library, objects, decodeInverted, isSoftMask);
+//			if (bitmapBi != null)
+//				return bitmapBi;
 //		}
-//		else {
-//			Object columnsObj = decodeParams.get("Columns");
-//			if (columnsObj instanceof Number)
-//				width = ((Number) columnsObj).intValue();
+//		
+//		SeekableInputConstrainedWrapper streamInputWrapper = new SeekableInputConstrainedWrapper(new SeekableByteArrayInputStream(data), 0, data.length);
+//		ImageStream str = new ImageStream(library, new HashMap(params), streamInputWrapper);
+//		try {
+//			Color biBackgroundColor = PdfUtils.getMaskImageBackgroundColor(params);
+//			BufferedImage bi = str.getImage(biBackgroundColor, resources);
+//			if (PdfExtractorTest.aimAtPage != -1) {
+//				if (bi != null)
+//					System.out.println(" ==> got image, size is " + bi.getWidth() + " x " + bi.getHeight());
+//				else System.out.println(" ==> Could not decode image");
+//			}
+//			return bi;
+//		}
+//		catch (Exception e) {
+//			System.out.println(" ==> Could not decode image: " + e.getMessage());
+//			e.printStackTrace(System.out);
+//			return null;
+//		}
+//	}
+//	
+//	private static BufferedImage decodeBitmap(byte[] data, Map params, String filter, Object csObj, Library library, Resources resources, Map objects, boolean decodeInverted, boolean isSoftMask) throws IOException {
+//		if (PdfExtractorTest.aimAtPage != -1)
+//			System.out.println(" ==> decoding bitmap");
+//		
+//		//	check whether or not we're dealing with an image mask
+//		Object isImageMaskObj = params.get("ImageMask");
+//		boolean isImageMask = ((isImageMaskObj != null) && Boolean.parseBoolean(isImageMaskObj.toString()));
+//		if (PdfExtractorTest.aimAtPage != -1)
+//			System.out.println("   - image mask is " + isImageMask + " (for " + isImageMaskObj + ")");
+//		
+//		//	test if we can handle this one (image mask or not)
+//		PdfColorSpace cs = (isImageMask ? PdfColorSpace.getImageMaskColorSpace(params, objects) : PdfColorSpace.getColorSpace(csObj, objects));
+//		if (cs == null)
+//			return null;
+//		if (PdfExtractorTest.aimAtPage != -1)
+//			System.out.println("   - color space is " + cs.name + " (" + cs.numComponents + " components)");
+//		
+//		//	get and TODO_not observe decode parameter dictionary ==> looks like wrecking more havoc than doing good
+//		//	TODO interpret array of decode parameters as dedicated to an equally long sequence of decoding filters (once we have an example ...)
+//		Object decodeParamsObj = PdfParser.dereference(params.get("DecodeParms"), objects);
+//		Map decodeParams;
+//		if (decodeParamsObj instanceof Map)
+//			decodeParams = ((Map) decodeParamsObj);
+//		else if (decodeParamsObj instanceof List) {
+//			decodeParams = new HashMap();
+//			for (int d = 0; d < ((List) decodeParamsObj).size(); d++) {
+//				Object subDecodeParamsObj = PdfParser.dereference(((List) decodeParamsObj).get(d), objects);
+//				if (subDecodeParamsObj instanceof Map)
+//					decodeParams.putAll((Map) subDecodeParamsObj);
+//			}
+//		}
+//		else decodeParams = new HashMap();
+//		if (PdfExtractorTest.aimAtPage != -1)
+//			System.out.println("   - decode parameters are " + decodeParams);
+//		
+//		//	get image size
+//		int width;
+////		if (decodeParams == null) {
+//			Object widthObj = params.get("Width");
+//			if (widthObj instanceof Number)
+//				width = ((Number) widthObj).intValue();
 //			else return null;
-//		}
-		if (PdfExtractorTest.aimAtPage != -1)
-			System.out.println("   - width is " + width);
-		
-		int height;
-		Object heightObj = params.get("Height");
-		if (heightObj instanceof Number)
-			height = ((Number) heightObj).intValue();
-		else return null;
-		if (PdfExtractorTest.aimAtPage != -1)
-			System.out.println("   - height is " + height);
-		
-		//	get component depth
-		int bitsPerComponent;
-//		if (decodeParams == null) {
-			Object bcpObj = params.get("BitsPerComponent");
-			if (bcpObj instanceof Number)
-				bitsPerComponent = ((Number) bcpObj).intValue();
-			else return null;
-//		}
-//		else {
-//			Object bcpObj = decodeParams.get("BitsPerComponent");
+////		}
+////		else {
+////			Object columnsObj = decodeParams.get("Columns");
+////			if (columnsObj instanceof Number)
+////				width = ((Number) columnsObj).intValue();
+////			else return null;
+////		}
+//		if (PdfExtractorTest.aimAtPage != -1)
+//			System.out.println("   - width is " + width);
+//		
+//		int height;
+//		Object heightObj = params.get("Height");
+//		if (heightObj instanceof Number)
+//			height = ((Number) heightObj).intValue();
+//		else return null;
+//		if (PdfExtractorTest.aimAtPage != -1)
+//			System.out.println("   - height is " + height);
+//		
+//		//	get component depth
+//		int bitsPerComponent;
+////		if (decodeParams == null) {
+//			Object bcpObj = params.get("BitsPerComponent");
 //			if (bcpObj instanceof Number)
 //				bitsPerComponent = ((Number) bcpObj).intValue();
 //			else return null;
+////		}
+////		else {
+////			Object bcpObj = decodeParams.get("BitsPerComponent");
+////			if (bcpObj instanceof Number)
+////				bitsPerComponent = ((Number) bcpObj).intValue();
+////			else return null;
+////		}
+//		if (PdfExtractorTest.aimAtPage != -1)
+//			System.out.println("   - bits per component is " + bitsPerComponent);
+//		
+//		//	prepare decoding stream
+//		InputStream biIn;
+//		if ("FlateDecode".equals(filter) || "Fl".equals(filter)) {
+//			Number predictor = ((Number) PdfParser.dereference(decodeParams.get("Predictor"), objects));
+//			if ((predictor == null) || (((Number) predictor).intValue() == 1 /* 1 means "no predictor" */) || (((Number) predictor).intValue() == 2 /* handled by flate decoder */))
+//				biIn = new BufferedInputStream(new FlateDecode(library, new HashMap(params), new ByteArrayInputStream(data)));
+//			else biIn = new BufferedInputStream(new PredictorDecode(new FlateDecode(library, new HashMap(params), new ByteArrayInputStream(data)), library, new HashMap(params)));
 //		}
-		if (PdfExtractorTest.aimAtPage != -1)
-			System.out.println("   - bits per component is " + bitsPerComponent);
-		
-		//	prepare decoding stream
-		InputStream biIn;
-		if ("FlateDecode".equals(filter) || "Fl".equals(filter)) {
-			Number predictor = ((Number) PdfParser.dereference(decodeParams.get("Predictor"), objects));
-			if ((predictor == null) || (((Number) predictor).intValue() == 1 /* 1 means "no predictor" */) || (((Number) predictor).intValue() == 2 /* handled by flate decoder */))
-				biIn = new BufferedInputStream(new FlateDecode(library, new HashMap(params), new ByteArrayInputStream(data)));
-			else biIn = new BufferedInputStream(new PredictorDecode(new FlateDecode(library, new HashMap(params), new ByteArrayInputStream(data)), library, new HashMap(params)));
-		}
-		else if ("LZWDecode".equals(filter) || "LZW".equals(filter)) {
-			Number predictor = ((Number) PdfParser.dereference(decodeParams.get("Predictor"), objects));
-			if ((predictor == null) || (((Number) predictor).intValue() == 1 /* 1 means "no predictor" */))
-				biIn = new BufferedInputStream(new LZWDecode(new BitStream(new ByteArrayInputStream(data)), library, new HashMap(params)));
-			else biIn = new BufferedInputStream(new PredictorDecode(new LZWDecode(new BitStream(new ByteArrayInputStream(data)), library, new HashMap(params)), library, new HashMap(params)));
-		}
-		else if ("ASCII85Decode".equals(filter) || "A85".equals(filter))
-			biIn = new BufferedInputStream(new ASCII85Decode(new ByteArrayInputStream(data)));
-		else if ("ASCIIHexDecode".equals(filter) || "AHx".equals(filter))
-			biIn = new BufferedInputStream(new ASCIIHexDecode(new ByteArrayInputStream(data)));
-		else if ("RunLengthDecode".equals(filter) || "RL".equals(filter))
-			biIn = new BufferedInputStream(new RunLengthDecode(new ByteArrayInputStream(data)));
-		else if ("CCITTFaxDecode".equals(filter) || "CCF".equals(filter)) {
-//			System.out.println("   - CCITTFaxDecoding " + Arrays.toString(stream));
-			byte[] dStream = new byte[((width + 7) / 8) * height];
-//			System.out.println("     - expecting " + dStream.length + " bytes of result");
-			Number k = ((decodeParams == null) ? null : ((Number) PdfParser.dereference(decodeParams.get("K"), objects)));
-			if (k == null)
-				k = new Integer(0);
-			Number columns = ((decodeParams == null) ? null : ((Number) PdfParser.dereference(decodeParams.get("Columns"), objects)));
-//			System.out.println("     - K is " + k);
-			CCITTFaxDecoder decoder = new CCITTFaxDecoder(1, ((columns == null) ? width : columns.intValue()), height);
-			Object byteAlign = ((decodeParams == null) ? null : decodeParams.get("EncodedByteAlign"));
-			if ((byteAlign != null) && "true".equals(byteAlign.toString()))
-				decoder.setAlign(true);
-			if (k.intValue() == 0)
-				decoder.decodeT41D(dStream, data, 0, height);
-			else if (k.intValue() < 0)
-				decoder.decodeT6(dStream, data, 0, height);
-			else decoder.decodeT42D(dStream, data, 0, height);
-			Object inverted = ((decodeParams == null) ? null : decodeParams.get("BlackIs1"));
-			if ((inverted == null) || !"true".equals(inverted.toString())) {
-				for (int b = 0; b < dStream.length; b++)
-					dStream[b] ^= 255; // TODO observe whether or not we need this (appears so initially)
-			}
-			//	TODO maybe better try and use black-on-white correction, and _after_ image assembly from parts
-			biIn = new ByteArrayInputStream(dStream);
-		}
-		else if (filter == null)
-			biIn = new ByteArrayInputStream(data);
-		//	TODO observe other encodings (as we encounter them)
-		else biIn = new ByteArrayInputStream(data);
-		if (PdfExtractorTest.aimAtPage != -1)
-			System.out.println("   - filter is " + filter);
-		
-		//	create bit masks
-		int colorComponents = cs.numComponents;
-		if (PdfExtractorTest.aimAtPage != -1)
-			System.out.println("   - color components are " + colorComponents + " in bitmap, " + cs.getColorNumComponents() + " in colors");
-		int componentBitMask = 0;
-		for (int b = 0; b < bitsPerComponent; b++) {
-			componentBitMask <<= 1;
-			componentBitMask |= 1;
-		}
-		if (PdfExtractorTest.aimAtPage != -1)
-			System.out.println("   - component bit mask is " + Long.toString(componentBitMask, 16));
-		int bitsPerPixel = (colorComponents * bitsPerComponent);
-		long pixelBitMask = 0;
-		for (int b = 0; b < bitsPerPixel; b++) {
-			pixelBitMask <<= 1;
-			pixelBitMask |= 1;
-		}
-		if (PdfExtractorTest.aimAtPage != -1) {
-			System.out.println("   - bits per pixel is " + bitsPerPixel);
-			System.out.println("   - pixel bit mask is " + Long.toString(pixelBitMask, 16));
-		}
-		
-		//	determine image type
-		int biType;
-		if (isSoftMask)
-			biType = BufferedImage.TYPE_BYTE_GRAY;
-		else if (bitsPerPixel == 1)
-			biType = BufferedImage.TYPE_BYTE_BINARY;
-		else if (cs.getColorNumComponents() == 1)
-			biType = BufferedImage.TYPE_BYTE_GRAY;
-		else biType = BufferedImage.TYPE_INT_ARGB;
-		
-		//	fill image
-		LinkedList colorDecodeStack = new LinkedList();
-		ArrayList topPixelRow = null;
-		if (PdfExtractorTest.aimAtPage != -1) {
-			colorDecodeStack.addFirst("DEBUG_COLORS");
-			topPixelRow = new ArrayList();
-		}
-		BufferedImage bi = new BufferedImage(width, height, biType);
-		for (int r = 0; r < height; r++) {
-			int bitsRemaining = 0;
-			long bitData = 0;
-			for (int c = 0; c < width; c++) {
-				
-				//	make sure we have enough bits left in buffer
-				while (bitsRemaining < bitsPerPixel) {
-					int nextByte = biIn.read();
-					bitData <<= 8;
-					bitData |= nextByte;
-					bitsRemaining += 8;
-				}
-				
-				//	get component values for pixel
-				long pixelBits = ((bitData >>> (bitsRemaining - bitsPerPixel)) & pixelBitMask);
-				bitsRemaining -= bitsPerPixel;
-				if ((r == 0) && (topPixelRow != null))
-					topPixelRow.add(Long.toString(pixelBits, 16).toUpperCase());
-				
-				//	extract component values
-				for (int cc = 0; cc < colorComponents; cc++) {
-					long rccb = ((pixelBits >>> ((colorComponents - cc - 1) * bitsPerComponent)) & componentBitMask);
-					long ccb = rccb;
-					for (int b = bitsPerComponent; b < 8; b += bitsPerComponent) {
-						ccb <<= bitsPerComponent;
-						ccb |= rccb;
-					}
-					colorDecodeStack.addLast(new Float(((float) ccb) / 255));
-				}
-				
-				//	get color
-				Color color = cs.decodeColor(colorDecodeStack, ((PdfExtractorTest.aimAtPage != -1) ? "" : null));
-				if (decodeInverted && !isImageMask) // mask image color space does inversion internally
-					color = new Color((255 - color.getRed()), (255 - color.getGreen()), (255 - color.getBlue()), (255 - color.getAlpha()));
-				
-				//	set pixel
-				bi.setRGB(c, r, color.getRGB());
-			}
-		}
-		
-		//	which colors did we use?
-		if (PdfExtractorTest.aimAtPage != -1)
-			cs.printStats();
-		
-		//	finally ...
-		biIn.close();
-		return bi;
-	}
+//		else if ("LZWDecode".equals(filter) || "LZW".equals(filter)) {
+//			Number predictor = ((Number) PdfParser.dereference(decodeParams.get("Predictor"), objects));
+//			if ((predictor == null) || (((Number) predictor).intValue() == 1 /* 1 means "no predictor" */))
+//				biIn = new BufferedInputStream(new LZWDecode(new BitStream(new ByteArrayInputStream(data)), library, new HashMap(params)));
+//			else biIn = new BufferedInputStream(new PredictorDecode(new LZWDecode(new BitStream(new ByteArrayInputStream(data)), library, new HashMap(params)), library, new HashMap(params)));
+//		}
+//		else if ("ASCII85Decode".equals(filter) || "A85".equals(filter))
+//			biIn = new BufferedInputStream(new ASCII85Decode(new ByteArrayInputStream(data)));
+//		else if ("ASCIIHexDecode".equals(filter) || "AHx".equals(filter))
+//			biIn = new BufferedInputStream(new ASCIIHexDecode(new ByteArrayInputStream(data)));
+//		else if ("RunLengthDecode".equals(filter) || "RL".equals(filter))
+//			biIn = new BufferedInputStream(new RunLengthDecode(new ByteArrayInputStream(data)));
+//		else if ("CCITTFaxDecode".equals(filter) || "CCF".equals(filter)) {
+////			System.out.println("   - CCITTFaxDecoding " + Arrays.toString(stream));
+//			byte[] dStream = new byte[((width + 7) / 8) * height];
+////			System.out.println("     - expecting " + dStream.length + " bytes of result");
+//			Number k = ((decodeParams == null) ? null : ((Number) PdfParser.dereference(decodeParams.get("K"), objects)));
+//			if (k == null)
+//				k = new Integer(0);
+//			Number columns = ((decodeParams == null) ? null : ((Number) PdfParser.dereference(decodeParams.get("Columns"), objects)));
+////			System.out.println("     - K is " + k);
+//			CCITTFaxDecoder decoder = new CCITTFaxDecoder(1, ((columns == null) ? width : columns.intValue()), height);
+//			Object byteAlign = ((decodeParams == null) ? null : decodeParams.get("EncodedByteAlign"));
+//			if ((byteAlign != null) && "true".equals(byteAlign.toString()))
+//				decoder.setAlign(true);
+//			if (k.intValue() == 0)
+//				decoder.decodeT41D(dStream, data, 0, height);
+//			else if (k.intValue() < 0)
+//				decoder.decodeT6(dStream, data, 0, height);
+//			else decoder.decodeT42D(dStream, data, 0, height);
+//			Object inverted = ((decodeParams == null) ? null : decodeParams.get("BlackIs1"));
+//			if ((inverted == null) || !"true".equals(inverted.toString())) {
+//				for (int b = 0; b < dStream.length; b++)
+//					dStream[b] ^= 255; // TODO observe whether or not we need this (appears so initially)
+//			}
+//			//	TODO maybe better try and use black-on-white correction, and _after_ image assembly from parts
+//			biIn = new ByteArrayInputStream(dStream);
+//		}
+//		else if (filter == null)
+//			biIn = new ByteArrayInputStream(data);
+//		//	TODO observe other encodings (as we encounter them)
+//		else biIn = new ByteArrayInputStream(data);
+//		if (PdfExtractorTest.aimAtPage != -1)
+//			System.out.println("   - filter is " + filter);
+//		
+//		//	create bit masks
+//		int colorComponents = cs.numComponents;
+//		if (PdfExtractorTest.aimAtPage != -1)
+//			System.out.println("   - color components are " + colorComponents + " in bitmap, " + cs.getColorNumComponents() + " in colors");
+//		int componentBitMask = 0;
+//		for (int b = 0; b < bitsPerComponent; b++) {
+//			componentBitMask <<= 1;
+//			componentBitMask |= 1;
+//		}
+//		if (PdfExtractorTest.aimAtPage != -1)
+//			System.out.println("   - component bit mask is " + Long.toString(componentBitMask, 16));
+//		int bitsPerPixel = (colorComponents * bitsPerComponent);
+//		long pixelBitMask = 0;
+//		for (int b = 0; b < bitsPerPixel; b++) {
+//			pixelBitMask <<= 1;
+//			pixelBitMask |= 1;
+//		}
+//		if (PdfExtractorTest.aimAtPage != -1) {
+//			System.out.println("   - bits per pixel is " + bitsPerPixel);
+//			System.out.println("   - pixel bit mask is " + Long.toString(pixelBitMask, 16));
+//		}
+//		
+//		//	determine image type
+//		int biType;
+//		if (isSoftMask)
+//			biType = BufferedImage.TYPE_BYTE_GRAY;
+//		else if (bitsPerPixel == 1)
+//			biType = BufferedImage.TYPE_BYTE_BINARY;
+//		else if (cs.getColorNumComponents() == 1)
+//			biType = BufferedImage.TYPE_BYTE_GRAY;
+//		else biType = BufferedImage.TYPE_INT_ARGB;
+//		
+//		//	fill image
+//		LinkedList colorDecodeStack = new LinkedList();
+//		ArrayList topPixelRow = null;
+//		if (PdfExtractorTest.aimAtPage != -1) {
+//			colorDecodeStack.addFirst("DEBUG_COLORS");
+//			topPixelRow = new ArrayList();
+//		}
+//		BufferedImage bi = new BufferedImage(width, height, biType);
+//		for (int r = 0; r < height; r++) {
+//			int bitsRemaining = 0;
+//			long bitData = 0;
+//			for (int c = 0; c < width; c++) {
+//				
+//				//	make sure we have enough bits left in buffer
+//				while (bitsRemaining < bitsPerPixel) {
+//					int nextByte = biIn.read();
+//					bitData <<= 8;
+//					bitData |= nextByte;
+//					bitsRemaining += 8;
+//				}
+//				
+//				//	get component values for pixel
+//				long pixelBits = ((bitData >>> (bitsRemaining - bitsPerPixel)) & pixelBitMask);
+//				bitsRemaining -= bitsPerPixel;
+//				if ((r == 0) && (topPixelRow != null))
+//					topPixelRow.add(Long.toString(pixelBits, 16).toUpperCase());
+//				
+//				//	extract component values
+//				for (int cc = 0; cc < colorComponents; cc++) {
+//					long rccb = ((pixelBits >>> ((colorComponents - cc - 1) * bitsPerComponent)) & componentBitMask);
+//					long ccb = rccb;
+//					for (int b = bitsPerComponent; b < 8; b += bitsPerComponent) {
+//						ccb <<= bitsPerComponent;
+//						ccb |= rccb;
+//					}
+//					colorDecodeStack.addLast(new Float(((float) ccb) / 255));
+//				}
+//				
+//				//	get color
+//				Color color = cs.decodeColor(colorDecodeStack, ((PdfExtractorTest.aimAtPage != -1) ? "" : null));
+//				if (decodeInverted && !isImageMask) // mask image color space does inversion internally
+//					color = new Color((255 - color.getRed()), (255 - color.getGreen()), (255 - color.getBlue()), (255 - color.getAlpha()));
+//				
+//				//	set pixel
+//				bi.setRGB(c, r, color.getRGB());
+//			}
+//		}
+//		
+//		//	which colors did we use?
+//		if (PdfExtractorTest.aimAtPage != -1)
+//			cs.printStats();
+//		
+//		//	finally ...
+//		biIn.close();
+//		return bi;
+//	}
 	
 	private BufferedImage decodeJPX(byte[] data, String colorSpace, String altColorSpace, boolean decodeInverted) throws IOException {
 		return this.decodeImageMagick(data, "jp2", colorSpace, altColorSpace, decodeInverted);
@@ -14085,45 +13930,45 @@ Also, make sure to render OCR overlay to line height in display panel:
 	private BufferedImage decodeJpeg(byte[] data, String colorSpace, String altColorSpace, boolean decodeInverted) throws IOException {
 		return this.decodeImageMagick(data, "jpg", colorSpace, altColorSpace, decodeInverted);
 	}
-	
-	private static Color getBackgroundColor(Map params) {
-		/* if we have a mask image
-		 * Decoding [0, 1] ==> 0 means paint-through (default), requires black background
-		 * Decoding [1, 0] ==> 1 means paint-through, requires white background WRONG, black as well */
-		Object imObj = params.get("ImageMask");
-		if (imObj == null) {
-			if (PdfExtractorTest.aimAtPage != -1)
-				System.out.println(" - image mask is null");
-			return Color.WHITE;
-		}
-		else {
-			if (PdfExtractorTest.aimAtPage != -1)
-				System.out.println(" - image mask is " + imObj.getClass().getName() + " - " + imObj);
-			Object dObj = params.get("Decode");
-			if ((dObj instanceof List) && (((List) dObj).size() != 0)) {
-				if (PdfExtractorTest.aimAtPage != -1)
-					System.out.println(" - decoder is " + dObj.getClass().getName() + " - " + dObj);
-				Object ptObj = ((List) dObj).get(0);
-				if (PdfExtractorTest.aimAtPage != -1)
-					System.out.println(" - paint-through is " + ptObj.getClass().getName() + " - " + ptObj);
-				if (ptObj instanceof Number) {
-					if (((Number) ptObj).intValue() == 0)
-						return Color.BLACK;
-					else return Color.BLACK;
-				}
-				else return Color.BLACK;
-			}
-			else {
-				if (dObj == null) {
-					if (PdfExtractorTest.aimAtPage != -1)
-						System.out.println(" - decoder is null");
-				}
-				else if (PdfExtractorTest.aimAtPage != -1)
-					System.out.println(" - decoder is " + dObj.getClass().getName() + " - " + dObj);
-				return Color.BLACK;
-			}
-		}
-	}
+//	
+//	private static Color getBackgroundColor(Map params) {
+//		/* if we have a mask image
+//		 * Decoding [0, 1] ==> 0 means paint-through (default), requires black background
+//		 * Decoding [1, 0] ==> 1 means paint-through, requires white background WRONG, black as well */
+//		Object imObj = params.get("ImageMask");
+//		if (imObj == null) {
+//			if (PdfExtractorTest.aimAtPage != -1)
+//				System.out.println(" - image mask is null");
+//			return Color.WHITE;
+//		}
+//		else {
+//			if (PdfExtractorTest.aimAtPage != -1)
+//				System.out.println(" - image mask is " + imObj.getClass().getName() + " - " + imObj);
+//			Object dObj = params.get("Decode");
+//			if ((dObj instanceof List) && (((List) dObj).size() != 0)) {
+//				if (PdfExtractorTest.aimAtPage != -1)
+//					System.out.println(" - decoder is " + dObj.getClass().getName() + " - " + dObj);
+//				Object ptObj = ((List) dObj).get(0);
+//				if (PdfExtractorTest.aimAtPage != -1)
+//					System.out.println(" - paint-through is " + ptObj.getClass().getName() + " - " + ptObj);
+//				if (ptObj instanceof Number) {
+//					if (((Number) ptObj).intValue() == 0)
+//						return Color.BLACK;
+//					else return Color.BLACK;
+//				}
+//				else return Color.BLACK;
+//			}
+//			else {
+//				if (dObj == null) {
+//					if (PdfExtractorTest.aimAtPage != -1)
+//						System.out.println(" - decoder is null");
+//				}
+//				else if (PdfExtractorTest.aimAtPage != -1)
+//					System.out.println(" - decoder is " + dObj.getClass().getName() + " - " + dObj);
+//				return Color.BLACK;
+//			}
+//		}
+//	}
 	
 	private static void checkForInvertedImage(BufferedImage bi) {
 		if (PdfExtractorTest.aimAtPage != -1)
@@ -14415,6 +14260,15 @@ Also, make sure to render OCR overlay to line height in display panel:
 		return new ImDocument(docId);
 	}
 	
+	/*
+TODO Switch PDF extractor to using _good_ HEX conversion for hash UUIDs ...
+... also adding XMPP UUID extraction to use where possible
+==> deploy this motherfucker with new GGI core
+==> add (at least temporary) legacy UUID duplicate check to both IMS and IMI
+  ==> should minimize adverse effects
+  ==> put legacy hash conversion in new ImDocumentIO ...
+  ==> ... if marked as deprecated from very start
+	 */
 	private static String getChecksum(byte[] pdfBytes) {
 		String checksum = HashUtils.getMd5(pdfBytes);
 		return ((checksum == null) ? Gamta.getAnnotationID() : checksum); // use random value to avoid collisions

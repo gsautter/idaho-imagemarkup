@@ -28,6 +28,7 @@
 package de.uka.ipd.idaho.im.util;
 
 import java.io.IOException;
+import java.io.PrintStream;
 import java.io.Reader;
 import java.io.StringReader;
 import java.util.ArrayList;
@@ -149,8 +150,9 @@ public class LinePattern {
 	 * @param minFontSize
 	 * @param maxFontSize
 	 * @param pattern
+	 * @throws IllegalArgumentException if a match parameter is invalid
 	 */
-	public LinePattern(String po, String sfp, String fp, int minFs, int maxFs, String pattern) {
+	public LinePattern(String po, String sfp, String fp, int minFs, int maxFs, String pattern) throws IllegalArgumentException {
 		if (po != null)
 			po = po.trim();
 		if ((po != null) && (po.replaceAll("[LRCJ]", "").length() != 0))
@@ -242,20 +244,35 @@ public class LinePattern {
 	 * @return an array holding the matching lines
 	 */
 	public ImRegion[] getMatches(ImPage page) {
+		return this.getMatches(page, (DEBUG_MATCH ? System.out : null));
+	}
+	
+	/**
+	 * Extract all matching lines from a given page in an Image Markup document.
+	 * @param page the page whose lines to test
+	 * @param log a print stream to write detail matching information to
+	 * @return an array holding the matching lines
+	 */
+	public ImRegion[] getMatches(ImPage page, PrintStream log) {
 		
 		//	work paragraph by paragraph
 		ArrayList matchLines = new ArrayList();
 		ImRegion[] paragraphs = page.getRegions(ImRegion.PARAGRAPH_TYPE);
 		Arrays.sort(paragraphs, ImUtils.topDownOrder);
 		for (int p = 0; p < paragraphs.length; p++) {
+			if (log != null) log.println(" - checking paragraph at " + paragraphs[p].bounds);
 			
 			//	check paragraph orientation first (no need to even get lines on mismatch)
-			if (!this.matchesParagraphOrientation((String) paragraphs[p].getAttribute(ImRegion.TEXT_ORIENTATION_ATTRIBUTE)))
+			if (!this.matchesParagraphOrientation((String) paragraphs[p].getAttribute(ImRegion.TEXT_ORIENTATION_ATTRIBUTE))) {
+				if (log != null) log.println(" ==> text orientation mis-match");
 				continue;
+			}
+			else if (log != null) log.println(" - text orientation match");
 			
 			//	get matching lines
-			ImRegion[] pMatchLines = this.getMatches(paragraphs[p].getRegions(ImRegion.LINE_ANNOTATION_TYPE, true), null /* no need to check paragraph time and again */);
-			matchLines.addAll(Arrays.asList(pMatchLines));
+//			ImRegion[] pMatchLines = this.getMatches(paragraphs[p].getRegions(ImRegion.LINE_ANNOTATION_TYPE, true), null /* no need to check paragraph time and again */, log);
+//			matchLines.addAll(Arrays.asList(pMatchLines));
+			this.addMatches(paragraphs[p].getRegions(ImRegion.LINE_ANNOTATION_TYPE, true), matchLines, log);
 		}
 		
 		//	finally ...
@@ -269,13 +286,27 @@ public class LinePattern {
 	 * @return an array holding the matching lines
 	 */
 	public ImRegion[] getMatches(ImRegion paragraph) {
+		return this.getMatches(paragraph, (DEBUG_MATCH ? System.out : null));
+	}
+	
+	/**
+	 * Extract all matching lines from a given paragraph in an Image Markup
+	 * document.
+	 * @param paragraph the paragraph whose lines to test
+	 * @param log a print stream to write detail matching information to
+	 * @return an array holding the matching lines
+	 */
+	public ImRegion[] getMatches(ImRegion paragraph, PrintStream log) {
 		
 		//	check paragraph orientation first (no need to even get lines on mismatch)
-		if (!this.matchesParagraphOrientation((String) paragraph.getAttribute(ImRegion.TEXT_ORIENTATION_ATTRIBUTE)))
+		if (!this.matchesParagraphOrientation((String) paragraph.getAttribute(ImRegion.TEXT_ORIENTATION_ATTRIBUTE))) {
+			if (log != null) log.println(" ==> text orientation mis-match");
 			return new ImRegion[0];
+		}
+		else if (log != null) log.println(" - text orientation match");
 		
 		//	get matching lines
-		return this.getMatches(paragraph.getRegions(ImRegion.LINE_ANNOTATION_TYPE, true), null /* no need to check paragraph again */);
+		return this.getMatches(paragraph.getRegions(ImRegion.LINE_ANNOTATION_TYPE, true), null /* no need to check paragraph again */, log);
 	}
 	
 	/**
@@ -288,19 +319,53 @@ public class LinePattern {
 	 * @return an array holding the matching lines
 	 */
 	public ImRegion[] getMatches(ImRegion[] lines, ImRegion paragraph) {
+		return this.getMatches(lines, paragraph, (DEBUG_MATCH ? System.out : null));
+	}
+	
+	/**
+	 * Extract all matching lines from a given array, in the context of their
+	 * parent paragraph. If the argument paragraph is null, paragraph
+	 * orientation will be ignored; the same applies if the paragraph comes
+	 * without the 'orientation' attribute.
+	 * @param lines the lines to test
+	 * @param paragraph the parent paragraph of the lines
+	 * @param log a print stream to write detail matching information to
+	 * @return an array holding the matching lines
+	 */
+	public ImRegion[] getMatches(ImRegion[] lines, ImRegion paragraph, PrintStream log) {
 		
 		//	check paragraph orientation first (no need to get words on mismatch)
-		if ((paragraph != null) && !this.matchesParagraphOrientation((String) paragraph.getAttribute(ImRegion.TEXT_ORIENTATION_ATTRIBUTE)))
-			return new ImRegion[0];
+//		if ((paragraph != null) && !this.matchesParagraphOrientation((String) paragraph.getAttribute(ImRegion.TEXT_ORIENTATION_ATTRIBUTE)))
+//			return new ImRegion[0];
+		if (paragraph != null) {
+			if (!this.matchesParagraphOrientation((String) paragraph.getAttribute(ImRegion.TEXT_ORIENTATION_ATTRIBUTE))) {
+				if (log != null) log.println(" ==> text orientation mis-match");
+				return new ImRegion[0];
+			}
+			else if (log != null) log.println(" - text orientation match");
+		}
 		
 		//	filter lines
-		Arrays.sort(lines, ImUtils.topDownOrder);
 		ArrayList matchLines = new ArrayList();
+//		Arrays.sort(lines, ImUtils.topDownOrder);
+//		for (int l = 0; l < lines.length; l++) {
+//			if (this.matches(lines[l], null /* no need to check paragraph time and again */, log))
+//				matchLines.add(lines[l]);
+//		}
+		this.addMatches(lines, matchLines, log);
+		return ((ImRegion[]) matchLines.toArray(new ImRegion[matchLines.size()]));
+	}
+	private void addMatches(ImRegion[] lines, ArrayList matchLines, PrintStream log) {
+		Arrays.sort(lines, ImUtils.topDownOrder);
 		for (int l = 0; l < lines.length; l++) {
-			if (this.matches(lines[l], null /* no need to check paragraph time and again */))
+			if (log != null) {
+				ImWord[] lineWords = lines[l].getWords();
+				Arrays.sort(lineWords, ImUtils.textStreamOrder);
+				log.println("   - checking line at " + lines[l].pageId + "." + lines[l].bounds + ": " + ImUtils.getString(lineWords, true));
+			}
+			if (this.matches(lines[l], null /* no need to check paragraph time and again */, log))
 				matchLines.add(lines[l]);
 		}
-		return ((ImRegion[]) matchLines.toArray(new ImRegion[matchLines.size()]));
 	}
 	
 	/**
@@ -313,6 +378,20 @@ public class LinePattern {
 	 * @return true on a match
 	 */
 	public boolean matches(ImRegion line) {
+		return this.matches(line, (DEBUG_MATCH ? System.out : null));
+	}
+	
+	/**
+	 * Match a line against the pattern, in context of its parent paragraph. If
+	 * the argument paragraph is null, paragraph orientation will be ignored;
+	 * the same applies if the paragraph comes without the 'orientation'
+	 * attribute.
+	 * @param line the line to match
+	 * @param paragraph the parent paragraph of the line
+	 * @param log a print stream to write detail matching information to
+	 * @return true on a match
+	 */
+	public boolean matches(ImRegion line, PrintStream log) {
 		
 		//	find parent paragraph
 		ImPage page = line.getPage();
@@ -327,7 +406,7 @@ public class LinePattern {
 		}
 		
 		//	match in paragraph context
-		return this.matches(line, paragraph);
+		return this.matches(line, paragraph, log);
 	}
 	
 	/**
@@ -340,20 +419,51 @@ public class LinePattern {
 	 * @return true on a match
 	 */
 	public boolean matches(ImRegion line, ImRegion paragraph) {
+		return this.matches(line, paragraph, (DEBUG_MATCH ? System.out : null));
+	}
+	
+	/**
+	 * Match a line against the pattern, in context of its parent paragraph. If
+	 * the argument paragraph is null, paragraph orientation will be ignored;
+	 * the same applies if the paragraph comes without the 'orientation'
+	 * attribute.
+	 * @param line the line to match
+	 * @param paragraph the parent paragraph of the line
+	 * @param log a print stream to write detail matching information to
+	 * @return true on a match
+	 */
+	public boolean matches(ImRegion line, ImRegion paragraph, PrintStream log) {
 		
 		//	check paragraph orientation first (no need to get words on mismatch)
-		if ((paragraph != null) && !this.matchesParagraphOrientation((String) paragraph.getAttribute(ImRegion.TEXT_ORIENTATION_ATTRIBUTE)))
-			return false;
+//		if ((paragraph != null) && !this.matchesParagraphOrientation((String) paragraph.getAttribute(ImRegion.TEXT_ORIENTATION_ATTRIBUTE)))
+//			return false;
+		if (paragraph != null) {
+			if (!this.matchesParagraphOrientation((String) paragraph.getAttribute(ImRegion.TEXT_ORIENTATION_ATTRIBUTE))) {
+				if (log != null) log.println(" ==> text orientation mis-match");
+				return false;
+			}
+			else if (log != null) log.println(" - text orientation match");
+		}
 		
 		//	match line words
 		ImWord[] lineWords = line.getWords();
 		Arrays.sort(lineWords, ImUtils.textStreamOrder);
-		return (true
-			&& this.matchesStartFontProperties(lineWords)
-			&& this.matchesFontProperties(lineWords)
-			&& this.matchesFontSize(lineWords)
-			&& this.matchesString(lineWords)
-		);
+//		return (true
+//			&& this.matchesStartFontProperties(lineWords, log)
+//			&& this.matchesFontProperties(lineWords, log)
+//			&& this.matchesFontSize(lineWords, log)
+//			&& this.matchesString(lineWords, log)
+//		);
+		if (true
+			&& this.matchesStartFontProperties(lineWords, log)
+			&& this.matchesFontProperties(lineWords, log)
+			&& this.matchesFontSize(lineWords, log)
+			&& this.matchesString(lineWords, log)
+		) {
+			if (log != null) log.println("   ==> match");
+			return true;
+		}
+		else return false;
 	}
 	
 	/**
@@ -384,7 +494,28 @@ public class LinePattern {
 	 * @return true on a match
 	 */
 	public boolean matchesStartFontProperties(ImWord[] lineWords) {
-		return matchesFontProperties(lineWords, this.startFontProperties, true);
+		return this.matchesStartFontProperties(lineWords, (DEBUG_MATCH ? System.out : null));
+	}
+	
+	/**
+	 * Check if the font properties of the starting words in a line match the
+	 * pattern.
+	 * @param lineWords words to test
+	 * @param log a print stream to write detail matching information to
+	 * @return true on a match
+	 */
+	public boolean matchesStartFontProperties(ImWord[] lineWords, PrintStream log) {
+//		return matchesFontProperties(lineWords, this.fontProperties, true, log);
+		if (this.startFontProperties == null)
+			return true; // wildcard match
+		else if (matchesFontProperties(lineWords, this.startFontProperties, true, log)) {
+			if (log != null) log.println("   - start font properties match");
+			return true;
+		}
+		else {
+			if (log != null) log.println("   ==> start font properties mis-match");
+			return false;
+		}
 	}
 	
 	/**
@@ -393,10 +524,30 @@ public class LinePattern {
 	 * @return true on a match
 	 */
 	public boolean matchesFontProperties(ImWord[] lineWords) {
-		return matchesFontProperties(lineWords, this.fontProperties, false);
+		return this.matchesFontProperties(lineWords, (DEBUG_MATCH ? System.out : null));
 	}
 	
-	private static boolean matchesFontProperties(ImWord[] lineWords, String fps, boolean startOnly) {
+	/**
+	 * Check if the font properties of the words in a line match the pattern.
+	 * @param lineWords words to test
+	 * @param log a print stream to write detail matching information to
+	 * @return true on a match
+	 */
+	public boolean matchesFontProperties(ImWord[] lineWords, PrintStream log) {
+//		return matchesFontProperties(lineWords, this.fontProperties, false, log);
+		if (this.fontProperties == null)
+			return true; // wildcard match
+		else if (matchesFontProperties(lineWords, this.fontProperties, true, log)) {
+			if (log != null) log.println("   - font properties match");
+			return true;
+		}
+		else {
+			if (log != null) log.println("   ==> font properties mis-match");
+			return false;
+		}
+	}
+	
+	private static boolean matchesFontProperties(ImWord[] lineWords, String fps, boolean startOnly, PrintStream log) {
 		if (fps == null)
 			return true; // wildcard match
 		
@@ -408,24 +559,24 @@ public class LinePattern {
 			String lineWordString = lineWords[w].getString();
 			if (bold && !lineWords[w].hasAttribute(ImWord.BOLD_ATTRIBUTE)) {
 				if (penalizeNonBold(lineWordString)) {
-					if (DEBUG_MATCH) System.out.println(" ==> not bold at '" + lineWordString + "'");
+					if (log != null) log.println("   ==> not bold at '" + lineWordString + "'");
 					return false;
 				}
-				else if (DEBUG_MATCH) System.out.println(" --> not bold at '" + lineWordString + "', but tolerated");
+				else if (log != null) log.println("   - not bold at '" + lineWordString + "', but tolerated");
 			}
 			if (italics && !lineWords[w].hasAttribute(ImWord.ITALICS_ATTRIBUTE)) {
 				if (penalizeNonItalics(lineWordString)) {
-					if (DEBUG_MATCH) System.out.println(" ==> not in italics at '" + lineWordString + "'");
+					if (log != null) log.println("   ==> not in italics at '" + lineWordString + "'");
 					return false;
 				}
-				else if (DEBUG_MATCH) System.out.println(" --> not in italics at '" + lineWordString + "', but tolerated");
+				else if (log != null) log.println("   - not in italics at '" + lineWordString + "', but tolerated");
 			}
 			if (lineWordString == null)
 				continue;
 			if (!Gamta.isWord(lineWordString))
 				continue; // all-caps only makes sense on actual words ...
 			if (allCaps && !lineWordString.equals(lineWordString.toUpperCase())) {
-				if (DEBUG_MATCH) System.out.println(" ==> not all-caps at '" + lineWordString + "'");
+				if (log != null) log.println("   ==> not all-caps at '" + lineWordString + "'");
 				return false;
 			}
 			if (startOnly)
@@ -466,6 +617,16 @@ public class LinePattern {
 	 * @return true on a match
 	 */
 	public boolean matchesFontSize(ImWord[] lineWords) {
+		return this.matchesFontSize(lineWords, (DEBUG_MATCH ? System.out : null));
+	}
+	
+	/**
+	 * Check if the font sizes of the words in a line match the pattern.
+	 * @param lineWords words to test
+	 * @param log a print stream to write detail matching information to
+	 * @return true on a match
+	 */
+	public boolean matchesFontSize(ImWord[] lineWords, PrintStream log) {
 		if ((this.minFontSize == 0) && (this.maxFontSize == 72))
 			return true; // wildcard match
 		
@@ -486,19 +647,19 @@ public class LinePattern {
 			}
 			
 			//	this one's good (with some upward tolerance for certain punctuation marks)
-			else if (isFontSizeMatch(lineWords[w], wfs, this.minFontSize, this.maxFontSize)) {
+			else if (isFontSizeMatch(lineWords[w], wfs, this.minFontSize, this.maxFontSize, log)) {
 				matchFontSizeWordCount++;
 				matchFontSizeWordCharCount += lineWords[w].getString().length();
 			}
 			
 			//	this one's too large, we're not having that
 			else if (this.maxFontSize < wfs) {
-				if (DEBUG_MATCH) System.out.println(" ==> too large words (font size " + wfs + ")");
+				if (log != null) log.println("   ==> too large words (font size " + wfs + ")");
 				return false;
 			}
 			
 			//	this one's too small, allow this to a certain degree (super- and subscripts)
-			else if (wfs < minFontSize) {
+			else if (wfs < this.minFontSize) {
 				lowFontSizeWordCount++;
 				lowFontSizeWordCharCount += lineWords[w].getString().length();
 			}
@@ -511,30 +672,31 @@ public class LinePattern {
 		//	declare mismatch if more than one third of words or characters have no font size at all
 		//	TODO verify thresholds, might be too lenient
 		if ((noFontSizeWordCount * 3) > matchFontSizeWordCount) {
-			if (DEBUG_MATCH) System.out.println(" ==> too many words without font size (" + noFontSizeWordCount + " against " + matchFontSizeWordCount + " with)");
+			if (log != null) log.println("   ==> too many words without font size (" + noFontSizeWordCount + " against " + matchFontSizeWordCount + " with)");
 			return false;
 		}
 		if ((noFontSizeWordCharCount * 3) > matchFontSizeWordCharCount) {
-			if (DEBUG_MATCH) System.out.println(" ==> too many characters without font size (" + noFontSizeWordCharCount + " against " + matchFontSizeWordCharCount + " with)");
+			if (log != null) log.println("   ==> too many characters without font size (" + noFontSizeWordCharCount + " against " + matchFontSizeWordCharCount + " with)");
 			return false;
 		}
 		
 		//	declare mismatch if more than one fifth of words or one tenth of characters have too small font size
 		//	TODO verify thresholds, might be too lenient
 		if ((lowFontSizeWordCount * 5) > matchFontSizeWordCount) {
-			if (DEBUG_MATCH) System.out.println(" ==> too many words below minimum font size (" + lowFontSizeWordCount + " against " + matchFontSizeWordCount + " above)");
+			if (log != null) log.println("   ==> too many words below minimum font size (" + lowFontSizeWordCount + " against " + matchFontSizeWordCount + " above)");
 			return false;
 		}
 		if ((lowFontSizeWordCharCount * 10) > matchFontSizeWordCharCount) {
-			if (DEBUG_MATCH) System.out.println(" ==> too many characters below minimum font size (" + lowFontSizeWordCharCount + " against " + matchFontSizeWordCharCount + " above)");
+			if (log != null) log.println("   ==> too many characters below minimum font size (" + lowFontSizeWordCharCount + " against " + matchFontSizeWordCharCount + " above)");
 			return false;
 		}
 		
 		//	no red flags on this one ...
+		if (log != null) log.println("   - font size match");
 		return true;
 	}
 	
-	private static boolean isFontSizeMatch(ImWord word, int wordFontSize, int minFontSize, int maxFontSize) {
+	private static boolean isFontSizeMatch(ImWord word, int wordFontSize, int minFontSize, int maxFontSize, PrintStream log) {
 		if (wordFontSize < 0)
 			return true;
 		int fontSizeTolerance = (((word.getString().length() > 1) || (fontSizeVariablePunctuationMarks.indexOf(word.getString()) == -1)) ? 0 : 1);
@@ -545,15 +707,15 @@ public class LinePattern {
 			else if (" st nd rd th ".indexOf(word.getString()) != -1)
 				isPossibleSuperOrSubScript = true; // English ordinal number suffixes (all other Latin based languages use single letter ones or none at all)
 			if (isPossibleSuperOrSubScript) {
-				if (DEBUG_MATCH) System.out.println(" ==> font smaller than " + minFontSize + " at " + wordFontSize + " tolerated for " + word.getString() + " as potential super- or subscript");
+				if (log != null) log.println("   ==> font smaller than " + minFontSize + " at " + wordFontSize + " tolerated for " + word.getString() + " as potential super- or subscript");
 			}
 			else {
-				if (DEBUG_MATCH) System.out.println(" ==> font smaller than " + minFontSize + " at " + wordFontSize + " for " + word.getString());
+				if (log != null) log.println("   ==> font smaller than " + minFontSize + " at " + wordFontSize + " for " + word.getString());
 				return false;
 			}
 		}
 		if (maxFontSize < (wordFontSize - fontSizeTolerance)) {
-			if (DEBUG_MATCH) System.out.println(" ==> font larger than " + maxFontSize + " at " + wordFontSize + " for " + word.getString());
+			if (log != null) log.println("   ==> font larger than " + maxFontSize + " at " + wordFontSize + " for " + word.getString());
 			return false;
 		}
 		return true;
@@ -565,9 +727,19 @@ public class LinePattern {
 	 * @return true on a match
 	 */
 	public boolean matchesString(ImWord[] lineWords) {
+		return this.matchesString(lineWords, (DEBUG_MATCH ? System.out : null));
+	}
+	
+	/**
+	 * Check if the text represented by the words in a line matches the pattern.
+	 * @param lineWords words to test
+	 * @param log a print stream to write detail matching information to
+	 * @return true on a match
+	 */
+	public boolean matchesString(ImWord[] lineWords, PrintStream log) {
 		if (this.pattern == null)
 			return true; // wildcard match
-		return this.matchesString(ImUtils.getString(lineWords, true));
+		return this.matchesString(ImUtils.getString(lineWords, true), log);
 	}
 	
 	/**
@@ -576,10 +748,32 @@ public class LinePattern {
 	 * @return true on a match
 	 */
 	public boolean matchesString(String lineString) {
+		return this.matchesString(lineString, (DEBUG_MATCH ? System.out : null));
+	}
+	
+	/**
+	 * Check if the text represented by the words in a line matches the pattern.
+	 * @param lineWords words to test
+	 * @param log a print stream to write detail matching information to
+	 * @return true on a match
+	 */
+	public boolean matchesString(String lineString, PrintStream log) {
+//		if (this.pattern == null)
+//			return true; // wildcard match
+//		lineString = StringUtils.normalizeString(lineString);
+//		return this.pattern.matcher(lineString).matches();
 		if (this.pattern == null)
 			return true; // wildcard match
-		lineString = StringUtils.normalizeString(lineString);
-		return this.pattern.matcher(lineString).matches();
+		else if (this.pattern.matcher(StringUtils.normalizeString(lineString)).matches()) {
+			if (log != null)
+				log.println("   - pattern match");
+			return true;
+		}
+		else {
+			if (log != null)
+				log.println("   ==> pattern mis-match on '" + lineString + "'");
+			return false;
+		}
 	}
 	
 	/**
@@ -594,19 +788,26 @@ public class LinePattern {
 			lpr.skipSpace();
 			Properties parameters = new Properties();
 			StringBuffer psb = new StringBuffer();
+			int parameterEnd = 0;
 			while (lpr.peek() != -1) {
 				if (lpr.peek() == '{') {
 					lpr.read(); // consume opening curly bracket
 					cropParameter(pattern, lpr, parameters); // read parameter
 				}
 				else {
+					parameterEnd = lpr.read;
 					while (lpr.peek() != -1)
 						psb.append((char) lpr.read()); // read actual pattern
 					break;
 				}
 			}
 			String ps = psb.toString().trim();
-			return new LinePattern(((ps.length() == 0) ? null : ps), parameters);
+			try {
+				return new LinePattern(((ps.length() == 0) ? null : ps), parameters);
+			}
+			catch (PatternSyntaxException pse) {
+				throw new PatternSyntaxException(pse.getDescription(), pattern, (parameterEnd + pse.getIndex()));
+			}
 		}
 		catch (IOException ioe) {
 			//	cannot happen with string reader, but Java don't know
@@ -672,12 +873,6 @@ Create LinePattern static inner class in PageAnalysis
   ==> denotes more compactly (see below) ...
   ==> ... but renders visualization of individual aspects (font size, etc.) harder
     ==> only use under the hood, but not in style template editor
-
-Serialization:
-- represent properties as leading "flags", enclosed in curly brackets (quantifiers never occur at start of pattern proper):
-  ==> sub classes can generically add custom flags
-  - use that in heading detection to indicate block-top headings (most likely as "B:true" or "T:true")
-  - use that in heading detection to indicate multi-line headings (most likely as "M:true")
 
 In heading style inference:
 - collect line patterns for all main text lines in document ...

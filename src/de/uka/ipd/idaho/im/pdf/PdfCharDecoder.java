@@ -32,11 +32,10 @@ import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.font.TextLayout;
+import java.awt.geom.Path2D;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.io.BufferedReader;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
@@ -45,7 +44,6 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.Map;
 import java.util.Set;
@@ -54,15 +52,12 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 
 import javax.swing.ImageIcon;
-import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 
 import de.uka.ipd.idaho.im.analysis.Imaging;
 import de.uka.ipd.idaho.im.analysis.Imaging.AnalysisImage;
 import de.uka.ipd.idaho.im.analysis.Imaging.ImagePartRectangle;
 import de.uka.ipd.idaho.im.pdf.PdfFontDecoder.FontDecoderCharset;
-import de.uka.ipd.idaho.im.pdf.PdfParser.PStream;
-import de.uka.ipd.idaho.im.pdf.PdfUtils.PdfLineInputStream;
 import de.uka.ipd.idaho.im.util.ImFontUtils;
 import de.uka.ipd.idaho.im.utilities.ImageDisplayDialog;
 import de.uka.ipd.idaho.stringUtils.StringUtils;
@@ -114,110 +109,110 @@ public class PdfCharDecoder {
 			unMatchedCharImages.setVisible(true);
 		}
 	}
-	
-	private static void testCharMatchDiffs(int charLimit) {
-		for (int s = 0; s <= ((Font.BOLD | Font.ITALIC) | (SERIF_IS_STYLE ? SERIF : 0)); s++) {
-//			Font font = new Font((((s & SERIF) != 0) ? "Serif" : "Sans"), (s & (Font.BOLD | Font.ITALIC)), 96);
-			Font font = new Font((((s & SERIF) != 0) ? "FreeSerif" : "FreeSans"), (s & (Font.BOLD | Font.ITALIC)), 96);
-			Graphics2D gr = (new BufferedImage(1, 1, BufferedImage.TYPE_BYTE_GRAY)).createGraphics();
-			gr.setFont(font);
-			Rectangle2D fontBox = font.getMaxCharBounds(gr.getFontRenderContext());
-			float sMaxMatchDiff = 0;
-			float sMatchDiffSum = 0;
-			float nsMaxMatchDiff = 0;
-			float nsMatchDiffSum = 0;
-			int testCharCount = 0;
-//			int nonMatchCharCount = 0;
-			TreeSet sCharMatches = new TreeSet();
-			TreeSet nsCharMatches = new TreeSet();
-			for (int t = 0; t < Math.min(charLimit, charSignatures.length); t++) {
-				if (charSignatures[t].ch > charLimit)
-					break;
-				char ch = charSignatures[t].ch;
-				if (!font.canDisplay(charSignatures[t].ch)) {
-					System.out.println(((ch == '"') ? "=\"\"\"\"" : ("=\"" + ch + "\"")) + "\t=\"" + Integer.toString(((int) ch), 16) + "\"");
-					continue;
-				}
-				BufferedImage cbi = new BufferedImage(((int) (Math.round(fontBox.getWidth()) + 2)), ((int) (Math.round(fontBox.getHeight()) + 2)), BufferedImage.TYPE_BYTE_GRAY);
-				Graphics2D cgr = cbi.createGraphics();
-				cgr.setColor(Color.WHITE);
-				cgr.fillRect(0, 0, cbi.getWidth(), cbi.getHeight());
-				cgr.setFont(font);
-				cgr.setColor(Color.BLACK);
-				TextLayout tl = new TextLayout(("" + ch), font, gr.getFontRenderContext());
-				int cbl = (Math.round(tl.getAscent()) + 1);
-				cgr.drawString(("" + ch), ((int) ((Math.round(fontBox.getWidth() - tl.getBounds().getWidth()) + 2) / 2)), cbl);
-				cgr.dispose();
-				
-				//	compute char signature and difference
-				CharMetrics cm = getCharMetrics(cbi, 1, fontBox, cbl);
-				if (cm == null)
-					continue;
-				LinkedHashMap sDiffDetails = new LinkedHashMap();
-				float sDiff = charSignatures[t].getDifference(s, (cm.disjointParts > 1), (cm.loops > 0), cm.fontBoxSignature, cm.relCharBoxTop, cm.relCharBoxBottom, cm.charBoxProportion, cm.charBoxSignature, false, ((char) 0), sDiffDetails);
-				LinkedHashMap nsDiffDetails = new LinkedHashMap();
-				float nsDiff = charSignatures[t].getDifference(-1, (cm.disjointParts > 1), (cm.loops > 0), cm.fontBoxSignature, cm.relCharBoxTop, cm.relCharBoxBottom, cm.charBoxProportion, cm.charBoxSignature, false, ((char) 0), nsDiffDetails);
-				
-				if (testCharCount == 0) {
-					System.out.println(styleNames[s]);
-					System.out.print("char\thex");
-					for (Iterator dkit = nsDiffDetails.keySet().iterator(); dkit.hasNext();) {
-						String diffKey = ((String) dkit.next());
-						if ("fbd;cbp;cbd".indexOf(diffKey) == -1)
-							System.out.print("\tsa." + diffKey);
-					}
-					System.out.print("\t\tchar\thex");
-					for (Iterator dkit = sDiffDetails.keySet().iterator(); dkit.hasNext();) {
-						String diffKey = ((String) dkit.next());
-						if ("fbd;cbp;cbd".indexOf(diffKey) == -1)
-							System.out.print("\tsa." + diffKey);
-					}
-					System.out.println();
-				}
-				System.out.print(((ch == '"') ? "=\"\"\"\"" : ("=\"" + ch + "\"")) + "\t=\"" + Integer.toString(((int) ch), 16) + "\"");
-				for (Iterator dkit = nsDiffDetails.keySet().iterator(); dkit.hasNext();) {
-					String diffKey = ((String) dkit.next());
-					if ("fbd;cbp;cbd".indexOf(diffKey) == -1)
-						System.out.print("\t" + nsDiffDetails.get(diffKey).toString().replaceAll("\\.", ","));
-				}
-				System.out.print("\t\t" + ((ch == '"') ? "=\"\"\"\"" : ("=\"" + ch + "\"")) + "\t=\"" + Integer.toString(((int) ch), 16) + "\"");
-				for (Iterator dkit = sDiffDetails.keySet().iterator(); dkit.hasNext();) {
-					String diffKey = ((String) dkit.next());
-					if ("fbd;cbp;cbd".indexOf(diffKey) == -1)
-						System.out.print("\t" + sDiffDetails.get(diffKey).toString().replaceAll("\\.", ","));
-				}
-				System.out.println();
-				
-				//	keep statistics
-				testCharCount++;
-				sMaxMatchDiff = Math.max(sMaxMatchDiff, sDiff);
-				sMatchDiffSum += sDiff;
-				sCharMatches.add(new CharMatch(ch, -1, sDiff, null));
-				nsMaxMatchDiff = Math.max(nsMaxMatchDiff, nsDiff);
-				nsMatchDiffSum += nsDiff;
-				nsCharMatches.add(new CharMatch(ch, -1, nsDiff, null));
-			}
-			System.out.println();
-			System.out.println();
-//			System.out.println("Result for " + font.getName() + "-" + font.getStyle() + ", " + testCharCount + " chars:");
-//			System.out.println(" - style aware: " + (sMatchDiffSum / testCharCount) + " on average, " + sMaxMatchDiff + " at worst");
-//			System.out.println(" - style aware matches with extreme difference");
-//			for (Iterator cmit = sCharMatches.iterator(); cmit.hasNext();) {
-//				CharMatch cm = ((CharMatch) cmit.next());
-//				if (cm.matchDiff < (sMatchDiffSum / testCharCount))
+//	
+//	private static void testCharMatchDiffs(int charLimit) {
+//		for (int s = 0; s <= ((Font.BOLD | Font.ITALIC) | (SERIF_IS_STYLE ? SERIF : 0)); s++) {
+////			Font font = new Font((((s & SERIF) != 0) ? "Serif" : "Sans"), (s & (Font.BOLD | Font.ITALIC)), 96);
+//			Font font = new Font((((s & SERIF) != 0) ? "FreeSerif" : "FreeSans"), (s & (Font.BOLD | Font.ITALIC)), 96);
+//			Graphics2D gr = (new BufferedImage(1, 1, BufferedImage.TYPE_BYTE_GRAY)).createGraphics();
+//			gr.setFont(font);
+//			Rectangle2D fontBox = font.getMaxCharBounds(gr.getFontRenderContext());
+//			float sMaxMatchDiff = 0;
+//			float sMatchDiffSum = 0;
+//			float nsMaxMatchDiff = 0;
+//			float nsMatchDiffSum = 0;
+//			int testCharCount = 0;
+////			int nonMatchCharCount = 0;
+//			TreeSet sCharMatches = new TreeSet();
+//			TreeSet nsCharMatches = new TreeSet();
+//			for (int t = 0; t < Math.min(charLimit, charSignatures.length); t++) {
+//				if (charSignatures[t].ch > charLimit)
+//					break;
+//				char ch = charSignatures[t].ch;
+//				if (!font.canDisplay(charSignatures[t].ch)) {
+//					System.out.println(((ch == '"') ? "=\"\"\"\"" : ("=\"" + ch + "\"")) + "\t=\"" + Integer.toString(((int) ch), 16) + "\"");
 //					continue;
-//				System.out.println("   - " + cm.toString());
-//			}
-//			System.out.println(" - style agnostic: " + (nsMatchDiffSum / testCharCount) + " on average, " + nsMaxMatchDiff + " at worst");
-//			System.out.println(" - style agnostic matches with extreme difference");
-//			for (Iterator cmit = nsCharMatches.iterator(); cmit.hasNext();) {
-//				CharMatch cm = ((CharMatch) cmit.next());
-//				if (cm.matchDiff < (nsMatchDiffSum / testCharCount))
+//				}
+//				BufferedImage cbi = new BufferedImage(((int) (Math.round(fontBox.getWidth()) + 2)), ((int) (Math.round(fontBox.getHeight()) + 2)), BufferedImage.TYPE_BYTE_GRAY);
+//				Graphics2D cgr = cbi.createGraphics();
+//				cgr.setColor(Color.WHITE);
+//				cgr.fillRect(0, 0, cbi.getWidth(), cbi.getHeight());
+//				cgr.setFont(font);
+//				cgr.setColor(Color.BLACK);
+//				TextLayout tl = new TextLayout(("" + ch), font, gr.getFontRenderContext());
+//				int cbl = (Math.round(tl.getAscent()) + 1);
+//				cgr.drawString(("" + ch), ((int) ((Math.round(fontBox.getWidth() - tl.getBounds().getWidth()) + 2) / 2)), cbl);
+//				cgr.dispose();
+//				
+//				//	compute char signature and difference
+//				CharMetrics cm = getCharMetrics(cbi, 1, fontBox, cbl);
+//				if (cm == null)
 //					continue;
-//				System.out.println("   - " + cm.toString());
+//				LinkedHashMap sDiffDetails = new LinkedHashMap();
+//				float sDiff = charSignatures[t].getDifference(s, (cm.disjointParts > 1), (cm.loops > 0), cm.fontBoxSignature, cm.relCharBoxTop, cm.relCharBoxBottom, cm.charBoxProportion, cm.charBoxSignature, false, ((char) 0), sDiffDetails);
+//				LinkedHashMap nsDiffDetails = new LinkedHashMap();
+//				float nsDiff = charSignatures[t].getDifference(-1, (cm.disjointParts > 1), (cm.loops > 0), cm.fontBoxSignature, cm.relCharBoxTop, cm.relCharBoxBottom, cm.charBoxProportion, cm.charBoxSignature, false, ((char) 0), nsDiffDetails);
+//				
+//				if (testCharCount == 0) {
+//					System.out.println(styleNames[s]);
+//					System.out.print("char\thex");
+//					for (Iterator dkit = nsDiffDetails.keySet().iterator(); dkit.hasNext();) {
+//						String diffKey = ((String) dkit.next());
+//						if ("fbd;cbp;cbd".indexOf(diffKey) == -1)
+//							System.out.print("\tsa." + diffKey);
+//					}
+//					System.out.print("\t\tchar\thex");
+//					for (Iterator dkit = sDiffDetails.keySet().iterator(); dkit.hasNext();) {
+//						String diffKey = ((String) dkit.next());
+//						if ("fbd;cbp;cbd".indexOf(diffKey) == -1)
+//							System.out.print("\tsa." + diffKey);
+//					}
+//					System.out.println();
+//				}
+//				System.out.print(((ch == '"') ? "=\"\"\"\"" : ("=\"" + ch + "\"")) + "\t=\"" + Integer.toString(((int) ch), 16) + "\"");
+//				for (Iterator dkit = nsDiffDetails.keySet().iterator(); dkit.hasNext();) {
+//					String diffKey = ((String) dkit.next());
+//					if ("fbd;cbp;cbd".indexOf(diffKey) == -1)
+//						System.out.print("\t" + nsDiffDetails.get(diffKey).toString().replaceAll("\\.", ","));
+//				}
+//				System.out.print("\t\t" + ((ch == '"') ? "=\"\"\"\"" : ("=\"" + ch + "\"")) + "\t=\"" + Integer.toString(((int) ch), 16) + "\"");
+//				for (Iterator dkit = sDiffDetails.keySet().iterator(); dkit.hasNext();) {
+//					String diffKey = ((String) dkit.next());
+//					if ("fbd;cbp;cbd".indexOf(diffKey) == -1)
+//						System.out.print("\t" + sDiffDetails.get(diffKey).toString().replaceAll("\\.", ","));
+//				}
+//				System.out.println();
+//				
+//				//	keep statistics
+//				testCharCount++;
+//				sMaxMatchDiff = Math.max(sMaxMatchDiff, sDiff);
+//				sMatchDiffSum += sDiff;
+//				sCharMatches.add(new CharMatch(ch, -1, sDiff, null));
+//				nsMaxMatchDiff = Math.max(nsMaxMatchDiff, nsDiff);
+//				nsMatchDiffSum += nsDiff;
+//				nsCharMatches.add(new CharMatch(ch, -1, nsDiff, null));
 //			}
-		}
-	}
+//			System.out.println();
+//			System.out.println();
+////			System.out.println("Result for " + font.getName() + "-" + font.getStyle() + ", " + testCharCount + " chars:");
+////			System.out.println(" - style aware: " + (sMatchDiffSum / testCharCount) + " on average, " + sMaxMatchDiff + " at worst");
+////			System.out.println(" - style aware matches with extreme difference");
+////			for (Iterator cmit = sCharMatches.iterator(); cmit.hasNext();) {
+////				CharMatch cm = ((CharMatch) cmit.next());
+////				if (cm.matchDiff < (sMatchDiffSum / testCharCount))
+////					continue;
+////				System.out.println("   - " + cm.toString());
+////			}
+////			System.out.println(" - style agnostic: " + (nsMatchDiffSum / testCharCount) + " on average, " + nsMaxMatchDiff + " at worst");
+////			System.out.println(" - style agnostic matches with extreme difference");
+////			for (Iterator cmit = nsCharMatches.iterator(); cmit.hasNext();) {
+////				CharMatch cm = ((CharMatch) cmit.next());
+////				if (cm.matchDiff < (nsMatchDiffSum / testCharCount))
+////					continue;
+////				System.out.println("   - " + cm.toString());
+////			}
+//		}
+//	}
 	
 	//	!!! TEST ONLY !!!
 	private static ImageDisplayDialog testCharMatchPos(int charLimit, int fontStyle, boolean useFontStyle, ImageDisplayDialog unMatchedCharImages) {
@@ -687,257 +682,423 @@ public class PdfCharDecoder {
 			return ((c == 0) ? (scs1.cs.ch - scs2.cs.ch) : c);
 		}
 	};
-	
-	private static final boolean DEBUG_CHAR_PROG_DECODING = false;
-	private static final boolean DEBUG_DISPLAY_CHAR_PROG_IMAGES = false;
-	
-	static char getChar(PdfFont pFont, PStream charProg, int charCode, String charName, FontDecoderCharset charSet, Map objects, Font[] serifFonts, Font[] sansFonts, Font[] monoFonts, HashMap cache, boolean debug) throws IOException {
-		byte[] cpBytes;
-		try {
-			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PdfParser.decode(charProg.params.get("Filter"), charProg.bytes, charProg.params, baos, objects);
-			cpBytes = baos.toByteArray();
-		}
-		catch (IOException ioe) {
-			System.out.println("Could not read char prog:");
-			ioe.printStackTrace(System.out);
-			char fbch = StringUtils.getCharForName(charName); // fail gracefully
-			System.out.println("Falling back to named char: '" + fbch + "' (" + ((int) fbch) + ")");
-			return fbch;
-		}
-		if (DEBUG_CHAR_PROG_DECODING) {
-			System.out.write(cpBytes);
-			System.out.println();
-		}
-		int imgWidth = -1;
-		int imgHeight = -1;
-		int imgMinY = -1;
-		int imgMaxY = -1;
-		int bpc = -1;
-		boolean isMaskImage = false;
-		String imgFilter = null;
-		ByteArrayOutputStream imgBuffer = null;
-		byte[] imgData = null;
-		PdfLineInputStream lis = new PdfLineInputStream(new ByteArrayInputStream(cpBytes));
-		byte[] line;
-		while ((line = lis.readLine()) != null) {
-			if (PdfUtils.startsWith(line, "BI", 0))
-				break;
-			if (PdfUtils.endsWith(line, " d1")) {
-				String[] glyphParams = (new String(line)).split("\\s+");
-				if (DEBUG_CHAR_PROG_DECODING) System.out.println("Glyph dimension params: " + Arrays.toString(glyphParams));
-				if (glyphParams.length >= 6) {
-					if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - lower left Y: " + Integer.parseInt(glyphParams[3]));
-					imgMinY = Integer.parseInt(glyphParams[3]);
-					if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - upper right Y: " + Integer.parseInt(glyphParams[5]));
-					imgMaxY = Integer.parseInt(glyphParams[5]);
-				}
-			}
-			else if (PdfUtils.endsWith(line, " cm")) {
-				String[] glyphTransMatrix = (new String(line)).split("\\s+");
-				if (DEBUG_CHAR_PROG_DECODING) System.out.println("Glyph transformation matrix: " + Arrays.toString(glyphTransMatrix));
-				if (glyphTransMatrix.length >= 6) {
-					float[][] gtm = new float[3][3];
-					gtm[2][2] = 1;
-					gtm[1][2] = Float.parseFloat(glyphTransMatrix[5]);
-					gtm[0][2] = Float.parseFloat(glyphTransMatrix[4]);
-					gtm[2][1] = 0;
-					gtm[1][1] = Float.parseFloat(glyphTransMatrix[3]);
-					gtm[0][1] = Float.parseFloat(glyphTransMatrix[2]);
-					gtm[2][0] = 0;
-					gtm[1][0] = Float.parseFloat(glyphTransMatrix[1]);
-					gtm[0][0] = Float.parseFloat(glyphTransMatrix[0]);
-					float[] translate = transform(0, 0, 1, gtm);
-					if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - glyph rendering origin " + Arrays.toString(translate));
-					float[] scaleRotate1 = transform(1, 0, 0, gtm);
-					if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - glyph rotation and scaling 1 " + Arrays.toString(scaleRotate1));
-					float[] scaleRotate2 = transform(0, 1, 0, gtm);
-					if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - glyph rotation and scaling 2 " + Arrays.toString(scaleRotate2));
-					//	if image is upside-down (scaleRotate2[1] < 0), invert min and max Y
-					if (scaleRotate2[1] < 0) {
-						int minY = Math.min(-imgMinY, -imgMaxY);
-						int maxY = Math.max(-imgMinY, -imgMaxY);
-						imgMinY = minY;
-						imgMaxY = maxY;
-					}
-				}
-			}
-			else if (DEBUG_CHAR_PROG_DECODING) System.out.println("IGNORING: " + new String(line));
-		}
-		Map imgParams = new HashMap();
-		while ((line = lis.readLine()) != null) {
-			if (PdfUtils.startsWith(line, "EI", 0)) {
-				if (imgBuffer != null)
-					imgData = imgBuffer.toByteArray();
-				break;
-			}
-			if (PdfUtils.startsWith(line, "ID", 0)) {
-				imgBuffer = new ByteArrayOutputStream();
-				if (line.length > 3)
-					imgBuffer.write(line, 3, (line.length-3));
-			}
-			else if (imgBuffer != null)
-				imgBuffer.write(line);
-			else if (PdfUtils.startsWith(line, "/", 0)) {
-				String keyValuePair = new String(line, 1, (line.length-1));
-				String[] keyValue = keyValuePair.split("\\s+");
-				if (keyValue.length != 2) {
-					if (DEBUG_CHAR_PROG_DECODING) System.out.println("BROKEN PARAMETER LINE: " + new String(line));
-					continue;
-				}
-				imgParams.put(keyValue[0], keyValue[1]);
-				if ("W".equals(keyValue[0]) || "Width".equals(keyValue[0]))
-					imgWidth = Integer.parseInt(keyValue[1]);
-				else if ("H".equals(keyValue[0]) || "Height".equals(keyValue[0]))
-					imgHeight = Integer.parseInt(keyValue[1]);
-				else if ("BPC".equals(keyValue[0]) || "BitsPerComponent".equals(keyValue[0]))
-					bpc = Integer.parseInt(keyValue[1]);
-				else if ("IM".equals(keyValue[0]) || "ImageMask".equals(keyValue[0]))
-					isMaskImage = "true".equals(keyValue[1]);
-				else if ("F".equals(keyValue[0]) || "Filter".equals(keyValue[0])) {
-					imgFilter = keyValue[1];
-					if (imgFilter.startsWith("/"))
-						imgFilter = imgFilter.substring(1);
-				}
-			}
-		}
-		
-		//	TODO implement other types of type 3 fonts (as examples become available)
-		
-		if ((imgWidth == -1) || (imgHeight == -1) || (imgData == null)) {
-			if (DEBUG_CHAR_PROG_DECODING) System.out.println("Invalid char prog");
-			return StringUtils.getCharForName(charName); // fail gracefully
-		}
-		if (imgFilter != null) {
-			imgBuffer = new ByteArrayOutputStream();
-			PdfParser.decode(imgFilter, imgData, imgParams, imgBuffer, objects);
-			imgData = imgBuffer.toByteArray();
-		}
-		if (DEBUG_CHAR_PROG_DECODING) {
-			System.out.println("GOT DATA FOR CHAR IMAGE (" + imgWidth + " x " + imgHeight + "): " + imgData.length);
-			System.out.println("MIN Y: " + imgMinY);
-			System.out.println("MAX Y: " + imgMaxY);
-		}
-		BufferedImage cpImg = null;
-		if (isMaskImage) {
-			cpImg = createImageMask(imgWidth, imgHeight, imgData);
-			if (DEBUG_DISPLAY_CHAR_PROG_IMAGES) {
-				BufferedImage cpImgBi = new BufferedImage(cpImg.getWidth(), cpImg.getHeight(), BufferedImage.TYPE_INT_ARGB);
-				Graphics gr = cpImgBi.createGraphics();
-				gr.drawImage(cpImg, 0, 0, null);
-				gr.setColor(Color.RED);
-				gr.drawLine(0, imgMaxY, imgWidth, imgMaxY);
-				JOptionPane.showMessageDialog(null, new JLabel(new ImageIcon(cpImgBi)));
-			}
-		}
-		else {
-			//	TODO implement color spaces, and read them as bitmaps nonetheless
-			//	TODO to achieve this, create a BufferedImage in respective color space and read back brightness
-		}
-		
-		//	do we have anything to work with?
-		if (cpImg == null)
-			return 0;
-		pFont.setCharImage(charCode, charName, cpImg);
-		
-		//	wrap and measure char
-		CharImage chImage = new CharImage(cpImg, imgMaxY);
-		CharMetrics chMetrics = getCharMetrics(cpImg, 1);
-		
-		//	little we can do about this one
-		if (chMetrics == null) {
-//			JOptionPane.showMessageDialog(null, "Char match problem", "Char Match Problem", JOptionPane.INFORMATION_MESSAGE, new ImageIcon(cpImg));
-			return 0;
-		}
-		
-		//	set up statistics
-		CharImageMatch bestCim = null;
-		float bestCimSigDiff = -1;
-		
-		//	get ranked list of probably matches
-		SortedSet matchChars = getScoredCharSignatures(chMetrics, -1, charSet, true, ((char) 0), null);
-		
-		//	evaluate probable matches
-		for (Iterator mcit = matchChars.iterator(); mcit.hasNext();) {
-			ScoredCharSignature scs = ((ScoredCharSignature) mcit.next());
-			if (scs.difference > 500)
-				break;
-			System.out.println(" testing '" + scs.cs.ch + "' (" + ((int) scs.cs.ch) + "), signature difference is " + scs.difference);
-			CharMatchResult matchResult = matchChar(chImage, scs.cs.ch, true, serifFonts, sansFonts, monoFonts, cache, false, false);
-			CharImageMatch cim = null;
-			for (int s = 0; s < matchResult.serifStyleCims.length; s++) {
-				if ((matchResult.serifStyleCims[s] != null) && ((cim == null) || (cim.sim < matchResult.serifStyleCims[s].sim)))
-					cim = matchResult.serifStyleCims[s];
-			}
-			for (int s = 0; s < matchResult.sansStyleCims.length; s++) {
-				if ((matchResult.sansStyleCims[s] != null) && ((cim == null) || (cim.sim < matchResult.sansStyleCims[s].sim)))
-					cim = matchResult.sansStyleCims[s];
-			}
-			for (int s = 0; s < matchResult.monoStyleCims.length; s++) {
-				if ((matchResult.monoStyleCims[s] != null) && ((cim == null) || (cim.sim < matchResult.monoStyleCims[s].sim)))
-					cim = matchResult.monoStyleCims[s];
-			}
-			
-			if (cim == null) {
-//				System.out.println("   --> could not render image");
-				continue;
-			}
-			System.out.println("   --> similarity is " + cim.sim);
-			if ((bestCim == null) || (cim.sim > bestCim.sim)) {
-				System.out.println("   ==> new best match '" + scs.cs.ch + "' (" + ((int) scs.cs.ch) + ", " + StringUtils.getCharName((char) scs.cs.ch) + "), similarity is " + cim.sim + ", scale logs are " + cim.scaleLogX + "/" + cim.scaleLogY);
-				if (bestCim != null) {
-					System.out.println("    - improvement is " + (cim.sim - bestCim.sim));
-					System.out.println("    - sig diff factor is " + (scs.difference / bestCimSigDiff));
-					System.out.println("    - sig diff malus is " + (scs.difference / (bestCimSigDiff * 100)));
-					if ((bestCim.sim + (scs.difference / (bestCimSigDiff * 100))) > cim.sim) {
-						System.out.println("    ==> rejected for signature difference");
-						if (debug || DEBUG_DISPLAY_CHAR_PROG_IMAGES)
-							PdfCharDecoder.displayCharMatch(cim, "New best match rejected for char signature difference");
-						continue;
-					}
-				}
-				if (debug || DEBUG_DISPLAY_CHAR_PROG_IMAGES)
-					displayCharMatch(cim, "New best match");
-				bestCim = cim;
-				bestCimSigDiff = scs.difference;
-			}
-			else if (DEBUG_DISPLAY_CHAR_PROG_IMAGES && ((bestCim == null) || (cim.sim > (bestCim.sim - 0.01))))
-				displayCharMatch(cim, "New almost best match");
-		}
-		
-		//	finally ...
-		return ((bestCim == null) ? 0 : bestCim.match.ch);
-	}
-	
-	private static float[] transform(float x, float y, float z, float[][] matrix) {
-		float[] res = new float[3];
-		for (int c = 0; c < matrix.length; c++)
-			res[c] = ((matrix[c][0] * x) + (matrix[c][1] * y) + (matrix[c][2] * z));
-		return res;
-	}
-	
-	private static final int blackRgb = Color.BLACK.getRGB();
-	private static BufferedImage createImageMask(int width, int height, byte[] bits) {
-		BufferedImage bi = new BufferedImage((width + 2), (height + 2), BufferedImage.TYPE_BYTE_GRAY);
-		Graphics g = bi.getGraphics();
-		g.setColor(Color.WHITE);
-		g.fillRect(0, 0, bi.getWidth(), bi.getHeight());
-		int rw = (((width % 8) == 0) ? width : (((width / 8) + 1) * 8));
-		for (int r = 0; r < height; r++)
-			for (int c = 0; c < width; c++) {
-				int bitOffset = (rw * r) + c;
-				int byteIndex = (bitOffset / 8);
-				if (byteIndex < bits.length) {
-					int byteOffset = (bitOffset % 8);
-					int bt = bits[byteIndex];
-					int btMask = 1 << (7 - byteOffset);
-					boolean bit = ((bt & btMask) == 0);
-					if (bit)
-						bi.setRGB((c+1), (r+1), blackRgb);
-				}
-			}
-		return bi;
-	}
+//	
+//	private static final boolean DEBUG_CHAR_PROG_DECODING = false;
+//	private static final boolean DEBUG_DISPLAY_CHAR_PROG_IMAGES = false;
+//	
+//	static char getChar(PdfFont pFont, PStream charProg, int charCode, String charName, float scaleX, float scaleY, FontDecoderCharset charSet, Map objects, Font[] serifFonts, Font[] sansFonts, Font[] monoFonts, HashMap cache, ImageDisplayDialog idd) throws IOException {
+//		byte[] cpBytes;
+//		try {
+//			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+//			PdfParser.decode(charProg.params.get("Filter"), charProg.bytes, charProg.params, baos, objects);
+//			cpBytes = baos.toByteArray();
+//		}
+//		catch (IOException ioe) {
+//			System.out.println("Could not read char prog:");
+//			ioe.printStackTrace(System.out);
+//			char fbch = StringUtils.getCharForName(charName); // fail gracefully
+//			System.out.println("Falling back to named char: '" + fbch + "' (" + ((int) fbch) + ")");
+//			return fbch;
+//		}
+//		if (DEBUG_CHAR_PROG_DECODING) {
+//			System.out.write(cpBytes);
+//			System.out.println();
+//		}
+//		int imgMinY = -1;
+//		int imgMaxY = -1;
+//		PdfLineInputStream lis = new PdfLineInputStream(new ByteArrayInputStream(cpBytes));
+//		for (byte[] line; (line = lis.readLine()) != null;) {
+//			if (PdfUtils.startsWith(line, "BI"))
+//				break;
+//			if (PdfUtils.endsWith(line, " d1")) {
+//				String[] glyphParams = (new String(line)).split("\\s+");
+//				if (DEBUG_CHAR_PROG_DECODING) System.out.println("Glyph dimension params: " + Arrays.toString(glyphParams));
+//				if (glyphParams.length >= 6) {
+//					if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - lower left Y: " + Integer.parseInt(glyphParams[3]));
+//					imgMinY = Integer.parseInt(glyphParams[3]);
+//					if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - upper right Y: " + Integer.parseInt(glyphParams[5]));
+//					imgMaxY = Integer.parseInt(glyphParams[5]);
+//				}
+//			}
+//			else if (PdfUtils.endsWith(line, " d0")) {
+//				//	TODO
+//			}
+//			else if (PdfUtils.endsWith(line, " cm")) {
+//				String[] glyphTransMatrix = (new String(line)).split("\\s+");
+//				if (DEBUG_CHAR_PROG_DECODING) System.out.println("Glyph transformation matrix: " + Arrays.toString(glyphTransMatrix));
+//				if (glyphTransMatrix.length >= 6) {
+//					float[][] gtm = new float[3][3];
+//					gtm[2][2] = 1;
+//					gtm[1][2] = Float.parseFloat(glyphTransMatrix[5]);
+//					gtm[0][2] = Float.parseFloat(glyphTransMatrix[4]);
+//					gtm[2][1] = 0;
+//					gtm[1][1] = Float.parseFloat(glyphTransMatrix[3]);
+//					gtm[0][1] = Float.parseFloat(glyphTransMatrix[2]);
+//					gtm[2][0] = 0;
+//					gtm[1][0] = Float.parseFloat(glyphTransMatrix[1]);
+//					gtm[0][0] = Float.parseFloat(glyphTransMatrix[0]);
+//					float[] translate = transform(0, 0, 1, gtm);
+//					if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - glyph rendering origin " + Arrays.toString(translate));
+//					float[] scaleRotate1 = transform(1, 0, 0, gtm);
+//					if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - glyph rotation and scaling 1 " + Arrays.toString(scaleRotate1));
+//					float[] scaleRotate2 = transform(0, 1, 0, gtm);
+//					if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - glyph rotation and scaling 2 " + Arrays.toString(scaleRotate2));
+//					//	if image is upside-down (scaleRotate2[1] < 0), invert min and max Y
+//					if (scaleRotate2[1] < 0) {
+//						int minY = Math.min(-imgMinY, -imgMaxY);
+//						int maxY = Math.max(-imgMinY, -imgMaxY);
+//						imgMinY = minY;
+//						imgMaxY = maxY;
+//					}
+//				}
+//			}
+//			else if (DEBUG_CHAR_PROG_DECODING) System.out.print("IGNORING (1): " + new String(line));
+//		}
+//		int imgWidth = -1;
+//		int imgHeight = -1;
+//		int bpc = -1;
+//		boolean isMaskImage = false;
+//		String imgFilter = null;
+//		ByteArrayOutputStream imgBuffer = null;
+//		byte[] imgData = null;
+//		Map imgParams = new HashMap();
+//		for (byte[] line; (line = lis.readLine()) != null;) {
+//			if (PdfUtils.startsWith(line, "EI", 0)) {
+//				if (imgBuffer != null)
+//					imgData = imgBuffer.toByteArray();
+//				break;
+//			}
+//			if (PdfUtils.startsWith(line, "ID", 0)) {
+//				imgBuffer = new ByteArrayOutputStream();
+//				if (line.length > 3)
+//					imgBuffer.write(line, 3, (line.length-3));
+//			}
+//			else if (imgBuffer != null)
+//				imgBuffer.write(line);
+//			else if (PdfUtils.startsWith(line, "/", 0)) {
+//				String keyValuePair = new String(line, 1, (line.length-1));
+//				String[] keyValue = keyValuePair.split("\\s+");
+//				if (keyValue.length != 2) {
+//					if (DEBUG_CHAR_PROG_DECODING) System.out.println("BROKEN PARAMETER LINE: " + new String(line));
+//					continue;
+//				}
+//				imgParams.put(keyValue[0], keyValue[1]);
+//				if ("W".equals(keyValue[0]) || "Width".equals(keyValue[0]))
+//					imgWidth = Integer.parseInt(keyValue[1]);
+//				else if ("H".equals(keyValue[0]) || "Height".equals(keyValue[0]))
+//					imgHeight = Integer.parseInt(keyValue[1]);
+//				else if ("BPC".equals(keyValue[0]) || "BitsPerComponent".equals(keyValue[0]))
+//					bpc = Integer.parseInt(keyValue[1]);
+//				else if ("IM".equals(keyValue[0]) || "ImageMask".equals(keyValue[0]))
+//					isMaskImage = "true".equals(keyValue[1]);
+//				else if ("F".equals(keyValue[0]) || "Filter".equals(keyValue[0])) {
+//					imgFilter = keyValue[1];
+//					if (imgFilter.startsWith("/"))
+//						imgFilter = imgFilter.substring(1);
+//				}
+//			}
+//		}
+//		
+//		//	TODO implement other types of type 3 fonts (as examples become available)
+//		
+//		if ((imgWidth == -1) || (imgHeight == -1) || (imgData == null)) {
+//			if (DEBUG_CHAR_PROG_DECODING) System.out.println("Invalid char prog");
+//			int charImageSize = 300;
+//			BufferedImage charImg = new BufferedImage(charImageSize, charImageSize, BufferedImage.TYPE_BYTE_BINARY);
+//			Graphics2D cigr = charImg.createGraphics();
+//			cigr.setColor(Color.WHITE);
+//			cigr.fillRect(0, 0, charImg.getWidth(), charImg.getHeight());
+//			cigr.translate(0, (charImg.getHeight() * (pFont.ascent / (pFont.ascent - pFont.descent))));
+//			cigr.scale(((scaleX * charImageSize) / 1000), ((-scaleY * charImageSize) / 1000)); // need to turn image upside-down, as in PDF (0,0) is in _lower_ left corner
+//			Path2D charPath = new Path2D.Float();
+//			cigr.setColor(Color.BLACK);
+//			lis = new PdfLineInputStream(new ByteArrayInputStream(cpBytes));
+//			int charWidth = -1;
+//			for (byte[] line; (line = lis.readLine()) != null;) {
+//				if (PdfUtils.endsWith(line, " d1")) {
+//					String[] glyphParams = (new String(line)).split("\\s+");
+//					if (DEBUG_CHAR_PROG_DECODING) System.out.println("Glyph dimension params: " + Arrays.toString(glyphParams));
+//					if (glyphParams.length >= 6) {
+//						if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - lower left X: " + Integer.parseInt(glyphParams[2]));
+//						cigr.translate((50 - Integer.parseInt(glyphParams[2])), 0);
+//						if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - lower left Y: " + Integer.parseInt(glyphParams[3]));
+//						imgMinY = Integer.parseInt(glyphParams[3]);
+//						if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - upper right X: " + Integer.parseInt(glyphParams[4]));
+//						charWidth = (Integer.parseInt(glyphParams[4]) - Integer.parseInt(glyphParams[2]));
+//						if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - upper right Y: " + Integer.parseInt(glyphParams[5]));
+//						imgMaxY = Integer.parseInt(glyphParams[5]);
+//					}
+//				}
+//				//	TODO d0
+//				else if (PdfUtils.endsWith(line, " cm")) {
+//					String[] glyphTransMatrix = (new String(line)).split("\\s+");
+//					if (DEBUG_CHAR_PROG_DECODING) System.out.println("Glyph transformation matrix: " + Arrays.toString(glyphTransMatrix));
+//					if (glyphTransMatrix.length >= 6) {
+//						float[][] gtm = new float[3][3];
+//						gtm[2][2] = 1;
+//						gtm[1][2] = Float.parseFloat(glyphTransMatrix[5]);
+//						gtm[0][2] = Float.parseFloat(glyphTransMatrix[4]);
+//						gtm[2][1] = 0;
+//						gtm[1][1] = Float.parseFloat(glyphTransMatrix[3]);
+//						gtm[0][1] = Float.parseFloat(glyphTransMatrix[2]);
+//						gtm[2][0] = 0;
+//						gtm[1][0] = Float.parseFloat(glyphTransMatrix[1]);
+//						gtm[0][0] = Float.parseFloat(glyphTransMatrix[0]);
+//						float[] translate = transform(0, 0, 1, gtm);
+//						if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - glyph rendering origin " + Arrays.toString(translate));
+//						float[] scaleRotate1 = transform(1, 0, 0, gtm);
+//						if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - glyph rotation and scaling 1 " + Arrays.toString(scaleRotate1));
+//						float[] scaleRotate2 = transform(0, 1, 0, gtm);
+//						if (DEBUG_CHAR_PROG_DECODING) System.out.println(" - glyph rotation and scaling 2 " + Arrays.toString(scaleRotate2));
+//						//	if image is upside-down (scaleRotate2[1] < 0), invert min and max Y
+//						if (scaleRotate2[1] < 0) {
+//							int minY = Math.min(-imgMinY, -imgMaxY);
+//							int maxY = Math.max(-imgMinY, -imgMaxY);
+//							imgMinY = minY;
+//							imgMaxY = maxY;
+//						}
+//					}
+//				}
+//				else if (PdfUtils.endsWith(line, " m")) {
+//					String[] params = (new String(line)).split("\\s+");
+//					charPath.moveTo(Float.parseFloat(params[0]), Float.parseFloat(params[1]));
+//				}
+//				else if (PdfUtils.endsWith(line, " l")) {
+//					String[] params = (new String(line)).split("\\s+");
+//					charPath.lineTo(Float.parseFloat(params[0]), Float.parseFloat(params[1]));
+//				}
+//				else if (PdfUtils.endsWith(line, " c")) {
+//					String[] params = (new String(line)).split("\\s+");
+//					charPath.curveTo(Float.parseFloat(params[0]), Float.parseFloat(params[1]), Float.parseFloat(params[2]), Float.parseFloat(params[3]), Float.parseFloat(params[4]), Float.parseFloat(params[5]));
+//				}
+//				else if (PdfUtils.endsWith(line, " v")) {
+//					String[] params = (new String(line)).split("\\s+");
+//					Point2D xy1 = charPath.getCurrentPoint();
+//					charPath.curveTo(xy1.getX(), xy1.getY(), Float.parseFloat(params[0]), Float.parseFloat(params[1]), Float.parseFloat(params[2]), Float.parseFloat(params[3]));
+//				}
+//				else if (PdfUtils.endsWith(line, " y")) {
+//					String[] params = (new String(line)).split("\\s+");
+//					charPath.curveTo(Float.parseFloat(params[0]), Float.parseFloat(params[1]), Float.parseFloat(params[2]), Float.parseFloat(params[3]), Float.parseFloat(params[2]), Float.parseFloat(params[3]));
+//				}
+//				else if (PdfUtils.endsWith(line, " re")) {
+//					String[] params = (new String(line)).split("\\s+");
+//					charPath.append(new Rectangle2D.Float(Float.parseFloat(params[0]), Float.parseFloat(params[1]), Float.parseFloat(params[2]), Float.parseFloat(params[3])), false);
+//				}
+//				else if (PdfUtils.startsWith(line, "h") && PdfUtils.endsWith(line, "h")) {
+//					charPath.closePath();
+//				}
+//				else if (PdfUtils.startsWith(line, "f") && PdfUtils.endsWith(line, "f")) {
+//					cigr.fill(charPath);
+//				}
+//				else if (DEBUG_CHAR_PROG_DECODING) System.out.print("IGNORING (2): " + new String(line));
+//			}
+//			if (idd != null)
+//				idd.addImage(charImg, charName);
+//			return StringUtils.getCharForName(charName); // fail gracefully
+//		}
+//		if (imgFilter != null) {
+//			imgBuffer = new ByteArrayOutputStream();
+//			PdfParser.decode(imgFilter, imgData, imgParams, imgBuffer, objects);
+//			imgData = imgBuffer.toByteArray();
+//		}
+//		if (DEBUG_CHAR_PROG_DECODING) {
+//			System.out.println("GOT DATA FOR CHAR IMAGE (" + imgWidth + " x " + imgHeight + "): " + imgData.length);
+//			System.out.println("MIN Y: " + imgMinY);
+//			System.out.println("MAX Y: " + imgMaxY);
+//		}
+//		BufferedImage cpImg = null;
+//		if (isMaskImage) {
+//			cpImg = createImageMask(imgWidth, imgHeight, imgData);
+//			if (DEBUG_DISPLAY_CHAR_PROG_IMAGES) {
+//				BufferedImage cpImgBi = new BufferedImage(cpImg.getWidth(), cpImg.getHeight(), BufferedImage.TYPE_INT_ARGB);
+//				Graphics gr = cpImgBi.createGraphics();
+//				gr.drawImage(cpImg, 0, 0, null);
+//				gr.setColor(Color.RED);
+//				gr.drawLine(0, imgMaxY, imgWidth, imgMaxY);
+//				JOptionPane.showMessageDialog(null, new JLabel(new ImageIcon(cpImgBi)));
+//			}
+//		}
+//		else {
+//			//	TODO implement color spaces, and read them as bitmaps nonetheless
+//			//	TODO to achieve this, create a BufferedImage in respective color space and read back brightness
+//		}
+//		
+//		//	do we have anything to work with?
+//		if (cpImg == null)
+//			return 0;
+//		pFont.setCharImage(charCode, charName, cpImg, null);
+//		
+//		//	wrap and measure char
+//		CharImage chImage = new CharImage(cpImg, imgMaxY, null, -1);
+//		CharMetrics chMetrics = getCharMetrics(cpImg, 1);
+//		
+//		//	little we can do about this one
+//		if (chMetrics == null) {
+////			JOptionPane.showMessageDialog(null, "Char match problem", "Char Match Problem", JOptionPane.INFORMATION_MESSAGE, new ImageIcon(cpImg));
+//			return 0;
+//		}
+//		
+//		//	set up statistics
+//		CharImageMatch bestCim = null;
+//		float bestCimSigDiff = -1;
+//		
+//		//	get ranked list of probably matches
+//		SortedSet matchChars = getScoredCharSignatures(chMetrics, -1, charSet, true, ((char) 0), null);
+//		
+//		//	evaluate probable matches
+//		for (Iterator mcit = matchChars.iterator(); mcit.hasNext();) {
+//			ScoredCharSignature scs = ((ScoredCharSignature) mcit.next());
+//			if (scs.difference > 500)
+//				break;
+//			System.out.println(" testing '" + scs.cs.ch + "' (" + ((int) scs.cs.ch) + "), signature difference is " + scs.difference);
+//			CharMatchResult matchResult = matchChar(chImage, scs.cs.ch, true, serifFonts, sansFonts, monoFonts, cache, false, false);
+//			CharImageMatch cim = null;
+//			for (int s = 0; s < matchResult.serifStyleCims.length; s++) {
+//				if ((matchResult.serifStyleCims[s] != null) && ((cim == null) || (cim.sim < matchResult.serifStyleCims[s].sim)))
+//					cim = matchResult.serifStyleCims[s];
+//			}
+//			for (int s = 0; s < matchResult.sansStyleCims.length; s++) {
+//				if ((matchResult.sansStyleCims[s] != null) && ((cim == null) || (cim.sim < matchResult.sansStyleCims[s].sim)))
+//					cim = matchResult.sansStyleCims[s];
+//			}
+//			for (int s = 0; s < matchResult.monoStyleCims.length; s++) {
+//				if ((matchResult.monoStyleCims[s] != null) && ((cim == null) || (cim.sim < matchResult.monoStyleCims[s].sim)))
+//					cim = matchResult.monoStyleCims[s];
+//			}
+//			
+//			if (cim == null) {
+////				System.out.println("   --> could not render image");
+//				continue;
+//			}
+//			System.out.println("   --> similarity is " + cim.sim);
+//			if ((bestCim == null) || (cim.sim > bestCim.sim)) {
+//				System.out.println("   ==> new best match '" + scs.cs.ch + "' (" + ((int) scs.cs.ch) + ", " + StringUtils.getCharName((char) scs.cs.ch) + "), similarity is " + cim.sim + ", scale logs are " + cim.scaleLogX + "/" + cim.scaleLogY);
+//				if (bestCim != null) {
+//					System.out.println("    - improvement is " + (cim.sim - bestCim.sim));
+//					System.out.println("    - sig diff factor is " + (scs.difference / bestCimSigDiff));
+//					System.out.println("    - sig diff malus is " + (scs.difference / (bestCimSigDiff * 100)));
+//					if ((bestCim.sim + (scs.difference / (bestCimSigDiff * 100))) > cim.sim) {
+//						System.out.println("    ==> rejected for signature difference");
+//						if ((idd != null) || DEBUG_DISPLAY_CHAR_PROG_IMAGES)
+//							PdfCharDecoder.displayCharMatch(cim, "New best match rejected for char signature difference");
+//						continue;
+//					}
+//				}
+//				if ((idd != null) || DEBUG_DISPLAY_CHAR_PROG_IMAGES)
+//					displayCharMatch(cim, "New best match");
+//				bestCim = cim;
+//				bestCimSigDiff = scs.difference;
+//			}
+//			else if (DEBUG_DISPLAY_CHAR_PROG_IMAGES && ((bestCim == null) || (cim.sim > (bestCim.sim - 0.01))))
+//				displayCharMatch(cim, "New almost best match");
+//		}
+//		
+//		//	finally ...
+//		return ((bestCim == null) ? 0 : bestCim.match.ch);
+//	}
+//	
+//	private static InLineImageData cropInLineImage(PdfLineInputStream lis, int imgMinY, int imgMaxY, Map objects) throws IOException {
+//		int imgWidth = -1;
+//		int imgHeight = -1;
+//		int bpc = -1;
+//		boolean isMaskImage = false;
+//		String imgFilter = null;
+//		ByteArrayOutputStream imgBuffer = null;
+//		byte[] imgData = null;
+//		Map imgParams = new HashMap();
+//		for (byte[] line; (line = lis.readLine()) != null;) {
+//			if (PdfUtils.startsWith(line, "EI", 0)) {
+//				if (imgBuffer != null)
+//					imgData = imgBuffer.toByteArray();
+//				break;
+//			}
+//			if (PdfUtils.startsWith(line, "ID", 0)) {
+//				imgBuffer = new ByteArrayOutputStream();
+//				if (line.length > 3)
+//					imgBuffer.write(line, 3, (line.length-3));
+//			}
+//			else if (imgBuffer != null)
+//				imgBuffer.write(line);
+//			else if (PdfUtils.startsWith(line, "/", 0)) {
+//				String keyValuePair = new String(line, 1, (line.length-1));
+//				String[] keyValue = keyValuePair.split("\\s+");
+//				if (keyValue.length != 2) {
+//					if (DEBUG_CHAR_PROG_DECODING) System.out.println("BROKEN PARAMETER LINE: " + new String(line));
+//					continue;
+//				}
+//				imgParams.put(keyValue[0], keyValue[1]);
+//				if ("W".equals(keyValue[0]) || "Width".equals(keyValue[0]))
+//					imgWidth = Integer.parseInt(keyValue[1]);
+//				else if ("H".equals(keyValue[0]) || "Height".equals(keyValue[0]))
+//					imgHeight = Integer.parseInt(keyValue[1]);
+//				else if ("BPC".equals(keyValue[0]) || "BitsPerComponent".equals(keyValue[0]))
+//					bpc = Integer.parseInt(keyValue[1]);
+//				else if ("IM".equals(keyValue[0]) || "ImageMask".equals(keyValue[0]))
+//					isMaskImage = "true".equals(keyValue[1]);
+//				else if ("F".equals(keyValue[0]) || "Filter".equals(keyValue[0])) {
+//					imgFilter = keyValue[1];
+//					if (imgFilter.startsWith("/"))
+//						imgFilter = imgFilter.substring(1);
+//				}
+//			}
+//		}
+//		if (imgFilter != null) {
+//			imgBuffer = new ByteArrayOutputStream();
+//			PdfParser.decode(imgFilter, imgData, imgParams, imgBuffer, objects);
+//			imgData = imgBuffer.toByteArray();
+//		}
+//		if (DEBUG_CHAR_PROG_DECODING) {
+//			System.out.println("GOT DATA FOR CHAR IMAGE (" + imgWidth + " x " + imgHeight + "): " + imgData.length);
+//			System.out.println("MIN Y: " + imgMinY);
+//			System.out.println("MAX Y: " + imgMaxY);
+//		}
+//		BufferedImage cpImg = null;
+//		if (isMaskImage) {
+//			cpImg = createImageMask(imgWidth, imgHeight, imgData);
+//			if (DEBUG_DISPLAY_CHAR_PROG_IMAGES) {
+//				BufferedImage cpImgBi = new BufferedImage(cpImg.getWidth(), cpImg.getHeight(), BufferedImage.TYPE_INT_ARGB);
+//				Graphics gr = cpImgBi.createGraphics();
+//				gr.drawImage(cpImg, 0, 0, null);
+//				gr.setColor(Color.RED);
+//				gr.drawLine(0, imgMaxY, imgWidth, imgMaxY);
+//				JOptionPane.showMessageDialog(null, new JLabel(new ImageIcon(cpImgBi)));
+//			}
+//		}
+//		else {
+//			//	TODO implement color spaces, and read them as bitmaps nonetheless
+//			//	TODO to achieve this, create a BufferedImage in respective color space and read back brightness
+//		}
+//	}
+//	
+//	private static float[] transform(float x, float y, float z, float[][] matrix) {
+//		float[] res = new float[3];
+//		for (int c = 0; c < matrix.length; c++)
+//			res[c] = ((matrix[c][0] * x) + (matrix[c][1] * y) + (matrix[c][2] * z));
+//		return res;
+//	}
+//	
+//	private static final int blackRgb = Color.BLACK.getRGB();
+//	private static BufferedImage createImageMask(int width, int height, byte[] bits) {
+//		BufferedImage bi = new BufferedImage((width + 2), (height + 2), BufferedImage.TYPE_BYTE_GRAY);
+//		Graphics g = bi.getGraphics();
+//		g.setColor(Color.WHITE);
+//		g.fillRect(0, 0, bi.getWidth(), bi.getHeight());
+//		int rw = (((width % 8) == 0) ? width : (((width / 8) + 1) * 8));
+//		for (int r = 0; r < height; r++)
+//			for (int c = 0; c < width; c++) {
+//				int bitOffset = (rw * r) + c;
+//				int byteIndex = (bitOffset / 8);
+//				if (byteIndex < bits.length) {
+//					int byteOffset = (bitOffset % 8);
+//					int bt = bits[byteIndex];
+//					int btMask = 1 << (7 - byteOffset);
+//					boolean bit = ((bt & btMask) == 0);
+//					if (bit)
+//						bi.setRGB((c+1), (r+1), blackRgb);
+//				}
+//			}
+//		return bi;
+//	}
 	
 	static class CharImageMatch {
 		CharImage charImage;
@@ -1146,8 +1307,8 @@ public class PdfCharDecoder {
 		double charBoxProportion2 = Math.log(((double) ci2.box.getWidth()) / ci2.box.getHeight());
 		return Math.abs(charBoxProportion1 - charBoxProportion2);
 	}
-	
-	private static final char DEBUG_MATCH_TARGET_CHAR = ((char) 0);
+//	
+//	private static final char DEBUG_MATCH_TARGET_CHAR = ((char) 0);
 	
 	private static CharImageMatch matchCharImage(CharImage charImage, CharImage match, String fontName, boolean charBoxMatch, boolean isVerificationMatch, boolean debug) {
 //		if ((charImage == null) || (match == null))
@@ -1499,14 +1660,14 @@ public class PdfCharDecoder {
 	private static final byte CIM_MATCHED = 1;
 	private static final byte CIM_SPURIOUS = 2;
 	private static final byte CIM_MISSED = 3;
-	
-	private static void resetCimData(byte[][] cimData) {
-		for (int x = 0; x < cimData.length; x++)
-			for (int y = 0; y < cimData[x].length; y++) {
-				if (cimData[x][y] < 0)
-					cimData[x][y] = ((byte) -cimData[x][y]);
-			}
-	}
+//	
+//	private static void resetCimData(byte[][] cimData) {
+//		for (int x = 0; x < cimData.length; x++)
+//			for (int y = 0; y < cimData[x].length; y++) {
+//				if (cimData[x][y] < 0)
+//					cimData[x][y] = ((byte) -cimData[x][y]);
+//			}
+//	}
 	
 	private static int getSurface(byte[][] cimData, byte t) {
 		int tSurface = 0;
@@ -1861,6 +2022,8 @@ public class PdfCharDecoder {
 		final String fontName;
 		final int fontStyle;
 		final BufferedImage img;
+		final Path2D.Float path;
+		final int pathWidth;
 		final byte[][] brightness;
 		final ImagePartRectangle box;
 		final int baseline;
@@ -1878,17 +2041,19 @@ public class PdfCharDecoder {
 		final byte yHistogramPeaks50;
 		final byte yHistogramPeaks67;
 		final byte yHistogramPeaks75;
-		CharImage(BufferedImage img, int baseline) {
-			this(((char) 0), "", -1, Imaging.wrapImage(img, null), baseline);
+		CharImage(BufferedImage img, int baseline, Path2D.Float path, int pathWidth) {
+			this(((char) 0), "", -1, Imaging.wrapImage(img, null), baseline, path, pathWidth);
 		}
-		CharImage(char ch, String fontName, int fontStyle, BufferedImage img, int baseline) {
-			this(ch, fontName, fontStyle, Imaging.wrapImage(img, (ch + "-" + fontName + "-" + fontStyle)), baseline);
+		CharImage(char ch, String fontName, int fontStyle, BufferedImage img, int baseline, Path2D.Float path, int pathWidth) {
+			this(ch, fontName, fontStyle, Imaging.wrapImage(img, (ch + "-" + fontName + "-" + fontStyle)), baseline, path, pathWidth);
 		}
-		CharImage(char ch, String fontName, int fontStyle, AnalysisImage ai, int baseline) {
+		CharImage(char ch, String fontName, int fontStyle, AnalysisImage ai, int baseline, Path2D.Float path, int pathWidth) {
 			this.ch = ch;
 			this.fontName = fontName;
 			this.fontStyle = fontStyle;
 			this.img = ai.getImage();
+			this.path = path;
+			this.pathWidth = pathWidth;
 			this.brightness = ai.getBrightness();
 			this.box = Imaging.getContentBox(ai);
 			this.baseline = baseline;
@@ -2023,7 +2188,7 @@ public class PdfCharDecoder {
 		cgr.drawString(("" + ch), ((int) (Math.round(fontBox.getWidth() - tl.getBounds().getWidth() + 1) / 2)), cbl);
 		cgr.dispose();
 		if (debug) System.out.println(" - char image rendered");
-		CharImage ci = new CharImage(ch, font.getName(), (font.getStyle() | (isSerifFont ? SERIF : 0) | (isMonospacedFont ? MONOSPACED : 0)), cbi, cbl);
+		CharImage ci = new CharImage(ch, font.getName(), (font.getStyle() | (isSerifFont ? SERIF : 0) | (isMonospacedFont ? MONOSPACED : 0)), cbi, cbl, null, -1);
 		if (debug) JOptionPane.showMessageDialog(null, "", ("'" + ch + "' in " + font.getName() + "-" + font.getStyle()), JOptionPane.PLAIN_MESSAGE, new ImageIcon(cbi));
 		
 		//	cache image if possible and return it
@@ -2403,21 +2568,21 @@ public class PdfCharDecoder {
 	static boolean isSpecialPunctuationPair(char char1, char char2) {
 		return specialPunctuationPairSet.contains(char1 + "" + char2);
 	}
-	
-	private static Integer[] ignoreChars = {
-		new Integer(Integer.parseInt("2100", 16)),
-		new Integer(Integer.parseInt("2101", 16)),
-		new Integer(Integer.parseInt("2105", 16)),
-		new Integer(Integer.parseInt("2106", 16)),
-		new Integer(Integer.parseInt("2120", 16)),
-		new Integer(Integer.parseInt("2121", 16)),
-		new Integer(Integer.parseInt("213a", 16)),
-		new Integer(Integer.parseInt("213b", 16)),
-		new Integer(Integer.parseInt("214d", 16)),
-		new Integer(Integer.parseInt("22d8", 16)),
-		new Integer(Integer.parseInt("22d9", 16)),
-	};
-	private static Set ignoreCharSet = new HashSet(Arrays.asList(ignoreChars));
+//	
+//	private static Integer[] ignoreChars = {
+//		new Integer(Integer.parseInt("2100", 16)),
+//		new Integer(Integer.parseInt("2101", 16)),
+//		new Integer(Integer.parseInt("2105", 16)),
+//		new Integer(Integer.parseInt("2106", 16)),
+//		new Integer(Integer.parseInt("2120", 16)),
+//		new Integer(Integer.parseInt("2121", 16)),
+//		new Integer(Integer.parseInt("213a", 16)),
+//		new Integer(Integer.parseInt("213b", 16)),
+//		new Integer(Integer.parseInt("214d", 16)),
+//		new Integer(Integer.parseInt("22d8", 16)),
+//		new Integer(Integer.parseInt("22d9", 16)),
+//	};
+//	private static Set ignoreCharSet = new HashSet(Arrays.asList(ignoreChars));
 	
 	static final String COMBINABLE_ACCENTS;
 	static final HashMap COMBINABLE_ACCENT_MAPPINGS = new HashMap();

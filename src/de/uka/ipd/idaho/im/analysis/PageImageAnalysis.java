@@ -27,25 +27,44 @@
  */
 package de.uka.ipd.idaho.im.analysis;
 
+import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Graphics2D;
+import java.awt.Point;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Properties;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
+import de.uka.ipd.idaho.gamta.Gamta;
+import de.uka.ipd.idaho.gamta.Token;
+import de.uka.ipd.idaho.gamta.TokenSequence;
+import de.uka.ipd.idaho.gamta.Tokenizer;
 import de.uka.ipd.idaho.gamta.util.CountingSet;
+import de.uka.ipd.idaho.gamta.util.DocumentStyle.PropertiesData;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.imaging.BoundingBox;
 import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
+import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
+import de.uka.ipd.idaho.im.ImAnnotation;
+import de.uka.ipd.idaho.im.ImDocument;
+import de.uka.ipd.idaho.im.ImLayoutObject;
+import de.uka.ipd.idaho.im.ImPage;
+import de.uka.ipd.idaho.im.ImRegion;
+import de.uka.ipd.idaho.im.ImWord;
 import de.uka.ipd.idaho.im.analysis.Imaging.AnalysisImage;
 import de.uka.ipd.idaho.im.analysis.Imaging.ImagePartRectangle;
+import de.uka.ipd.idaho.im.util.ImDocumentStyle;
+import de.uka.ipd.idaho.im.util.ImUtils;
 import de.uka.ipd.idaho.im.utilities.ImageDisplayDialog;
 
 /**
@@ -64,7 +83,7 @@ public class PageImageAnalysis implements ImagingConstants {
 		public final ImagePartRectangle bounds;
 		PagePart(ImagePartRectangle bounds) {
 			//	clone bounds, so no two parts share the same (causes trouble with adjustments)
-			this.bounds = new ImagePartRectangle(bounds.analysisImage);
+			this.bounds = new ImagePartRectangle(bounds.ai);
 			this.bounds.leftCol = bounds.leftCol;
 			this.bounds.rightCol = bounds.rightCol;
 			this.bounds.topRow = bounds.topRow;
@@ -481,7 +500,7 @@ public class PageImageAnalysis implements ImagingConstants {
 		if (minHorizontalBlockMargin != 1) {
 			System.out.println(" - got " + subRegions.length + " sub regions");
 			if ((idd != null) && (subRegions.length > 1)) {
-				BufferedImage pi = region.bounds.analysisImage.getImage();
+				BufferedImage pi = region.bounds.ai.getImage();
 				BufferedImage bi = new BufferedImage((pi.getWidth() / 3), (pi.getHeight() / 3), BufferedImage.TYPE_INT_ARGB);
 				Graphics2D gr = bi.createGraphics();
 				gr.scale(0.33, 0.33);
@@ -522,7 +541,7 @@ public class PageImageAnalysis implements ImagingConstants {
 			subRegionList.add(subRegions[subRegions.length-1]);
 			if (subRegionList.size() < subRegions.length) {
 				if ((minHorizontalBlockMargin != 1) && (idd != null) && (subRegions.length > 1)) {
-					BufferedImage pi = region.bounds.analysisImage.getImage();
+					BufferedImage pi = region.bounds.ai.getImage();
 					BufferedImage bi = new BufferedImage((pi.getWidth() / 3), (pi.getHeight() / 3), BufferedImage.TYPE_INT_ARGB);
 					Graphics2D gr = bi.createGraphics();
 					gr.scale(0.33, 0.33);
@@ -618,7 +637,7 @@ public class PageImageAnalysis implements ImagingConstants {
 						subRegionList.add(subRegions[c]);
 				}
 				if ((minHorizontalBlockMargin != 1) && (idd != null) && (subRegions.length > 1)) {
-					BufferedImage pi = region.bounds.analysisImage.getImage();
+					BufferedImage pi = region.bounds.ai.getImage();
 					BufferedImage bi = new BufferedImage((pi.getWidth() / 3), (pi.getHeight() / 3), BufferedImage.TYPE_INT_ARGB);
 					Graphics2D gr = bi.createGraphics();
 					gr.scale(0.33, 0.33);
@@ -707,7 +726,7 @@ public class PageImageAnalysis implements ImagingConstants {
 			
 			//	slice and dice atomic region with 1 pixel margin and see if anything meaningful remains
 			if (subRegion.isAtomic() && (minHorizontalBlockMargin > 1) && (minVerticalBlockMargin > 1)) {
-				ImagePartRectangle testRegionBounds = new ImagePartRectangle(subRegion.bounds.analysisImage);
+				ImagePartRectangle testRegionBounds = new ImagePartRectangle(subRegion.bounds.ai);
 				Imaging.copyBounds(subRegion.bounds, testRegionBounds);
 				Region testRegion = new Region(testRegionBounds, true, null);
 				fillInSubRegions(idd, (indent + "  "), testRegion, 1, 1, null, -1, dpi, true, pm);
@@ -941,7 +960,7 @@ public class PageImageAnalysis implements ImagingConstants {
 			if (prevRepairCount == repairCount)
 				break; // nothing new this round, we're done
 			if ((minHorizontalBlockMargin != 1) && (idd != null)) {
-				BufferedImage pi = region.bounds.analysisImage.getImage();
+				BufferedImage pi = region.bounds.ai.getImage();
 				BufferedImage bi = new BufferedImage((pi.getWidth() / 3), (pi.getHeight() / 3), BufferedImage.TYPE_INT_ARGB);
 				Graphics2D gr = bi.createGraphics();
 				gr.scale(0.33, 0.33);
@@ -1684,7 +1703,7 @@ public class PageImageAnalysis implements ImagingConstants {
 		BufferedImage blockImage = block.bounds.toImage().getImage();
 		
 		//	paint copied image white where original has black stripes
-		byte[][] brightness = block.bounds.analysisImage.getBrightness();
+		byte[][] brightness = block.bounds.ai.getBrightness();
 		
 		//	collect grid line bounds for later cell merging
 		ArrayList gridLines = new ArrayList();
@@ -2891,7 +2910,7 @@ public class PageImageAnalysis implements ImagingConstants {
 				}
 				if (words[w].bounds.topRow < topBound)
 					continue;
-				ImagePartRectangle wordBox = new ImagePartRectangle(words[w].bounds.analysisImage);
+				ImagePartRectangle wordBox = new ImagePartRectangle(words[w].bounds.ai);
 				Imaging.copyBounds(words[w].bounds, wordBox);
 				wordBox.topRow = topBound;
 				wordBox = Imaging.narrowTopAndBottom(wordBox);
@@ -3054,7 +3073,7 @@ Literature ideas for bold:
 			for (int w = 0; w < baselineComputationWords.length; w++) {
 				wordBounds[w] = baselineComputationWords[w].bounds;
 				ImagePartRectangle[] nwrs = {baselineComputationWords[w].bounds};
-				baselineComputationWords[w].baseline = findBaseline(block.bounds.analysisImage, nwrs);
+				baselineComputationWords[w].baseline = findBaseline(block.bounds.ai, nwrs);
 			}
 			
 			//	detect line slope
@@ -3092,7 +3111,7 @@ Literature ideas for bold:
 					lineBaselineWordCount++;
 					lineBaselineSum += baselineComputationWords[w].baseline;
 				}
-				int lineBaseline = ((lineBaselineWordCount == 0) ? findBaseline(block.bounds.analysisImage, wordBounds) : ((lineBaselineSum + (lineBaselineWordCount / 2)) / lineBaselineWordCount));
+				int lineBaseline = ((lineBaselineWordCount == 0) ? findBaseline(block.bounds.ai, wordBounds) : ((lineBaselineSum + (lineBaselineWordCount / 2)) / lineBaselineWordCount));
 				System.out.println(" - mean line baseline is " + lineBaseline + " based on " + lineBaselineWordCount + " words");
 				
 				//	smoothen out word baselines
@@ -3117,7 +3136,7 @@ Literature ideas for bold:
 					windowBaselineWordCount++;
 					windowBaselineSum += baselineComputationWords[w].baseline;
 				}
-				int windowBaseline = ((windowBaselineWordCount == 0) ? findBaseline(block.bounds.analysisImage, wordBounds) : ((windowBaselineSum + (windowBaselineWordCount / 2)) / windowBaselineWordCount));
+				int windowBaseline = ((windowBaselineWordCount == 0) ? findBaseline(block.bounds.ai, wordBounds) : ((windowBaselineSum + (windowBaselineWordCount / 2)) / windowBaselineWordCount));
 				System.out.println(" - mean window baseline is " + windowBaseline + " based on " + windowBaselineWordCount + " words");
 				
 				//	smoothen out word baselines
@@ -3281,38 +3300,2770 @@ Literature ideas for bold:
 		return (top + maxDropRow);
 	}
 	
-	private static final boolean DEBUG_BLOCK_ANALYSIS = true;
-	
 	/**
-	 * Analyze the structure of a document page, i.e., chop it into sub regions
-	 * and text blocks.
-	 * @param ai the page image to analyze
-	 * @param dpi the resolution of the underlying page image
-	 * @param block the block to analyze
-	 * @param separateLines untangle mingled lines?
-	 * @param regroupWords group words based upon spaces in line?
-	 * @param pm a monitor object for reporting progress, e.g. to a UI
-	 * @return the root region, representing the whole page
+	 * Container holding a region coloring for a document page, combined with
+	 * several analyses like the extent of individual regions.
+	 * 
+	 * @author sautter
 	 */
-//	public static BlockLine[] getBlockLinesAndWords(AnalysisImage pageAi, int dpi, Region block, ProgressMonitor pm) {
-	public static BlockLine[] getBlockLinesAndWords(AnalysisImage pageAi, int dpi, BoundingBox blockBounds, boolean separateLines, boolean regroupWords, ProgressMonitor pm) {
-//		return getBlockLinesAndWords(pageAi, dpi, block, pm, null);
-		return getBlockLinesAndWords(pageAi, dpi, blockBounds, separateLines, regroupWords, pm, null);
+	public static class PageRegionColoring {
+		
+		/** the page whose image the region coloring refers to */
+		public final ImPage page;
+		/** the page image the region coloring refers to */
+		public final PageImage pageImage;
+		/** the threshold used to create the region coloring */
+		public final byte threshold;
+		/** the actual region coloring */
+		public final int[][] pageRegionColors;
+		/** the number of pixels in every region of the page, indexed by region color */
+		public final int[] pageRegionSizes;
+		/** the minimum (left-most) X coordinate of every region in the page, indexed by region color */
+		public final int[] pageRegionMinX;
+		/** the maximum (right-most) X coordinate of every region in the page, indexed by region color */
+		public final int[] pageRegionMaxX;
+		/** the minimum (top-most) Y coordinate of every region in the page, indexed by region color */
+		public final int[] pageRegionMinY;
+		/** the maximum (bottom-most) Y coordinate of every region in the page, indexed by region color */
+		public final int[] pageRegionMaxY;
+		
+		/**
+		 * @param page the page whose image the region coloring refers to
+		 * @param pageImage the page image the region coloring refers to
+		 * @param threshold the threshold used to create the region coloring
+		 * @param pageRegionColors the actual region coloring
+		 */
+		public PageRegionColoring(ImPage page, PageImage pageImage, byte threshold, int[][] pageRegionColors) {
+			this.page = page;
+			this.pageImage = pageImage;
+			this.threshold = threshold;
+			this.pageRegionColors = pageRegionColors;
+			
+			//	analyse region coloring
+			int regionColorCount = 0;
+			for (int c = 0; c < pageRegionColors.length; c++) {
+				for (int r = 0; r < pageRegionColors[c].length; r++)
+					regionColorCount = Math.max(regionColorCount, pageRegionColors[c][r]);
+			}
+			regionColorCount++; // account for 0
+			this.pageRegionSizes = new int[regionColorCount];
+			Arrays.fill(this.pageRegionSizes, 0);
+			this.pageRegionMinX = new int[regionColorCount];
+			Arrays.fill(this.pageRegionMinX, this.pageRegionColors.length);
+			this.pageRegionMaxX = new int[regionColorCount];
+			Arrays.fill(this.pageRegionMaxX, 0);
+			this.pageRegionMinY = new int[regionColorCount];
+			Arrays.fill(this.pageRegionMinY, this.pageRegionColors[0].length);
+			this.pageRegionMaxY = new int[regionColorCount];
+			Arrays.fill(this.pageRegionMaxY, 0);
+			for (int c = 0; c < pageRegionColors.length; c++)
+				for (int r = 0; r < pageRegionColors[c].length; r++) {
+					if (pageRegionColors[c][r] == 0)
+						continue;
+					this.pageRegionSizes[pageRegionColors[c][r]]++;
+					this.pageRegionMinX[pageRegionColors[c][r]] = Math.min(c, this.pageRegionMinX[pageRegionColors[c][r]]);
+					this.pageRegionMaxX[pageRegionColors[c][r]] = Math.max(c, this.pageRegionMaxX[pageRegionColors[c][r]]);
+					this.pageRegionMinY[pageRegionColors[c][r]] = Math.min(r, this.pageRegionMinY[pageRegionColors[c][r]]);
+					this.pageRegionMaxY[pageRegionColors[c][r]] = Math.max(r, this.pageRegionMaxY[pageRegionColors[c][r]]);
+				}
+		}
 	}
 	
 	/**
-	 * Analyze the structure of a block in a document page, i.e., chop it into
-	 * lines and words.
-	 * @param ai the page image to analyze
-	 * @param dpi the resolution of the underlying page image
-	 * @param block the block to analyze
-	 * @param separateLines untangle mingled lines?
-	 * @param regroupWords group words based upon spaces in line?
-	 * @param pm a monitor object for reporting progress, e.g. to a UI
-	 * @param vbi a buffered image to visualize analysis in (for debugging)
-	 * @return the root region, representing the whole page
+	 * Create a region coloring for the image of a document page, using a
+	 * specific brightness threshold.
+	 * @param page the page whose image to analyse
+	 * @param threshold the broghtness threshold to use
+	 * @return the region coloring
 	 */
-	public static BlockLine[] getBlockLinesAndWords(AnalysisImage pageAi, int dpi, BoundingBox blockBounds, boolean separateLines, boolean regroupWords, ProgressMonitor pm, BufferedImage vbi) {
+	public static PageRegionColoring getRegionColoring(ImPage page, byte threshold) {
+		
+		//	get and wrap page image only once
+		PageImage pageImage = page.getImage();
+		AnalysisImage pageAi = Imaging.wrapImage(pageImage.image, null);
+		
+		//	create region coloring of whole page
+		int[][] pageRegionColors = Imaging.getRegionColoring(pageAi, threshold, false);
+		return new PageRegionColoring(page, pageImage, threshold, pageRegionColors);
+	}
+	
+	/**
+	 * Adjust the baselines of OCR derived words to the lines in the underlying
+	 * page image. This method matches up lines of OCR derived words to page
+	 * image lines on a block-by-block basis, also making sure to cover the
+	 * entire block with OCR words. Further, words are also adjusted to the
+	 * height of the lines.
+	 * @param words an array holding the words to adjust
+	 * @param adjustToWords adjust words horizontally inside lines?
+	 * @param pm a progress monitor to relay status information
+	 * @return an array holding the adjusted words
+	 */
+	public static ImWord[] adjustOcrWordsToBlocks(ImWord[] words, boolean adjustToWords, ProgressMonitor pm) {
+		return adjustOcrWordsToBlocks(words, null, null, adjustToWords, pm);
+	}
+	
+	/**
+	 * Adjust the baselines of OCR derived words to the lines in the underlying
+	 * page image. This method matches up lines of OCR derived words to page
+	 * image lines on a block-by-block basis, also making sure to cover the
+	 * entire block with OCR words. Further, words are also adjusted to the
+	 * height of the lines.
+	 * @param words an array holding the words to adjust
+	 * @param page the page the argument words lie in
+	 * @param adjustToWords adjust words horizontally inside lines?
+	 * @param pm a progress monitor to relay status information
+	 * @return an array holding the adjusted words
+	 */
+	public static ImWord[] adjustOcrWordsToBlocks(ImWord[] words, ImPage page, boolean adjustToWords, ProgressMonitor pm) {
+		return adjustOcrWordsToBlocks(words, page, null, adjustToWords, pm);
+	}
+	
+	/**
+	 * Adjust the baselines of OCR derived words to the lines in the underlying
+	 * page image. This method matches up lines of OCR derived words to page
+	 * image lines on a block-by-block basis, also making sure to cover the
+	 * entire block with OCR words. Further, words are also adjusted to the
+	 * height of the lines.
+	 * @param words an array holding the words to adjust
+	 * @param page the page the argument words lie in
+	 * @param pageImage the image of the page the words lie in
+	 * @param adjustToWords adjust words horizontally inside lines?
+	 * @param pm a progress monitor to relay status information
+	 * @return an array holding the adjusted words
+	 */
+	public static ImWord[] adjustOcrWordsToBlocks(ImWord[] words, ImPage page, PageImage pageImage, boolean adjustToWords, ProgressMonitor pm) {
+		return adjustOcrWordsToBlocks(words, page, pageImage, null, adjustToWords, pm);
+	}
+	
+	/**
+	 * Adjust the baselines of OCR derived words to the lines in the underlying
+	 * page image. This method matches up lines of OCR derived words to page
+	 * image lines on a block-by-block basis, also making sure to cover the
+	 * entire block with OCR words. Further, words are also adjusted to the
+	 * height of the lines.
+	 * @param words an array holding the words to adjust
+	 * @param page the page the argument words lie in
+	 * @param pageImage the image of the page the words lie in
+	 * @param docLayout the document style describing page layout
+	 * @param adjustToWords adjust words horizontally inside lines?
+	 * @param pm a progress monitor to relay status information
+	 * @return an array holding the adjusted words
+	 */
+	public static ImWord[] adjustOcrWordsToBlocks(ImWord[] words, ImPage page, PageImage pageImage, ImDocumentStyle docLayout, boolean adjustToWords, ProgressMonitor pm) {
+		if (words.length == 0)
+			return words;
+		
+		//	check parameters
+		ImDocument doc = null;
+		int pageId = -1;
+		for (int w = 0; w < words.length; w++) {
+			if (doc == null)
+				doc = words[w].getDocument();
+			else if (words[w].getDocument() != doc)
+				throw new IllegalArgumentException("Cannot adjust words belonging to different documents");
+			if (pageId == -1)
+				pageId = words[w].pageId;
+			else if (words[w].pageId != pageId)
+				throw new IllegalArgumentException("Cannot adjust words belonging to different pages");
+		}
+		if (page == null)
+			page = doc.getPage(pageId);
+		if (pageImage == null)
+			pageImage = page.getImage();
+		if (pm == null)
+			pm = ProgressMonitor.dummy;
+		
+		//	get document style and use it for page structure analysis
+		if (docLayout == null) {
+			ImDocumentStyle docStyle = ImDocumentStyle.getStyleFor(doc);
+			if (docStyle == null)
+				docStyle = new ImDocumentStyle(new PropertiesData(new Properties()));
+			docLayout = docStyle.getImSubset("layout");
+		}
+		
+		//	get page content area layout hint (defaulting to whole page bounds), as well as number of columns
+		BoundingBox contentArea = docLayout.getBoxProperty("contentArea", page.bounds, pageImage.currentDpi);
+		int columnCount = docLayout.getIntProperty("columnCount", -1);
+		
+		//	get column and block margin layout hints (defaulting to kind of universal ball park figures)
+		int minBlockMargin = docLayout.getIntProperty("minBlockMargin", (pageImage.currentDpi / 10), pageImage.currentDpi);
+		int minColumnMargin = ((columnCount == 1) ? (page.bounds.right - page.bounds.left) : docLayout.getIntProperty("minColumnMargin", (pageImage.currentDpi / 10), pageImage.currentDpi));
+		
+		//	get (or compute) column areas to correct erroneous column splits
+		BoundingBox[] columnAreas = docLayout.getBoxListProperty("columnAreas", null, pageImage.currentDpi);
+		if (columnAreas == null) {
+			if (columnCount == 1) {
+				columnAreas = new BoundingBox[1];
+				columnAreas[0] = contentArea;
+			}
+			else if (columnCount == 2) {
+				columnAreas = new BoundingBox[2];
+				columnAreas[0] = new BoundingBox(contentArea.left, ((contentArea.left + contentArea.right) / 2), contentArea.top, contentArea.bottom);
+				columnAreas[1] = new BoundingBox(((contentArea.left + contentArea.right) / 2), contentArea.right, contentArea.top, contentArea.bottom);
+			}
+			else if ((columnCount != -1) && (contentArea != page.bounds)) {
+				columnAreas = new BoundingBox[columnCount];
+				for (int c = 0; c < columnCount; c++)
+					columnAreas[c] = new BoundingBox((contentArea.left + (((contentArea.right - contentArea.left) * c) / columnCount)), (contentArea.left + (((contentArea.right - contentArea.left) * (c + 1)) / columnCount)), contentArea.top, contentArea.bottom);
+			}
+		}
+		
+		//	get minimum column width to prevent column splits resulting in too narrow columns
+		int minColumnWidth = docLayout.getIntProperty("minColumnWidth", -1, pageImage.currentDpi);
+		
+		//	loop through to analysis method
+		return adjustOcrWordsToBlocks(doc, words, page, pageImage, minColumnMargin, minBlockMargin, columnAreas, minColumnWidth, adjustToWords, pm);
+	}
+	
+	private static final boolean DEBUG_ADJUST_OCR = false;
+	
+	/**
+	 * Adjust the baselines of OCR derived words to the lines in the underlying
+	 * page image. This method matches up lines of OCR derived words to page
+	 * image lines on a block-by-block basis, also making sure to cover the
+	 * entire block with OCR words. Further, words are also adjusted to the
+	 * height of the lines.
+	 * @param doc the document the words belong to
+	 * @param words an array holding the words to adjust
+	 * @param page the page the argument words lie in
+	 * @param pageImage the image of the page the words lie in
+	 * @param minColumnMargin the minimum horizontal distance between two columns (in pixels)
+	 * @param minBlockMargin the minimum vertical distance between two blocks (in pixels)
+	 * @param columnAreas an array of bounding boxes specifying where text columns can be
+	 * @param minColumnWidth the minimum width of a column (in pixels)
+	 * @param adjustToWords adjust words horizontally inside lines?
+	 * @param pm a progress monitor to relay status information
+	 * @return an array holding the adjusted words
+	 */
+	public static ImWord[] adjustOcrWordsToBlocks(ImDocument doc, ImWord[] words, ImPage page, PageImage pageImage, int minColumnMargin, int minBlockMargin, BoundingBox[] columnAreas, int minColumnWidth, boolean adjustToWords, ProgressMonitor spm) {
+		BufferedImage vbi = null;
+		Graphics2D vbiGr = null;
+		if (DEBUG_ADJUST_OCR) {
+			vbi = new BufferedImage(pageImage.image.getWidth(), pageImage.image.getHeight(), BufferedImage.TYPE_INT_ARGB);
+			vbiGr = vbi.createGraphics();
+			vbiGr.setColor(Color.WHITE);
+			vbiGr.fillRect(0, 0, vbi.getWidth(), vbi.getHeight());
+			vbiGr.drawImage(pageImage.image, 0, 0, pageImage.image.getWidth(), pageImage.image.getHeight(), null);
+		}
+		
+		//	get structure of scanned page image
+		AnalysisImage api = Imaging.wrapImage(pageImage.image, null);
+		Region apiRootRegion = PageImageAnalysis.getPageRegion(api, pageImage.currentDpi, minColumnMargin, minBlockMargin, columnAreas, minColumnWidth, false, spm);
+		Region[] apiBlocks = getAtomicRegions(apiRootRegion);
+		
+		//	get lines and instantiate non-empty blocks
+		ArrayList apiPageBlockList = new ArrayList();
+		for (int b = 0; b < apiBlocks.length; b++) {
+			BlockLine[] apiBlockLines = getBlockLines(api, pageImage.currentDpi, apiBlocks[b].getBoundingBox(), true, spm, vbi);
+			if (apiBlockLines.length != 0)
+				apiPageBlockList.add(new PageBlock(apiBlockLines));
+		}
+		PageBlock[] apiPageBlocks = ((PageBlock[]) apiPageBlockList.toArray(new PageBlock[apiPageBlockList.size()]));
+		
+		//	get structure of OCR word distribution
+		BufferedImage obi = new BufferedImage(pageImage.image.getWidth(), pageImage.image.getHeight(), BufferedImage.TYPE_BYTE_GRAY);
+		Graphics2D obiGr = obi.createGraphics();
+		obiGr.setColor(Color.WHITE);
+		obiGr.fillRect(0, 0, obi.getWidth(), obi.getHeight());
+		obiGr.setColor(Color.BLACK);
+		for (int w = 0; w < words.length; w++)
+			obiGr.fillRect(words[w].bounds.left, words[w].bounds.top, words[w].bounds.getWidth(), words[w].bounds.getHeight());
+		AnalysisImage aoi = Imaging.wrapImage(obi, null);
+		Region aoiRootRegion = PageImageAnalysis.getPageRegion(aoi, pageImage.currentDpi, minColumnMargin, minBlockMargin, columnAreas, minColumnWidth, false, spm);
+		Region[] aoiBlocks = getAtomicRegions(aoiRootRegion);
+		
+		//	assign OCR words to blocks
+		ArrayList ocrBlocks = new ArrayList(aoiBlocks.length);
+		ArrayList ocrWords = new ArrayList(Arrays.asList(words));
+		for (int b = 0; b < aoiBlocks.length; b++) {
+			OcrBlock ob = new OcrBlock(aoiBlocks[b].bounds);
+			BoundingBox obb = aoiBlocks[b].getBoundingBox();
+			for (int w = 0; w < ocrWords.size(); w++) {
+				if (obb.includes(((ImWord) ocrWords.get(w)).bounds, true))
+					ob.words.add(ocrWords.remove(w--));
+			}
+			if (ob.words.isEmpty())
+				continue;
+			ocrBlocks.add(ob);
+			if (DEBUG_ADJUST_OCR)
+				System.out.println("Got OCR block at " + ob.getBounds() + " with " + ob.words.size() + " words");
+		}
+		System.out.println(ocrWords.size() + " of " + words.length + " OCR words remaining");
+		obiGr.setColor(Color.GRAY);
+		for (int w = 0; w < ocrWords.size(); w++) {
+			ImWord word = ((ImWord) ocrWords.get(w));
+			obiGr.fillRect(word.bounds.left, word.bounds.top, word.bounds.getWidth(), word.bounds.getHeight());
+		}
+		obiGr.dispose();
+		
+		//	pair up blocks (merge multiple OCR blocks if in same page block)
+		int emptyApiBlockCount = 0;
+		for (int pb = 0; pb < apiPageBlocks.length; pb++) {
+			if (DEBUG_ADJUST_OCR)
+				System.out.println("Populating page block " + apiPageBlocks[pb].getBounds());
+			int obCount = 0; 
+			for (int ob = 0; ob < ocrBlocks.size(); ob++) {
+				Point obc = ((OcrBlock) ocrBlocks.get(ob)).getCenter();
+				if (apiPageBlocks[pb].contains(obc)) {
+					apiPageBlocks[pb].addOcrBlock((OcrBlock) ocrBlocks.remove(ob--));
+					obCount++;
+				}
+			}
+			if (DEBUG_ADJUST_OCR)
+				System.out.println(" ==> added " + obCount + " OCR blocks");
+			if (apiPageBlocks[pb].ocrBlock == null)
+				emptyApiBlockCount++;
+			else if (DEBUG_ADJUST_OCR) {
+				System.out.println(" ==> OCR block bounds are " + apiPageBlocks[pb].ocrBlock.getBounds());
+				System.out.println(" ==> added " + apiPageBlocks[pb].ocrBlock.words.size() + " OCR words");
+			}
+		}
+		System.out.println(ocrBlocks.size() + " OCR blocks and " + emptyApiBlockCount + " page blocks remaining (1)");
+		if (DEBUG_ADJUST_OCR) {
+			for (int b = 0; b < ocrBlocks.size(); b++)
+				System.out.println(" - OCR block " + ((OcrBlock) ocrBlocks.get(b)).getBounds());
+			for (int b = 0; b < apiPageBlocks.length; b++) {
+				if (apiPageBlocks[b].ocrBlock == null)
+					System.out.println(" - page block " + apiPageBlocks[b].getBounds());
+			}
+		}
+		
+		//	merge page blocks that are in same OCR block, and re-get lines
+		if (emptyApiBlockCount != 0) {
+			apiPageBlockList.clear();
+			apiPageBlockList.addAll(Arrays.asList(apiPageBlocks));
+			for (int b = 0; b < apiPageBlockList.size(); b++) {
+				PageBlock apiPageBlock = ((PageBlock) apiPageBlockList.get(b));
+				if (apiPageBlock.ocrBlock != null)
+					continue; // taken care of above ...
+				if (DEBUG_ADJUST_OCR)
+					System.out.println("Attempting to attach empty page block " + apiPageBlock.getBounds());
+				Point pbc = apiPageBlock.getCenter();
+				System.out.println(" - center is " + pbc);
+				for (int cb = 0; cb < apiPageBlockList.size(); cb++) {
+					if (cb == b)
+						continue; // little we cound do here
+					PageBlock cApiPageBlock = ((PageBlock) apiPageBlockList.get(cb));
+					if (DEBUG_ADJUST_OCR)
+						System.out.println(" - checking " + cApiPageBlock.getBounds());
+					if (cApiPageBlock.ocrBlock == null)
+						continue; // another empty block won't help ...
+					if (DEBUG_ADJUST_OCR)
+						System.out.println(" - OCR bounds are " + cApiPageBlock.ocrBlock.getBounds());
+					if (!cApiPageBlock.ocrBlock.contains(pbc))
+						continue;
+					BoundingBox mApiBlockBounds = cApiPageBlock.getBounds().union(apiPageBlock.getBounds());
+					BlockLine[] mApiBlockLines = getBlockLines(api, pageImage.currentDpi, mApiBlockBounds, true, spm, vbi);
+					if (DEBUG_ADJUST_OCR)
+						System.out.println(" ==> attached to " + cApiPageBlock.getBounds());
+					PageBlock mApiPageBlock = new PageBlock(mApiBlockLines);
+					if (DEBUG_ADJUST_OCR)
+						System.out.println(" ==> bounds are " + mApiPageBlock.getBounds());
+					mApiPageBlock.addOcrBlock(cApiPageBlock.ocrBlock);
+					apiPageBlockList.set(cb, mApiPageBlock);
+					apiPageBlockList.remove(b--);
+					emptyApiBlockCount--;
+					break;
+				}
+			}
+			if (apiPageBlockList.size() < apiPageBlocks.length)
+				apiPageBlocks = ((PageBlock[]) apiPageBlockList.toArray(new PageBlock[apiPageBlockList.size()]));
+		}
+		System.out.println(ocrBlocks.size() + " OCR blocks and " + emptyApiBlockCount + " page blocks remaining (2)");
+		if (DEBUG_ADJUST_OCR) {
+			for (int b = 0; b < ocrBlocks.size(); b++)
+				System.out.println(" - OCR block " + ((OcrBlock) ocrBlocks.get(b)).getBounds());
+			for (int b = 0; b < apiPageBlocks.length; b++) {
+				if (apiPageBlocks[b].ocrBlock == null)
+					System.out.println(" - page block " + apiPageBlocks[b].getBounds());
+			}
+		}
+		
+		//	if both empty OCR blocks and empty page blocks remain, merge them by overlap
+		if (emptyApiBlockCount != 0) {
+			apiPageBlockList.clear();
+			apiPageBlockList.addAll(Arrays.asList(apiPageBlocks));
+			for (int b = 0; b < apiPageBlockList.size(); b++) {
+				PageBlock apiPageBlock = ((PageBlock) apiPageBlockList.get(b));
+				if (apiPageBlock.ocrBlock != null)
+					continue; // taken care of above ...
+				BoundingBox apiPageBlockBounds = apiPageBlock.getBounds();
+				if (DEBUG_ADJUST_OCR)
+					System.out.println("Attempting to attach empty page block " + apiPageBlockBounds);
+				Point pbc = apiPageBlock.getCenter();
+				if (DEBUG_ADJUST_OCR)
+					System.out.println(" - center is " + pbc);
+				
+				//	merge page bloack that lie in same unassigned OCR block
+				PageBlock mApiPageBlock = null;
+				for (int cb = (b+1); cb < apiPageBlockList.size(); cb++) {
+					PageBlock cApiPageBlock = ((PageBlock) apiPageBlockList.get(cb));
+					BoundingBox cApiPageBlockBounds = cApiPageBlock.getBounds();
+					if (DEBUG_ADJUST_OCR)
+						System.out.println(" - checking " + cApiPageBlockBounds);
+					if (cApiPageBlock.ocrBlock != null)
+						continue; // we would have merged with this one above ...
+					Point cPbc = cApiPageBlock.getCenter();
+					for (int ob = 0; ob < ocrBlocks.size(); ob++) {
+						OcrBlock ocrBlock = ((OcrBlock) ocrBlocks.get(ob));
+						if (DEBUG_ADJUST_OCR)
+							System.out.println("   - checking against OCR block " + ocrBlock.getBounds());
+						if (!ocrBlock.contains(pbc))
+							continue;
+						if (!ocrBlock.contains(cPbc))
+							continue;
+						BoundingBox mApiBlockBounds = cApiPageBlockBounds.union(apiPageBlockBounds);
+						if (DEBUG_ADJUST_OCR)
+							System.out.println("   ==> combined bounds are " + mApiBlockBounds);
+						BlockLine[] mApiBlockLines = getBlockLines(api, pageImage.currentDpi, mApiBlockBounds, true, spm, vbi);
+						if (DEBUG_ADJUST_OCR)
+							System.out.println("   ==> combined lines are:");
+						BoundingBox[] mApiBlockLineBounds = new BoundingBox[mApiBlockLines.length];
+						for (int l = 0; l < mApiBlockLines.length; l++) {
+							mApiBlockLineBounds[l] = mApiBlockLines[l].getPageBounds();
+							if (DEBUG_ADJUST_OCR)
+								System.out.println("     - " + mApiBlockLines[l].getPageBounds());
+						}
+						BoundingBox mApiBlockLineHull = BoundingBox.aggregate(mApiBlockLineBounds);
+						if (DEBUG_ADJUST_OCR)
+							System.out.println("     ==> " + mApiBlockLineHull);
+						if (apiPageBlockBounds.includes(mApiBlockLineHull, false)) {
+							if (DEBUG_ADJUST_OCR)
+								System.out.println("   ==> fully contained in original " + apiPageBlockBounds);
+							continue;
+						}
+						if (cApiPageBlockBounds.includes(mApiBlockLineHull, false)) {
+							if (DEBUG_ADJUST_OCR)
+								System.out.println("   ==> fully contained in original " + cApiPageBlockBounds);
+							continue;
+						}
+						if (DEBUG_ADJUST_OCR)
+							System.out.println(" ==> attached to " + cApiPageBlock.getBounds());
+						mApiPageBlock = new PageBlock(mApiBlockLines);
+						if (DEBUG_ADJUST_OCR)
+							System.out.println(" ==> bounds are " + mApiPageBlock.getBounds());
+						break;
+					}
+					if (mApiPageBlock != null)
+						break;
+				}
+				
+				//	clean up all page blcos the lie in merge result (we might have merged across one)
+				if (mApiPageBlock == null)
+					continue;
+				for (int cb = 0; cb < apiPageBlockList.size(); cb++) {
+					PageBlock cApiPageBlock = ((PageBlock) apiPageBlockList.get(cb));
+					if (DEBUG_ADJUST_OCR)
+						System.out.println(" - checking " + cApiPageBlock.getBounds());
+					if (cApiPageBlock.ocrBlock != null)
+						continue; // we would have handled this one above ...
+					Point cPbc = cApiPageBlock.getCenter();
+					if (mApiPageBlock.contains(cPbc)) {
+						apiPageBlockList.remove(cb--);
+						emptyApiBlockCount--;
+					}
+				}
+				
+				//	store merged block, and account for it still being empty
+				apiPageBlockList.add(mApiPageBlock);
+				emptyApiBlockCount++;
+				
+				//	start over with main loop (our indexes might be all over the place now)
+				b = -1;
+			}
+			
+			//	try and attach remaining OCR blocks if we performed any mergers
+			if (apiPageBlockList.size() < apiPageBlocks.length) {
+				apiPageBlocks = ((PageBlock[]) apiPageBlockList.toArray(new PageBlock[apiPageBlockList.size()]));
+				for (int pb = 0; pb < apiPageBlocks.length; pb++) {
+					if (apiPageBlocks[pb].ocrBlock != null)
+						continue; // handled above
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("Populating page block " + apiPageBlocks[pb].getBounds());
+					int obCount = 0; 
+					for (int ob = 0; ob < ocrBlocks.size(); ob++) {
+						Point obc = ((OcrBlock) ocrBlocks.get(ob)).getCenter();
+						if (apiPageBlocks[pb].contains(obc)) {
+							apiPageBlocks[pb].addOcrBlock((OcrBlock) ocrBlocks.remove(ob--));
+							obCount++;
+						}
+					}
+					if (DEBUG_ADJUST_OCR)
+						System.out.println(" ==> added " + obCount + " OCR blocks");
+					if (apiPageBlocks[pb].ocrBlock != null) {
+						emptyApiBlockCount--;
+						if (DEBUG_ADJUST_OCR) {
+							System.out.println(" ==> OCR block bounds are " + apiPageBlocks[pb].ocrBlock.getBounds());
+							System.out.println(" ==> added " + apiPageBlocks[pb].ocrBlock.words.size() + " OCR words");
+						}
+					}
+				}
+			}
+		}
+		System.out.println(ocrBlocks.size() + " OCR blocks and " + emptyApiBlockCount + " page blocks remaining (3)");
+		if (DEBUG_ADJUST_OCR) {
+			for (int b = 0; b < ocrBlocks.size(); b++)
+				System.out.println(" - OCR block " + ((OcrBlock) ocrBlocks.get(b)).getBounds());
+			for (int b = 0; b < apiPageBlocks.length; b++) {
+				if (apiPageBlocks[b].ocrBlock == null)
+					System.out.println(" - page block " + apiPageBlocks[b].getBounds());
+			}
+		}
+		
+		//	try and assign any remaining OCR blocks (we must be out of vacant page blocks that might match)
+		for (int ob = 0; ob < ocrBlocks.size(); ob++) {
+			OcrBlock ocrBlock = ((OcrBlock) ocrBlocks.get(ob));
+			if (DEBUG_ADJUST_OCR)
+				System.out.println("Assigning vacant OCR block " + ocrBlock.getBounds());
+			Point obc = ocrBlock.getCenter();
+			if (DEBUG_ADJUST_OCR)
+				System.out.println(" - center point is " + obc);
+			for (int pb = 0; pb < apiPageBlocks.length; pb++) {
+				if (DEBUG_ADJUST_OCR)
+					System.out.println(" - checking page block " + apiPageBlocks[pb].getBounds());
+				if (apiPageBlocks[pb].contains(obc)) {
+					apiPageBlocks[pb].addOcrBlock(ocrBlock);
+					ocrBlocks.remove(ob--);
+					if (DEBUG_ADJUST_OCR)
+						System.out.println(" ==> added");
+					break;
+				}
+			}
+		}
+		System.out.println(ocrBlocks.size() + " OCR blocks and " + emptyApiBlockCount + " page blocks remaining (4)");
+		if (DEBUG_ADJUST_OCR) {
+			for (int b = 0; b < ocrBlocks.size(); b++)
+				System.out.println(" - OCR block " + ((OcrBlock) ocrBlocks.get(b)).getBounds());
+			for (int b = 0; b < apiPageBlocks.length; b++) {
+				if (apiPageBlocks[b].ocrBlock == null)
+					System.out.println(" - page block " + apiPageBlocks[b].getBounds());
+			}
+		}
+		
+		//	adjust word boundaries, transfer baselines, and collect corrected words
+		ArrayList pageWords = new ArrayList();
+		HashSet doneWords = new HashSet();
+		for (int b = 0; b < apiPageBlocks.length; b++)
+			addAdjustedOcrWordsToBlock(doc, page, apiPageBlocks[b], pageImage, adjustToWords, pageWords, doneWords, spm);
+		
+		//	salvage unhandled words
+		for (int w = 0; w < words.length; w++) {
+			if (!doneWords.contains(words[w]))
+				pageWords.add(words[w]);
+		}
+		
+		if (vbi != null) {
+			BufferedImage cbi = new BufferedImage(pageImage.image.getWidth(), pageImage.image.getHeight(), BufferedImage.TYPE_INT_ARGB);
+			Graphics2D cbiGr = cbi.createGraphics();
+			cbiGr.setColor(Color.WHITE);
+			cbiGr.fillRect(0, 0, cbi.getWidth(), cbi.getHeight());
+			cbiGr.drawImage(pageImage.image, 0, 0, pageImage.image.getWidth(), pageImage.image.getHeight(), null);
+			cbiGr.setColor(Color.BLACK);
+			for (int w = 0; w < words.length; w++)
+				cbiGr.fillRect(words[w].bounds.left, words[w].bounds.top, words[w].bounds.getWidth(), words[w].bounds.getHeight());
+			AnalysisImage aci = Imaging.wrapImage(cbi, null);
+			Region aciRootRegion = PageImageAnalysis.getPageRegion(aci, pageImage.currentDpi, minColumnMargin, minBlockMargin, columnAreas, minColumnWidth, false, spm);
+			Region[] aciBlocks = getAtomicRegions(aciRootRegion);
+			
+			vbiGr.setColor(new Color(255, 0, 0, 64));
+			for (int w = 0; w < words.length; w++)
+				vbiGr.fillRect(words[w].bounds.left, words[w].bounds.top, words[w].bounds.getWidth(), words[w].bounds.getHeight());
+			vbiGr.setColor(new Color(0, 0, 255, 64));
+//			for (int b = 0; b < apiPageBlocks.length; b++) {
+//				if (apiPageBlocks[b].ocrBlock == null)
+//					continue; // empty block ...
+//				for (int l = 0; l < apiPageBlocks[b].ocrBlock.lines.size(); l++) {
+//					OcrLine ol = ((OcrLine) apiPageBlocks[b].ocrBlock.lines.get(l));
+//					for (int w = 0; w < ol.words.size(); w++) {
+//						OcrWord ow = ((OcrWord) ol.words.get(w));
+//						BoundingBox owbb = ow.getPageBounds();
+//						vbiGr.fillRect(owbb.left, owbb.top, owbb.getWidth(), owbb.getHeight());
+//					}
+//				}
+//			}
+			for (int w = 0; w < pageWords.size(); w++) {
+				ImWord word = ((ImWord) pageWords.get(w));
+				vbiGr.fillRect(word.bounds.left, word.bounds.top, word.bounds.getWidth(), word.bounds.getHeight());
+			}
+			vbiGr.setColor(new Color(0, 0, 255, 255));
+			for (int w = 0; w < pageWords.size(); w++) {
+				ImWord word = ((ImWord) pageWords.get(w));
+				vbiGr.drawRect(word.bounds.left, word.bounds.top, word.bounds.getWidth(), word.bounds.getHeight());
+			}
+			
+			vbiGr.setStroke(new BasicStroke(3));
+			vbiGr.setColor(new Color(0, 255, 0, 128));
+			for (int b = 0; b < apiBlocks.length; b++) {
+				BoundingBox apiBb = apiBlocks[b].getBoundingBox();
+				vbiGr.drawRect(apiBb.left, apiBb.top, apiBb.getWidth(), apiBb.getHeight());
+			}
+//			vbiGr.setStroke(new BasicStroke(1));
+//			for (int b = 0; b < apiBlocks.length; b++) {
+//				if (apiBlockLines[b] == null)
+//					continue;
+//				for (int l = 0; l < apiBlockLines[b].length; l++)
+//					vbiGr.drawRect(apiBlockLines[b][l].getLeftCol(), apiBlockLines[b][l].getTopRow(), apiBlockLines[b][l].getWidth(), apiBlockLines[b][l].getHeight());
+//			}
+			vbiGr.setStroke(new BasicStroke(3));
+//			vbiGr.setColor(new Color(255, 0, 0, 128));
+//			for (int b = 0; b < aoiBlocks.length; b++) {
+//				BoundingBox aoiBb = aoiBlocks[b].getBoundingBox();
+//				vbiGr.drawRect(aoiBb.left, aoiBb.top, aoiBb.getWidth(), aoiBb.getHeight());
+//			}
+			vbiGr.setColor(new Color(0, 0, 255, 128));
+			for (int b = 0; b < aciBlocks.length; b++) {
+				BoundingBox aciBb = aciBlocks[b].getBoundingBox();
+				vbiGr.drawRect(aciBb.left, aciBb.top, aciBb.getWidth(), aciBb.getHeight());
+			}
+			
+			ImageDisplayDialog idd = new ImageDisplayDialog("OCR relative to page images");
+			idd.addImage(vbi, ("Page " + page.pageId + " Lines"));
+			idd.addImage(pageImage.image, ("Page " + page.pageId + " Scan"));
+			idd.addImage(obi, ("Page " + page.pageId + " OCR"));
+			idd.setSize(800, 800);
+			idd.setLocationRelativeTo(null);
+			idd.setVisible(true);
+		}
+		
+		//	generate and return words
+		return ((ImWord[]) pageWords.toArray(new ImWord[pageWords.size()]));
+	}
+	
+	/**
+	 * Adjust the baselines of OCR derived words to the lines in a selected
+	 * block of a page image. Further, words are also adjusted to the height of
+	 * the lines.
+	 * @param words an array holding the words to adjust
+	 * @param blockBounds the boundary of the block in the argument page image
+	 * @param adjustToWords adjust words horizontally inside lines?
+	 * @param pm a progress monitor to relay status information
+	 * @return an array holding the adjusted words
+	 */
+	public static ImWord[] adjustOcrWordsToBlock(ImWord[] words, BoundingBox blockBounds, boolean adjustToWords, ProgressMonitor pm) {
+		return adjustOcrWordsToBlock(words, null, null, null, blockBounds, adjustToWords, pm);
+	}
+	
+	/**
+	 * Adjust the baselines of OCR derived words to the lines in a selected
+	 * block of a page image. Further, words are also adjusted to the height of
+	 * the lines.
+	 * @param words an array holding the words to adjust
+	 * @param page the page the words lie in
+	 * @param blockBounds the boundary of the block in the argument page image
+	 * @param adjustToWords adjust words horizontally inside lines?
+	 * @param pm a progress monitor to relay status information
+	 * @return an array holding the adjusted words
+	 */
+	public static ImWord[] adjustOcrWordsToBlock(ImWord[] words, ImPage page, BoundingBox blockBounds, boolean adjustToWords, ProgressMonitor pm) {
+		return adjustOcrWordsToBlock(words, page, null, null, blockBounds, adjustToWords, pm);
+	}
+	
+	/**
+	 * Adjust the baselines of OCR derived words to the lines in a selected
+	 * block of a page image. Further, words are also adjusted to the height of
+	 * the lines.
+	 * @param words an array holding the words to adjust
+	 * @param page the page the words lie in
+	 * @param pageImage the image of the page the words lie in
+	 * @param blockBounds the boundary of the block in the argument page image
+	 * @param adjustToWords adjust words horizontally inside lines?
+	 * @param pm a progress monitor to relay status information
+	 * @return an array holding the adjusted words
+	 */
+	public static ImWord[] adjustOcrWordsToBlock(ImWord[] words, ImPage page, PageImage pageImage, BoundingBox blockBounds, boolean adjustToWords, ProgressMonitor pm) {
+		return adjustOcrWordsToBlock(words, page, pageImage, null, blockBounds, adjustToWords, pm);
+	}
+	
+	/**
+	 * Adjust the baselines of OCR derived words to the lines in a selected
+	 * block of a page image. Further, words are also adjusted to the height of
+	 * the lines.
+	 * @param words an array holding the words to adjust
+	 * @param page the page the words lie in
+	 * @param pageImage the image of the page the words lie in
+	 * @param api an analysis image wrapped around the page image
+	 * @param blockBounds the boundary of the block in the argument page image
+	 * @param adjustToWords adjust words horizontally inside lines?
+	 * @param pm a progress monitor to relay status information
+	 * @return an array holding the adjusted words
+	 */
+	public static ImWord[] adjustOcrWordsToBlock(ImWord[] words, ImPage page, PageImage pageImage, AnalysisImage api, BoundingBox blockBounds, boolean adjustToWords, ProgressMonitor pm) {
+		if (words.length == 0)
+			return words;
+		
+		//	check parameters
+		ImDocument doc = null;
+		int pageId = -1;
+		for (int w = 0; w < words.length; w++) {
+			if (doc == null)
+				doc = words[w].getDocument();
+			else if (words[w].getDocument() != doc)
+				throw new IllegalArgumentException("Cannot adjust words belonging to different documents");
+			if (pageId == -1)
+				pageId = words[w].pageId;
+			else if (words[w].pageId != pageId)
+				throw new IllegalArgumentException("Cannot adjust words belonging to different pages");
+		}
+		if (page == null)
+			page = doc.getPage(pageId);
+		if (pageImage == null)
+			pageImage = page.getImage();
+		if (pm == null)
+			pm = ProgressMonitor.dummy;
+		if (api == null)
+			api = Imaging.wrapImage(pageImage.image, null);
+		
+		//	adjust and return words
+		ArrayList pageWords = new ArrayList();
+		HashSet doneWords = new HashSet();
+		addAdjustedOcrWordsToBlock(doc, page, words, pageImage, api, blockBounds, adjustToWords, pageWords, doneWords, pm);
+		for (int w = 0; w < words.length; w++) {
+			if (!doneWords.contains(words[w]))
+				pageWords.add(words[w]);
+		}
+		return ((ImWord[]) pageWords.toArray(new ImWord[pageWords.size()]));
+	}
+	
+	private static void addAdjustedOcrWordsToBlock(ImDocument doc, ImPage page, ImWord[] words, PageImage pageImage, AnalysisImage api, BoundingBox blockBounds, boolean adjustToWords, ArrayList pageWords, HashSet doneWords, ProgressMonitor pm) {
+		BufferedImage vbi = null;
+		Graphics2D vbiGr = null;
+		if (DEBUG_ADJUST_OCR) {
+			vbi = new BufferedImage(pageImage.image.getWidth(), pageImage.image.getHeight(), BufferedImage.TYPE_INT_ARGB);
+			vbiGr = vbi.createGraphics();
+			vbiGr.setColor(Color.WHITE);
+			vbiGr.fillRect(0, 0, vbi.getWidth(), vbi.getHeight());
+			vbiGr.drawImage(pageImage.image, 0, 0, pageImage.image.getWidth(), pageImage.image.getHeight(), null);
+		}
+		BlockLine[] apiBlockLines = getBlockLines(api, pageImage.currentDpi, blockBounds, true, pm, vbi);
+		PageBlock apiPageBlock = new PageBlock(apiBlockLines);
+		
+		//	perform the actual work
+		BoundingBox ocrBlockBounds = ImLayoutObject.getAggregateBox(words);
+		apiPageBlock.ocrBlock = new OcrBlock(ocrBlockBounds);
+		apiPageBlock.ocrBlock.words.addAll(Arrays.asList(words));
+		addAdjustedOcrWordsToBlock(doc, page, apiPageBlock, pageImage, adjustToWords, pageWords, doneWords, pm);
+		
+		if (vbi != null) {
+			BufferedImage cbi = new BufferedImage(pageImage.image.getWidth(), pageImage.image.getHeight(), BufferedImage.TYPE_INT_ARGB);
+			Graphics2D cbiGr = cbi.createGraphics();
+			cbiGr.setColor(Color.WHITE);
+			cbiGr.fillRect(0, 0, cbi.getWidth(), cbi.getHeight());
+			cbiGr.drawImage(pageImage.image, 0, 0, pageImage.image.getWidth(), pageImage.image.getHeight(), null);
+			cbiGr.setColor(Color.BLACK);
+			for (int w = 0; w < words.length; w++)
+				cbiGr.fillRect(words[w].bounds.left, words[w].bounds.top, words[w].bounds.getWidth(), words[w].bounds.getHeight());
+			
+			vbiGr.setColor(new Color(255, 0, 0, 64));
+			for (int w = 0; w < words.length; w++)
+				vbiGr.fillRect(words[w].bounds.left, words[w].bounds.top, words[w].bounds.getWidth(), words[w].bounds.getHeight());
+			vbiGr.setColor(new Color(0, 0, 255, 64));
+//			for (int b = 0; b < apiPageBlocks.length; b++) {
+//				if (apiPageBlocks[b].ocrBlock == null)
+//					continue; // empty block ...
+//				for (int l = 0; l < apiPageBlocks[b].ocrBlock.lines.size(); l++) {
+//					OcrLine ol = ((OcrLine) apiPageBlocks[b].ocrBlock.lines.get(l));
+//					for (int w = 0; w < ol.words.size(); w++) {
+//						OcrWord ow = ((OcrWord) ol.words.get(w));
+//						BoundingBox owbb = ow.getPageBounds();
+//						vbiGr.fillRect(owbb.left, owbb.top, owbb.getWidth(), owbb.getHeight());
+//					}
+//				}
+//			}
+			for (int w = 0; w < pageWords.size(); w++) {
+				ImWord word = ((ImWord) pageWords.get(w));
+				vbiGr.fillRect(word.bounds.left, word.bounds.top, word.bounds.getWidth(), word.bounds.getHeight());
+			}
+			
+			vbiGr.setStroke(new BasicStroke(3));
+			vbiGr.setColor(new Color(0, 255, 0, 128));
+			BoundingBox apiBb = apiPageBlock.getBounds();
+			vbiGr.drawRect(apiBb.left, apiBb.top, apiBb.getWidth(), apiBb.getHeight());
+//			vbiGr.setStroke(new BasicStroke(1));
+//			for (int b = 0; b < apiBlocks.length; b++) {
+//				if (apiBlockLines[b] == null)
+//					continue;
+//				for (int l = 0; l < apiBlockLines[b].length; l++)
+//					vbiGr.drawRect(apiBlockLines[b][l].getLeftCol(), apiBlockLines[b][l].getTopRow(), apiBlockLines[b][l].getWidth(), apiBlockLines[b][l].getHeight());
+//			}
+//			vbiGr.setStroke(new BasicStroke(3));
+//			vbiGr.setColor(new Color(255, 0, 0, 128));
+//			for (int b = 0; b < aoiBlocks.length; b++) {
+//				BoundingBox aoiBb = aoiBlocks[b].getBoundingBox();
+//				vbiGr.drawRect(aoiBb.left, aoiBb.top, aoiBb.getWidth(), aoiBb.getHeight());
+//			}
+//			vbiGr.setColor(new Color(0, 0, 255, 128));
+//			for (int b = 0; b < aciBlocks.length; b++) {
+//				BoundingBox aciBb = aciBlocks[b].getBoundingBox();
+//				vbiGr.drawRect(aciBb.left, aciBb.top, aciBb.getWidth(), aciBb.getHeight());
+//			}
+			
+			ImageDisplayDialog idd = new ImageDisplayDialog("OCR relative to page images");
+			idd.addImage(vbi, ("Block " + blockBounds + " Lines"));
+			idd.addImage(pageImage.image, ("Block " + blockBounds + " Scan"));
+			idd.setSize(800, 800);
+			idd.setLocationRelativeTo(null);
+			idd.setVisible(true);
+		}
+	}
+	
+	/**
+	 * Adjust the horizontal extent of OCR derived words to the glyphs in the
+	 * lines that lie inside a block of a page image.
+	 * @param words an array holding the words to adjust
+	 * @param blockBounds the boundary of the block in the argument page image
+	 * @param pm a progress monitor to relay status information
+	 * @return an array holding the adjusted words
+	 */
+	public static ImWord[] adjustOcrWordsToPageWords(ImWord[] words, BoundingBox blockBounds, ProgressMonitor pm) {
+		return adjustOcrWordsToPageWords(words, null, null, blockBounds, pm);
+	}
+	
+	/**
+	 * Adjust the horizontal extent of OCR derived words to the glyphs in the
+	 * lines that lie inside a block of a page image.
+	 * @param words an array holding the words to adjust
+	 * @param pageImage the image of the page the words lie in
+	 * @param blockBounds the boundary of the block in the argument page image
+	 * @param pm a progress monitor to relay status information
+	 * @return an array holding the adjusted words
+	 */
+	public static ImWord[] adjustOcrWordsToPageWords(ImWord[] words, PageImage pageImage, BoundingBox blockBounds, ProgressMonitor pm) {
+		return adjustOcrWordsToPageWords(words, null, pageImage, blockBounds, pm);
+	}
+	
+	/**
+	 * Adjust the horizontal extent of OCR derived words to the glyphs in the
+	 * lines that lie inside a block of a page image.
+	 * @param words an array holding the words to adjust
+	 * @param page the page the words lie in
+	 * @param blockBounds the boundary of the block in the argument page image
+	 * @param pm a progress monitor to relay status information
+	 * @return an array holding the adjusted words
+	 */
+	public static ImWord[] adjustOcrWordsToPageWords(ImWord[] words, ImPage page, BoundingBox blockBounds, ProgressMonitor pm) {
+		return adjustOcrWordsToPageWords(words, page, null, blockBounds, pm);
+	}
+	
+	/**
+	 * Adjust the horizontal extent of OCR derived words to the glyphs in the
+	 * lines that lie inside a block of a page image.
+	 * @param words an array holding the words to adjust
+	 * @param page the page the words lie in
+	 * @param pageImage the image of the page the words lie in
+	 * @param blockBounds the boundary of the block in the argument page image
+	 * @param pm a progress monitor to relay status information
+	 * @return an array holding the adjusted words
+	 */
+	public static ImWord[] adjustOcrWordsToPageWords(ImWord[] words, ImPage page, PageImage pageImage, BoundingBox blockBounds, ProgressMonitor pm) {
+		if (words.length == 0)
+			return words;
+		
+		//	check parameters
+		ImDocument doc = null;
+		int pageId = -1;
+		for (int w = 0; w < words.length; w++) {
+			if (doc == null)
+				doc = words[w].getDocument();
+			else if (words[w].getDocument() != doc)
+				throw new IllegalArgumentException("Cannot adjust words belonging to different documents");
+			if (pageId == -1)
+				pageId = words[w].pageId;
+			else if (words[w].pageId != pageId)
+				throw new IllegalArgumentException("Cannot adjust words belonging to different pages");
+		}
+		if (page == null)
+			page = doc.getPage(pageId);
+		if (pageImage == null)
+			pageImage = page.getImage();
+		if (pm == null)
+			pm = ProgressMonitor.dummy;
+		
+		//	adjust and return words
+		ArrayList pageWords = new ArrayList();
+		HashSet doneWords = new HashSet();
+		addAdjustedOcrWordsToPageWords(doc, words, page, pageImage, blockBounds, pageWords, doneWords, pm);
+		for (int w = 0; w < words.length; w++) {
+			if (!doneWords.contains(words[w]))
+				pageWords.add(words[w]);
+		}
+		return ((ImWord[]) pageWords.toArray(new ImWord[pageWords.size()]));
+	}
+	
+	private static void addAdjustedOcrWordsToPageWords(ImDocument doc, ImWord[] words, ImPage page, PageImage pageImage, BoundingBox blockBounds, ArrayList pageWords, HashSet doneWord, ProgressMonitor pm) {
+		BufferedImage vbi = null;
+		Graphics2D vbiGr = null;
+		if (DEBUG_ADJUST_OCR) {
+			vbi = new BufferedImage(pageImage.image.getWidth(), pageImage.image.getHeight(), BufferedImage.TYPE_INT_ARGB);
+			vbiGr = vbi.createGraphics();
+			vbiGr.setColor(Color.WHITE);
+			vbiGr.fillRect(0, 0, vbi.getWidth(), vbi.getHeight());
+			vbiGr.drawImage(pageImage.image, 0, 0, pageImage.image.getWidth(), pageImage.image.getHeight(), null);
+		}
+		
+		//	make sure we have lines to work with (required during OCR decoding, as lines are added after words)
+		ImRegion[] blockLines = page.getRegionsInside(ImRegion.LINE_ANNOTATION_TYPE, blockBounds, false);
+		if (blockLines.length == 0) {
+			ImUtils.sortLeftRightTopDown(words);
+			ImWord lastWord = null;
+			int lineStart = 0;
+			ArrayList bLines = new ArrayList();
+			for (int w = 0; w < words.length; w++) {
+				ImWord word = words[w];
+				if ((lastWord != null) && ImUtils.areTextFlowBreak(lastWord, word)) {
+					BoundingBox lineBounds = ImLayoutObject.getAggregateBox(words, lineStart, w);
+					bLines.add(new ImRegion(doc, page.pageId, lineBounds, ImRegion.LINE_ANNOTATION_TYPE));
+					if (DEBUG_ADJUST_OCR) {
+						System.out.print("  - got line at " + lineBounds + " with " + (w - lineStart) + " words:");
+						for (int lw = lineStart; lw < w; lw++)
+							System.out.print(" " + words[lw].getString());
+						System.out.println();
+					}
+					lineStart = w;
+				}
+				lastWord = word;
+			}
+			if (lastWord != null) {
+				BoundingBox lineBounds = ImLayoutObject.getAggregateBox(words, lineStart, words.length);
+				bLines.add(new ImRegion(doc, page.pageId, lineBounds, ImRegion.LINE_ANNOTATION_TYPE));
+				if (DEBUG_ADJUST_OCR) {
+					System.out.print("  - got line at " + lineBounds + " with " + (words.length - lineStart) + " words:");
+					for (int lw = lineStart; lw < words.length; lw++)
+						System.out.print(" " + words[lw].getString());
+					System.out.println();
+				}
+			}
+			blockLines = ((ImRegion[]) bLines.toArray(new ImRegion[bLines.size()]));
+		}
+		
+		//	synthesize block from given OCR words
+		Arrays.sort(blockLines, ImUtils.topDownOrder);
+		BlockLine[] apiBlockLines = new BlockLine[blockLines.length];
+		for (int l = 0; l < blockLines.length; l++) {
+			int relLeft = (blockLines[l].bounds.left - blockBounds.left);
+			int relRight = (blockLines[l].bounds.right - blockBounds.left);
+			int relTop = (blockLines[l].bounds.top - blockBounds.top);
+			int relBottom = (blockLines[l].bounds.bottom - blockBounds.top);
+			apiBlockLines[l] = new BlockLine(blockBounds, 0 /* noo need for a color here */, relLeft, relRight, relTop, relBottom);
+			
+			//	add line local region coloring (we need that to adjust words horizontally)
+			AnalysisImage lineAi = Imaging.wrapImage(pageImage.image.getSubimage(blockLines[l].bounds.left, blockLines[l].bounds.top, blockLines[l].bounds.getWidth(), blockLines[l].bounds.getHeight()), null);
+			apiBlockLines[l].setRegions(lineAi);
+			
+			//	measure region coloring of line
+			measureRegions(apiBlockLines[l].regionColors, apiBlockLines[l].regionSizes, apiBlockLines[l].regionMinCols, apiBlockLines[l].regionMaxCols, apiBlockLines[l].regionMinRows, apiBlockLines[l].regionMaxRows);
+			
+			//	attach small regions (dots, accents) downward
+			attachSmallRegionsDownward(apiBlockLines[l].regionColors, (pageImage.currentDpi / 12), (pageImage.currentDpi / 6), 0, apiBlockLines[l].regionSizes, apiBlockLines[l].regionMinCols, apiBlockLines[l].regionMaxCols, apiBlockLines[l].regionMinRows, apiBlockLines[l].regionMaxRows, -1, -1, null);
+			
+			//	determine baseline
+			CountingSet lineRegionBottomCounts = new CountingSet(new TreeMap());
+			for (int reg = 1; reg < apiBlockLines[l].regionSizes.length; reg++) {
+				if (apiBlockLines[l].regionSizes[reg] == 0)
+					continue; // attached above
+				//System.out.println(" - " + reg + ": " + blockLines[l].lineRegionSizes[reg] + " pixels in " + blockLines[l].lineRegionMinCols[reg] + "-" + blockLines[l].lineRegionMaxCols[reg] + " x " + blockLines[l].lineRegionMinRows[reg] + "-" + blockLines[l].lineRegionMaxRows[reg]);
+				lineRegionBottomCounts.add(new Integer(apiBlockLines[l].regionMaxRows[reg]));
+			}
+			int avgLineRegionBottom = getAverageMid60(lineRegionBottomCounts, (apiBlockLines[l].getHeight() / 2), Integer.MAX_VALUE);
+			apiBlockLines[l].baseline = avgLineRegionBottom;
+		}
+		PageBlock apiPageBlock = new PageBlock(apiBlockLines);
+		
+		//	adjust words
+		BoundingBox ocrBlockBounds = ImLayoutObject.getAggregateBox(words);
+		apiPageBlock.ocrBlock = new OcrBlock(ocrBlockBounds);
+		apiPageBlock.ocrBlock.words.addAll(Arrays.asList(words));
+		addAdjustedOcrWordsToBlock(doc, page, apiPageBlock, pageImage, true, pageWords, doneWord, pm);
+		
+		if (vbi != null) {
+			BufferedImage cbi = new BufferedImage(pageImage.image.getWidth(), pageImage.image.getHeight(), BufferedImage.TYPE_INT_ARGB);
+			Graphics2D cbiGr = cbi.createGraphics();
+			cbiGr.setColor(Color.WHITE);
+			cbiGr.fillRect(0, 0, cbi.getWidth(), cbi.getHeight());
+			cbiGr.drawImage(pageImage.image, 0, 0, pageImage.image.getWidth(), pageImage.image.getHeight(), null);
+			cbiGr.setColor(Color.BLACK);
+			for (int w = 0; w < words.length; w++)
+				cbiGr.fillRect(words[w].bounds.left, words[w].bounds.top, words[w].bounds.getWidth(), words[w].bounds.getHeight());
+//			AnalysisImage aci = Imaging.wrapImage(cbi, null);
+			
+			vbiGr.setColor(new Color(255, 0, 0, 64));
+			for (int w = 0; w < words.length; w++)
+				vbiGr.fillRect(words[w].bounds.left, words[w].bounds.top, words[w].bounds.getWidth(), words[w].bounds.getHeight());
+			vbiGr.setColor(new Color(0, 0, 255, 64));
+//			for (int b = 0; b < apiPageBlocks.length; b++) {
+//				if (apiPageBlocks[b].ocrBlock == null)
+//					continue; // empty block ...
+//				for (int l = 0; l < apiPageBlocks[b].ocrBlock.lines.size(); l++) {
+//					OcrLine ol = ((OcrLine) apiPageBlocks[b].ocrBlock.lines.get(l));
+//					for (int w = 0; w < ol.words.size(); w++) {
+//						OcrWord ow = ((OcrWord) ol.words.get(w));
+//						BoundingBox owbb = ow.getPageBounds();
+//						vbiGr.fillRect(owbb.left, owbb.top, owbb.getWidth(), owbb.getHeight());
+//					}
+//				}
+//			}
+			for (int w = 0; w < pageWords.size(); w++) {
+				ImWord word = ((ImWord) pageWords.get(w));
+				vbiGr.fillRect(word.bounds.left, word.bounds.top, word.bounds.getWidth(), word.bounds.getHeight());
+			}
+			vbiGr.setColor(new Color(0, 0, 255, 255));
+			for (int w = 0; w < pageWords.size(); w++) {
+				ImWord word = ((ImWord) pageWords.get(w));
+				vbiGr.drawRect(word.bounds.left, word.bounds.top, word.bounds.getWidth(), word.bounds.getHeight());
+			}
+			
+			vbiGr.setStroke(new BasicStroke(3));
+			vbiGr.setColor(new Color(0, 255, 0, 128));
+			BoundingBox apiBb = apiPageBlock.getBounds();
+			vbiGr.drawRect(apiBb.left, apiBb.top, apiBb.getWidth(), apiBb.getHeight());
+//			vbiGr.setStroke(new BasicStroke(1));
+//			for (int b = 0; b < apiBlocks.length; b++) {
+//				if (apiBlockLines[b] == null)
+//					continue;
+//				for (int l = 0; l < apiBlockLines[b].length; l++)
+//					vbiGr.drawRect(apiBlockLines[b][l].getLeftCol(), apiBlockLines[b][l].getTopRow(), apiBlockLines[b][l].getWidth(), apiBlockLines[b][l].getHeight());
+//			}
+//			vbiGr.setStroke(new BasicStroke(3));
+//			vbiGr.setColor(new Color(255, 0, 0, 128));
+//			for (int b = 0; b < aoiBlocks.length; b++) {
+//				BoundingBox aoiBb = aoiBlocks[b].getBoundingBox();
+//				vbiGr.drawRect(aoiBb.left, aoiBb.top, aoiBb.getWidth(), aoiBb.getHeight());
+//			}
+//			vbiGr.setColor(new Color(0, 0, 255, 128));
+//			for (int b = 0; b < aciBlocks.length; b++) {
+//				BoundingBox aciBb = aciBlocks[b].getBoundingBox();
+//				vbiGr.drawRect(aciBb.left, aciBb.top, aciBb.getWidth(), aciBb.getHeight());
+//			}
+			
+			ImageDisplayDialog idd = new ImageDisplayDialog("OCR relative to page images");
+			idd.addImage(vbi, ("Page " + page.pageId + "." + blockBounds + " Lines"));
+			idd.addImage(pageImage.image, ("Page " + page.pageId + "." + blockBounds + " Scan"));
+			idd.setSize(800, 800);
+			idd.setLocationRelativeTo(null);
+			idd.setVisible(true);
+		}
+	}
+	
+	//	TODO actually use progress monitor !!!
+	private static void addAdjustedOcrWordsToBlock(ImDocument doc, ImPage page, PageBlock apiPageBlock, PageImage pageImage, boolean adjustWords, ArrayList pageWords, HashSet doneWords, ProgressMonitor pm) {
+		if (apiPageBlock.ocrBlock == null)
+			return;
+		
+		//	assess existing block structure
+		BoundingBox ocrBlockBounds = apiPageBlock.ocrBlock.getBounds();
+		apiPageBlock.ocrBlock.exBlocks = page.getRegionsInside(ImRegion.BLOCK_ANNOTATION_TYPE, ocrBlockBounds, true);
+		ImRegion[] exParagraphs = page.getRegionsInside(ImRegion.PARAGRAPH_TYPE, ocrBlockBounds, true);
+		Arrays.sort(exParagraphs, ImUtils.topDownOrder);
+		ImRegion[] exLines = page.getRegionsInside(ImRegion.LINE_ANNOTATION_TYPE, ocrBlockBounds, true);
+		Arrays.sort(exLines, ImUtils.topDownOrder);
+		ImRegion[] endingExPara = new ImRegion[exLines.length];
+		for (int l = 0, p = 0; (l < exLines.length); l++) {
+			if ((p < exParagraphs.length) && exParagraphs[p].bounds.includes(exLines[l].bounds, true)) {
+				endingExPara[l] = exParagraphs[p];
+				p++; // we've found the start of this one, switch to next paragraph
+			}
+			else if (l != 0) {
+				//	we're still inside previous paragraph, carry reference
+				endingExPara[l] = endingExPara[l - 1];
+				endingExPara[l - 1] = null;
+			}
+		}
+		
+		//	sort block words into lines (only now that we've merged any OCR blocks lying in same page block, and vice versa)
+		if (DEBUG_ADJUST_OCR)
+			System.out.println("Structuring page block " + apiPageBlock.getBounds());
+		ImUtils.sortLeftRightTopDown(apiPageBlock.ocrBlock.words);
+		OcrLine ocrLine = null;
+		ImWord lastWord = null;
+		for (int w = 0; w < apiPageBlock.ocrBlock.words.size(); w++) {
+			ImWord word = ((ImWord) apiPageBlock.ocrBlock.words.get(w));
+			if ((lastWord == null) || ImUtils.areTextFlowBreak(lastWord, word)) {
+				if ((DEBUG_ADJUST_OCR) && (ocrLine != null)) {
+					System.out.print("  - got line at " + ocrLine.getPageBounds() + " with " + ocrLine.words.size() + " words:");
+					for (int lw = 0; lw < ocrLine.words.size(); lw++)
+						System.out.print(" " + ((OcrWord) ocrLine.words.get(lw)).word.getString());
+					System.out.println();
+				}
+				if (ocrLine != null)
+					Collections.sort(ocrLine.words);
+				ocrLine = new OcrLine(apiPageBlock.ocrBlock);
+			}
+			ocrLine.addWord(word);
+			lastWord = word;
+		}
+		if (ocrLine != null)
+			Collections.sort(ocrLine.words);
+		if ((DEBUG_ADJUST_OCR) && (ocrLine != null)) {
+			System.out.print("  - got line at " + ocrLine.getPageBounds() + " with " + ocrLine.words.size() + " words:");
+			for (int lw = 0; lw < ocrLine.words.size(); lw++)
+				System.out.print(" " + ((OcrWord) ocrLine.words.get(lw)).word.getString());
+			System.out.println();
+		}
+		if (DEBUG_ADJUST_OCR)
+			System.out.println("  ==> got " + apiPageBlock.ocrBlock.lines.size() + " lines");
+		
+		//	do we have a match?
+		if (apiPageBlock.blockLines.length != apiPageBlock.ocrBlock.lines.size())
+			return; // just too ambiguous, and word salvaging will take care of the words for us
+		
+		//	associate OCR lines with existing line regions (before we start moving things around)
+		for (int ol = 0; ol < apiPageBlock.ocrBlock.lines.size(); ol++) {
+			ocrLine = ((OcrLine) apiPageBlock.ocrBlock.lines.get(ol));
+			BoundingBox olBb = ocrLine.getPageBounds();
+			for (int l = 0; l < exLines.length; l++)
+				if (olBb.includes(exLines[l].bounds, true)) {
+					ocrLine.exLine = exLines[l];
+					ocrLine.endingExPara = endingExPara[l];
+					break;
+				}
+		}
+		
+		/*
+TODO Tame OCR adjustment to prevent errors like the one reported by Felipe:
+- limit how far OCR lines will stretch horizontally _after_ whole-block translation ...
+- ... and also apply to horizontal stretch for whole block (especially in single-line blocks)
+==> should help prevent havoc in lines with leading or trailing words missed by OCR
+- throw OcrAdjustmentException (extends IllegalArgumentException) instead ...
+- ... containing lines ot blocks with such problems
+- catch those exceptions in PDF decoder ...
+- ... and use contained information to mark ocrAdjustmentFailure regions
+- maybe handle differently in OcrAdjuster gizmo if latter running on single block ...
+- ... but keep up in whole-document mode
+  ==> add respective switch(es) to method signatures ...
+  ==> ... most likely as maximum horizontal stretch factor ...
+  ==> ... taking inverse if <1 to simplify parametrization ...
+  ==> ... and also add respective template parameter
+- pick up ocrAdjustmentFailure regions in OCR QC (alongside OCR conflict areas) ...
+- ... and also provide respective visualization support via display extensions
+==> test whole thing with very document from Carol/Felipe to get idea of sensible thresholds for horizontal stretch (for both whole blocks and individual lines) ...
+==> ... but also check through usual "off" embedded OCR documents (Puffinus <xyz>, etc.) most likely noted by name in test method
+==> TEST: BullSocVaudScNat.68.333-349.pdf.imd (version before we fixed font issues)
+		 */
+		
+		//	adjust OCR block to page block (limiting shift and stretch, though, as especially single-line blocks can be missing leading or tailing words)
+		if (DEBUG_ADJUST_OCR) {
+			System.out.println("Adjusting lines in page block " + apiPageBlock.getBounds());
+			System.out.println(" - got " + apiPageBlock.blockLines.length + " block lines and " + apiPageBlock.ocrBlock.lines.size() + " OCR lines");
+			System.out.println(" - OCR block is " + apiPageBlock.ocrBlock.getBounds());
+		}
+		int widthDelta = Math.abs((apiPageBlock.right - apiPageBlock.left) - (apiPageBlock.ocrBlock.right - apiPageBlock.ocrBlock.left));
+		int pbWidthPercent = ((widthDelta * 100) / (apiPageBlock.right - apiPageBlock.left));
+		int obWidthPercent = ((widthDelta * 100) / (apiPageBlock.ocrBlock.right - apiPageBlock.ocrBlock.left));
+		if (DEBUG_ADJUST_OCR)
+			System.out.println(" - width difference is " + widthDelta + " (" + pbWidthPercent + "% of page block, " + obWidthPercent + "% of OCR block)");
+		if ((pbWidthPercent < 50) && (obWidthPercent < 50)) {
+			apiPageBlock.ocrBlock.shiftHorizontally(apiPageBlock.left - apiPageBlock.ocrBlock.left);
+			apiPageBlock.ocrBlock.stretchHorizontally(apiPageBlock.right - apiPageBlock.ocrBlock.right);
+		}
+		else if (DEBUG_ADJUST_OCR)
+			System.out.println("   ==> horizontal adjustment rejected");
+		int heightDelta = Math.abs((apiPageBlock.bottom - apiPageBlock.top) - (apiPageBlock.ocrBlock.bottom - apiPageBlock.ocrBlock.top));
+		int pbHeightPercent = ((heightDelta * 100) / (apiPageBlock.bottom - apiPageBlock.top));
+		int obHeightPercent = ((heightDelta * 100) / (apiPageBlock.ocrBlock.bottom - apiPageBlock.ocrBlock.top));
+		if (DEBUG_ADJUST_OCR)
+			System.out.println(" - heigth difference is " + heightDelta + " (" + pbHeightPercent + "% of page block, " + obHeightPercent + "% of OCR block)");
+		if ((pbHeightPercent < 50) && (obHeightPercent < 50)) {
+			apiPageBlock.ocrBlock.shiftVertically(apiPageBlock.top - apiPageBlock.ocrBlock.top);
+			apiPageBlock.ocrBlock.stretchVertically(apiPageBlock.bottom - apiPageBlock.ocrBlock.bottom);
+		}
+		else if (DEBUG_ADJUST_OCR)
+			System.out.println("   ==> vertical adjustment rejected");
+		
+		//	adjust word boundaries, transfer baselines, and collect words
+		if (DEBUG_ADJUST_OCR)
+			System.out.println("Evaluating page block " + apiPageBlock.getBounds());
+		
+		//	pair up page image lines with OCR lines
+		int lastMatchOl = -1;
+		for (int bl = 0; bl < apiPageBlock.blockLines.length; bl++) {
+			BoundingBox blBb = apiPageBlock.blockLines[bl].getPageBounds();
+			if (DEBUG_ADJUST_OCR)
+				System.out.println(" - line " + blBb/* + " with " + apiPageBlocks[b].blockLines[bl].getWordCount() + " words"*/);
+			for (int ol = (lastMatchOl + 1); ol < apiPageBlock.ocrBlock.lines.size(); ol++) {
+				ocrLine = ((OcrLine) apiPageBlock.ocrBlock.lines.get(ol));
+				BoundingBox olBb = ocrLine.getPageBounds();
+				if (!blBb.includes(olBb, true))
+					continue;
+//				if (apiPageBlock.blockLines[bl].ocrLine == null)
+//					apiPageBlock.blockLines[bl].ocrLine = ocrLineOld;
+//				else throw new RuntimeException("GOTCHA !!!");
+				apiPageBlock.blockLines[bl].ocrLine = ocrLine;
+				int owLeftGap = (apiPageBlock.blockLines[bl].getPageLeft() - ocrLine.getPageLeft());
+				if (DEBUG_ADJUST_OCR) {
+					System.out.println("   - matched to OCR line " + olBb + " with " + ocrLine.words.size() + " words");
+					System.out.println("   - line region coloring is " + apiPageBlock.blockLines[bl].regionColors.length + "x" + apiPageBlock.blockLines[bl].regionColors[0].length);
+					System.out.println("   - block offset compensation gap is " + owLeftGap);
+				}
+			}
+		}
+		
+		//	if active, adjust word boundaries horizontally to (a) fully include regions and (b) also adjacent regions
+		CountingSet blockRegionNeighborGaps = new CountingSet(new TreeMap());
+		CountingSet blockWordRegionNeighborGaps = new CountingSet(new TreeMap());
+		ArrayList blockWords = new ArrayList();
+		ArrayList paraWords = new ArrayList();
+		ArrayList lineWords = new ArrayList();
+		HashMap blockWordsToLines = new HashMap();
+		if (adjustWords) {
+			for (int bl = 0; bl < apiPageBlock.blockLines.length; bl++) {
+				if (apiPageBlock.blockLines[bl].ocrLine == null)
+					continue; // nothing to adjust here
+				BoundingBox blBb = apiPageBlock.blockLines[bl].getPageBounds();
+				if (DEBUG_ADJUST_OCR)
+					System.out.println(" - line " + blBb/* + " with " + apiPageBlocks[b].blockLines[bl].getWordCount() + " words"*/);
+				
+				//	get fresh region coloring of line (gets somewhat messed up by whole-block analysis)
+				AnalysisImage lineAi = Imaging.wrapImage(pageImage.image.getSubimage(apiPageBlock.blockLines[bl].getPageLeft(), apiPageBlock.blockLines[bl].getPageTop(), apiPageBlock.blockLines[bl].getWidth(), apiPageBlock.blockLines[bl].getHeight()), null);
+				apiPageBlock.blockLines[bl].setRegions(lineAi);
+				
+				//	measure region coloring of line
+				measureRegions(apiPageBlock.blockLines[bl].regionColors, apiPageBlock.blockLines[bl].regionSizes, apiPageBlock.blockLines[bl].regionMinCols, apiPageBlock.blockLines[bl].regionMaxCols, apiPageBlock.blockLines[bl].regionMinRows, apiPageBlock.blockLines[bl].regionMaxRows);
+				
+				//	attach small regions (dots, accents) downward
+				attachSmallRegionsDownward(apiPageBlock.blockLines[bl].regionColors, (pageImage.currentDpi / 12), (pageImage.currentDpi / 6), 0, apiPageBlock.blockLines[bl].regionSizes, apiPageBlock.blockLines[bl].regionMinCols, apiPageBlock.blockLines[bl].regionMaxCols, apiPageBlock.blockLines[bl].regionMinRows, apiPageBlock.blockLines[bl].regionMaxRows, -1, -1, null);
+				
+				//	sort regions left to right (simplifies neighbor search)
+				long[] lineRegionsLeftRight = new long[apiPageBlock.blockLines[bl].regionSizes.length];
+				Arrays.fill(lineRegionsLeftRight, Long.MAX_VALUE);
+				for (int reg = 1; reg < apiPageBlock.blockLines[bl].regionSizes.length; reg++) {
+					if (apiPageBlock.blockLines[bl].regionSizes[reg] == 0)
+						continue; // attached above
+					lineRegionsLeftRight[reg] &= apiPageBlock.blockLines[bl].regionMinCols[reg];
+					lineRegionsLeftRight[reg] <<= 32;
+					lineRegionsLeftRight[reg] |= reg;
+				}
+				Arrays.sort(lineRegionsLeftRight);
+				
+				//	measure actual distances of regions to closest right neighbor
+				apiPageBlock.blockLines[bl].regionLeftNeighbors = new int[apiPageBlock.blockLines[bl].regionSizes.length];
+				Arrays.fill(apiPageBlock.blockLines[bl].regionLeftNeighbors, 0);
+				apiPageBlock.blockLines[bl].regionLeftNeighborDistances = new int[apiPageBlock.blockLines[bl].regionSizes.length];
+				Arrays.fill(apiPageBlock.blockLines[bl].regionLeftNeighborDistances, Integer.MAX_VALUE);
+				apiPageBlock.blockLines[bl].regionRightNeighbors = new int[apiPageBlock.blockLines[bl].regionSizes.length];
+				Arrays.fill(apiPageBlock.blockLines[bl].regionRightNeighbors, 0);
+				apiPageBlock.blockLines[bl].regionRightNeighborDistances = new int[apiPageBlock.blockLines[bl].regionSizes.length];
+				Arrays.fill(apiPageBlock.blockLines[bl].regionRightNeighborDistances, Integer.MAX_VALUE);
+				CountingSet lineRegionNeighborGaps = new CountingSet(new TreeMap());
+				for (int lrReg = 0; lrReg < (lineRegionsLeftRight.length - 1); lrReg++) {
+					if (lineRegionsLeftRight[lrReg] == Long.MAX_VALUE)
+						break; // nothing more to come
+					if (lineRegionsLeftRight[lrReg + 1] == Long.MAX_VALUE)
+						break; // nothing more to come on our right
+					int reg = ((int) (lineRegionsLeftRight[lrReg] & 0x7FFFFFFF));
+					if (apiPageBlock.blockLines[bl].regionSizes[reg] == 0)
+						continue; // attached above
+					int enReg = ((int) (lineRegionsLeftRight[lrReg + 1] & 0x7FFFFFFF));
+					if (apiPageBlock.blockLines[bl].regionSizes[enReg] == 0)
+						continue; // attached above
+					for (int c = apiPageBlock.blockLines[bl].regionMinCols[reg]; c <= apiPageBlock.blockLines[bl].regionMaxCols[reg]; c++) {
+						for (int r = apiPageBlock.blockLines[bl].regionMinRows[reg]; r <= apiPageBlock.blockLines[bl].regionMaxRows[reg]; r++) {
+							if (apiPageBlock.blockLines[bl].regionColors[c][r] != reg)
+								continue;
+							int nReg = -1;
+							int nRegDist = -1;
+							for (int lc = (c+1); lc < apiPageBlock.blockLines[bl].regionColors.length; lc++) {
+								if (apiPageBlock.blockLines[bl].regionColors[lc][r] == reg)
+									break; // we're getting back to this one in next column
+								if (apiPageBlock.blockLines[bl].regionColors[lc][r] == 0)
+									continue; // nothing there
+								int lReg = apiPageBlock.blockLines[bl].regionColors[lc][r];
+								if (apiPageBlock.blockLines[bl].regionSizes[lReg] == 0)
+									continue; // attached above
+								nReg = lReg;
+								nRegDist = (lc - (c + 1));
+								break; // we found our neighbor on current row
+							}
+							if (nRegDist == -1)
+								continue; // nothing found at all, or we were in our own middle
+							if (nRegDist < apiPageBlock.blockLines[bl].regionRightNeighborDistances[reg]) {
+								apiPageBlock.blockLines[bl].regionLeftNeighbors[nReg] = reg;
+								apiPageBlock.blockLines[bl].regionLeftNeighborDistances[nReg] = nRegDist;
+								apiPageBlock.blockLines[bl].regionRightNeighbors[reg] = nReg;
+								apiPageBlock.blockLines[bl].regionRightNeighborDistances[reg] = nRegDist;
+							}
+						}
+					}
+					if (apiPageBlock.blockLines[bl].regionRightNeighbors[reg] != enReg) /* we _should_ have found our neighbor to the right */ {
+						apiPageBlock.blockLines[bl].regionRightNeighbors[reg] = enReg;
+						apiPageBlock.blockLines[bl].regionRightNeighborDistances[reg] = Math.max((apiPageBlock.blockLines[bl].regionMinCols[enReg] - (apiPageBlock.blockLines[bl].regionMaxCols[reg] + 1)), 0);
+					}
+					if (apiPageBlock.blockLines[bl].regionRightNeighborDistances[reg] == Integer.MAX_VALUE)
+						continue;
+					if (apiPageBlock.blockLines[bl].regionRightNeighborDistances[reg] > (apiPageBlock.blockLines[bl].getHeight() / 2)) // cap distance off at half the line height, space is hardly ever wider
+						apiPageBlock.blockLines[bl].regionRightNeighborDistances[reg] = (apiPageBlock.blockLines[bl].getHeight() / 2);
+					lineRegionNeighborGaps.add(new Integer(apiPageBlock.blockLines[bl].regionRightNeighborDistances[reg]));
+				}
+				blockRegionNeighborGaps.addAll(lineRegionNeighborGaps);
+				if (DEBUG_ADJUST_OCR) {
+					System.out.println("   - region neighbor gaps: " + lineRegionNeighborGaps);
+					System.out.println("     ==> average neighbor gap is " + getAverage(lineRegionNeighborGaps, 0, Integer.MAX_VALUE));
+				}
+				
+				//	count out words per region ...
+				//	... as well as average region distance inside words
+				int owLeftGap = (apiPageBlock.blockLines[bl].getPageLeft() - apiPageBlock.blockLines[bl].ocrLine.getPageLeft());
+				if (DEBUG_ADJUST_OCR) {
+					System.out.println("   - OCR block is " + apiPageBlock.blockLines[bl].ocrLine.getPageBounds());
+					System.out.println("   - block offset compensation gap is " + owLeftGap);
+				}
+				Object[] lineRegionWords = new Object[apiPageBlock.blockLines[bl].regionSizes.length];
+				CountingSet[] wordRegions = new CountingSet[apiPageBlock.blockLines[bl].ocrLine.words.size()];
+				for (int ow = 0; ow < apiPageBlock.blockLines[bl].ocrLine.words.size(); ow++) {
+					OcrWord ocrWord = ((OcrWord) apiPageBlock.blockLines[bl].ocrLine.words.get(ow));
+					int pageLeft = Math.max(0, (ocrWord.left - owLeftGap));
+					int pageRight = Math.min(apiPageBlock.blockLines[bl].regionColors.length, (ocrWord.right - owLeftGap));
+					
+					//	check which regions touch word area
+					wordRegions[ow] = new CountingSet();
+					for (int c = pageLeft; c < pageRight; c++)
+						for (int r = 0; r < apiPageBlock.blockLines[bl].regionColors[c].length; r++) {
+							int reg = apiPageBlock.blockLines[bl].regionColors[c][r];
+							if (reg == 0)
+								continue;
+							wordRegions[ow].add(new Integer(reg));
+							if (lineRegionWords[reg] == ocrWord)
+								continue;
+							if (lineRegionWords[reg] == null)
+								lineRegionWords[reg] = ocrWord;
+							else if (lineRegionWords[reg] instanceof LinkedHashSet)
+								((LinkedHashSet) lineRegionWords[reg]).add(ocrWord);
+							else {
+								LinkedHashSet lrws = new LinkedHashSet();
+								lrws.add(lineRegionWords[reg]);
+								lrws.add(ocrWord);
+								lineRegionWords[reg] = lrws;
+							}
+						}
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("     - regions in OCR word " + ocrWord.word.getString() + " at " + ocrWord.word.bounds + " (" + pageLeft + "-" + pageRight + " in line) are " + wordRegions[ow]);
+				}
+				if (DEBUG_ADJUST_OCR) {
+					for (int r = 0; r < lineRegionWords.length; r++)
+						System.out.println("     - words in region " + r + " at [" +
+								apiPageBlock.blockLines[bl].regionMinCols[r] + ", " +
+								apiPageBlock.blockLines[bl].regionMaxCols[r] + ", " +
+								apiPageBlock.blockLines[bl].regionMinRows[r] + ", " +
+								apiPageBlock.blockLines[bl].regionMaxRows[r] +
+								"]: " + lineRegionWords[r]);
+				}
+				
+				//	collect region gaps within current word
+				CountingSet[] wordRegionNeighborGaps = new CountingSet[apiPageBlock.blockLines[bl].ocrLine.words.size()];
+				CountingSet lineWordRegionNeighborGaps = new CountingSet(new TreeMap());
+				for (int ow = 0; ow < apiPageBlock.blockLines[bl].ocrLine.words.size(); ow++) {
+					wordRegionNeighborGaps[ow] = new CountingSet(new TreeMap());
+					for (Iterator regit = wordRegions[ow].iterator(); regit.hasNext();) {
+						Integer reg = ((Integer) regit.next());
+						if (apiPageBlock.blockLines[bl].regionRightNeighbors[reg.intValue()] == 0)
+							continue; // no neighbor at all
+						Integer nReg = new Integer(apiPageBlock.blockLines[bl].regionRightNeighbors[reg.intValue()]);
+						if (!wordRegions[ow].contains(nReg))
+							continue; // neighbor in different word, we get at those below
+						Integer nRegDist = new Integer(apiPageBlock.blockLines[bl].regionRightNeighborDistances[reg.intValue()]);
+						wordRegionNeighborGaps[ow].add(nRegDist);
+						lineWordRegionNeighborGaps.add(nRegDist);
+					}
+					if (DEBUG_ADJUST_OCR) {
+						OcrWord ocrWord = ((OcrWord) apiPageBlock.blockLines[bl].ocrLine.words.get(ow));
+						System.out.println("     - region distances within OCR word " + ocrWord.word.getString() + " at " + ocrWord.word.bounds + " are " + wordRegionNeighborGaps[ow]);
+					}
+				}
+				blockWordRegionNeighborGaps.addAll(lineWordRegionNeighborGaps);
+				if (DEBUG_ADJUST_OCR)
+					System.out.println("   - region distances within words are " + lineWordRegionNeighborGaps);
+				int avgLineWordRegionNeighborGap = getAverageMid60(lineWordRegionNeighborGaps, 0, Integer.MAX_VALUE);
+				if (DEBUG_ADJUST_OCR)
+					System.out.println("     ==> average word region distance is " + avgLineWordRegionNeighborGap);
+				CountingSet lineCrossWordRegionNeighborGaps = new CountingSet(new TreeMap());
+				lineCrossWordRegionNeighborGaps.addAll(lineRegionNeighborGaps);
+				lineCrossWordRegionNeighborGaps.removeAll(lineWordRegionNeighborGaps);
+				if (DEBUG_ADJUST_OCR)
+					System.out.println("   - region distances across words are " + lineCrossWordRegionNeighborGaps);
+				int avgLineCrossWordRegionNeighborGap = getAverageMid60(lineCrossWordRegionNeighborGaps, 0, Integer.MAX_VALUE);
+				if (DEBUG_ADJUST_OCR)
+					System.out.println("     ==> average cross word region distance is " + avgLineCrossWordRegionNeighborGap);
+				
+				//	contract words left and right to fully exclude whitespace regions
+				for (int ow = 0; ow < apiPageBlock.blockLines[bl].ocrLine.words.size(); ow++) {
+					if (wordRegions[ow].isEmpty())
+						continue; // nothing we can do about this one
+					OcrWord ocrWord = ((OcrWord) apiPageBlock.blockLines[bl].ocrLine.words.get(ow));
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("     - horizontally shrinking OCR word " + ocrWord.word.getString() + " at " + ocrWord.word.bounds + " (line relative extent is " + ocrWord.left + "-" + ocrWord.right + ")");
+					int pageLeft = (ocrWord.left - owLeftGap);
+					int pageRight = (ocrWord.right - owLeftGap);
+					int conPageLeft = pageRight;
+					int conPageRight = pageLeft;
+					for (Iterator regit = wordRegions[ow].iterator(); regit.hasNext();) {
+						Integer reg = ((Integer) regit.next());
+						if (lineRegionWords[reg.intValue()] == ocrWord) {}
+						else if (lineRegionWords[reg.intValue()] == null)
+							lineRegionWords[reg.intValue()] = ocrWord; // claim so far unassigned region (can happen with italics)
+//						//	CANNOT DO THIS HERE, MIGHT EXCLUDE CONTESTED REGIONS
+//						else continue; // skip over contested regions, OCR adjuster does those
+						int pageRegLeft = apiPageBlock.blockLines[bl].regionMinCols[reg.intValue()];
+						conPageLeft = Math.min(conPageLeft, pageRegLeft);
+						int pageRegRight = (apiPageBlock.blockLines[bl].regionMaxCols[reg.intValue()] + 1);
+						conPageRight = Math.max(conPageRight, pageRegRight);
+					}
+					if (conPageRight <= conPageLeft)
+						continue; // nothing to work with at all
+					if ((conPageLeft <= pageLeft) && (pageRight <= conPageRight))
+						continue; // no contraction at all
+					ocrWord.left = Math.max(ocrWord.left, (conPageLeft + owLeftGap)); // make sure to not expand, we do that below
+					ocrWord.right = Math.min(ocrWord.right, (conPageRight + owLeftGap)); // make sure to not expand, we do that below
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("       ==> block relative extent contracted to " + ocrWord.left + "-" + ocrWord.right);
+				}
+				
+				//	expand words left and right to fully include overlapping regions
+				for (int ow = 0; ow < apiPageBlock.blockLines[bl].ocrLine.words.size(); ow++) {
+					if (wordRegions[ow].isEmpty())
+						continue; // nothing we can do about this one
+					OcrWord ocrWord = ((OcrWord) apiPageBlock.blockLines[bl].ocrLine.words.get(ow));
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("     - horizontally expanding OCR word " + ocrWord.word.getString() + " at " + ocrWord.word.bounds + " (block relative extent is " + ocrWord.left + "-" + ocrWord.right + ")");
+					OcrWord pOcrWord = ((ow == 0) ? null : ((OcrWord) apiPageBlock.blockLines[bl].ocrLine.words.get(ow - 1)));
+					int minPageLeft = ((pOcrWord == null) ? 0 : (pOcrWord.right - owLeftGap));
+					OcrWord nOcrWord = (((ow + 1) < apiPageBlock.blockLines[bl].ocrLine.words.size()) ? ((OcrWord) apiPageBlock.blockLines[bl].ocrLine.words.get(ow + 1)) : null);
+					int maxPageRight = ((nOcrWord == null) ? apiPageBlock.blockLines[bl].regionColors.length : (nOcrWord.left - owLeftGap));
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("       - expansion limits are " + minPageLeft + "-" + maxPageRight);
+					for (boolean expanded = true; expanded;) {
+						expanded = false;
+						int pageLeft = (ocrWord.left - owLeftGap);
+						int pageRight = (ocrWord.right - owLeftGap);
+						int exPageLeft = pageLeft;
+						int exPageRight = pageRight;
+						for (Iterator regit = wordRegions[ow].iterator(); regit.hasNext();) {
+							Integer reg = ((Integer) regit.next());
+							boolean expandLeft = true;
+							boolean expandRight = true;
+							if (lineRegionWords[reg.intValue()] == ocrWord) {}
+							else if (lineRegionWords[reg.intValue()] == null)
+								lineRegionWords[reg.intValue()] = ocrWord; // claim so far unassigned region (can happen with italics)
+//							else continue; // skip over contested regions, OCR adjuster does those
+							else if (lineRegionWords[reg.intValue()] instanceof LinkedHashSet) {
+								OcrWord firstConflictWord = null;
+								OcrWord lastConflictWord = null;
+								for (Iterator owit = ((LinkedHashSet) lineRegionWords[reg.intValue()]).iterator(); owit.hasNext();) {
+									lastConflictWord = ((OcrWord) owit.next());
+									if (firstConflictWord == null)
+										firstConflictWord = lastConflictWord;
+								}
+								if (DEBUG_ADJUST_OCR)
+									System.out.println("     - last of " + ((LinkedHashSet) lineRegionWords[reg.intValue()]).size() + " OCR words conflicting over region " + reg + " is " + lastConflictWord.word.getString() + " at " + lastConflictWord.word.bounds + " (block relative extent is " + lastConflictWord.left + "-" + lastConflictWord.right + ")");
+								expandLeft = (firstConflictWord == ocrWord); // can only expand leftmost contestant to left
+								expandRight = (lastConflictWord == ocrWord); // can only expand rightmost contestant to right
+								if (!expandLeft && !expandRight)
+									continue; // sandwiched in, cannot do anything with current word
+							}
+							else continue; // shouldn't happen, but let's be safe
+							if (expandLeft) {
+								int pageRegLeft = apiPageBlock.blockLines[bl].regionMinCols[reg.intValue()];
+								if (pageRegLeft < exPageLeft) {
+									exPageLeft = Math.max(pageRegLeft, minPageLeft); // avoid bumping into previous word
+									expanded = (expanded || (exPageLeft < pageLeft)); // catch endless loop from claiming partially contested region time and again
+								}
+							}
+							if (expandRight) {
+								int pageRegRight = (apiPageBlock.blockLines[bl].regionMaxCols[reg.intValue()] + 1);
+								if (exPageRight < pageRegRight) {
+									exPageRight = pageRegRight;
+									expanded = true;
+								}
+							}
+						}
+						if (expanded) {
+							for (int c = exPageLeft; c < exPageRight; c++) {
+								if (c == pageLeft) {
+									c = (pageRight - 1); // jump over old extent (right boundary is exclusive, need to revisit)
+									continue; // need to go around to have boundary condition checked, though
+								}
+								for (int r = 0; r < apiPageBlock.blockLines[bl].regionColors[c].length; r++) {
+									int reg = apiPageBlock.blockLines[bl].regionColors[c][r];
+									if (reg == 0)
+										continue;
+									wordRegions[ow].add(new Integer(reg));
+								}
+							}
+							ocrWord.left = (exPageLeft + owLeftGap);
+							ocrWord.right = (exPageRight + owLeftGap);
+							if (DEBUG_ADJUST_OCR)
+								System.out.println("       ==> block relative extent expanded to " + ocrWord.left + "-" + ocrWord.right);
+						}
+					}
+				}
+				
+				//	expand words (mostly) right to also cover previously-unassigned regions if distance small enough
+				for (int ow = 0; ow < apiPageBlock.blockLines[bl].ocrLine.words.size(); ow++) {
+					if (wordRegions[ow].isEmpty())
+						continue; // nothing we can do about this one
+					OcrWord ocrWord = ((OcrWord) apiPageBlock.blockLines[bl].ocrLine.words.get(ow));
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("     - horizontally expanding OCR word " + ocrWord.word.getString() + " at " + ocrWord.word.bounds + " (block relative extent is " + ocrWord.left + "-" + ocrWord.right + ")");
+					OcrWord pOcrWord = ((ow == 0) ? null : ((OcrWord) apiPageBlock.blockLines[bl].ocrLine.words.get(ow - 1)));
+					int minPageLeft = ((pOcrWord == null) ? 0 : (pOcrWord.right - owLeftGap));
+					OcrWord nOcrWord = (((ow + 1) < apiPageBlock.blockLines[bl].ocrLine.words.size()) ? ((OcrWord) apiPageBlock.blockLines[bl].ocrLine.words.get(ow + 1)) : null);
+					int maxPageRight = ((nOcrWord == null) ? apiPageBlock.blockLines[bl].regionColors.length : (nOcrWord.left - owLeftGap));
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("       - expansion limits are " + minPageLeft + "-" + maxPageRight);
+					for (boolean expanded = true; expanded;) {
+						expanded = false;
+						int pageLeft = (ocrWord.left - owLeftGap);
+						int pageRight = (ocrWord.right - owLeftGap);
+						int exPageLeft = pageLeft;
+						int exPageRight = pageRight;
+						for (Iterator regit = wordRegions[ow].iterator(); regit.hasNext();) {
+							Integer reg = ((Integer) regit.next());
+							if (apiPageBlock.blockLines[bl].regionRightNeighbors[reg.intValue()] == 0)
+								continue; // no neighbor at all
+							int nReg = apiPageBlock.blockLines[bl].regionRightNeighbors[reg.intValue()];
+							if (lineRegionWords[nReg] != null)
+								continue; // either we already cover this one, or some other word does
+//							//	CANNOT DO THIS, as we might already be overlapping with region we have yet to claim in full (especially in italics)
+//							if (wordRegions[ow].contains(nReg))
+//								continue; // we already cover this one
+							int nRegDist = apiPageBlock.blockLines[bl].regionRightNeighborDistances[reg.intValue()];
+							if (DEBUG_ADJUST_OCR)
+								System.out.println("       - checking (1) unassigned region " + nReg + " at distance " + nRegDist);
+//							if (Math.abs(nRegDist - avgLineCrossWordRegionNeighborGap) < Math.abs(nRegDist - avgLineWordRegionNeighborGap)) {
+//								if (DEBUG_ADJUST_OCR)
+//									System.out.println("       ==> closer to cross-word gap " + avgLineCrossWordRegionNeighborGap + " than to in-word gap " + avgLineWordRegionNeighborGap);
+//								continue; // closer to word gap than to in-word letter gap
+//							}
+							int farSideComparisonGap = ((nOcrWord == null) ? (apiPageBlock.blockLines[bl].getHeight() / 3) /* good upper bound for avearge space */ : avgLineCrossWordRegionNeighborGap);
+							if (Math.abs(nRegDist - farSideComparisonGap) < Math.abs(nRegDist - avgLineWordRegionNeighborGap)) {
+								if (DEBUG_ADJUST_OCR)
+									System.out.println("       ==> closer to " + ((nOcrWord == null) ? "line height derived space" : "cross-word gap") + " " + farSideComparisonGap + " than to in-word gap " + avgLineWordRegionNeighborGap);
+								continue; // closer to word gap than to in-word letter gap
+							}
+							if (apiPageBlock.blockLines[bl].regionRightNeighbors[nReg] == 0) { /* no neighbor on far side */ }
+							else if (lineRegionWords[apiPageBlock.blockLines[bl].regionRightNeighbors[nReg]] == null) { /* far side neighbor unclaimed */ }
+							else if (nRegDist < apiPageBlock.blockLines[bl].regionRightNeighborDistances[nReg]) { /* closer to us than far side neighbor */ }
+							else {
+								if (DEBUG_ADJUST_OCR)
+									System.out.println("       ==> closer to claimed far-side neighbor " + lineRegionWords[apiPageBlock.blockLines[bl].regionRightNeighbors[nReg]] + " at distance " + apiPageBlock.blockLines[bl].regionRightNeighborDistances[nReg]);
+								continue; // this one seems to belong to word further to right
+							}
+							
+							//	claim region and include in bounds
+							int pageRegLeft = apiPageBlock.blockLines[bl].regionMinCols[nReg];
+							int pageRegRight = (apiPageBlock.blockLines[bl].regionMaxCols[nReg] + 1);
+							if (pageRegLeft < exPageLeft) {
+								exPageLeft = Math.max(pageRegLeft, minPageLeft); // avoid bumping into previous word
+								expanded = (expanded || (exPageLeft < pageLeft)); // catch endless loop from claiming partially contested region time and again
+							}
+							if (exPageRight < pageRegRight) {
+								exPageRight = Math.min(pageRegRight, maxPageRight); // avoid bumping into next word
+								expanded = (expanded || (pageRight < exPageRight)); // catch endless loop from claiming partially contested region time and again
+							}
+							if (exPageRight <= pageRegLeft) {
+								if (DEBUG_ADJUST_OCR)
+									System.out.println("       ==> could not claim unassigned region " + nReg + " at " + pageRegLeft + "-" + pageRegRight + " due to next word");
+								continue;
+							}
+							if (pageRegRight <= exPageLeft) {
+								if (DEBUG_ADJUST_OCR)
+									System.out.println("       ==> could not claim unassigned region " + nReg + " at " + pageRegLeft + "-" + pageRegRight + " due to previous word");
+								continue;
+							}
+							lineRegionWords[nReg] = ocrWord;
+							if (DEBUG_ADJUST_OCR) {
+								System.out.println("       ==> claimed unassigned region " + nReg + " at " + pageRegLeft + "-" + pageRegRight);
+								System.out.println("           block relative extent expanded to " + exPageLeft + "-" + exPageRight);
+							}
+						}
+						if (expanded) {
+							for (int c = exPageLeft; c < exPageRight; c++) {
+								if (c == pageLeft) {
+									c = (pageRight - 1); // jump over old extent (right boundary is exclusive, need to revisit)
+									continue; // need to go around to have boundary condition checked, though
+								}
+								for (int r = 0; r < apiPageBlock.blockLines[bl].regionColors[c].length; r++) {
+									int reg = apiPageBlock.blockLines[bl].regionColors[c][r];
+									if (reg == 0)
+										continue;
+									wordRegions[ow].add(new Integer(reg));
+								}
+							}
+							ocrWord.left = (exPageLeft + owLeftGap);
+							ocrWord.right = (exPageRight + owLeftGap);
+							if (DEBUG_ADJUST_OCR)
+								System.out.println("       ==> block relative extent expanded to " + ocrWord.left + "-" + ocrWord.right);
+						}
+					}
+				}
+				
+				//	attach unclaimed regions, iteratively relaxing scrutimy
+				for (int round = 0; round < 2; round++) {
+					
+					//	get extent of line currently covered with words
+					OcrWord fOcrWord = ((OcrWord) apiPageBlock.blockLines[bl].ocrLine.words.get(0));
+					int firstWordPageLeft = (fOcrWord.left - owLeftGap);
+					OcrWord lOcrWord = ((OcrWord) apiPageBlock.blockLines[bl].ocrLine.words.get(apiPageBlock.blockLines[bl].ocrLine.words.size() - 1));
+					int lastWordPageRight = (lOcrWord.right - owLeftGap);
+					
+					//	rightwards assign any remaining unclaimed regions
+					for (boolean expanded = true; expanded;) {
+						expanded = false;
+						for (int reg = 1; reg < apiPageBlock.blockLines[bl].regionSizes.length; reg++) {
+							if (lineRegionWords[reg] != null)
+								continue; // already assigned
+							if (apiPageBlock.blockLines[bl].regionSizes[reg] == 0)
+								continue; // attached as dot of i or j or accent
+							if (apiPageBlock.blockLines[bl].regionRightNeighbors[reg] == 0)
+								continue; // no neighbor at all
+							if (DEBUG_ADJUST_OCR)
+								System.out.println("       - checking (2) unassigned region " + reg);
+							int nReg = apiPageBlock.blockLines[bl].regionRightNeighbors[reg];
+							if (lineRegionWords[nReg] == null)
+								continue; // neighbor not assigned, either
+							int nRegDist = apiPageBlock.blockLines[bl].regionRightNeighborDistances[reg];
+							if (DEBUG_ADJUST_OCR)
+								System.out.println("       - checking rightward assignment to assigned region " + nReg + " at distance " + nRegDist);
+//							if (Math.abs(nRegDist - avgLineCrossWordRegionNeighborGap) < Math.abs(nRegDist - avgLineWordRegionNeighborGap)) {
+//								if (DEBUG_ADJUST_OCR)
+//									System.out.println("       ==> closer to cross-word gap " + avgLineCrossWordRegionNeighborGap + " than to in-word gap " + avgLineWordRegionNeighborGap);
+//								continue; // closer to word gap than to in-word letter gap
+//							}
+							if ((apiPageBlock.blockLines[bl].regionMaxCols[reg] <= firstWordPageLeft) && ((nRegDist * 2) < apiPageBlock.blockLines[bl].getHeight())) {
+								if (DEBUG_ADJUST_OCR)
+									System.out.println("       - accepting distance " + nRegDist + " at left end of line");
+								//	simply catch this case, so to salvage regions left of leftmost word if less than regular space (half line height) away
+							}
+							else if ((round == 0) && (Math.abs(nRegDist - avgLineCrossWordRegionNeighborGap) < Math.abs(nRegDist - avgLineWordRegionNeighborGap))) {
+								if (DEBUG_ADJUST_OCR)
+									System.out.println("       ==> closer to cross-word gap " + avgLineCrossWordRegionNeighborGap + " than to in-word gap " + avgLineWordRegionNeighborGap);
+								continue; // closer to word gap than to in-word letter gap
+							}
+							else if ((round != 0) && (avgLineCrossWordRegionNeighborGap < nRegDist)) {
+								if (DEBUG_ADJUST_OCR)
+									System.out.println("       ==> larger than cross-word gap " + avgLineCrossWordRegionNeighborGap + " than to in-word gap " + avgLineWordRegionNeighborGap);
+								continue; // larger than word gap
+							}
+							
+							//	get word we're assigning to
+							OcrWord ocrWord;
+							if (lineRegionWords[nReg] instanceof OcrWord)
+								ocrWord = ((OcrWord) lineRegionWords[nReg]);
+							else ocrWord = ((OcrWord) ((LinkedHashSet) lineRegionWords[nReg]).iterator().next()); // words are added left to right
+							
+							//	claim region and include in bounds
+							lineRegionWords[reg] = ocrWord;
+							if (DEBUG_ADJUST_OCR)
+								System.out.println("       - rightward assigned to owner of claimed region: " + ocrWord.word.getString() + " at " + ocrWord.word.bounds + " (block relative extent is " + ocrWord.left + "-" + ocrWord.right + ")");
+							int pageRegLeft = apiPageBlock.blockLines[bl].regionMinCols[reg];
+							int pageLeft = (ocrWord.left - owLeftGap);
+							int exPageLeft = pageLeft;
+							if (pageRegLeft < exPageLeft) {
+								exPageLeft = pageRegLeft;
+								expanded = true;
+							}
+							int pageRegRight = (apiPageBlock.blockLines[bl].regionMaxCols[reg] + 1);
+							int pageRight = (ocrWord.right - owLeftGap);
+							int exPageRight = pageRight;
+							if (exPageRight < pageRegRight) {
+								exPageRight = pageRegRight;
+								expanded = true;
+							}
+							if (expanded) {
+								ocrWord.left = (exPageLeft + owLeftGap);
+								ocrWord.right = (exPageRight + owLeftGap);
+								if (DEBUG_ADJUST_OCR)
+									System.out.println("       ==> block relative extent expanded to " + ocrWord.left + "-" + ocrWord.right);
+							}
+						}
+					}
+					
+					//	leftward assign any remaining unclaimed regions
+					for (boolean expanded = true; expanded;) {
+						expanded = false;
+						for (int reg = 1; reg < apiPageBlock.blockLines[bl].regionSizes.length; reg++) {
+							if (lineRegionWords[reg] != null)
+								continue; // already assigned
+							if (apiPageBlock.blockLines[bl].regionSizes[reg] == 0)
+								continue; // attached as dot of i or j or accent
+							if (apiPageBlock.blockLines[bl].regionLeftNeighbors[reg] == 0)
+								continue; // no neighbor at all
+							if (DEBUG_ADJUST_OCR)
+								System.out.println("       - checking (3) unassigned region " + reg);
+							int nReg = apiPageBlock.blockLines[bl].regionLeftNeighbors[reg];
+							if (lineRegionWords[nReg] == null)
+								continue; // neighbor not assigned, either
+							int nRegDist = apiPageBlock.blockLines[bl].regionLeftNeighborDistances[reg];
+							if (DEBUG_ADJUST_OCR)
+								System.out.println("       - checking leftward assignment to assigned region " + nReg + " at distance " + nRegDist);
+//							if (Math.abs(nRegDist - avgLineCrossWordRegionNeighborGap) < Math.abs(nRegDist - avgLineWordRegionNeighborGap)) {
+//								if (DEBUG_ADJUST_OCR)
+//									System.out.println("       ==> closer to cross-word gap " + avgLineCrossWordRegionNeighborGap + " than to in-word gap " + avgLineWordRegionNeighborGap);
+//								continue; // closer to word gap than to in-word letter gap
+//							}
+							if ((lastWordPageRight <= apiPageBlock.blockLines[bl].regionMinCols[reg]) && ((nRegDist * 2) < apiPageBlock.blockLines[bl].getHeight())) {
+								if (DEBUG_ADJUST_OCR)
+									System.out.println("       - accepting distance " + nRegDist + " at right end of line");
+								//	simply catch this case, so to salvage regions right of rightmost word if less than regular space (half line height) away
+							}
+							else if ((round == 0) && (Math.abs(nRegDist - avgLineCrossWordRegionNeighborGap) < Math.abs(nRegDist - avgLineWordRegionNeighborGap))) {
+								if (DEBUG_ADJUST_OCR)
+									System.out.println("       ==> closer to cross-word gap " + avgLineCrossWordRegionNeighborGap + " than to in-word gap " + avgLineWordRegionNeighborGap);
+								continue; // closer to word gap than to in-word letter gap
+							}
+							else if ((round != 0) && (avgLineCrossWordRegionNeighborGap < nRegDist)) {
+								if (DEBUG_ADJUST_OCR)
+									System.out.println("       ==> larger than cross-word gap " + avgLineCrossWordRegionNeighborGap + " than to in-word gap " + avgLineWordRegionNeighborGap);
+								continue; // larger than word gap
+							}
+							
+							//	get word we're assigning to
+							OcrWord ocrWord = null;
+							if (lineRegionWords[nReg] instanceof OcrWord)
+								ocrWord = ((OcrWord) lineRegionWords[nReg]);
+							else for (Iterator owit = ((LinkedHashSet) lineRegionWords[nReg]).iterator(); owit.hasNext();)
+								ocrWord = ((OcrWord) owit.next()); // words are added left to right, need last one
+							if (ocrWord == null)
+								continue; // should not happen, but let's be safe
+							
+							//	claim region and include in bounds
+							lineRegionWords[reg] = ocrWord;
+							if (DEBUG_ADJUST_OCR)
+								System.out.println("       - leftward assigned to owner of claimed region: " + ocrWord.word.getString() + " at " + ocrWord.word.bounds + " (block relative extent is " + ocrWord.left + "-" + ocrWord.right + ")");
+							int pageRegLeft = apiPageBlock.blockLines[bl].regionMinCols[reg];
+							int pageLeft = (ocrWord.left - owLeftGap);
+							int exPageLeft = pageLeft;
+							if (pageRegLeft < exPageLeft) {
+								exPageLeft = pageRegLeft;
+								expanded = true;
+							}
+							int pageRegRight = (apiPageBlock.blockLines[bl].regionMaxCols[reg] + 1);
+							int pageRight = (ocrWord.right - owLeftGap);
+							int exPageRight = pageRight;
+							if (exPageRight < pageRegRight) {
+								exPageRight = pageRegRight;
+								expanded = true;
+							}
+							if (expanded) {
+								ocrWord.left = (exPageLeft + owLeftGap);
+								ocrWord.right = (exPageRight + owLeftGap);
+								if (DEBUG_ADJUST_OCR)
+									System.out.println("       ==> block relative extent expanded to " + ocrWord.left + "-" + ocrWord.right);
+							}
+						}
+					}
+					
+					//	gather status of unassigned regions
+					int unassignedRegCount = 0;
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("Remaining unassigned regions (round " + round + ", gaps " + avgLineWordRegionNeighborGap + " and " + avgLineCrossWordRegionNeighborGap + "):");
+					for (int reg = 1; reg < apiPageBlock.blockLines[bl].regionSizes.length; reg++) {
+						if (lineRegionWords[reg] != null)
+							continue; // already assigned
+						if (apiPageBlock.blockLines[bl].regionSizes[reg] == 0)
+							continue; // attached above
+						unassignedRegCount++;
+						if (DEBUG_ADJUST_OCR) {
+							BoundingBox regBb = new BoundingBox(
+									apiPageBlock.blockLines[bl].regionMinCols[reg],
+									(apiPageBlock.blockLines[bl].regionMaxCols[reg] + 1),
+									apiPageBlock.blockLines[bl].regionMinRows[reg],
+									(apiPageBlock.blockLines[bl].regionMaxRows[reg] + 1)
+								);
+							System.out.println(" - " + reg + ", sized " + apiPageBlock.blockLines[bl].regionSizes[reg] + " at " + regBb);
+							System.out.println("   left neighbor is " + apiPageBlock.blockLines[bl].regionLeftNeighbors[reg] + " at distance " + apiPageBlock.blockLines[bl].regionLeftNeighborDistances[reg]);
+							System.out.println("   right neighbor is " + apiPageBlock.blockLines[bl].regionRightNeighbors[reg] + " at distance " + apiPageBlock.blockLines[bl].regionRightNeighborDistances[reg]);
+						}
+					}
+					if (DEBUG_ADJUST_OCR)
+						System.out.println(" ==> " + unassignedRegCount + " unassigned regions");
+					
+					//	anything left to assign at all?
+					if (unassignedRegCount == 0)
+						break;
+					
+					//	no need to go another round if contrast of gaps sufficiently clear (larger than half a millimeter)
+					if ((avgLineCrossWordRegionNeighborGap - avgLineWordRegionNeighborGap) > (pageImage.currentDpi / 100))
+						break;
+				}
+				
+				//	re-assess which regions belong to which word (might be off after all the above adjustment)
+				for (int ow = 0; ow < apiPageBlock.blockLines[bl].ocrLine.words.size(); ow++) {
+					OcrWord ocrWord = ((OcrWord) apiPageBlock.blockLines[bl].ocrLine.words.get(ow));
+					int pageLeft = Math.max(0, (ocrWord.left - owLeftGap));
+					int pageRight = Math.min(apiPageBlock.blockLines[bl].regionColors.length, (ocrWord.right - owLeftGap));
+					
+					//	check which regions touch word area
+					wordRegions[ow].clear();
+					for (int c = pageLeft; c < pageRight; c++)
+						for (int r = 0; r < apiPageBlock.blockLines[bl].regionColors[c].length; r++) {
+							int reg = apiPageBlock.blockLines[bl].regionColors[c][r];
+							if (reg != 0)
+								wordRegions[ow].add(new Integer(reg));
+						}
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("     - regions in OCR word " + ocrWord.word.getString() + " at " + ocrWord.word.bounds + " are " + wordRegions[ow]);
+				}
+				
+				//	move boundary between baseline punctuation and preceding word right if punctuation mark has x-height regions
+				for (int ow = 1; ow < apiPageBlock.blockLines[bl].ocrLine.words.size(); ow++) {
+					if (wordRegions[ow].isEmpty())
+						continue; // nothing we can do about this one
+					OcrWord ocrWord = ((OcrWord) apiPageBlock.blockLines[bl].ocrLine.words.get(ow));
+					if ((ocrWord.word.getString() == null) || (ocrWord.word.getString().length() != 1) || (".,".indexOf(ocrWord.word.getString()) == -1))
+						continue; // we're only after baseline punctuation
+					if ((ocrWord.right - ocrWord.left) <= 4)
+						continue; // too narrow anyway, leave untouched
+					if (wordRegions[ow].elementCount() < 2)
+						continue; // this one looks OK
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("     - checking contents of baseline punctuation OCR word " + ocrWord.word.getString() + " at " + ocrWord.word.bounds + " (block relative extent is " + ocrWord.left + "-" + ocrWord.right + ")");
+					OcrWord pOcrWord = ((OcrWord) apiPageBlock.blockLines[bl].ocrLine.words.get(ow - 1));
+					int pOcrWordDist = (ocrWord.left - pOcrWord.right);
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("       - preceding OCR word is " + pOcrWord.word.getString() + " at " + pOcrWord.word.bounds + " (block relative extent is " + pOcrWord.left + "-" + pOcrWord.right + ")");
+					if (pOcrWordDist > 1) {
+						if (DEBUG_ADJUST_OCR)
+							System.out.println("       ==> too far away");
+						continue; // no use doing any adjustment here
+					}
+					if (!Gamta.isWord(pOcrWord.word.getString()) && !Gamta.isNumber(pOcrWord.word.getString())) {
+						if (DEBUG_ADJUST_OCR)
+							System.out.println("       ==> not the required word or number");
+						continue; // nothing to work against
+					}
+					OcrWord nOcrWord = (((ow + 1) < apiPageBlock.blockLines[bl].ocrLine.words.size()) ? ((OcrWord) apiPageBlock.blockLines[bl].ocrLine.words.get(ow + 1)) : null);
+					int nOcrWordDist = ((nOcrWord == null) ? Integer.MAX_VALUE : (nOcrWord.left - ocrWord.right));
+					if (nOcrWordDist < 2) {
+						if (DEBUG_ADJUST_OCR)
+							System.out.println("       ==> too close to subsequent OCR word " + nOcrWord.word.getString() + " at " + nOcrWord.word.bounds + " (block relative extent is " + nOcrWord.left + "-" + nOcrWord.right + ")");
+						continue; // no use doing any adjustment here
+					}
+					boolean noContestedRegions = true;
+					boolean noOwnedRegions = true;
+					boolean noXHeightRegions = true;
+					int maxRegLeft = 0;
+					int maxBaselineRegLeft = -1;
+					for (Iterator crit = wordRegions[ow].iterator(); crit.hasNext();) {
+						int reg = ((Integer) crit.next()).intValue();
+						if (lineRegionWords[reg] instanceof LinkedHashSet)
+							noContestedRegions = false;
+						else if (lineRegionWords[reg] == ocrWord)
+							noOwnedRegions = false;
+						maxRegLeft = Math.max(maxRegLeft, apiPageBlock.blockLines[bl].regionMinCols[reg]);
+						int baselineDist = Math.abs(apiPageBlock.blockLines[bl].baseline - apiPageBlock.blockLines[bl].regionMinRows[reg]);
+						int xHeightDist = Math.abs((apiPageBlock.blockLines[bl].baseline - apiPageBlock.blockLines[bl].xHeight) - apiPageBlock.blockLines[bl].regionMinRows[reg]);
+						if (xHeightDist < baselineDist)
+							noXHeightRegions = false;
+						else maxBaselineRegLeft = Math.max(maxBaselineRegLeft, apiPageBlock.blockLines[bl].regionMinCols[reg]);
+					}
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("       - rightmost region of " + wordRegions[ow].elementCount() + " starts at " + maxRegLeft + ", rightmost baseline region at " + maxBaselineRegLeft);
+					if (maxBaselineRegLeft == -1) {
+						maxBaselineRegLeft = maxRegLeft;
+						if (DEBUG_ADJUST_OCR)
+							System.out.println("         ==> falling back to " + maxRegLeft);
+					}
+					if ((maxBaselineRegLeft + owLeftGap) < ocrWord.left) {
+						if (DEBUG_ADJUST_OCR)
+							System.out.println("       ==> no use shifting word boundary");
+						continue;
+					}
+					if (noXHeightRegions) {
+						if (DEBUG_ADJUST_OCR)
+							System.out.println("       ==> no regions found that would be too high (closer to " + (apiPageBlock.blockLines[bl].baseline - apiPageBlock.blockLines[bl].xHeight) + " than " + apiPageBlock.blockLines[bl].baseline + ")");
+						continue;
+					}
+					if (noContestedRegions) {
+						if (DEBUG_ADJUST_OCR)
+							System.out.println("       ==> no region conflicts found that would need resolving");
+						continue;
+					}
+					if (noOwnedRegions) {
+						if (DEBUG_ADJUST_OCR)
+							System.out.println("       ==> no region found to collapse word to");
+						continue;
+					}
+					ocrWord.left = Math.min((maxBaselineRegLeft + owLeftGap), (ocrWord.right - 4)); // ensure some minimum width
+					pOcrWord.right = (ocrWord.left - pOcrWordDist);
+					if (DEBUG_ADJUST_OCR) {
+						System.out.println("       ==> adjusted word boundaries to block relative extent " + ocrWord.left + "-" + ocrWord.right);
+						System.out.println("       ==> adjusted preceding word boundaries to block relative extent " + pOcrWord.left + "-" + pOcrWord.right);
+					}
+				}
+				
+				//	ensure each word is at least 4 pixels wide
+				for (int ow = 0; ow < apiPageBlock.blockLines[bl].ocrLine.words.size(); ow++) {
+					OcrWord ocrWord = ((OcrWord) apiPageBlock.blockLines[bl].ocrLine.words.get(ow));
+					if ((ocrWord.right - ocrWord.left) >= 4)
+						continue; // no need to take any action here
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("     - ensuring horizontal extent of OCR word " + ocrWord.word.getString() + " at " + ocrWord.word.bounds + " (block relative extent is " + ocrWord.left + "-" + ocrWord.right + ")");
+					OcrWord pOcrWord = ((ow == 0) ? null : ((OcrWord) apiPageBlock.blockLines[bl].ocrLine.words.get(ow - 1)));
+					int minPageLeft = ((pOcrWord == null) ? 0 : (pOcrWord.right - owLeftGap));
+					OcrWord nOcrWord = (((ow + 1) < apiPageBlock.blockLines[bl].ocrLine.words.size()) ? ((OcrWord) apiPageBlock.blockLines[bl].ocrLine.words.get(ow + 1)) : null);
+					int maxPageRight = ((nOcrWord == null) ? apiPageBlock.blockLines[bl].regionColors.length : (nOcrWord.left - owLeftGap));
+					if ((pOcrWord == null) && (nOcrWord == null))
+						continue; // nothing to work with
+					if (DEBUG_ADJUST_OCR) {
+						if (pOcrWord != null)
+							System.out.println("       - preceding OCR word is " + pOcrWord.word.getString() + " at " + pOcrWord.word.bounds + " (block relative extent is " + pOcrWord.left + "-" + pOcrWord.right + ")");
+						if (nOcrWord != null)
+							System.out.println("       - following OCR word is " + nOcrWord.word.getString() + " at " + nOcrWord.word.bounds + " (block relative extent is " + nOcrWord.left + "-" + nOcrWord.right + ")");
+						System.out.println("       - expansion limits are " + minPageLeft + "-" + maxPageRight);
+					}
+					boolean expandLeft = ((pOcrWord != null) && ((pOcrWord.right - pOcrWord.left) > 4));
+					boolean expandRight = ((nOcrWord != null) && ((nOcrWord.right - nOcrWord.left) > 4));
+					while (((ocrWord.right - ocrWord.left) < 4) && (expandLeft || expandRight)) {
+						if (expandLeft) {
+							ocrWord.left--;
+							if ((ocrWord.left - pOcrWord.right) < 0)
+								pOcrWord.right--;
+						}
+						if (expandRight) {
+							ocrWord.right++;
+							if ((nOcrWord.left - ocrWord.right) < 0)
+								nOcrWord.left++;
+						}
+					}
+					if (DEBUG_ADJUST_OCR) {
+						System.out.println("       ==> adjusted word boundaries to block relative extent " + ocrWord.left + "-" + ocrWord.right);
+						if (pOcrWord != null)
+							System.out.println("       ==> adjusted preceding word boundaries to block relative extent " + pOcrWord.left + "-" + pOcrWord.right);
+						if (nOcrWord != null)
+							System.out.println("       ==> adjusted following word boundaries to block relative extent " + nOcrWord.left + "-" + nOcrWord.right);
+					}
+				}
+			}
+		}
+		
+		//	adjust OCR words to line
+		for (int bl = 0; bl < apiPageBlock.blockLines.length; bl++) {
+			if (apiPageBlock.blockLines[bl].ocrLine == null)
+				continue; // nothing to adjust here
+			BoundingBox blBb = apiPageBlock.blockLines[bl].getPageBounds();
+			if (DEBUG_ADJUST_OCR)
+				System.out.println(" - line " + blBb/* + " with " + apiPageBlocks[b].blockLines[bl].getWordCount() + " words"*/);
+			lineWords.clear();
+			for (int ow = 0; ow < apiPageBlock.blockLines[bl].ocrLine.words.size(); ow++) {
+				OcrWord ocrWord = ((OcrWord) apiPageBlock.blockLines[bl].ocrLine.words.get(ow));
+				BoundingBox owBb = new BoundingBox(ocrWord.getPageLeft(), ocrWord.getPageRight(), blBb.top, blBb.bottom);
+				
+				//	no need to modify this one at all, only ensure baseline is correct
+				if (ocrWord.word.bounds.equals(owBb)) {
+					if (apiPageBlock.blockLines[bl].baseline != -1)
+						ocrWord.word.setBaseline(apiPageBlock.blockLines[bl].getPageBaseline());
+					doneWords.add(ocrWord.word);
+					blockWords.add(ocrWord.word);
+					blockWordsToLines.put(ocrWord.word, apiPageBlock.blockLines[bl]);
+					paraWords.add(ocrWord.word);
+					lineWords.add(ocrWord.word);
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("     - retained OCR word " + ocrWord.word.getString() + " at " + ocrWord.word.bounds);
+					continue;
+				}
+				
+				//	create adjusted word
+				ImWord newWord;
+				if (ocrWord.word.getPage() == null)
+					newWord = new ImWord(doc, ocrWord.word.pageId, owBb, ocrWord.word.getString());
+				else newWord = new ImWord(ocrWord.word.getPage(), owBb, ocrWord.word.getString());
+				if (ocrWord.word.hasAttribute(ImWord.BOLD_ATTRIBUTE))
+					newWord.setAttribute(ImWord.BOLD_ATTRIBUTE);
+				if (ocrWord.word.hasAttribute(ImWord.ITALICS_ATTRIBUTE))
+					newWord.setAttribute(ImWord.ITALICS_ATTRIBUTE);
+				if (ocrWord.word.hasAttribute(ImWord.FONT_NAME_ATTRIBUTE))
+					newWord.setAttribute(ImWord.FONT_NAME_ATTRIBUTE, ocrWord.word.getAttribute(ImWord.FONT_NAME_ATTRIBUTE));
+				if (ocrWord.word.getFontSize() != -1)
+					newWord.setFontSize(ocrWord.word.getFontSize());
+				if (apiPageBlock.blockLines[bl].baseline != -1)
+					newWord.setBaseline(apiPageBlock.blockLines[bl].getPageBaseline());
+				newWord.setTextStreamType(ocrWord.word.getTextStreamType());
+				
+				//	get surrounding words and relationship
+	//			System.out.println("   - getting text stream neighbors");
+				ImWord prev = ocrWord.word.getPreviousWord();
+				ImWord next = ocrWord.word.getNextWord();
+				
+				//	switch annotations to replacement word
+				ImAnnotation[] startingAnnots = doc.getAnnotations(ocrWord.word, null);
+				for (int a = 0; a < startingAnnots.length; a++)
+					startingAnnots[a].setFirstWord(newWord);
+				ImAnnotation[] endingAnnots = doc.getAnnotations(null, ocrWord.word);
+				for (int a = 0; a < endingAnnots.length; a++)
+					endingAnnots[a].setLastWord(newWord);
+				
+				//	replace word in text stream
+	//			System.out.println("   - integrating in text stream");
+				if (prev != null)
+					prev.setNextWord(newWord);
+				if (next != null) {
+					newWord.setNextRelation(ocrWord.word.getNextRelation()); // only makes sense if there is next word
+					next.setPreviousWord(newWord);
+				}
+				
+				//	remove replaced word
+	//			System.out.println("   - cleaning up replaced words");
+				if (ocrWord.word.getPage() != null)
+					ocrWord.word.getPage().removeWord(ocrWord.word, false);
+	//			System.out.println(" ==> done");
+				
+				//	store adjusted word
+				doneWords.add(ocrWord.word);
+				blockWords.add(newWord);
+				blockWordsToLines.put(newWord, apiPageBlock.blockLines[bl]);
+				paraWords.add(newWord);
+				lineWords.add(newWord);
+				if (DEBUG_ADJUST_OCR)
+					System.out.println("     - moved OCR word " + ocrWord.word.getString() + " from " + ocrWord.word.bounds + " to " + owBb);
+			}
+			
+			//	adjust line (if any)
+			if (apiPageBlock.blockLines[bl].ocrLine.exLine != null) {
+				ImWord[] lws = ((ImWord[]) lineWords.toArray(new ImWord[lineWords.size()]));
+				BoundingBox lBb = ImLayoutObject.getAggregateBox(lws);
+				if (!apiPageBlock.blockLines[bl].ocrLine.exLine.bounds.equals(lBb)) {
+					ImRegion newLine = new ImRegion(page, lBb, ImRegion.LINE_ANNOTATION_TYPE);
+					newLine.copyAttributes(apiPageBlock.blockLines[bl].ocrLine.exLine);
+					if (apiPageBlock.blockLines[bl].baseline != -1)
+						newLine.setAttribute(BASELINE_ATTRIBUTE, ("" + apiPageBlock.blockLines[bl].getPageBaseline()));
+					page.removeRegion(apiPageBlock.blockLines[bl].ocrLine.exLine);
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("     - moved line " + apiPageBlock.blockLines[bl].ocrLine.exLine.bounds + " to " + newLine.bounds);
+				}
+				else if (DEBUG_ADJUST_OCR)
+					System.out.println("     - retained line " + apiPageBlock.blockLines[bl].ocrLine.exLine.bounds);
+			}
+			
+			//	adjust ending paragraph (if any)
+			if (apiPageBlock.blockLines[bl].ocrLine.endingExPara != null) {
+				ImWord[] pws = ((ImWord[]) paraWords.toArray(new ImWord[paraWords.size()]));
+				BoundingBox pBb = ImLayoutObject.getAggregateBox(pws);
+				if (!apiPageBlock.blockLines[bl].ocrLine.endingExPara.bounds.equals(pBb)) {
+					ImRegion newPara = new ImRegion(page, pBb, ImRegion.PARAGRAPH_TYPE);
+					newPara.copyAttributes(apiPageBlock.blockLines[bl].ocrLine.endingExPara);
+					page.removeRegion(apiPageBlock.blockLines[bl].ocrLine.endingExPara);
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("     - moved paragraph " + apiPageBlock.blockLines[bl].ocrLine.endingExPara.bounds + " to " + newPara.bounds);
+				}
+				else if (DEBUG_ADJUST_OCR)
+					System.out.println("     - retained paragraph " + apiPageBlock.blockLines[bl].ocrLine.endingExPara.bounds);
+				paraWords.clear();
+			}
+		}
+		
+		//	merge scattered words, now that we have done all the rest
+		CountingSet blockPunctRegionNeighborGaps = new CountingSet(new TreeMap());
+		for (int round = 0; adjustWords; round++) {
+			if (DEBUG_ADJUST_OCR)
+				System.out.println("Checking for mergers of scattered words (round " + round + ")");
+			if (DEBUG_ADJUST_OCR)
+				System.out.println(" - block region distances within words are " + blockWordRegionNeighborGaps);
+			int avgBlockWordRegionNeighborGap = getAverageMid60(blockWordRegionNeighborGaps, 0, Integer.MAX_VALUE);
+			if (DEBUG_ADJUST_OCR)
+				System.out.println("   ==> block average word region distance is " + avgBlockWordRegionNeighborGap);
+			System.out.println(" - block region distances adjacent to punctuation markas are " + blockPunctRegionNeighborGaps);
+			int avgBlockPunctRegionNeighborGap = getAverageMid60(blockPunctRegionNeighborGaps, 0, Integer.MAX_VALUE);
+			if (DEBUG_ADJUST_OCR)
+				System.out.println("   ==> block average region distance adjacent to punctuation marks is " + avgBlockPunctRegionNeighborGap);
+			CountingSet blockCrossWordRegionNeighborGaps = new CountingSet(new TreeMap());
+			blockCrossWordRegionNeighborGaps.addAll(blockRegionNeighborGaps);
+			blockCrossWordRegionNeighborGaps.removeAll(blockWordRegionNeighborGaps);
+			blockCrossWordRegionNeighborGaps.removeAll(blockPunctRegionNeighborGaps);
+			if (DEBUG_ADJUST_OCR)
+				System.out.println(" - block region distances across words are " + blockCrossWordRegionNeighborGaps);
+			int avgBlockCrossWordRegionNeighborGap = getAverageMid60(blockCrossWordRegionNeighborGaps, 0, Integer.MAX_VALUE);
+			if (DEBUG_ADJUST_OCR)
+				System.out.println("   ==> block average cross word region distance is " + avgBlockCrossWordRegionNeighborGap);
+			
+			//	collect blocks of words are in same line and close together (block words are sorted left-right-top-down at this point)
+			int sWordPos = -1;
+			ArrayList wordBlocks = new ArrayList();
+			for (int w = 1; w < blockWords.size(); w++) {
+				ImWord lWord = ((ImWord) blockWords.get(w - 1));
+				ImWord rWord = ((ImWord) blockWords.get(w));
+				int hDist = (rWord.bounds.left - lWord.bounds.right);
+				if (blockWordsToLines.get(lWord) != blockWordsToLines.get(rWord))
+					hDist = (apiPageBlock.right - apiPageBlock.left);
+				if (Math.abs((hDist - avgBlockWordRegionNeighborGap) * 2) < Math.abs(avgBlockCrossWordRegionNeighborGap - hDist)) /* close enough */ {
+//				if (Math.abs((hDist - avgBlockWordRegionNeighborGap) * 3) < Math.abs(avgBlockCrossWordRegionNeighborGap - hDist)) /* close enough */ {
+					if (sWordPos == -1) {
+						sWordPos = (w - 1); // start new block if none open
+						if (DEBUG_ADJUST_OCR)
+							System.out.println(" - starting word block with '" + lWord.getString() + "'");
+					}
+					if (DEBUG_ADJUST_OCR)
+						System.out.println(" - continuing word block with '" + rWord.getString() + "' at distance " + hDist);
+				}
+				else /* block interrupted (if any), stash to process below (vastly simplifies handling of loop index) */ {
+					if (sWordPos != -1)  {
+						ImWord[] wordBlock = new ImWord[w - sWordPos];
+						for (int bw = sWordPos, wbi = 0; bw < w; bw++)
+							wordBlock[wbi++] = ((ImWord) blockWords.get(bw));
+						wordBlocks.add(wordBlock);
+					}
+					sWordPos = -1;
+				}
+			}
+			
+			//	stash last block (if any) to process below
+			if (sWordPos != -1)  {
+				ImWord[] wordBlock = new ImWord[blockWords.size() - sWordPos];
+				for (int bw = sWordPos, wbi = 0; bw < blockWords.size(); bw++)
+					wordBlock[wbi++] = ((ImWord) blockWords.get(bw));
+				wordBlocks.add(wordBlock);
+			}
+			
+			//	chop up word blocks if actual word distance above threshold
+			CountingSet caughtCrossWordRegionDistances = new CountingSet(new TreeMap());
+			for (int b = 0; b < wordBlocks.size(); b++) {
+				ImWord[] wordBlock = ((ImWord[]) wordBlocks.get(b));
+				BlockLine blockLine = ((BlockLine) blockWordsToLines.get(wordBlock[0]));
+				if (DEBUG_ADJUST_OCR)
+					System.out.println(" - assessing regions in block '" + ImUtils.getString(wordBlock, true, wordBlock[0].bounds.getHeight()) + "' of " + wordBlock.length + " words at " + ImLayoutObject.getAggregateBox(wordBlock));
+				
+				//	count out words per region ...
+				//	... as well as average region distance inside words
+				Object[] lineRegionWords = new Object[blockLine.regionSizes.length];
+				CountingSet[] wordRegions = new CountingSet[wordBlock.length];
+				for (int w = 0; w < wordBlock.length; w++) {
+					int lineLeft = Math.max(0, (wordBlock[w].bounds.left - blockLine.getPageLeft()));
+					int lineRight = Math.min(blockLine.regionColors.length, (wordBlock[w].bounds.right - blockLine.getPageLeft()));
+					
+					//	check which regions touch word area
+					wordRegions[w] = new CountingSet();
+					for (int c = lineLeft; c < lineRight; c++)
+						for (int r = 0; r < blockLine.regionColors[c].length; r++) {
+							int reg = blockLine.regionColors[c][r];
+							if (reg == 0)
+								continue;
+							wordRegions[w].add(new Integer(reg));
+							if (lineRegionWords[reg] == wordBlock[w])
+								continue;
+							if (lineRegionWords[reg] == null)
+								lineRegionWords[reg] = wordBlock[w];
+							else if (lineRegionWords[reg] instanceof LinkedHashSet)
+								((LinkedHashSet) lineRegionWords[reg]).add(wordBlock[w]);
+							else {
+								LinkedHashSet lrws = new LinkedHashSet();
+								lrws.add(lineRegionWords[reg]);
+								lrws.add(wordBlock[w]);
+								lineRegionWords[reg] = lrws;
+							}
+						}
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("   - regions in word " + wordBlock[w].getString() + " at " + wordBlock[w].bounds + " are " + wordRegions[w]);
+				}
+				
+				//	assess actual word distances
+				for (int w = 1; w < wordBlock.length; w++) {
+					ImWord lWord = wordBlock[w-1];
+					ImWord rWord = wordBlock[w];
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("   - rectangular distance between '" + lWord.getString() + "' and '" + rWord.getString() + "' is " + (rWord.bounds.left - lWord.bounds.right));
+					if (wordRegions[w-1].isEmpty() || wordRegions[w].isEmpty())
+						continue; // nothing to work with at all, better merge and resolve conflicts later
+					int minRegionDistance = Integer.MAX_VALUE;
+					for (Iterator rcit = wordRegions[w-1].iterator(); rcit.hasNext();) {
+						Integer reg = ((Integer) rcit.next());
+						if (wordRegions[w].contains(reg)) {
+							minRegionDistance = 0;
+							break; // shared (contested) region
+						}
+						Integer nReg = new Integer(blockLine.regionRightNeighbors[reg.intValue()]);
+						if (!wordRegions[w].contains(nReg))
+							continue;
+						int nRegDist = blockLine.regionRightNeighborDistances[reg.intValue()];
+						minRegionDistance = Math.min(minRegionDistance, nRegDist);
+					}
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("     region color distance is " + minRegionDistance);
+					if (Math.abs((minRegionDistance - avgBlockWordRegionNeighborGap) * 2) < Math.abs(avgBlockCrossWordRegionNeighborGap - minRegionDistance)) /* still close enough */ {
+//					if (Math.abs((minRegionDistance - avgBlockWordRegionNeighborGap) * 3) < Math.abs(avgBlockCrossWordRegionNeighborGap - minRegionDistance)) /* still close enough */ {
+						if (DEBUG_ADJUST_OCR)
+							System.out.println("     ==> looks OK for merge attempt");
+						continue;
+					}
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("     ==> too far apart after compensating for kerning");
+					caughtCrossWordRegionDistances.add(new Integer(minRegionDistance));
+					if (wordBlock.length == 2) /* no leding or tailing blocks left */ {
+						wordBlocks.remove(b-- /* need to compensate loop increment on removal */);
+					}
+					else if (w == 1) /* only chop off leading word */ {
+						ImWord[] rWordBlock = new ImWord[wordBlock.length - w];
+						System.arraycopy(wordBlock, w, rWordBlock, 0, rWordBlock.length);
+						wordBlocks.set(b-- /* need to start over with tailing block */, rWordBlock);
+					}
+					else if ((w+1) == wordBlock.length) /* only chop off tailing word */ {
+						ImWord[] lWordBlock = new ImWord[w];
+						System.arraycopy(wordBlock, 0, lWordBlock, 0, lWordBlock.length);
+						wordBlocks.set(b /* no need to check leading block again */, lWordBlock);
+					}
+					else /* chop blocks apart */ {
+						ImWord[] lWordBlock = new ImWord[w];
+						System.arraycopy(wordBlock, 0, lWordBlock, 0, lWordBlock.length);
+						wordBlocks.set(b /* no need to check leading block again */, lWordBlock);
+						ImWord[] rWordBlock = new ImWord[wordBlock.length - w];
+						System.arraycopy(wordBlock, w, rWordBlock, 0, rWordBlock.length);
+						wordBlocks.add((b + 1) /* we'll get to tailing block in next round of loop */, rWordBlock);
+					}
+					break;
+				}
+			}
+			
+			//	merge sequences of words that do not tokenize apart
+			int blockWordCount = blockWords.size();
+//			Tokenizer tokenizer = ((Tokenizer) doc.getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.INNER_PUNCTUATION_TOKENIZER));
+			Tokenizer tokenizer = ((Tokenizer) doc.getAttribute(ImDocument.TOKENIZER_ATTRIBUTE, Gamta.getDefaultTokenizer()));
+			for (int b = 0; b < wordBlocks.size(); b++) {
+				ImWord[] wordBlock = ((ImWord[]) wordBlocks.get(b));
+				
+				//	concatenate words
+				StringBuffer wordBlockStr = new StringBuffer();
+				for (int w = 0; w < wordBlock.length; w++)
+					wordBlockStr.append(wordBlock[w].getString());
+				if (DEBUG_ADJUST_OCR)
+					System.out.println(" - processing block of " + wordBlock.length + " words at " + ImLayoutObject.getAggregateBox(wordBlock) + ": " + wordBlockStr);
+				
+				//	index words per character
+				ImWord[] wordAtChar = new ImWord[wordBlockStr.length()];
+				for (int w = 0, bc = 0; w < wordBlock.length; w++) {
+					String wordStr = wordBlock[w].getString();
+					for (int wc = 0; wc < wordStr.length(); wc++)
+						wordAtChar[bc++] = wordBlock[w];
+				}
+				
+				//	tokenize word block, and merge words that are in same token
+				TokenSequence wordBlockTokens = tokenizer.tokenize(wordBlockStr);
+				for (int t = 0; t < wordBlockTokens.size(); t++) {
+					Token token = wordBlockTokens.tokenAt(t);
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("   - processing token '" + token.getValue() + "'");
+					if (wordAtChar[token.getStartOffset()] == wordAtChar[token.getEndOffset() - 1]) {
+						if (DEBUG_ADJUST_OCR)
+							System.out.println("     ==> retained single word");
+						continue; // already same word
+					}
+					
+					//	count out font properties
+					int boldCharCount = 0;
+					int italicsCharCount = 0;
+					CountingSet fontNames = new CountingSet();
+					int fontSizeCount = 0;
+					int fontSizeSum = 0;
+					int baselineSum = 0;
+					for (int c = token.getStartOffset(); c < token.getEndOffset(); c++) {
+						if (wordAtChar[c].hasAttribute(ImWord.BOLD_ATTRIBUTE))
+							boldCharCount++;
+						if (wordAtChar[c].hasAttribute(ImWord.ITALICS_ATTRIBUTE))
+							italicsCharCount++;
+						if (wordAtChar[c].hasAttribute(ImWord.FONT_NAME_ATTRIBUTE))
+							fontNames.add(wordAtChar[c].getAttribute(ImWord.FONT_NAME_ATTRIBUTE));
+						if (wordAtChar[c].getFontSize() != -1) {
+							fontSizeCount++;
+							fontSizeSum += wordAtChar[c].getFontSize();
+						}
+						baselineSum += wordAtChar[c].getBaseline();
+					}
+					
+					//	get border words
+					ImWord fWord = wordAtChar[token.getStartOffset()];
+					ImWord lWord = wordAtChar[token.getEndOffset() - 1];
+					
+					//	create adjusted word
+					BoundingBox newWordBb = ImLayoutObject.getAggregateBox(wordAtChar, token.getStartOffset(), token.getEndOffset());
+					ImWord newWord;
+					if (fWord.getPage() == null)
+						newWord = new ImWord(doc, fWord.pageId, newWordBb, token.getValue());
+					else newWord = new ImWord(fWord.getPage(), newWordBb, token.getValue());
+					if (token.length() < (boldCharCount * 2))
+						newWord.setAttribute(ImWord.BOLD_ATTRIBUTE);
+					if (token.length() < (italicsCharCount * 2))
+						newWord.setAttribute(ImWord.ITALICS_ATTRIBUTE);
+					Object fontName = fontNames.max();
+					if (fontName != null)
+						newWord.setAttribute(ImWord.FONT_NAME_ATTRIBUTE, fontName.toString());
+					if (fontSizeCount != 0)
+						newWord.setFontSize((fontSizeSum + (fontSizeCount / 2)) / fontSizeCount);
+					newWord.setBaseline(baselineSum / token.length());
+					newWord.setTextStreamType(fWord.getTextStreamType());
+					
+					//	get surrounding words and relationship
+//					System.out.println("   - getting text stream neighbors");
+					ImWord prev = fWord.getPreviousWord();
+					ImWord next = lWord.getNextWord();
+					
+					//	switch annotations to replacement word
+					for (int c = token.getStartOffset(); c < token.getEndOffset(); c++) {
+						if ((c != 0) && (wordAtChar[c] == wordAtChar[c-1]))
+							continue;
+						ImAnnotation[] startingAnnots = doc.getAnnotations(wordAtChar[c], null);
+						for (int a = 0; a < startingAnnots.length; a++)
+							startingAnnots[a].setFirstWord(newWord);
+						ImAnnotation[] endingAnnots = doc.getAnnotations(null, wordAtChar[c]);
+						for (int a = 0; a < endingAnnots.length; a++)
+							endingAnnots[a].setLastWord(newWord);
+					}
+					
+					//	replace word in text stream
+//					System.out.println("   - integrating in text stream");
+					if (prev != null)
+						prev.setNextWord(newWord);
+					if (next != null) {
+						newWord.setNextRelation(lWord.getNextRelation()); // only makes sense if there is next word
+						next.setPreviousWord(newWord);
+					}
+					
+					//	remove replaced word
+//					System.out.println("   - cleaning up replaced words");
+					int wordCount = 0;
+					for (int c = token.getStartOffset(); c < token.getEndOffset(); c++) {
+						if ((c != 0) && (wordAtChar[c] == wordAtChar[c-1]))
+							continue;
+						if (wordAtChar[c].getPage() != null)
+							wordAtChar[c].getPage().removeWord(wordAtChar[c], false);
+						wordCount++;
+					}
+//					System.out.println(" ==> done");
+					if (DEBUG_ADJUST_OCR)
+						System.out.println("     ==> merged " + wordCount + " words into " + newWordBb);
+					
+					//	replace words in list we're filling
+					for (int bw = 0; bw < blockWords.size(); bw++) {
+						ImWord word = ((ImWord) blockWords.get(bw));
+						if (word != fWord)
+							continue;
+						blockWords.set(bw, newWord);
+						blockWords.subList((bw + 1), (bw + wordCount)).clear();
+						blockWordsToLines.put(newWord, blockWordsToLines.get(fWord));
+					}
+				}
+			}
+			if (DEBUG_ADJUST_OCR) {
+				System.out.println(" ==> merged away " + (blockWordCount - blockWords.size()) + " of " + blockWordCount + " words in round " + round + " at distances " + avgBlockWordRegionNeighborGap + " and " + avgBlockCrossWordRegionNeighborGap);
+				System.out.println("     region coloring stopped mergers at distances " + caughtCrossWordRegionDistances);
+			}
+			
+			//	nothing merged at all, so no changes to expect (go aroud at least once, as observance of punctuation might make difference)
+			if ((blockWords.size() == blockWordCount) && (round != 0))
+				break;
+			
+			//	re-asses in-word region gaps and start over (above mergers might have sharpened contrast in blocks with many scattered words
+			if (DEBUG_ADJUST_OCR)
+				System.out.println(" - re-assessing in-word region gaps");
+			blockWordRegionNeighborGaps.clear();
+			blockPunctRegionNeighborGaps.clear();
+			CountingSet[] blockWordRegions = new CountingSet[blockWords.size()];
+			for (int w = 0; w < blockWords.size(); w++) {
+				ImWord blockWord = ((ImWord) blockWords.get(w));
+				BlockLine blockLine = ((BlockLine) blockWordsToLines.get(blockWord));
+				int lineLeft = Math.max(0, (blockWord.bounds.left - blockLine.getPageLeft()));
+				int lineRight = Math.min(blockLine.regionColors.length, (blockWord.bounds.right - blockLine.getPageLeft()));
+				
+				//	check which regions touch word area
+				blockWordRegions[w] = new CountingSet();
+				for (int c = lineLeft; c < lineRight; c++)
+					for (int r = 0; r < blockLine.regionColors[c].length; r++) {
+						int reg = blockLine.regionColors[c][r];
+						if (reg == 0)
+							continue;
+						blockWordRegions[w].add(new Integer(reg));
+					}
+				if (DEBUG_ADJUST_OCR)
+					System.out.println("   - regions in word " + blockWord.getString() + " at " + blockWord.bounds + " are " + blockWordRegions[w]);
+			}
+			
+			//	collect gaps to neighboring regions in same word
+			for (int w = 0; w < blockWords.size(); w++) {
+				ImWord blockWord = ((ImWord) blockWords.get(w));
+				BlockLine blockLine = ((BlockLine) blockWordsToLines.get(blockWord));
+				boolean checkNextWord = ((w+1) < blockWords.size());
+				ImWord nBlockWord = null;
+				BlockLine nBlockLine = null;
+				for (Iterator crit = blockWordRegions[w].iterator(); crit.hasNext();) {
+					Integer reg = ((Integer) crit.next());
+					Integer nReg = new Integer(blockLine.regionRightNeighbors[reg.intValue()]);
+					int nRegDist = blockLine.regionRightNeighborDistances[reg.intValue()];
+					if (blockWordRegions[w].contains(nReg)) {
+						blockWordRegionNeighborGaps.add(new Integer(nRegDist));
+						continue;
+					}
+					
+					//	check if there _should_ be space before next word
+					if ((nBlockWord == null) && checkNextWord) {
+						nBlockWord = ((ImWord) blockWords.get(w+1));
+						nBlockLine = ((BlockLine) blockWordsToLines.get(nBlockWord));
+						if (nBlockLine != blockLine) {
+							checkNextWord = false;
+							nBlockWord = null;
+							nBlockLine = null;
+						}
+					}
+					if (nBlockWord == null)
+						continue; // nothing to work with
+					if (!blockWordRegions[w+1].contains(nReg))
+						continue; // no dice with next word, either
+					if ("({[".indexOf(blockWord.getString()) != -1)
+						blockPunctRegionNeighborGaps.add(new Integer(nRegDist));
+					else if (".,:;)]}".indexOf(nBlockWord.getString()) != -1)
+						blockPunctRegionNeighborGaps.add(new Integer(nRegDist));
+				}
+			}
+		}
+		
+		//	adjust existing block (if any)
+		if ((apiPageBlock.ocrBlock.exBlocks != null) && (apiPageBlock.ocrBlock.exBlocks.length != 0)) {
+			ImWord[] bws = ((ImWord[]) blockWords.toArray(new ImWord[blockWords.size()]));
+			BoundingBox bBb = ImLayoutObject.getAggregateBox(bws);
+			if ((apiPageBlock.ocrBlock.exBlocks.length != 1) || !apiPageBlock.ocrBlock.exBlocks[0].bounds.equals(bBb)) {
+				ImRegion newBlock = new ImRegion(page, bBb, ImRegion.BLOCK_ANNOTATION_TYPE);
+				for (int b = 0; b < apiPageBlock.ocrBlock.exBlocks.length; b++) {
+					newBlock.copyAttributes(apiPageBlock.ocrBlock.exBlocks[b]);
+					page.removeRegion(apiPageBlock.ocrBlock.exBlocks[b]);
+				}
+				if (DEBUG_ADJUST_OCR)
+					System.out.println("     - moved/merged block " + apiPageBlock.ocrBlock.exBlocks[0].bounds + " to " + newBlock.bounds);
+			}
+			else if (DEBUG_ADJUST_OCR)
+				System.out.println("     - retained block " + apiPageBlock.ocrBlock.exBlocks[0].bounds);
+			paraWords.clear();
+		}
+		
+		//	finally ...
+		pageWords.addAll(blockWords);
+	}
+	
+	private static Region[] getAtomicRegions(Region theRegion) {
+		ArrayList regions = new ArrayList();
+		addAtomicRegions(theRegion, regions);
+		return ((Region[]) regions.toArray(new Region[regions.size()]));
+	}
+	private static void addAtomicRegions(Region theRegion, ArrayList regions) {
+		if (theRegion.isAtomic() || theRegion.isImage())
+			regions.add(theRegion);
+		else for (int s = 0; s < theRegion.getSubRegionCount(); s++)
+			addAtomicRegions(theRegion.getSubRegion(s), regions);
+	}
+	
+	private static class PageBlock {
+		final BlockLine[] blockLines;
+		int left = Integer.MAX_VALUE;
+		int right = Integer.MIN_VALUE;
+		int top = Integer.MAX_VALUE;
+		int bottom = Integer.MIN_VALUE;
+		OcrBlock ocrBlock = null;
+		PageBlock(BlockLine[] blockLines) {
+			this.blockLines = blockLines;
+			for (int l = 0; l < this.blockLines.length; l++) {
+				this.left = Math.min(this.left, this.blockLines[l].getPageLeft());
+				this.right = Math.max(this.right, this.blockLines[l].getPageRight());
+				this.top = Math.min(this.top, this.blockLines[l].getPageTop());
+				this.bottom = Math.max(this.bottom, this.blockLines[l].getPageBottom());
+			}
+		}
+		BoundingBox getBounds() {
+			return new BoundingBox(this.left, this.right, this.top, this.bottom);
+		}
+		int getWidth() {
+			return (this.right - this.left);
+		}
+		int getHeight() {
+			return (this.bottom - this.top);
+		}
+		Point getCenter() {
+			return new Point(((this.left + this.right) / 2), ((this.top + this.bottom) / 2));
+		}
+		boolean contains(Point p) {
+			if (p.x < this.left)
+				return false;
+			else if (this.right <= p.x)
+				return false;
+			else if (p.y < this.top)
+				return false;
+			else if (this.bottom <= p.y)
+				return false;
+			else return true;
+		}
+//		void addWords(OcrBlock ob) {
+//			this.ocrWords.addAll(ob.words);
+//		}
+		void addOcrBlock(OcrBlock ob) {
+			if (this.ocrBlock == null)
+				this.ocrBlock = ob;
+			else this.ocrBlock.include(ob);
+		}
+//		void include(PageBlock pb) {
+//			if (pb == this)
+//				return;
+//			this.left = Math.min(this.left, pb.left);
+//			this.right = Math.max(this.right, pb.right);
+//			this.top = Math.min(this.top, pb.top);
+//			this.bottom = Math.max(this.bottom, pb.bottom);
+//		}
+	}
+	
+	private static class BlockLine {
+		final BoundingBox blockBounds;
+		int color;
+		int left; // relative to parent block
+		int right; // relative to parent block
+		int top; // relative to parent block
+		final int oTop; // relative to parent block (need this as basis of region colors as we adjust top)
+		int bottom; // relative to parent block
+		//final int oBottom; // relative to parent block (need this as basis of region colors as we adjust bottom)
+		int baseline = -1; // relative to own top
+		int xHeight = -1;
+		int capHeight = -1;
+		int fontSize = -1;
+		OcrLine ocrLine = null;
+		BlockLine(BoundingBox blockBounds, int color, int left, int right, int top, int bottom) {
+			this.blockBounds = blockBounds;
+			this.color = color;
+			this.left = left;
+			this.right = right;
+			this.top = top;
+			this.oTop = top;
+			this.bottom = bottom;
+			//this.oBottom = bottom;
+		}
+		BoundingBox getPageBounds() {
+			return new BoundingBox(this.getPageLeft(), this.getPageRight(), this.getPageTop(), this.getPageBottom());
+		}
+		int getPageLeft() {
+			return (this.blockBounds.left + this.left);
+		}
+		int getPageRight() {
+			return (this.blockBounds.left + this.right);
+		}
+		int getPageTop() {
+			return (this.blockBounds.top + this.top);
+		}
+		int getPageBottom() {
+			return (this.blockBounds.top + this.bottom);
+		}
+//		BoundingBox getBlockBounds() {
+//			return new BoundingBox(this.getBlockLeft(), this.getBlockRight(), this.getBlockTop(), this.getBlockBottom());
+//		}
+		int getBlockLeft() {
+			return this.left;
+		}
+//		int getBlockRight() {
+//			return this.right;
+//		}
+		int getBlockTop() {
+			return this.top;
+		}
+		int getBlockBottom() {
+			return this.bottom;
+		}
+		int getWidth() {
+			return (this.right - this.left);
+		}
+		int getHeight() {
+			return (this.bottom - this.top);
+		}
+//		int getBlockBaseline() {
+//			return (this.top + this.baseline);
+//		}
+		int getPageBaseline() {
+			return (this.getPageTop() + this.baseline);
+		}
+//		int getCapHeight() {
+//			return this.capHeight;
+//		}
+//		int getXHeight() {
+//			return this.xHeight;
+//		}
+		
+		int[][] regionColors = null;
+		int[] regionSizes = null;
+		int[] regionMinCols = null;
+		int[] regionMaxCols = null;
+		int[] regionMinRows = null;
+		int[] regionMaxRows = null;
+		int[] regionLeftNeighbors = null;
+		int[] regionLeftNeighborDistances = null;
+		int[] regionRightNeighbors = null;
+		int[] regionRightNeighborDistances = null;
+		void setRegions(AnalysisImage lineAi) {
+			this.regionColors = Imaging.getRegionColoring(lineAi, ((byte) 112), true);
+			int maxLineAiRegion = getMaxRegionColor(this.regionColors);
+			this.regionSizes = new int[maxLineAiRegion + 1];
+			this.regionMinCols = new int[maxLineAiRegion + 1];
+			this.regionMaxCols = new int[maxLineAiRegion + 1];
+			this.regionMinRows = new int[maxLineAiRegion + 1];
+			this.regionMaxRows = new int[maxLineAiRegion + 1];
+		}
+	}
+	
+	private static class OcrBlock {
+		int left;
+		int right;
+		int top;
+		int bottom;
+		ArrayList lines = new ArrayList();
+		ArrayList words = new ArrayList();
+		ImRegion[] exBlocks = null;
+		OcrBlock(ImagePartRectangle bounds) {
+			this.left = bounds.getLeftCol();
+			this.right = bounds.getRightCol();
+			this.top = bounds.getTopRow();
+			this.bottom = bounds.getBottomRow();
+		}
+		OcrBlock(BoundingBox bounds) {
+			this.left = bounds.left;
+			this.right = bounds.right;
+			this.top = bounds.top;
+			this.bottom = bounds.bottom;
+		}
+		BoundingBox getBounds() {
+			return new BoundingBox(this.left, this.right, this.top, this.bottom);
+		}
+		Point getCenter() {
+			return new Point(((this.left + this.right) / 2), ((this.top + this.bottom) / 2));
+		}
+		boolean contains(Point p) {
+			if (p.x < this.left)
+				return false;
+			else if (this.right <= p.x)
+				return false;
+			else if (p.y < this.top)
+				return false;
+			else if (this.bottom <= p.y)
+				return false;
+			else return true;
+		}
+		void include(OcrBlock ob) {
+			if (ob == this)
+				return;
+			this.words.addAll(ob.words);
+			this.left = Math.min(this.left, ob.left);
+			this.right = Math.max(this.right, ob.right);
+			this.top = Math.min(this.top, ob.top);
+			this.bottom = Math.max(this.bottom, ob.bottom);
+		}
+		void shiftHorizontally(int by) {
+			if (DEBUG_ADJUST_OCR)
+				System.out.println(" - shifting horizontally by " + by + ", " + ((by * 100) / (this.right - this.left)) + "%");
+			this.left += by;
+			this.right += by;
+		}
+		void stretchHorizontally(int by) {
+			if (DEBUG_ADJUST_OCR)
+				System.out.println(" - stretching horizontally by " + by + ", " + ((by * 100) / (this.right - this.left)) + "%");
+			for (int l = 0; l < this.lines.size(); l++) {
+				OcrLine ol = ((OcrLine) this.lines.get(l));
+				int lols = ((by * ol.left) / (this.right - this.left));
+				ol.left += lols;
+				int rols = ((by * ol.right) / (this.right - this.left));
+				ol.right += rols;
+				if (lols != rols)
+					ol.stretchHorizontally(rols - lols);
+			}
+		}
+		void shiftVertically(int by) {
+			if (DEBUG_ADJUST_OCR)
+				System.out.println(" - shifting vertically by " + by + ", " + ((by * 100) / (this.bottom - this.top)) + "%");
+			this.top += by;
+			this.bottom += by;
+		}
+		void stretchVertically(int by) {
+			if (DEBUG_ADJUST_OCR)
+				System.out.println(" - stretching vertically by " + by + ", " + ((by * 100) / (this.bottom - this.top)) + "%");
+			for (int l = 0; l < this.lines.size(); l++) {
+				OcrLine ol = ((OcrLine) this.lines.get(l));
+				int olc = ((ol.top + ol.bottom) / 2);
+				int ols = ((by * olc) / (this.bottom - this.top));
+				ol.top += ols;
+				ol.bottom += ols;
+			}
+			this.bottom += by;
+		}
+	}
+	
+	private static class OcrLine {
+		OcrBlock block;
+		int left = Integer.MAX_VALUE; // relative to parent block for easier whole-block bulk shift
+		int right = Integer.MIN_VALUE; // relative to parent block for easier whole-block bulk shift
+		int top = Integer.MAX_VALUE; // relative to parent block for easier whole-block bulk shift
+		int bottom = Integer.MIN_VALUE; // relative to parent block for easier whole-block bulk shift
+		ArrayList words = new ArrayList();
+		ImRegion exLine = null;
+		ImRegion endingExPara = null;
+		OcrLine(OcrBlock block) {
+			this.block = block;
+			this.block.lines.add(this);
+		}
+		void addWord(ImWord word) {
+//			this.left = Math.min(this.left, (word.bounds.left - this.block.left));
+			int owLeft = (word.bounds.left - this.block.left);
+			if (owLeft < this.left) {
+				this.left = owLeft;
+				for (int w = 0; w < this.words.size(); w++)
+					((OcrWord) this.words.get(w)).lineExpandedLeft(); // if line expands left, we need to update line-relative word boundaries
+			}
+			this.right = Math.max(this.right, (word.bounds.right - this.block.left));
+			this.top = Math.min(this.top, (word.bounds.top - this.block.top));
+			this.bottom = Math.max(this.bottom, (word.bounds.bottom - this.block.top));
+			this.words.add(new OcrWord(word, this));
+		}
+//		BoundingBox getBlockBounds() {
+//			return new BoundingBox(this.left, this.right, this.top, this.bottom);
+//		}
+		BoundingBox getPageBounds() {
+			return new BoundingBox((this.left + this.block.left), (this.right + this.block.left), (this.top + this.block.top), (this.bottom + this.block.top));
+		}
+		int getPageLeft() {
+			return (this.left + this.block.left);
+		}
+		int getPageTop() {
+			return (this.top + this.block.top);
+		}
+		void stretchHorizontally(int by) {
+			for (int w = 0; w < this.words.size(); w++) {
+				OcrWord ow = ((OcrWord) this.words.get(w));
+				int lows = ((by * ow.left) / (this.right - this.left));
+				ow.left += lows;
+				int rows = ((by * ow.right) / (this.right - this.left));
+				ow.right += rows;
+			}
+		}
+	}
+	private static class OcrWord implements Comparable {
+		final ImWord word;
+		OcrLine line;
+		int left; // relative to parent line for easier whole-line bulk shift
+		int right; // relative to parent line for easier whole-line bulk shift
+		OcrWord(ImWord word, OcrLine line) {
+			this.word = word;
+			this.line = line;
+			this.left = (this.word.bounds.left - this.line.left - this.line.block.left);
+			this.right = (this.word.bounds.right - this.line.left - this.line.block.left);
+		}
+		void lineExpandedLeft() {
+			this.left = (this.word.bounds.left - this.line.left - this.line.block.left);
+			this.right = (this.word.bounds.right - this.line.left - this.line.block.left);
+		}
+//		BoundingBox getLineBounds() {
+//			return new BoundingBox(this.left, this.right, 0, (this.line.bottom - this.line.top));
+//		}
+//		BoundingBox getBlockBounds() {
+//			return new BoundingBox((this.left + this.line.left), (this.right + this.line.left), this.line.top, this.line.bottom);
+//		}
+		int getPageLeft() {
+			return (this.left + this.line.left + this.line.block.left);
+		}
+		int getPageRight() {
+			return (this.right + this.line.left + this.line.block.left);
+		}
+//		BoundingBox getPageBounds() {
+//			return new BoundingBox((this.left + this.line.left + this.line.block.left), (this.right + this.line.left + this.line.block.left), (this.line.top + this.line.block.top), (this.line.bottom + this.line.block.top));
+//		}
+		public int compareTo(Object obj) {
+			return ImUtils.leftRightOrder.compare(this.word, ((OcrWord) obj).word);
+		}
+	}
+	
+	private static final boolean DEBUG_BLOCK_ANALYSIS = false;
+	private static BlockLine[] getBlockLines(AnalysisImage pageAi, int dpi, BoundingBox blockBounds, boolean separateLines, ProgressMonitor pm, BufferedImage vbi) {
 		Graphics2D vbiGr = ((vbi == null) ? null : vbi.createGraphics());
 		
 		//	get region coloring of block
@@ -3344,7 +6095,6 @@ Literature ideas for bold:
 //		cleanRegions(blockRegions, pi.currentDpi, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows);
 		
 		//	gather statistics TODOne do we still need those ==> yes, if not all of them
-//		if (DEBUG_BLOCK_ANALYSIS) System.out.println("Region colors in " + block.getBoundingBox() + ":");
 		if (DEBUG_BLOCK_ANALYSIS) System.out.println("Region colors in " + blockBounds + ":");
 		CountingSet blockRegionTopCounts = new CountingSet(new TreeMap());
 		CountingSet blockRegionBottomCounts = new CountingSet(new TreeMap());
@@ -3363,7 +6113,6 @@ Literature ideas for bold:
 				for (int c = blockRegionMinCols[reg]; c <= blockRegionMaxCols[reg]; c++)
 					for (int r = blockRegionMinRows[reg]; r <= blockRegionMaxRows[reg]; r++) {
 						if (blockRegions[c][r] == reg)
-//							vbi.setRGB((block.bounds.getLeftCol() + c), (block.bounds.getTopRow() + r), regRgb);
 							vbi.setRGB((blockBounds.left + c), (blockBounds.top + r), regRgb);
 					}
 			}
@@ -3378,25 +6127,29 @@ Literature ideas for bold:
 			System.out.println("     average size is " + getAverage(blockRegionSizeCounts, 0, Integer.MAX_VALUE));
 		}
 		
-		//	eliminate altogether if totally out of proportion (sans-serif lower case L is about 8 times as tall as wide, at worst)
+		/* eliminate altogether if totally out of proportion:
+		 * - sans-serif lower case L is about 8 times as tall as wide, at worst
+		 *   ==> eliminates vertical lines (page layout graphics, etc.) and letters mingled across lines
+		 * - even conflated 40 letter word is about 20 times as wide as the line height
+		 *   ==> eliminates gorizontal lines (page layout graphics, etc.) */
 		for (int reg = 1; reg <= maxBlockRegion; reg++) {
 			if (blockRegionSizes[reg] == 0)
 				continue; // eliminated above
 			int regHeight = (blockRegionMaxRows[reg] - blockRegionMinRows[reg] + 1);
 			int regWidth = (blockRegionMaxCols[reg] - blockRegionMinCols[reg] + 1);
-			if ((regHeight * 1) < (regWidth * 10))
+//			if ((regHeight * 1) < (regWidth * 10))
+//				continue;
+			if (((regHeight * 1) < (regWidth * 10)) && ((regWidth * 1) < (regHeight * 25)))
 				continue;
 			if (vbi != null) {
 				int killRegRgb = Color.GRAY.getRGB();
 				for (int c = blockRegionMinCols[reg]; c <= blockRegionMaxCols[reg]; c++)
 					for (int r = blockRegionMinRows[reg]; r <= blockRegionMaxRows[reg]; r++) {
 						if (blockRegions[c][r] == reg)
-//							vbi.setRGB((block.bounds.getLeftCol() + c), (block.bounds.getTopRow() + r), killRegRgb);
 							vbi.setRGB((blockBounds.left + c), (blockBounds.top + r), killRegRgb);
 					}
 			}
 			if (DEBUG_BLOCK_ANALYSIS) System.out.println(" - eliminating for aspect ratio " + reg + ": " + blockRegionSizes[reg] + " pixels in " + blockRegionMinCols[reg] + "-" + blockRegionMaxCols[reg] + " x " + blockRegionMinRows[reg] + "-" + blockRegionMaxRows[reg]);
-//			attachRegion(blockRegions, reg, 0, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
 			attachRegion(blockRegions, reg, 0, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
 		}
 		
@@ -3418,7 +6171,6 @@ Literature ideas for bold:
 				if (blockRegionMaxRows[aReg] < blockRegionMaxRows[reg])
 					continue;
 				if (DEBUG_BLOCK_ANALYSIS) System.out.println(" - assimilating " + reg + " into " + aReg + ": " + blockRegionSizes[reg] + " pixels in " + blockRegionMinCols[reg] + "-" + blockRegionMaxCols[reg] + " x " + blockRegionMinRows[reg] + "-" + blockRegionMaxRows[reg] + " inside " + blockRegionMinCols[aReg] + "-" + blockRegionMaxCols[aReg] + " x " + blockRegionMinRows[aReg] + "-" + blockRegionMaxRows[aReg]);
-//				attachRegion(blockRegions, reg, 0, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
 				attachRegion(blockRegions, reg, aReg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
 				break;
 			}
@@ -3456,13 +6208,11 @@ Literature ideas for bold:
 			}
 			else {
 				if (DEBUG_BLOCK_ANALYSIS) System.out.println(" - eliminating for size " + reg + ": " + blockRegionSizes[reg] + " pixels in " + blockRegionMinCols[reg] + "-" + blockRegionMaxCols[reg] + " x " + blockRegionMinRows[reg] + "-" + blockRegionMaxRows[reg]);
-//				attachRegion(blockRegions, reg, 0, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
 				attachRegion(blockRegions, reg, 0, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
 			}
 		}
 		
 		//	amalgamate very small regions with larger regions right below them (attach accents to letters)
-//		attachSmallRegionsDownward(blockRegions, (dpi / 25), (dpi / 50), (dpi / 25), blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
 		attachSmallRegionsDownward(blockRegions, (dpi / 25), (dpi / 50), (dpi / 25), blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
 		
 //		if (DEBUG_BLOCK_ANALYSIS) {
@@ -3482,12 +6232,12 @@ Literature ideas for bold:
 		//	amalgamate every two regions if (a) one contains full vertical extent of other or (b) each contains center of vertical extent of other
 		for (boolean changed = true; changed;) {
 			changed = false;
+			
+			//	scan left to find adjacent regions
 			for (int reg = 1; reg <= maxBlockRegion; reg++) {
 				if (blockRegionSizes[reg] == 0)
 					continue; // already attached
 				int aReg = -1;
-				
-				//	scan left to find adjacent regions
 				for (int r = blockRegionMinRows[reg]; r <= blockRegionMaxRows[reg]; r++) {
 					for (int c = (blockRegionMinCols[reg] - 1); c >= 0; c--) {
 						if (blockRegions[c][r] == 0)
@@ -3514,7 +6264,6 @@ Literature ideas for bold:
 						
 						//	attach vertically contained region to current one
 						if (lRegContained) {
-//							attachRegion(blockRegions, lReg, reg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
 							attachRegion(blockRegions, lReg, reg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
 							changed = true;
 						}
@@ -3530,16 +6279,15 @@ Literature ideas for bold:
 				}
 				if (aReg == -1)
 					continue;
-//				attachRegion(blockRegions, reg, aReg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
 				attachRegion(blockRegions, reg, aReg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
 				changed = true;
 			}
+			
+			//	scan right to find adjacent regions
 			for (int reg = 1; reg <= maxBlockRegion; reg++) {
 				if (blockRegionSizes[reg] == 0)
 					continue; // already attached
 				int aReg = -1;
-				
-				//	scan right to find adjacent regions
 				for (int r = blockRegionMinRows[reg]; r <= blockRegionMaxRows[reg]; r++) {
 					for (int c = (blockRegionMaxCols[reg] + 1); c < blockRegions.length; c++) {
 						if (blockRegions[c][r] == 0)
@@ -3566,7 +6314,6 @@ Literature ideas for bold:
 						
 						//	attach vertically contained region to current one
 						if (lRegContained) {
-//							attachRegion(blockRegions, lReg, reg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
 							attachRegion(blockRegions, lReg, reg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
 							changed = true;
 						}
@@ -3582,7 +6329,6 @@ Literature ideas for bold:
 				}
 				if (aReg == -1)
 					continue;
-//				attachRegion(blockRegions, reg, aReg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
 				attachRegion(blockRegions, reg, aReg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
 				changed = true;
 			}
@@ -3659,10 +6405,11 @@ Literature ideas for bold:
 					}
 				if (aReg == -1)
 					continue;
-//				attachRegion(blockRegions, reg, aReg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
 				attachRegion(blockRegions, reg, aReg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
 				changed = true;
 			}
+			
+			//	re-compute center of mass
 			if (changed)
 				for (int reg = 1; reg <= maxBlockRegion; reg++) {
 					if (blockRegionSizes[reg] == 0)
@@ -3679,7 +6426,6 @@ Literature ideas for bold:
 		
 		//	amalgamate every small region with larger region right below (attach dots to Is and Js in all-lower-case lines without letters reaching cap height)
 		//	no risk of erroneously attaching periods or commas any more, as those attach to letters on same line above
-//		attachSmallRegionsDownward(blockRegions, (dpi / 25), (dpi / 12), (dpi / 25), blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
 		attachSmallRegionsDownward(blockRegions, (dpi / 25), (dpi / 12), (dpi / 25), blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
 		
 		//	amalgamate regions that overlap with over 50% of their respective heights
@@ -3709,7 +6455,6 @@ Literature ideas for bold:
 				}
 				if (aReg == -1)
 					continue;
-//				attachRegion(blockRegions, reg, aReg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, block.bounds.getLeftCol(), block.bounds.getTopRow(), vbi);
 				attachRegion(blockRegions, reg, aReg, blockRegionSizes, blockRegionMinCols, blockRegionMaxCols, blockRegionMinRows, blockRegionMaxRows, blockBounds.left, blockBounds.top, vbi);
 				changed = true;
 			}
@@ -3728,7 +6473,6 @@ Literature ideas for bold:
 			int regWidth = (blockRegionMaxCols[reg] - blockRegionMinCols[reg]);
 			if (regWidth < (dpi / 50))
 				continue; // less than half a millimeter wide (vertical separator or table grid line, etc.)
-//			BlockLine blockLine = new BlockLine(block, reg, 0, block.bounds.getWidth(), blockRegionMinRows[reg], (blockRegionMaxRows[reg] + 1));
 			BlockLine blockLine = new BlockLine(blockBounds, reg, 0, blockBounds.getWidth(), blockRegionMinRows[reg], (blockRegionMaxRows[reg] + 1));
 			blockLineList.add(blockLine);
 		}
@@ -3756,7 +6500,7 @@ Literature ideas for bold:
 				}
 		}
 		
-		//	expand lines upwards and downwards to fully cover partially included single-line regions
+		//	expand lines upwards and downwards to fully cover partially included regions (ignoring ones contested between lines)
 		for (int l = 0; l < blockLines.length; l++) {
 			BlockLine regLine = blockLines[l];
 			if (DEBUG_BLOCK_ANALYSIS) System.out.println(" - expanding line at " + regLine.getPageBounds());
@@ -3876,7 +6620,7 @@ Literature ideas for bold:
 			measureRegions(blockLines[l].regionColors, blockLines[l].regionSizes, blockLines[l].regionMinCols, blockLines[l].regionMaxCols, blockLines[l].regionMinRows, blockLines[l].regionMaxRows);
 //			
 //			//	eliminate regions that are too small to even see (beware of periods and dots, though)
-//			this.cleanRegions(blockLines[l].regionColors, dpi, blockLines[l].regionSizes, blockLines[l].regionMinCols, blockLines[l].regionMaxCols, blockLines[l].regionMinRows, blockLines[l].regionMaxRows);
+//			cleanRegions(blockLines[l].regionColors, dpi, blockLines[l].regionSizes, blockLines[l].regionMinCols, blockLines[l].regionMaxCols, blockLines[l].regionMinRows, blockLines[l].regionMaxRows);
 			
 			//	eliminate regions whose top is in bottom 20% of line
 			//	DO NOT eliminate dimensions just yet, though, as without a descender, we'd eliminate periods, and we need those for word detection
@@ -3893,7 +6637,7 @@ Literature ideas for bold:
 			attachSmallRegionsDownward(blockLines[l].regionColors, (dpi / 12), (dpi / 6), 0, blockLines[l].regionSizes, blockLines[l].regionMinCols, blockLines[l].regionMaxCols, blockLines[l].regionMinRows, blockLines[l].regionMaxRows, -1, -1, null);
 			
 			//	gather statistics
-			System.out.println(" - region colors in " + blockLines[l].getPageBounds() + ":");
+			if (DEBUG_BLOCK_ANALYSIS) System.out.println(" - region colors in " + blockLines[l].getPageBounds() + ":");
 			CountingSet lineRegionTopCounts = new CountingSet(new TreeMap());
 			CountingSet lineRegionBottomCounts = new CountingSet(new TreeMap());
 			CountingSet lineRegionSizeCounts = new CountingSet(new TreeMap());
@@ -4156,236 +6900,6 @@ Literature ideas for bold:
 			if (DEBUG_BLOCK_ANALYSIS) System.out.println("     --> top now is at " + blockLines[l].getPageTop() + " with bounds " + blockLines[l].getPageBounds());
 		}
 		
-		//	identify words in individual lines
-		for (int l = 0; l < blockLines.length; l++) {
-			System.out.println("   - detecting words in " + blockLines[l].getPageBounds() + ":");
-			//	measure occupation of each column to identify word gaps ==> doesn't work reliably with italics and/or kerning
-//			int[] lineApiColOccupations = new int[lineRegions.length];
-//			Arrays.fill(lineApiColOccupations, 0);
-//			for (int c = 0; c < lineRegions.length; c++)
-//				for (int r = 0; r < lineRegions[c].length; r++) {
-//					//	TODO_ might have to ignore regions that (a) touch either of line top or bottom and (b) don't overlap with line center
-//					//	==> keeps intrusions from lines below and above from interferring
-//					if (lineRegions[c][r] != 0)
-//						lineApiColOccupations[c]++;
-//				}
-//			CountingSet lineApiColOccupationGaps = new CountingSet(new TreeMap());
-//			ArrayList lineApiColOccupationGapList = new ArrayList();
-//			int lastLineApiColOccupation = -1;
-//			for (int c = 0; c < lineRegions.length; c++) {
-//				if (lineApiColOccupations[c] == 0) {
-//					if (lastLineApiColOccupation == -1)
-//						lastLineApiColOccupation = c;
-//				}
-//				else if (lastLineApiColOccupation != -1) {
-//					lineApiColOccupationGaps.add(new Integer(c - lastLineApiColOccupation));
-//					int cog = ((lastLineApiColOccupation << 16) | c);
-//					lineApiColOccupationGapList.add(new Integer(cog));
-//					lastLineApiColOccupation = -1;
-//				}
-//			}
-//			System.out.println("   - column occupations: " + Arrays.toString(lineApiColOccupations));
-//			System.out.println("   - column occupation gaps: " + lineApiColOccupationGaps);
-//			System.out.println("     average column occupation gap is " + this.getAverage(lineApiColOccupationGaps, 0, Integer.MAX_VALUE));
-//			int lastLineApiColOccupationGap = -1;
-//			int maxLineApiColOccupationGapJump = 0;
-//			int maxBelowJumpLineApiColOccupationGap = -1;
-//			int minAboveJumpLineApiColOccupationGap = -1;
-//			for (Iterator cogit = lineApiColOccupationGaps.iterator(); cogit.hasNext();) {
-//				Integer cog = ((Integer) cogit.next());
-//				if (lastLineApiColOccupationGap == -1) {
-//					lastLineApiColOccupationGap = cog.intValue();
-//					continue;
-//				}
-//				int cogJump = (cog.intValue() - lastLineApiColOccupationGap);
-//				if (cogJump > maxLineApiColOccupationGapJump) {
-//					maxBelowJumpLineApiColOccupationGap = lastLineApiColOccupationGap;
-//					minAboveJumpLineApiColOccupationGap = cog.intValue();
-//					maxLineApiColOccupationGapJump = cogJump;
-//				}
-//				lastLineApiColOccupationGap = cog.intValue();
-//			}
-//			System.out.println("     largest column occupation gap jump is " + maxLineApiColOccupationGapJump + " between " + maxBelowJumpLineApiColOccupationGap + " and " + minAboveJumpLineApiColOccupationGap);
-//			int minLineApiWordGap = minAboveJumpLineApiColOccupationGap;
-//			if (maxLineApiColOccupationGapJump < (dpi / 50) /* half a millimeter */) {
-//				minLineApiWordGap = ((blockLines[l].getHeight() + 2) / 4);
-//				System.out.println("     ==> too insignificant below " + (dpi / 50) + ", falling back to quarter line height " + minLineApiWordGap);
-//			}
-			
-			//	restore sizes of baseline regions
-			for (int reg = 1; reg < blockLines[l].regionSizes.length; reg++) {
-				if (blockLines[l].regionSizes[reg] == 0)
-					blockLines[l].regionSizes[reg] = lineRegionSizeReserves[l][reg];
-			}
-			
-			//	sort regions left to right
-			long[] lineRegionsLeftRight = new long[blockLines[l].regionSizes.length];
-			Arrays.fill(lineRegionsLeftRight, Long.MAX_VALUE);
-			for (int reg = 1; reg < blockLines[l].regionSizes.length; reg++) {
-				if (blockLines[l].regionSizes[reg] == 0)
-					continue; // attached above
-				lineRegionsLeftRight[reg] &= blockLines[l].regionMinCols[reg];
-				lineRegionsLeftRight[reg] <<= 32;
-				lineRegionsLeftRight[reg] |= reg;
-			}
-			Arrays.sort(lineRegionsLeftRight);
-			
-			//	merge regions with ones at most (DPI / 50) away (horizontal distance only)
-			for (int lrReg = 0; lrReg < (lineRegionsLeftRight.length - 1); lrReg++) {
-				if (lineRegionsLeftRight[lrReg] == Long.MAX_VALUE)
-					break; // nothing more to come
-				if (lineRegionsLeftRight[lrReg + 1] == Long.MAX_VALUE)
-					break; // nothing more to come on our right
-				int lReg = ((int) (lineRegionsLeftRight[lrReg] & 0x7FFFFFFF));
-				if (blockLines[l].regionSizes[lReg] == 0)
-					continue; // attached above
-				int rReg = ((int) (lineRegionsLeftRight[lrReg + 1] & 0x7FFFFFFF));
-				if (blockLines[l].regionSizes[rReg] == 0)
-					continue; // attached above
-//				if ((dpi / 50) <= (blockLines[l].lineRegionMinCols[rReg] - (blockLines[l].lineRegionMaxCols[lReg] + 1)))
-//					continue; // too far apart TODOne make this dependent on line height instead (latter alo reflects both font size and DPI) !!!
-				int minSpaceWidth = (blockLines[l].getHeight() / 6); // now that we're all but sure line height includes both ascender and descender, we can cap this at the normal width of a thin space (according to https://en.wikipedia.org/wiki/Thin_space)
-				if (minSpaceWidth < (dpi / 50))
-					minSpaceWidth = (dpi / 50); // anything less would be extremely hard to discern by a pair of human eyeballs
-				if (minSpaceWidth <= (blockLines[l].regionMinCols[rReg] - (blockLines[l].regionMaxCols[lReg] + 1)))
-					continue; // too far apart
-				attachRegion(blockLines[l].regionColors, rReg, lReg, blockLines[l].regionSizes, blockLines[l].regionMinCols, blockLines[l].regionMaxCols, blockLines[l].regionMinRows, blockLines[l].regionMaxRows, -1, -1, null);
-				if ((lrReg + 2) < lineRegionsLeftRight.length)
-					System.arraycopy(lineRegionsLeftRight, (lrReg + 2), lineRegionsLeftRight, (lrReg + 1), (lineRegionsLeftRight.length - (lrReg + 2)));
-				lineRegionsLeftRight[lineRegionsLeftRight.length - 1] = Long.MAX_VALUE;
-				lrReg--;
-			}
-			
-			//	measure actual distances of regions to closest right neighbor
-			int[] lineRegionNeighbors = new int[blockLines[l].regionSizes.length];
-			Arrays.fill(lineRegionNeighbors, 0);
-			int[] lineRegionNeighborDistances = new int[blockLines[l].regionSizes.length];
-			Arrays.fill(lineRegionNeighborDistances, Integer.MAX_VALUE);
-			CountingSet lineRegionNeighborGaps = new CountingSet(new TreeMap());
-			for (int lrReg = 0; lrReg < (lineRegionsLeftRight.length - 1); lrReg++) {
-				if (lineRegionsLeftRight[lrReg] == Long.MAX_VALUE)
-					break; // nothing more to come
-				if (lineRegionsLeftRight[lrReg + 1] == Long.MAX_VALUE)
-					break; // nothing more to come on our right
-				int reg = ((int) (lineRegionsLeftRight[lrReg] & 0x7FFFFFFF));
-				if (blockLines[l].regionSizes[reg] == 0)
-					continue; // attached above
-				int enReg = ((int) (lineRegionsLeftRight[lrReg + 1] & 0x7FFFFFFF));
-				if (blockLines[l].regionSizes[enReg] == 0)
-					continue; // attached above
-				for (int c = blockLines[l].regionMinCols[reg]; c <= blockLines[l].regionMaxCols[reg]; c++) {
-					for (int r = blockLines[l].regionMinRows[reg]; r <= blockLines[l].regionMaxRows[reg]; r++) {
-						if (blockLines[l].regionColors[c][r] != reg)
-							continue;
-						int nReg = -1;
-						int nRegDist = -1;
-						for (int lc = (c+1); lc < blockLines[l].regionColors.length; lc++) {
-							if (blockLines[l].regionColors[lc][r] == reg)
-								break; // we're getting back to this one in next column
-							if (blockLines[l].regionColors[lc][r] == 0)
-								continue; // nothing there
-							int lReg = blockLines[l].regionColors[lc][r];
-							if (blockLines[l].regionSizes[lReg] == 0)
-								continue; // attached above
-							nReg = lReg;
-							nRegDist = (lc - (c + 1));
-							break; // we found our neighbor on current row
-						}
-						if (nRegDist == -1)
-							continue; // nothing found at all, or we were in our own middle
-						if (nRegDist < lineRegionNeighborDistances[reg]) {
-							lineRegionNeighbors[reg] = nReg;
-							lineRegionNeighborDistances[reg] = nRegDist;
-						}
-					}
-				}
-				if (lineRegionNeighbors[reg] != enReg) /* we _should_ have found our neighbor to the right */ {
-					lineRegionNeighbors[reg] = enReg;
-					lineRegionNeighborDistances[reg] = Math.max((blockLines[l].regionMinCols[enReg] - (blockLines[l].regionMaxCols[reg] + 1)), 0);
-				}
-				if (lineRegionNeighborDistances[reg] == Integer.MAX_VALUE)
-					continue;
-				if (lineRegionNeighborDistances[reg] > (blockLines[l].getHeight() / 2)) // cap distance off at half the line width, no space is hardly wider
-					lineRegionNeighborDistances[reg] = (blockLines[l].getHeight() / 2);
-				lineRegionNeighborGaps.add(new Integer(lineRegionNeighborDistances[reg]));
-			}
-			if (DEBUG_BLOCK_ANALYSIS) {
-				System.out.println("   - region neighbor gaps: " + lineRegionNeighborGaps);
-				System.out.println("     average neighbor gap is " + getAverage(lineRegionNeighborGaps, 0, Integer.MAX_VALUE));
-			}
-			int minLineApiWordGap;
-			if (regroupWords) {
-				int lastLineApiNeighborGap = -1;
-				int maxLineApiNeighborGapJump = 0;
-				int maxBelowJumpLineApiNeighborGap = -1;
-				int minAboveJumpLineApiNeighborGap = -1;
-				for (Iterator rngit = lineRegionNeighborGaps.iterator(); rngit.hasNext();) {
-					Integer rng = ((Integer) rngit.next());
-					if (lastLineApiNeighborGap == -1) {
-						lastLineApiNeighborGap = rng.intValue();
-						continue;
-					}
-					int cogJump = (rng.intValue() - lastLineApiNeighborGap);
-					if (cogJump > maxLineApiNeighborGapJump) {
-						maxBelowJumpLineApiNeighborGap = lastLineApiNeighborGap;
-						minAboveJumpLineApiNeighborGap = rng.intValue();
-						maxLineApiNeighborGapJump = cogJump;
-					}
-					lastLineApiNeighborGap = rng.intValue();
-				}
-				if (DEBUG_BLOCK_ANALYSIS) System.out.println("     largest neighbor gap jump is " + maxLineApiNeighborGapJump + " between " + maxBelowJumpLineApiNeighborGap + " and " + minAboveJumpLineApiNeighborGap);
-				minLineApiWordGap = minAboveJumpLineApiNeighborGap;
-				if (maxLineApiNeighborGapJump < (dpi / 50) /* half a millimeter */) {
-					minLineApiWordGap = ((blockLines[l].getHeight() + 2) / 4);
-					if (DEBUG_BLOCK_ANALYSIS) System.out.println("     ==> too insignificant below " + (dpi / 50) + ", falling back to quarter line height " + minLineApiWordGap);
-				}
-			}
-			else {
-				minLineApiWordGap = ((blockLines[l].getHeight() + 3) / 6); // width of a thin space (according to https://en.wikipedia.org/wiki/Thin_space)
-				if (DEBUG_BLOCK_ANALYSIS) System.out.println("     using sixth of line height " + minLineApiWordGap);
-			}
-			
-			//	group occupied areas into words
-			LineWord regWord = new LineWord(blockLines[l], 0, blockLines[l].getWidth());
-//			for (int g = 0; g < lineApiColOccupationGapList.size(); g++) {
-//				Integer cog = ((Integer) lineApiColOccupationGapList.get(g));
-//				int cogLeft = ((cog.intValue() >> 16) & 0xFFFF);
-//				int cogRight = (cog.intValue() & 0xFFFF);
-//				int cogWidth = (cogRight - cogLeft);
-//				if (cogWidth < minLineApiWordGap)
-//					continue;
-//				regWord.right = cogLeft;
-//				regWord = new RegWord(blockLines[l], cogRight, blockLines[l].getWidth());
-//			}
-			for (int lrReg = 0; lrReg < lineRegionsLeftRight.length; lrReg++) {
-				if (lineRegionsLeftRight[lrReg] == Long.MAX_VALUE)
-					break; // nothing more to come
-				int reg = ((int) (lineRegionsLeftRight[lrReg] & 0x7FFFFFFF));
-				int nRegDist = lineRegionNeighborDistances[reg];
-				if (nRegDist < minLineApiWordGap)
-					continue;
-				int nReg = lineRegionNeighbors[reg];
-				if (nReg == 0)
-					continue;
-				regWord.right = (blockLines[l].regionMaxCols[reg] + 1);
-				regWord = new LineWord(blockLines[l], blockLines[l].regionMinCols[nReg], blockLines[l].getWidth());
-			}
-			
-			/* TODO handle words connected by a mingled underline (easily happens via descender):
-			 * - apply same grouping as used here restricted to baseline and above (with fresh region coloring)
-			 * - compare results ...
-			 * - ... and use better one */
-			
-			//	visualize words
-			if (vbiGr != null) {
-				vbiGr.setColor(Color.MAGENTA);
-				for (int w = 0; w < blockLines[l].words.size(); w++) {
-					regWord = ((LineWord) blockLines[l].words.get(w));
-					vbiGr.drawRect(regWord.getPageLeft(), regWord.line.getPageTop(), regWord.getWidth(), regWord.line.getHeight());
-				}
-			}
-		}
-		
 		//	finally
 		return blockLines;
 	}
@@ -4405,6 +6919,46 @@ Literature ideas for bold:
 			sum += (i.intValue() * cs.getCount(i));
 		}
 		return ((count == 0) ? -1 : ((sum + (count / 2)) / count));
+	}
+	
+	private static int getMinMid60(CountingSet cs, int minToCount, int maxToCount) {
+		if (cs.isEmpty())
+			return -1;
+		int checkCount = 0;
+		for (Iterator it = cs.iterator(); it.hasNext();) {
+			Integer i = ((Integer) it.next());
+			if ((cs.size() * 80) < (checkCount * 100))
+				break; // beyond 80%
+			int iCount = cs.getCount(i);
+			checkCount += iCount;
+			if (i.intValue() < minToCount)
+				continue;
+			if (maxToCount < i.intValue())
+				break;
+			if ((cs.size() * (100 - 80)) < (checkCount * 100)) // we're beyond smallest 20%
+				return i.intValue();
+		}
+		return -1;
+	}
+	
+	private static int getMaxMid60(CountingSet cs, int minToCount, int maxToCount) {
+		if (cs.isEmpty())
+			return -1;
+		int checkCount = 0;
+		int lastChecked = -1;
+		for (Iterator it = cs.iterator(); it.hasNext();) {
+			Integer i = ((Integer) it.next());
+			if ((cs.size() * 80) < (checkCount * 100))
+				break; // beyond 80%
+			int iCount = cs.getCount(i);
+			checkCount += iCount;
+			if (i.intValue() < minToCount)
+				continue;
+			if (maxToCount < i.intValue())
+				break;
+			lastChecked = i.intValue();
+		}
+		return lastChecked;
 	}
 	
 	private static int getAverageMid60(CountingSet cs, int minToCount, int maxToCount) {
@@ -4574,321 +7128,5 @@ Literature ideas for bold:
 		regionMaxCols[toReg] = Math.max(regionMaxCols[toReg], regionMaxCols[reg]);
 		regionMinRows[toReg] = Math.min(regionMinRows[toReg], regionMinRows[reg]);
 		regionMaxRows[toReg] = Math.max(regionMaxRows[toReg], regionMaxRows[reg]);
-	}
-	
-	/**
-	 * A line in a page block (for word extraction)
-	 * 
-	 * @author sautter
-	 */
-	public static class BlockLine {
-		//final Region block;
-		final BoundingBox blockBounds;
-		int color;
-		int left; // relative to parent block
-		int right; // relative to parent block
-		int top; // relative to parent block
-		final int oTop; // relative to parent block (need this as basis of region colors as we adjust top)
-		int bottom; // relative to parent block
-		//final int oBottom; // relative to parent block (need this as basis of region colors as we adjust bottom)
-		int baseline = -1; // relative to own top
-		int xHeight = -1;
-		int capHeight = -1;
-		int fontSize = -1;
-		ArrayList words = new ArrayList();
-//		BlockLine(Region block, int color, int left, int right, int top, int bottom) {
-		BlockLine(BoundingBox blockBounds, int color, int left, int right, int top, int bottom) {
-//			this.block = block;
-			this.blockBounds = blockBounds;
-			this.color = color;
-			this.left = left;
-			this.right = right;
-			this.top = top;
-			this.oTop = top;
-			this.bottom = bottom;
-			//this.oBottom = bottom;
-		}
-		
-		/**
-		 * Get the number of words in the line.
-		 * @return the number of words
-		 */
-		public int getWordCount() {
-			return this.words.size();
-		}
-		
-		/**
-		 * Get the word at a specific position in the line.
-		 * @param pos the position of the word
-		 * @return the word at the argument position
-		 */
-		public LineWord getWord(int pos) {
-			return ((LineWord) this.words.get(pos));
-		}
-		
-		/**
-		 * Get the words in the line.
-		 * @return an array holding the words
-		 */
-		public LineWord[] getWords() {
-			return ((LineWord[]) this.words.toArray(new LineWord[this.words.size()]));
-		}
-		
-		/**
-		 * Get the bounding box of the line relative to the underlying page.
-		 * @return the bounding box relative to the page
-		 */
-		public BoundingBox getPageBounds() {
-			return new BoundingBox(this.getPageLeft(), this.getPageRight(), this.getPageTop(), this.getPageBottom());
-		}
-		
-		/**
-		 * Get the left edge of the line relative to the underlying page.
-		 * @return the left edge relative to the page
-		 */
-		public int getPageLeft() {
-//			return (this.block.bounds.getLeftCol() + this.left);
-			return (this.blockBounds.left + this.left);
-		}
-		
-		/**
-		 * Get the right edge of the line relative to the underlying page.
-		 * @return the right edge relative to the page
-		 */
-		public int getPageRight() {
-//			return (this.block.bounds.getLeftCol() + this.right);
-			return (this.blockBounds.left + this.right);
-		}
-		
-		/**
-		 * Get the top edge of the line relative to the underlying page.
-		 * @return the top edge relative to the page
-		 */
-		public int getPageTop() {
-//			return (this.block.bounds.getTopRow() + this.top);
-			return (this.blockBounds.top + this.top);
-		}
-		
-		/**
-		 * Get the bottom edge of the line relative to the underlying page.
-		 * @return the bottom edge relative to the page
-		 */
-		public int getPageBottom() {
-//			return (this.block.bounds.getTopRow() + this.bottom);
-			return (this.blockBounds.top + this.bottom);
-		}
-		
-		/**
-		 * Get the bounding box of the line relative to the parent block.
-		 * @return the bounding box relative to the block
-		 */
-		public BoundingBox getBlockBounds() {
-			return new BoundingBox(this.getBlockLeft(), this.getBlockRight(), this.getBlockTop(), this.getBlockBottom());
-		}
-		
-		/**
-		 * Get the left edge of the line relative to the parent block.
-		 * @return the left edge relative to the block
-		 */
-		public int getBlockLeft() {
-			return this.left;
-		}
-		
-		/**
-		 * Get the right edge of the line relative to the parent block.
-		 * @return the right edge relative to the block
-		 */
-		public int getBlockRight() {
-			return this.right;
-		}
-		
-		/**
-		 * Get the top edge of the line relative to the parent block.
-		 * @return the top edge relative to the block
-		 */
-		public int getBlockTop() {
-			return this.top;
-		}
-		
-		/**
-		 * Get the bottom edge of the line relative to the parent block.
-		 * @return the bottom edge relative to the block
-		 */
-		public int getBlockBottom() {
-			return this.bottom;
-		}
-		
-		/**
-		 * Get the width of the line.
-		 * @return the width
-		 */
-		public int getWidth() {
-			return (this.right - this.left);
-		}
-		
-		/**
-		 * Get the height of the line.
-		 * @return the height
-		 */
-		public int getHeight() {
-			return (this.bottom - this.top);
-		}
-		
-		/**
-		 * Get the baseline of the line relative to the parent block.
-		 * @return the baseline relative to the block
-		 */
-		public int getBlockBaseline() {
-			return (this.top + this.baseline);
-		}
-		
-		/**
-		 * Get the baseline of the line relative to underlying page.
-		 * @return the baseline relative to the page
-		 */
-		public int getPageBaseline() {
-			return (this.getPageTop() + this.baseline);
-		}
-		
-		/**
-		 * Get the height of capital letters above the baseline. This value is
-		 * measured using region coloring and statistical analyses and thus
-		 * might not be absolutely accurate.
-		 * @return the cap height
-		 */
-		public int getCapHeight() {
-			return this.capHeight;
-		}
-		
-		/**
-		 * Get the height of lower case letters (without ascender, like 'x')
-		 * above the baseline. This value is measured using region coloring and
-		 * statistical analyses and thus might not be absolutely accurate.
-		 * @return the x-height
-		 */
-		public int getXHeight() {
-			return this.xHeight;
-		}
-		
-		int[][] regionColors = null;
-		int[] regionSizes = null;
-		int[] regionMinCols = null;
-		int[] regionMaxCols = null;
-		int[] regionMinRows = null;
-		int[] regionMaxRows = null;
-		void setRegions(AnalysisImage lineAi) {
-			this.regionColors = Imaging.getRegionColoring(lineAi, ((byte) 112), true);
-			int maxLineAiRegion = getMaxRegionColor(this.regionColors);
-			this.regionSizes = new int[maxLineAiRegion + 1];
-			this.regionMinCols = new int[maxLineAiRegion + 1];
-			this.regionMaxCols = new int[maxLineAiRegion + 1];
-			this.regionMinRows = new int[maxLineAiRegion + 1];
-			this.regionMaxRows = new int[maxLineAiRegion + 1];
-		}
-	}
-	
-	/**
-	 * A word in a block line (for word extraction)
-	 * 
-	 * @author sautter
-	 */
-	public static class LineWord {
-		final BlockLine line;
-		int left; // relative to parent line
-		int right; // relative to parent line
-		LineWord(BlockLine line, int left, int right) {
-			this.line = line;
-			this.left = left;
-			this.right = right;
-			this.line.words.add(this);
-		}
-		
-		/**
-		 * Get the bounding box of the word relative to the underlying page.
-		 * @return the bounding box relative to the page
-		 */
-		public BoundingBox getPageBounds() {
-			return new BoundingBox(this.getPageLeft(), this.getPageRight(), this.line.getPageTop(), this.line.getPageBottom());
-		}
-		
-		/**
-		 * Get the left edge of the word relative to the underlying page.
-		 * @return the left edge relative to the page
-		 */
-		public int getPageLeft() {
-			return (this.line.getPageLeft() + this.left);
-		}
-		
-		/**
-		 * Get the right edge of the word relative to the underlying page.
-		 * @return the right edge relative to the page
-		 */
-		public int getPageRight() {
-			return (this.line.getPageLeft() + this.right);
-		}
-		
-		/**
-		 * Get the bounding box of the word relative to the parent block.
-		 * @return the bounding box relative to the block
-		 */
-		public BoundingBox getBlockBounds() {
-			return new BoundingBox(this.getBlockLeft(), this.getBlockRight(), this.line.getBlockTop(), this.line.getBlockBottom());
-		}
-		
-		/**
-		 * Get the left edge of the word relative to the parent block.
-		 * @return the left edge relative to the block
-		 */
-		public int getBlockLeft() {
-			return (this.line.getBlockLeft() + this.left);
-		}
-		
-		/**
-		 * Get the right edge of the word relative to the parent block.
-		 * @return the right edge relative to the block
-		 */
-		public int getBlockRight() {
-			return (this.line.getBlockLeft() + this.right);
-		}
-		
-		/**
-		 * Get the bounding box of the word relative to the parent line.
-		 * @return the bounding box relative to the line
-		 */
-		public BoundingBox getLineBounds() {
-			return new BoundingBox(this.getLineLeft(), this.getLineRight(), 0, this.line.getHeight());
-		}
-		
-		/**
-		 * Get the left edge of the word relative to the parent line.
-		 * @return the left edge relative to the line
-		 */
-		public int getLineLeft() {
-			return this.left;
-		}
-		
-		/**
-		 * Get the right edge of the word relative to the parent line.
-		 * @return the right edge relative to the line
-		 */
-		public int getLineRight() {
-			return this.right;
-		}
-		
-		/**
-		 * Get the width of the word.
-		 * @return the width
-		 */
-		public int getWidth() {
-			return (this.right - this.left);
-		}
-		
-		/**
-		 * Get the height of the word (same as for the parent line).
-		 * @return the height
-		 */
-		public int getHeight() {
-			return this.line.getHeight();
-		}
 	}
 }

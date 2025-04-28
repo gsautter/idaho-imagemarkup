@@ -27,7 +27,6 @@
  */
 package de.uka.ipd.idaho.im.pdf;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -69,7 +68,7 @@ public class PsParser {
 	}
 	
 	private static void doExecutePs(byte[] data, Map state, LinkedList stack, String indent) throws IOException {
-		PdfByteInputStream pbis = new PdfByteInputStream(new ByteArrayInputStream(data));
+		PdfByteInputStream pbis = new PdfByteInputStream(data);
 		
 		Map errorDict = new HashMap();
 		Map errorStatusDict = new HashMap();

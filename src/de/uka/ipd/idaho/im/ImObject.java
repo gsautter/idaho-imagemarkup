@@ -145,7 +145,7 @@ public interface ImObject extends Attributed, ImagingConstants {
 		}
 		
 		/**
-		 * Compute the UUID of an annotation. If the argument object is not
+		 * Compute the UUID of an object. If the argument object is not
 		 * attached to a document, this method returns null.
 		 * @param obj the object to compute the UUID for
 		 * @return the UUID of the argument object

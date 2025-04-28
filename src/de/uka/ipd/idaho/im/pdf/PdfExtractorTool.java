@@ -205,7 +205,7 @@ public class PdfExtractorTool {
 		}
 		
 		//	check parameters before investing effort in loading data
-		if (("GDSMO".indexOf(sourceType) == -1) || (sourceType.length() != 1)) {
+		if (("GDSMOHV".indexOf(sourceType) == -1) || (sourceType.length() != 1)) {
 			printError("Invalid source type '" + sourceType + "'");
 			return;
 		}
@@ -448,6 +448,10 @@ public class PdfExtractorTool {
 			imDoc = pdfExtractor.loadImagePdf(pdfBytes, true, pm);
 		else if ("O".equals(sourceType))
 			imDoc = pdfExtractor.loadImagePdf(pdfBytes, true, true, pm);
+		else if ("H".equals(sourceType))
+			imDoc = pdfExtractor.loadHybridPdf(pdfBytes, PdfExtractor.ENHANCE_SCANS_ALL_OPTIONS, false, pm);
+		else if ("V".equals(sourceType))
+			imDoc = pdfExtractor.loadHybridPdf(pdfBytes, PdfExtractor.ENHANCE_SCANS_ALL_OPTIONS, true, pm);
 		else imDoc = null;
 		
 		//	shut down PDF extractor
@@ -659,6 +663,8 @@ public class PdfExtractorTool {
 				"\r\n\t- S: scanned PDF" +
 				"\r\n\t- M: scanned PDF with born-digital meta pages (leading or tailing)" +
 				"\r\n\t- O: scanned PDF with embedded OCR to reuse" +
+				"\r\n\t- H: scanned PDF with text erased from page images and only preseved digitally" +
+				"\r\n\t- V: scanned PDF with text erased from page images and replaces by vector glyphs" +
 				"\r\n\t- G: generic PDF, let converter determine type (the default)");
 		System.out.println("-f <fontMode>\tSelect how to handle embedded fonts (relevant only for '-t D'" +
 				"\r\n\tand '-t G'):" +

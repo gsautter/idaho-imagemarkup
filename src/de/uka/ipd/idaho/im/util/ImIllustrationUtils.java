@@ -430,6 +430,7 @@ Add QC check for existence of caption targets ...
 			AffineTransform preAt = renderer.getTransform();
 			Composite preComp = renderer.getComposite();
 			renderer.translate(this.renderingBounds.left, this.renderingBounds.top);
+			pm.setInfo("Translated to " + this.renderingBounds.left + "/" + this.renderingBounds.top);
 			
 			if (this.graphics != null) {
 				pm.setInfo("Rendering vector graphics at " + this.renderingBounds.toString());
@@ -583,8 +584,8 @@ Add QC check for existence of caption targets ...
 					renderer.clipRect((this.clipBounds.left - this.renderingBounds.left), (this.clipBounds.top - this.renderingBounds.top), this.clipBounds.getWidth(), this.clipBounds.getHeight());
 				}
 				if (this.figure.hasAttribute(Figure.IMAGE_MASK_MARKER_ATTRIBUTE)) {
-					renderer.setComposite(imageMaskMultiplyComposite); // use multiply composite for image masks
 					pm.setInfo(" - rendering bitmap image mask");
+					renderer.setComposite(imageMaskMultiplyComposite); // use multiply composite for image masks
 				}
 				else pm.setInfo(" - rendering bitmap image");
 				try {
@@ -644,11 +645,17 @@ Add QC check for existence of caption targets ...
 	//	stripped-down copy of PdfParser.BlendComposite (we only need 'Multiply' mode, for image masks)
 	private static final Composite imageMaskMultiplyComposite = new Composite() {
 		public CompositeContext createContext(ColorModel srcColorModel, ColorModel dstColorModel, RenderingHints hints) {
-			return imageMaskMultiplyCompositeContext;
+			return new MultiplyCompositeContext(srcColorModel, dstColorModel);
 		}
 	};
-	private static final CompositeContext imageMaskMultiplyCompositeContext = new CompositeContext() {
-		public void dispose() { /* we have no internal state */ }
+	private static class MultiplyCompositeContext implements CompositeContext {
+		private ColorModel srcColorModel;
+		private ColorModel dstColorModel;
+		MultiplyCompositeContext(ColorModel srcColorModel, ColorModel dstColorModel) {
+			this.srcColorModel = srcColorModel;
+			this.dstColorModel = dstColorModel;
+		}
+		public void dispose() { /* nothing to dispose */ }
 		public void compose(Raster src, Raster dstIn, WritableRaster dstOut) {
 			if (dstIn.getSampleModel().getDataType() != dstOut.getSampleModel().getDataType())
 				throw new IllegalArgumentException("Destination input and output must store pixels as the same type (composite is Multiply).");
@@ -666,15 +673,17 @@ Add QC check for existence of caption targets ...
 				src.getDataElements(0, y, width, 1, srcPixels);
 				dstIn.getDataElements(0, y, width, 1, dstPixels);
 				for (int x = 0; x < width; x++) {
+					int pixel;
+					
 					// pixels are stored as INT_ARGB
 					// our arrays are [R, G, B, A]
-					int pixel = getPixel(srcPixels, x);
+					pixel = this.srcColorModel.getRGB(this.getPixel(srcPixels, x));
 					srcPixel[0] = (pixel >> 16) & 0xFF;
 					srcPixel[1] = (pixel >>  8) & 0xFF;
 					srcPixel[2] = (pixel	  ) & 0xFF;
 					srcPixel[3] = (pixel >> 24) & 0xFF;
 					
-					pixel = getPixel(dstPixels, x);
+					pixel = this.dstColorModel.getRGB(this.getPixel(dstPixels, x));
 					dstPixel[0] = (pixel >> 16) & 0xFF;
 					dstPixel[1] = (pixel >>  8) & 0xFF;
 					dstPixel[2] = (pixel	  ) & 0xFF;
@@ -735,10 +744,120 @@ Add QC check for existence of caption targets ...
 				(src[0] * dst[0]) >> 8,
 				(src[1] * dst[1]) >> 8,
 				(src[2] * dst[2]) >> 8,
-				Math.min(255, src[3] + dst[3])
+				Math.min(0xFF, src[3] + dst[3])
 			};
 		}
-	};
+	}
+//	
+//	//	stripped-down copy of PdfParser.BlendComposite (we only need 'Multiply' mode, for image masks)
+//	private static final Composite imageMaskMultiplyComposite = new Composite() {
+//		public CompositeContext createContext(ColorModel srcColorModel, ColorModel dstColorModel, RenderingHints hints) {
+//			return imageMaskMultiplyCompositeContext;
+//		}
+//	};
+//	private static final CompositeContext imageMaskMultiplyCompositeContext = new CompositeContext() {
+//		public void dispose() { /* we have no internal state */ }
+//		public void compose(Raster src, Raster dstIn, WritableRaster dstOut) {
+//			if (dstIn.getSampleModel().getDataType() != dstOut.getSampleModel().getDataType())
+//				throw new IllegalArgumentException("Destination input and output must store pixels as the same type (composite is Multiply).");
+//			
+//			int width = Math.min(src.getWidth(), dstIn.getWidth());
+//			int height = Math.min(src.getHeight(), dstIn.getHeight());
+//			float alpha = 1.0f;
+//			
+//			int[] srcPixel = new int[4];
+//			int[] dstPixel = new int[4];
+//			Object srcPixels = this.getPixelRowArray(src.getSampleModel().getDataType(), width);
+//			System.out.println("SRC is " + srcPixels);
+//			Object dstPixels = this.getPixelRowArray(dstIn.getSampleModel().getDataType(), width);
+//			System.out.println("DST is " + dstPixels);
+//			
+//			HashSet loggedCombinations = new HashSet();
+//			for (int y = 0; y < height; y++) {
+//				src.getDataElements(0, y, width, 1, srcPixels);
+//				dstIn.getDataElements(0, y, width, 1, dstPixels);
+//				for (int x = 0; x < width; x++) {
+//					int pixel;
+//					
+//					// pixels are stored as INT_ARGB
+//					// our arrays are [R, G, B, A]
+//					pixel = getPixel(srcPixels, x);
+//					srcPixel[0] = (pixel >> 16) & 0xFF;
+//					srcPixel[1] = (pixel >>  8) & 0xFF;
+//					srcPixel[2] = (pixel	  ) & 0xFF;
+//					srcPixel[3] = (pixel >> 24) & 0xFF;
+//					
+//					pixel = getPixel(dstPixels, x);
+//					dstPixel[0] = (pixel >> 16) & 0xFF;
+//					dstPixel[1] = (pixel >>  8) & 0xFF;
+//					dstPixel[2] = (pixel	  ) & 0xFF;
+//					dstPixel[3] = (pixel >> 24) & 0xFF;
+//					
+//					int[] result = this.blend(srcPixel, dstPixel);
+//					String combKey = (Arrays.toString(srcPixel) + "+" + Arrays.toString(dstPixel));
+//					if (loggedCombinations.add(combKey)) {
+//						System.out.println("SRC: " + Arrays.toString(srcPixel));
+//						System.out.println("DST: " + Arrays.toString(dstPixel));
+//						System.out.println("RES: " + Arrays.toString(result));
+//					}
+//					
+//					// mixes the result with the opacity
+//					pixel = ((int) (dstPixel[3] + (result[3] - dstPixel[3]) * alpha) & 0xFF) << 24 |
+//							((int) (dstPixel[0] + (result[0] - dstPixel[0]) * alpha) & 0xFF) << 16 |
+//							((int) (dstPixel[1] + (result[1] - dstPixel[1]) * alpha) & 0xFF) <<  8 |
+//							 (int) (dstPixel[2] + (result[2] - dstPixel[2]) * alpha) & 0xFF;
+//					this.setPixel(dstPixels, x, pixel);
+//				}
+//				dstOut.setDataElements(0, y, width, 1, dstPixels);
+//			}
+//		}
+//		private Object getPixelRowArray(int type, int length) {
+//			if (type == DataBuffer.TYPE_BYTE)
+//				return new byte[length];
+//			else if (type == DataBuffer.TYPE_SHORT)
+//				return new short[length];
+//			else if (type == DataBuffer.TYPE_USHORT)
+//				return new short[length];
+//			else return new int[length];
+//		}
+//		private int getPixel(Object pixelArray, int index) {
+//			if (pixelArray instanceof byte[]) {
+//				int pixelByte = (((byte[]) pixelArray)[index] & 0xFF);
+//				return (0xFF000000 | (pixelByte << 16) | (pixelByte << 8) | (pixelByte << 0));
+//			}
+//			else if (pixelArray instanceof short[]) {
+//				int pixelByte = (((short[]) pixelArray)[index] & 0xFFFF);
+//				pixelByte >>= 8;
+//				return (0xFF000000 | (pixelByte << 16) | (pixelByte << 8) | (pixelByte << 0));
+//			}
+//			else return ((int[]) pixelArray)[index];
+//		}
+//		private void setPixel(Object pixelArray, int index, int pixel) {
+//			if (pixelArray instanceof byte[]) {
+//				int red = ((pixel >> 16) & 0xFF);
+//				int green = ((pixel >> 8) & 0xFF);
+//				int blue = ((pixel >> 0) & 0xFF);
+//				int pixelByte = ((int) ((0.299f * red) + (0.587f * green) + (0.114f * blue)));
+//				((byte[]) pixelArray)[index] = ((byte) (pixelByte & 0xFF));
+//			}
+//			else if (pixelArray instanceof short[]) {
+//				int red = (((pixel >> 16) & 0xFF) << 8);
+//				int green = (((pixel >> 8) & 0xFF) << 8);
+//				int blue = (((pixel >> 0) & 0xFF) << 8);
+//				int pixelByte = ((int) ((0.299f * red) + (0.587f * green) + (0.114f * blue)));
+//				((short[]) pixelArray)[index] = ((short) (pixelByte & 0xFFFF));
+//			}
+//			else ((int[]) pixelArray)[index] = pixel;
+//		}
+//		private int[] blend(int[] src, int[] dst) {
+//			return new int[] {
+//				(src[0] * dst[0]) >> 8,
+//				(src[1] * dst[1]) >> 8,
+//				(src[2] * dst[2]) >> 8,
+//				Math.min(0xFF, src[3] + dst[3])
+//			};
+//		}
+//	};
 	
 	/**
 	 * Produce SVG (Scalable Vector Graphics) XML from one or more
@@ -1372,7 +1491,11 @@ Add QC check for existence of caption targets ...
 	 * @return the overall image
 	 */
 	public static BufferedImage renderImage(ImRegion image, RenderingOptions.Provider rop, ImDocument doc, int imageType, ProgressMonitor pm) {
-		return renderImageOrGrid(image, true, rop, doc, imageType, pm);
+//		return renderImageOrGrid(image, true, rop, doc, imageType, pm);
+		BoundingBox[] biBounds = {null};
+		int[] biDpi = {-1};
+		BufferedImage bi = renderImageOrGrid(image, null /* no need for aggregate bounds in single-image mode */, true, rop, doc, imageType, pm, biBounds, biDpi);
+		return cropImageToRegionBounds(image.bounds, image.getPage().getImageDPI(), bi, biBounds[0], biDpi[0]);
 	}
 	
 	/**
@@ -1615,7 +1738,14 @@ Add QC check for existence of caption targets ...
 	 * @return the overall image
 	 */
 	public static BufferedImage renderImageGrid(ImRegion image, RenderingOptions.Provider rop, ImDocument doc, int imageType, ProgressMonitor pm) {
-		return renderImageOrGrid(image, false, rop, doc, imageType, pm);
+//		return renderImageOrGrid(image, false, rop, doc, imageType, pm);
+		BoundingBox[] imageGridBounds = {null};
+		BoundingBox[] biBounds = {null};
+		int[] biDpi = {-1};
+		BufferedImage bi = renderImageOrGrid(image, imageGridBounds, false, rop, doc, imageType, pm, biBounds, biDpi);
+		if (imageGridBounds[0] == null)
+			return bi;
+		else return cropImageToRegionBounds(imageGridBounds[0], image.getPage().getImageDPI(), bi, biBounds[0], biDpi[0]);
 	}
 	
 	public static void main(String[] args) throws Exception {
@@ -1636,7 +1766,21 @@ Add QC check for existence of caption targets ...
 		idd.setVisible(true);
 	}
 	
-	private static BufferedImage renderImageOrGrid(ImRegion image, boolean singleImageOnly, RenderingOptions.Provider rop, ImDocument doc, int imageType, ProgressMonitor pm) {
+	private static BufferedImage cropImageToRegionBounds(BoundingBox imageRegionBounds, int imageRegionDpi, BufferedImage bi, BoundingBox biBounds /* this is in image region resolution !!! */, int biDpi) {
+		if ((bi == null) || (biBounds == null) || (biDpi < 1))
+			return bi;
+		if ((biBounds.getArea() * 2) < (imageRegionBounds.getArea() * 3))
+			return bi; // over 67% included in region, we're fine
+		BoundingBox biResImageRegionBounds = imageRegionBounds.scale(((float) biDpi) / imageRegionDpi);
+		BoundingBox biResBiBounds = biBounds.scale(((float) biDpi) / imageRegionDpi);
+		int cropLeft = Math.max(0, (biResImageRegionBounds.left - biResBiBounds.left));
+		int cropRight = Math.min(bi.getWidth(), (biResImageRegionBounds.right - biResBiBounds.left));
+		int cropTop = Math.max(0, (biResImageRegionBounds.top - biResBiBounds.top));
+		int cropBottom = Math.min(bi.getHeight(), (biResImageRegionBounds.bottom - biResBiBounds.top));
+		return bi.getSubimage(cropLeft, cropTop, (cropRight - cropLeft), (cropBottom - cropTop));
+	}
+	
+	private static BufferedImage renderImageOrGrid(ImRegion image, BoundingBox[] imageGridBounds, boolean singleImageOnly, RenderingOptions.Provider rop, ImDocument doc, int imageType, ProgressMonitor pm, BoundingBox[] renderedBounds, int[] renderedDpi) {
 		if (doc == null)
 			doc = image.getDocument();
 		if (pm == null)
@@ -1673,23 +1817,45 @@ Add QC check for existence of caption targets ...
 			ImSupplement[] supplements = seekIgc.page.getSupplements();
 			Scan iScan = null;
 			ArrayList iFigures = new ArrayList();
+			ArrayList cFigures = new ArrayList();
 			ArrayList iGraphics = new ArrayList();
+			ArrayList cGraphics = new ArrayList();
 			for (int s = 0; s < supplements.length; s++) {
 				if (supplements[s] instanceof Scan)
 					iScan = ((Scan) supplements[s]);
-				else if ((supplements[s] instanceof Figure) && seekIgc.physicalBounds.includes(((Figure) supplements[s]).getBounds(), true)) {
-					iFigures.add(supplements[s]);
+//				else if ((supplements[s] instanceof Figure) && seekIgc.physicalBounds.includes(((Figure) supplements[s]).getBounds(), true)) {
+//					iFigures.add(supplements[s]);
+//					dpiSet.add(new Integer(((Figure) supplements[s]).getDpi()));
+//				}
+				else if (supplements[s] instanceof Figure) {
+					if (seekIgc.physicalBounds.includes(((Figure) supplements[s]).getBounds(), true))
+						iFigures.add(supplements[s]);
+					else if (seekIgc.physicalBounds.liesIn(((Figure) supplements[s]).getBounds(), true))
+//						cFigures.add(supplements[s]);
+						iFigures.add(supplements[s]);
 					dpiSet.add(new Integer(((Figure) supplements[s]).getDpi()));
 				}
-				else if ((supplements[s] instanceof Graphics) && seekIgc.physicalBounds.includes(((Graphics) supplements[s]).getBounds(), true))
-					iGraphics.add(supplements[s]);
+//				else if ((supplements[s] instanceof Graphics) && seekIgc.physicalBounds.includes(((Graphics) supplements[s]).getBounds(), true))
+//					iGraphics.add(supplements[s]);
+				else if (supplements[s] instanceof Graphics) {
+					if (seekIgc.physicalBounds.includes(((Graphics) supplements[s]).getBounds(), true))
+						iGraphics.add(supplements[s]);
+					else if (seekIgc.physicalBounds.liesIn(((Graphics) supplements[s]).getBounds(), true))
+//						cGraphics.add(supplements[s]);
+						iGraphics.add(supplements[s]);
+				}
 			}
+			
 			if (iFigures.size() != 0)
 				iScan = null; // no need for any scan if we have figure supplement(s), and be it alternative rendition
 			if (iScan != null) {
 				gScans.add(iScan);
 				pm.setInfo(" - added scan");
 				dpiSet.add(new Integer(iScan.getDpi()));
+			}
+			if (iFigures.isEmpty() && gFigures.isEmpty() && (iScan == null)) /* fall back on spanning objects, might contain multiple images */ {
+				iFigures.addAll(cFigures);
+				iGraphics.addAll(cGraphics);
 			}
 			gFigures.addAll(iFigures);
 			pm.setInfo(" - added " + iFigures.size() + " bitmap images");
@@ -1784,6 +1950,8 @@ Add QC check for existence of caption targets ...
 			includeGraphics = ros.includeGraphics;
 			includeWords = ros.includeWords;
 		}
+		if (renderedDpi != null)
+			renderedDpi[0] = dpi;
 		
 		//	check cell relationships within pages
 		if (!singleImageOnly)
@@ -1886,7 +2054,14 @@ Add QC check for existence of caption targets ...
 			pm.setProgress(0);
 			pm.setMaxProgress(100);
 			ProgressMonitor rpm = ((pm == ProgressMonitor.silent) ? pm : new CascadingProgressMonitor(pm));
-			BufferedImage gridImage = createPageContentImage(pImageGridCells, dpi, includeFigures, includeGraphics, includeWords, page, imageType, rpm);
+			BufferedImage gridImage = createPageContentImage(pImageGridCells, dpi, includeFigures, includeGraphics, includeWords, page, imageType, rpm, renderedBounds);
+			if (imageGridBounds != null) // compute aggregate bounds of connected image regions
+				for (int c = 0; c < pImageGridCells.size(); c++) {
+					RegionImageGridCell igc = ((RegionImageGridCell) pImageGridCells.get(c));
+					if (imageGridBounds[0] == null)
+						imageGridBounds[0] = igc.image.bounds;
+					else imageGridBounds[0] = imageGridBounds[0].union(igc.image.bounds);
+				}
 			return gridImage;
 		}
 		
@@ -1921,7 +2096,7 @@ Add QC check for existence of caption targets ...
 				
 				//	store image at target resolution
 				ProgressMonitor prpm = ((pm == ProgressMonitor.silent) ? pm : new CascadingProgressMonitor(rpm));
-				BufferedImage pImage = createPageContentImage(pImageGridCells, dpi, includeFigures, includeGraphics, includeWords, seekIgc.page, imageType, prpm);
+				BufferedImage pImage = createPageContentImage(pImageGridCells, dpi, includeFigures, includeGraphics, includeWords, seekIgc.page, imageType, prpm, null);
 				PageImageGridCell igc = seekIgc;
 				igc.setImageData(pImage, dpi);
 				gPageImageGridCells.add(igc);
@@ -2037,7 +2212,7 @@ Add QC check for existence of caption targets ...
 		return gridImage;
 	}
 	
-	private static BufferedImage createPageContentImage(ArrayList pImageGridCells, int dpi, boolean includeFigures, boolean includeGraphics, boolean includeWords, ImPage page, int imageType, ProgressMonitor pm) {
+	private static BufferedImage createPageContentImage(ArrayList pImageGridCells, int dpi, boolean includeFigures, boolean includeGraphics, boolean includeWords, ImPage page, int imageType, ProgressMonitor pm, BoundingBox[] renderedBounds) {
 		
 		//	collect grid image components and rotation
 		pm.setInfo(" - collecting objects");
@@ -2050,16 +2225,30 @@ Add QC check for existence of caption targets ...
 			RegionImageGridCell igc = ((RegionImageGridCell) pImageGridCells.get(c));
 			if (igc.scan != null)
 				pScan = igc.scan;
-			if (igc.figures != null)
+			if (includeFigures && (igc.figures != null)) {
 				pFigures.addAll(Arrays.asList(igc.figures));
-			if (igc.graphics != null)
+				if (renderedBounds == null) {}
+				else for (int f = 0; f < igc.figures.length; f++) {
+					if (renderedBounds[0] == null)
+						renderedBounds[0] = igc.figures[f].getBounds();
+					else renderedBounds[0] = renderedBounds[0].union(igc.figures[f].getBounds());
+				}
+			}
+			if (includeGraphics && (igc.graphics != null)) {
 				pGraphics.addAll(Arrays.asList(igc.graphics));
-			if (igc.words != null)
+				if (renderedBounds == null) {}
+				else for (int g = 0; g < igc.graphics.length; g++) {
+					if (renderedBounds[0] == null)
+						renderedBounds[0] = igc.graphics[g].getBounds();
+					else renderedBounds[0] = renderedBounds[0].union(igc.graphics[g].getBounds());
+				}
+			}
+			if (includeWords && (igc.words != null))
 				pWords.addAll(Arrays.asList(igc.words));
 			pRotations.add(new Integer(igc.rotation));
 		}
 		
-		//	if we have a scan, use that to create temporary figures
+		//	if we have a scan, use that to create temporary figures (cut out at scan resolution, might not be same as page image !!!)
 		if (pScan != null) try {
 			pm.setInfo(" - adding scan excerpts");
 			BufferedImage pScanImage = ImageIO.read(pScan.getInputStream());
@@ -2067,9 +2256,19 @@ Add QC check for existence of caption targets ...
 				RegionImageGridCell igc = ((RegionImageGridCell) pImageGridCells.get(c));
 				if (igc.scan == null)
 					continue; // we have other means of rendering this one
-				BufferedImage igcScanImage = pScanImage.getSubimage(igc.image.bounds.left, igc.image.bounds.top, igc.image.bounds.getWidth(), igc.image.bounds.getHeight());
+				int pImageDpi = page.getImageDPI();
+				int pScanDpi = pScan.getDpi();
+				int igcScanLeft = ((igc.image.bounds.left * pScanDpi) / pImageDpi);
+				int igcScanRight = ((igc.image.bounds.right * pScanDpi) / pImageDpi);
+				int igcScanTop = ((igc.image.bounds.top * pScanDpi) / pImageDpi);
+				int igcScanBottom = ((igc.image.bounds.bottom * pScanDpi) / pImageDpi);
+				BufferedImage igcScanImage = pScanImage.getSubimage(igcScanLeft, igcScanTop, (igcScanRight - igcScanLeft), (igcScanBottom - igcScanTop));
 				Figure igcFigure = Figure.createFigure(null, page.pageId, 0, page.getImageDPI(), igcScanImage, igc.image.bounds);
 				pFigures.add(igcFigure);
+				if (renderedBounds == null) {}
+				else if (renderedBounds[0] == null)
+					renderedBounds[0] = igc.image.bounds;
+				else renderedBounds[0] = renderedBounds[0].union(igc.image.bounds);
 			}
 		}
 		catch (Exception e) {

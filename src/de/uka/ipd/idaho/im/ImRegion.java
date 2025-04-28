@@ -52,6 +52,9 @@ public class ImRegion extends ImLayoutObject {
 	/** the region type for marking table cells, namely 'tableCell', intentionally distinct from HTML counterpart */
 	public static final String TABLE_CELL_TYPE = "tableCell";
 	
+	/** the attribute for marking header columns and rows, i.e., row labels and column headers, namely 'isHeader' */
+	public static final String TABLE_HEADER_MARKER_ATTRIBUTE = "isHeader"; 
+	
 	/** the region type for marking bitmap based images, diagrams, maps, etc., namely 'image' */
 	public static final String IMAGE_TYPE = "image";
 	

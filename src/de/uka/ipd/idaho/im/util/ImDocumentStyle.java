@@ -324,7 +324,8 @@ public class ImDocumentStyle extends DocumentStyle {
 			ImUtils.sortLeftRightTopDown(words);
 			StringBuffer wordStr = new StringBuffer();
 			for (int w = 0; w < words.length; w++)
-				wordStr.append(normalizeString(words[w].getString()));
+//				wordStr.append(normalizeString(words[w].getString()));
+				wordStr.append(StringUtils.normalizeString(words[w].getString()));
 			if (matchLog != null)
 				matchLog.add(" - word string is '" + wordStr.toString() + "'");
 			
@@ -338,21 +339,21 @@ public class ImDocumentStyle extends DocumentStyle {
 			//	finally ...
 			return match;
 		}
-		
-		private static String normalizeString(String string) {
-			StringBuffer nString = new StringBuffer();
-			for (int c = 0; c < string.length(); c++) {
-				char ch = string.charAt(c);
-				if ((ch < 33) || (ch == 160))
-					nString.append(" "); // turn all control characters into spaces, along with non-breaking space
-				else if (ch < 127)
-					nString.append(ch); // no need to normalize basic ASCII characters
-				else if ("-\u00AD\u2010\u2011\u2012\u2013\u2014\u2015\u2212".indexOf(ch) != -1)
-					nString.append("-"); // normalize dashes right here
-				else nString.append(StringUtils.getNormalForm(ch));
-			}
-			return nString.toString();
-		}
+//		
+//		private static String normalizeString(String string) {
+//			StringBuffer nString = new StringBuffer();
+//			for (int c = 0; c < string.length(); c++) {
+//				char ch = string.charAt(c);
+//				if ((ch <= 0x20) || (ch == 0xA0))
+//					nString.append(" "); // turn all control characters into spaces, along with non-breaking space
+//				else if (ch < 127)
+//					nString.append(ch); // no need to normalize basic ASCII characters
+//				else if ("-\u00AD\u2010\u2011\u2012\u2013\u2014\u2015\u2212".indexOf(ch) != -1)
+//					nString.append("-"); // normalize dashes right here
+//				else nString.append(StringUtils.getNormalForm(ch));
+//			}
+//			return nString.toString();
+//		}
 		
 		static void installFactory(/* need method call to trigger static initializers */) {
 			Anchor.addFactory(new Factory() {
@@ -409,6 +410,9 @@ public class ImDocumentStyle extends DocumentStyle {
 			
 			PARAMETER_GROUP_DESCRIPTION.setParamLabel(IS_REQUIRED_PROPERTY, "Is the Anchor Required to Match for an Overall Match?");
 			PARAMETER_GROUP_DESCRIPTION.setParamDescription(IS_REQUIRED_PROPERTY, "A mismatch on a required anchor fails the overall match of a document style regardless how many other anchors do match a given document.");
+			
+			PARAMETER_GROUP_DESCRIPTION.setParamLabel(MAXIMUM_PAGES_AFTER_FIRST_PROPERTY, "Maximum Pages After First");
+			PARAMETER_GROUP_DESCRIPTION.setParamDescription(MAXIMUM_PAGES_AFTER_FIRST_PROPERTY, "The maximum number of pages to search for matches after the very first one of a document");
 			
 			mapParameterValueClass(TARGET_AREA_PROPERTY, BoundingBox.class);
 			mapParameterValueClass(TARGET_MINIMUM_FONT_SIZE_PROPERTY, Integer.class);

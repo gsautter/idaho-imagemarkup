@@ -27,12 +27,17 @@
  */
 package de.uka.ipd.idaho.im.pdf;
 
+import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.geom.AffineTransform;
 import java.awt.geom.CubicCurve2D;
+import java.awt.geom.Path2D;
+import java.awt.geom.Point2D;
 import java.awt.geom.QuadCurve2D;
+import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
@@ -53,9 +58,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.SortedSet;
+import java.util.TreeMap;
 import java.util.TreeSet;
 
 import javax.swing.JOptionPane;
+
+import org.icepdf.core.pobjects.Reference;
+import org.icepdf.core.util.Library;
 
 import de.uka.ipd.idaho.easyIO.streams.CharSequenceReader;
 import de.uka.ipd.idaho.gamta.Gamta;
@@ -70,6 +79,12 @@ import de.uka.ipd.idaho.im.pdf.PdfCharDecoder.UnicodeBlock;
 import de.uka.ipd.idaho.im.pdf.PdfFont.CharDecoder;
 import de.uka.ipd.idaho.im.pdf.PdfFont.CharNeighbor;
 import de.uka.ipd.idaho.im.pdf.PdfFont.CharUsageStats;
+import de.uka.ipd.idaho.im.pdf.PdfParser.PInlineImage;
+import de.uka.ipd.idaho.im.pdf.PdfParser.PRotate;
+import de.uka.ipd.idaho.im.pdf.PdfParser.PStream;
+import de.uka.ipd.idaho.im.pdf.PdfParser.PString;
+import de.uka.ipd.idaho.im.pdf.PdfParser.PTag;
+import de.uka.ipd.idaho.im.pdf.PdfUtils.PdfByteInputStream;
 import de.uka.ipd.idaho.im.pdf.PsParser.PsProcedure;
 import de.uka.ipd.idaho.im.pdf.PsParser.PsString;
 import de.uka.ipd.idaho.im.util.ImFontUtils;
@@ -104,6 +119,7 @@ public class PdfFontDecoder {
 		
 		private boolean verifyUnicodeMapped = true;
 		private boolean decodeUnicodeMapped = true;
+		private boolean cleanUnicodeMapping = true;
 		
 		/** Constructor
 		 * @param name the name of the charset
@@ -118,9 +134,20 @@ public class PdfFontDecoder {
 		 * @param dum decode characters that come with a Unicode mapping?
 		 */
 		protected FontDecoderCharset(String name, boolean vum, boolean dum) {
+			this(name, vum, dum, true);
+		}
+		
+		/** Constructor
+		 * @param name the name of the charset
+		 * @param vum verify characters that come with a Unicode mapping?
+		 * @param dum decode characters that come with a Unicode mapping?
+		 * @param cum clean Unicode mapping (of duplicates, etc.)?
+		 */
+		FontDecoderCharset(String name, boolean vum, boolean dum, boolean cum) {
 			this.name = name;
 			this.verifyUnicodeMapped = vum;
 			this.decodeUnicodeMapped = dum;
+			this.cleanUnicodeMapping = cum;
 		}
 		
 		/**
@@ -157,6 +184,16 @@ public class PdfFontDecoder {
 		 */
 		public boolean decodeUnicodeMapped() {
 			return this.decodeUnicodeMapped;
+		}
+		
+		/**
+		 * Check whether or no to clean the overall Unicode mapping, i.e.,
+		 * resolve conflicts of multiple characters mapping to the same Unicode
+		 * point.
+		 * @return true if the Unicode mapping should be cleaned
+		 */
+		public boolean cleanUnicodeMapping() {
+			return this.cleanUnicodeMapping;
 		}
 		
 		/**
@@ -200,9 +237,9 @@ public class PdfFontDecoder {
 				return fdc1;
 			else if (fdc2 == UNICODE)
 				return fdc2;
-			else if ((fdc1 == NO_DECODING) || (fdc1 == RENDER_ONLY))
+			else if ((fdc1 == NO_DECODING) || (fdc1 == RENDER_ONLY) || (fdc1 == VECTORIZED_OCR_DECODING))
 				return fdc2;
-			else if ((fdc2 == NO_DECODING) || (fdc2 == RENDER_ONLY))
+			else if ((fdc2 == NO_DECODING) || (fdc2 == RENDER_ONLY) || (fdc2 == VECTORIZED_OCR_DECODING))
 				return fdc1;
 			FontDecoderCharset fdcUnion = new FontDecoderCharset((fdc1.name + '+' + fdc2.name), (fdc1.verifyUnicodeMapped || fdc2.verifyUnicodeMapped), (fdc1.decodeUnicodeMapped || fdc2.decodeUnicodeMapped)) {
 				public boolean containsChar(char ch) {
@@ -305,6 +342,13 @@ public class PdfFontDecoder {
 	
 	/** font decoder charset indicating that the glyphs of a font should be rendered for later correction, but not decoded */
 	public static final FontDecoderCharset RENDER_ONLY = new FontDecoderCharset("RenderOnly", false, false) {
+		public boolean containsChar(char ch) {
+			return false;
+		}
+	};
+	
+	/** font decoder charset indicating that the glyphs of a font should be rendered for later correction, but not decoded, and that multiple glyphs might map to same Unicode point */
+	public static final FontDecoderCharset VECTORIZED_OCR_DECODING = new FontDecoderCharset("VectorizedOCR", false, false, false) {
 		public boolean containsChar(char ch) {
 			return false;
 		}
@@ -603,6 +647,565 @@ public class PdfFontDecoder {
 		private static LinkedHashSet charsetProviders = new LinkedHashSet();
 	}
 	
+	private static abstract class OpReceiver {
+//		int iSideBearing = 0;
+//		int iUpBearing = 0;
+		float iWidth = 0;
+		float iHeight = 0;
+		int rWidth = 0;
+		int x = 0;
+		int y = 0;
+		int segCount = 0; // overall number of segments
+		int subSegCount = 0; // number of segments since last call to moveTo()
+		int sx = 0;
+		int sy = 0;
+		abstract void moveTo(int dx, int dy);
+		abstract void moveToAbs(int x, int y);
+		abstract void lineTo(int dx, int dy);
+		abstract void lineToAbs(int x, int y);
+		abstract void curveTo(int dx1, int dy1, int dx2, int dy2);
+		abstract void curveToAbs(int x1, int y1, int x2, int y2);
+		abstract void curveTo(int dx1, int dy1, int dx2, int dy2, int dx3, int dy3);
+		abstract void curveToAbs(int x1, int y1, int x2, int y2, int x3, int y3);
+		abstract void closePath();
+		abstract void closePath(int dx, int dy, boolean explicit);
+	}
+	
+	private static class OpTracker extends OpReceiver {
+		int minX = 0;
+		int minY = 0;
+		int minPaintX = Integer.MAX_VALUE;
+		int minPaintY = Integer.MAX_VALUE;
+		int maxX = 0;
+		int maxY = 0;
+		boolean isMultiPath = false;
+		Path2D.Float path = new Path2D.Float(Path2D.WIND_NON_ZERO);
+		StringBuffer ops = new StringBuffer("Ops:");
+		final boolean debug;
+		OpTracker(boolean debug) {
+			this.debug = debug;
+		}
+		void moveTo(int dx, int dy) {
+			if (this.segCount != 0)
+				this.isMultiPath = true;
+			if (this.subSegCount != 0)
+				this.path.closePath();
+			this.subSegCount = 0;
+			this.path.moveTo((this.x + dx), (this.y + dy));
+			this.doSegTo(dx, dy, false);
+			this.ops.append(" M" + dx + "/" + dy);
+			if (this.debug) {
+				System.out.println("Move to " + dx + "/" + dy + ":");
+				System.out.println(" at " + this.x + "/" + this.y);
+				System.out.println(" " + this.minX + " < X < " + this.maxX);
+				System.out.println(" " + this.minY + " < Y < " + this.maxY);
+			}
+		}
+		void moveToAbs(int x, int y) {
+			if (this.segCount != 0)
+				this.isMultiPath = true;
+			if (this.subSegCount != 0)
+				this.path.closePath();
+			this.subSegCount = 0;
+			this.path.moveTo(x, y);
+			this.x = x;
+			this.minX = Math.min(this.minX, this.x);
+			this.maxX = Math.max(this.maxX, this.x);
+			this.y = y;
+			this.minY = Math.min(this.minY, this.y);
+			this.maxY = Math.max(this.maxY, this.y);
+			this.ops.append(" MA" + x + "/" + y);
+			if (this.debug) {
+				System.out.println("Move abs to " + x + "/" + y + ":");
+				System.out.println(" at " + this.x + "/" + this.y);
+				System.out.println(" " + this.minX + " < X < " + this.maxX);
+				System.out.println(" " + this.minY + " < Y < " + this.maxY);
+			}
+		}
+		void lineTo(int dx, int dy) {
+			if (this.subSegCount == 0) {
+				this.sx = this.x;
+				this.sy = this.y;
+			}
+			this.path.lineTo((this.x + dx), (this.y + dy));
+			this.doSegTo(dx, dy, true);
+			this.segCount++;
+			this.subSegCount++;
+			this.ops.append(" L" + dx + "/" + dy);
+		}
+		void lineToAbs(int x, int y) {
+			if (this.subSegCount == 0) {
+				this.sx = this.x;
+				this.sy = this.y;
+			}
+			this.path.lineTo(x, y);
+			this.doSegToAbs(x, y, true);
+			this.segCount++;
+			this.subSegCount++;
+			this.ops.append(" LA" + x + "/" + y);
+		}
+		private void doSegTo(int dx, int dy, boolean painted) {
+			if (painted) {
+				this.minPaintX = Math.min(this.minPaintX, this.x);
+				this.minPaintY = Math.min(this.minPaintY, this.y);
+			}
+			this.x += dx;
+			this.minX = Math.min(this.minX, this.x);
+			this.maxX = Math.max(this.maxX, this.x);
+			this.y += dy;
+			this.minY = Math.min(this.minY, this.y);
+			this.maxY = Math.max(this.maxY, this.y);
+			if (painted) {
+				this.minPaintX = Math.min(this.minPaintX, this.x);
+				this.minPaintY = Math.min(this.minPaintY, this.y);
+			}
+			if (this.debug) {
+				System.out.println("Line to " + dx + "/" + dy + ":");
+				System.out.println(" at " + this.x + "/" + this.y);
+				System.out.println(" " + this.minX + " < X < " + this.maxX);
+				System.out.println(" " + this.minY + " < Y < " + this.maxY);
+			}
+		}
+		private void doSegToAbs(int x, int y, boolean painted) {
+			if (painted) {
+				this.minPaintX = Math.min(this.minPaintX, this.x);
+				this.minPaintY = Math.min(this.minPaintY, this.y);
+			}
+			this.x = x;
+			this.minX = Math.min(this.minX, this.x);
+			this.maxX = Math.max(this.maxX, this.x);
+			this.y = y;
+			this.minY = Math.min(this.minY, this.y);
+			this.maxY = Math.max(this.maxY, this.y);
+			if (painted) {
+				this.minPaintX = Math.min(this.minPaintX, this.x);
+				this.minPaintY = Math.min(this.minPaintY, this.y);
+			}
+			if (this.debug) {
+				System.out.println("Line to abs " + x + "/" + y + ":");
+				System.out.println(" at " + this.x + "/" + this.y);
+				System.out.println(" " + this.minX + " < X < " + this.maxX);
+				System.out.println(" " + this.minY + " < Y < " + this.maxY);
+			}
+		}
+		private static final int curveSteps = 16;
+		void curveTo(int dx1, int dy1, int dx2, int dy2) {
+			if (this.subSegCount == 0) {
+				this.sx = this.x;
+				this.sy = this.y;
+			}
+			this.path.quadTo((this.x + dx1), (this.y + dy1), (this.x + dx1 + dx2), (this.y + dy1 + dy2));
+			/* simply line to control point if lying inside rectagle spanned
+			 * open by current position and target point, which is basically
+			 * the case if both deltas have the same direction (signum) in both
+			 * dimensions */
+			if ((((dx1 <= 0) && (dx2 <= 0)) || ((dx1 >= 0) && (dx2 >= 0))) && (((dy1 <= 0) && (dy2 <= 0)) || ((dy1 >= 0) && (dy2 >= 0)))) {
+				this.doSegTo(dx1, dy1, true);
+				this.doSegTo(dx2, dy2, true);
+			}
+			/* otherwise, compute vertex of parabola and use that, as including
+			 * control point proper in size estimation incurs catastrophic size
+			 * over-estimation on tight turns close to 180° whose control point
+			 * is either way up or way down (formula see below) */
+			else {
+				/* run along curve and find extremes:
+				 * - should be fast using integer arithmetics by projecting [0,1] on [0,16]
+				 * - assume starting point at 0/0 and relative movement from there
+				 * - rounding errors not an issue, as formula yields absolute offset from starting point (absolute coordinates, really, but those are offsets from 0/0)
+				 * - courtesy https://pomax.github.io/bezierinfo/ :
+x(t) = p0x * (1-t)*(1-t) + p1x * (1-t)*t + p2x * t*t
+y(t) = p0y * (1-t)*(1-t) + p1y * (1-t)*t + p2y * t*t
+
+=== expand [0,1] to [0,16] and divide out again
+x(t) = (p0x * (16-t)*(16-t) + p1x * (16-t)*t + p2x * t*t) / 16*16
+y(t) = (p0y * (16-t)*(16-t) + p1y * (16-t)*t + p2y * t*t) / 16*16
+
+=== consider p0 always is 0/0 in relative movement
+x(t) = (p1x * (16-t)*t + p2x * t*t) / 16*16
+y(t) = (p1y * (16-t)*t + p2y * t*t) / 16*16
+				 */
+				
+				//	assuming p0 to be at 0/0, as we're after relative positions anyway
+//				int p0x = 0;
+//				int p0y = 0;
+				int p1x = dx1;
+				int p1y = dy1;
+				int p2x = (dx1 + dx2);
+				int p2y = (dy1 + dy2);
+				if (this.debug) System.out.println("Curving to " + dx1 + "/" + dy1 + "(" + p1x + "/" + p1y + ") and " + dx2 + "/" + dy2 + "(" + p2x + "/" + p2y + ")");
+				
+//				int lpx = p0x;
+//				int lpy = p0y;
+				int lpx = 0;
+				int lpy = 0;
+				for (int t = 1; t <= curveSteps; t++) {
+					int r = (curveSteps - t);
+//					int px = (((p0x * r*r) + (2 * p1x * r*t) + (p2x * t*t)) / (curveSteps * curveSteps));
+//					int py = (((p0y * r*r) + (2 * p1y * r*t) + (p2y * t*t)) / (curveSteps * curveSteps));
+					int px = (((2 * p1x * r*t) + (p2x * t*t)) / (curveSteps * curveSteps));
+					int py = (((2 * p1y * r*t) + (p2y * t*t)) / (curveSteps * curveSteps));
+					this.doSegTo((px - lpx), (py - lpy), true);
+					if (this.debug) System.out.println(" - step " + t + " to " + (px - lpx) + "/" + (py - lpy) + "(" + px + "/" + py + ")");
+					lpx = px;
+					lpy = py;
+				}
+			}
+			this.segCount++;
+			this.subSegCount++;
+			this.ops.append(" C" + dx1 + "/" + dy1 + "," + dx2 + "/" + dy2);
+		}
+		void curveToAbs(int x1, int y1, int x2, int y2) {
+			if (this.subSegCount == 0) {
+				this.sx = this.x;
+				this.sy = this.y;
+			}
+			this.path.quadTo(x1, y1, x2, y2);
+			/* run along curve and find extremes:
+			 * - should be fast using integer arithmetics by projecting [0,1] on [0,16]
+			 * - assume starting point at 0/0 and relative movement from there
+			 * - rounding errors not an issue, as formula yields absolute offset from starting point (absolute coordinates, really, but those are offsets from 0/0)
+			 * - courtesy https://pomax.github.io/bezierinfo/ :
+x(t) = p0x * (1-t)*(1-t) + p1x * (1-t)*t + p2x * t*t
+y(t) = p0y * (1-t)*(1-t) + p1y * (1-t)*t + p2y * t*t
+
+=== expand [0,1] to [0,16] and divide out again
+x(t) = (p0x * (16-t)*(16-t) + p1x * (16-t)*t + p2x * t*t) / 16*16
+y(t) = (p0y * (16-t)*(16-t) + p1y * (16-t)*t + p2y * t*t) / 16*16
+
+=== consider p0 always is 0/0 in relative movement
+x(t) = (p1x * (16-t)*t + p2x * t*t) / 16*16
+y(t) = (p1y * (16-t)*t + p2y * t*t) / 16*16
+			 */
+			
+			//	assuming p0 to be at 0/0, as we're after relative positions anyway
+			int p0x = this.x;
+			int p0y = this.y;
+//			int p1x = dx1;
+//			int p1y = dy1;
+//			int p2x = (dx1 + dx2);
+//			int p2y = (dy1 + dy2);
+			if (this.debug) System.out.println("Curving to abs " + x1 + "/" + y1 + " and " + x2 + "/" + y2);
+			
+//			int lpx = p0x;
+//			int lpy = p0y;
+//			int lpx = 0;
+//			int lpy = 0;
+			for (int t = 1; t <= curveSteps; t++) {
+				int r = (curveSteps - t);
+				int px = (((p0x * r*r) + (2 * x1 * r*t) + (x2 * t*t)) / (curveSteps * curveSteps));
+				int py = (((p0y * r*r) + (2 * y1 * r*t) + (y2 * t*t)) / (curveSteps * curveSteps));
+//				int px = (((2 * p1x * r*t) + (p2x * t*t)) / (curveSteps * curveSteps));
+//				int py = (((2 * p1y * r*t) + (p2y * t*t)) / (curveSteps * curveSteps));
+				this.doSegToAbs(px, py, true);
+				if (this.debug) System.out.println(" - step abs " + t + " to " + px + "/" + py);
+//				lpx = px;
+//				lpy = py;
+			}
+			this.segCount++;
+			this.subSegCount++;
+			this.ops.append(" CA" + x1 + "/" + y1 + "," + x2 + "/" + y2);
+		}
+		void curveTo(int dx1, int dy1, int dx2, int dy2, int dx3, int dy3) {
+			this.path.curveTo((this.x + dx1), (this.y + dy1), (this.x + dx1 + dx2), (this.y + dy1 + dy2), (this.x + dx1 + dx2 + dx3), (this.y + dy1 + dy2 + dy3));
+			
+			/* run along curve and find extremes:
+			 * - should be fast using integer arithmetics by projecting [0,1] on [0,16]
+			 * - assume starting point at 0/0 and relative movement from there
+			 * - rounding errors not an issue, as formula yields absolute offset from starting point (absolute coordinates, really, but those are offsets from 0/0)
+			 * - courtesy https://pomax.github.io/bezierinfo/ :
+x(t) = p0x * (1-t)*(1-t)*(1-t) + 3 * p1x * (1-t)*(1-t)*t + 3 * p2x * (1-t)*t*t + p3x * t*t*t
+y(t) = p0y * (1-t)*(1-t)*(1-t) + 3 * p1y * (1-t)*(1-t)*t + 3 * p2y * (1-t)*t*t + p3x * t*t*t
+
+=== expand [0,1] to [0,16] and divide out again
+x(t) = p0x * (16-t)*(16-t)*(16-t) + 3 * p1x * (16-t)*(16-t)*t + 3 * p2x * (16-t)*t*t + p3x * t*t*t / 16*16*16
+y(t) = p0y * (16-t)*(16-t)*(16-t) + 3 * p1y * (16-t)*(16-t)*t + 3 * p2y * (16-t)*t*t + p3y * t*t*t / 16*16*16
+
+=== consider p0 always is 0/0 in relative movement
+x(t) = 3 * p1x * (16-t)*(16-t)*t + 3 * p2x * (16-t)*t*t + p3x * t*t*t / 16*16*16
+y(t) = 3 * p1y * (16-t)*(16-t)*t + 3 * p2y * (16-t)*t*t + p3y * t*t*t / 16*16*16
+			 */
+			
+			//	assuming p0 to be at 0/0, as we're after relative positions anyway
+//			int p0x = 0;
+//			int p0y = 0;
+			int p1x = dx1;
+			int p1y = dy1;
+			int p2x = (dx1 + dx2);
+			int p2y = (dy1 + dy2);
+			int p3x = (dx1 + dx2 + dx3);
+			int p3y = (dy1 + dy2 + dy3);
+			if (this.debug) System.out.println("Curving to " + dx1 + "/" + dy1 + "(" + p1x + "/" + p1y + "), " + dx2 + "/" + dy2 + "(" + p2x + "/" + p2y + "), and " + dx3 + "/" + dy3 + "(" + p3x + "/" + p3y + ")");
+			
+//			int lpx = p0x;
+//			int lpy = p0y;
+			int lpx = 0;
+			int lpy = 0;
+			for (int t = 1; t <= curveSteps; t++) {
+				int r = (curveSteps - t);
+//				int px = (((p0x * r*r*r) + (3 * p1x * r*r*t) + (3 * p2x * r*t*t) + (p3x * t*t*t)) / (curveSteps * curveSteps * curveSteps));
+//				int py = (((p0y * r*r*r) + (3 * p1y * r*r*t) + (3 * p2y * r*t*t) + (p3y * t*t*t)) / (curveSteps * curveSteps * curveSteps));
+				int px = (((3 * p1x * r*r*t) + (3 * p2x * r*t*t) + (p3x * t*t*t)) / (curveSteps * curveSteps * curveSteps));
+				int py = (((3 * p1y * r*r*t) + (3 * p2y * r*t*t) + (p3y * t*t*t)) / (curveSteps * curveSteps * curveSteps));
+				this.doSegTo((px - lpx), (py - lpy), true);
+				if (this.debug) System.out.println(" - step " + t + " to " + (px - lpx) + "/" + (py - lpy) + "(" + px + "/" + py + ")");
+				lpx = px;
+				lpy = py;
+			}
+			this.segCount++;
+			this.subSegCount++;
+			this.ops.append(" C" + dx1 + "/" + dy1 + "," + dx2 + "/" + dy2 + "," + dx3 + "/" + dy3);
+		}
+		void curveToAbs(int x1, int y1, int x2, int y2, int x3, int y3) {
+			this.path.curveTo(x1, y1, x2, y2, x3, y3);
+			
+			/* run along curve and find extremes:
+			 * - should be fast using integer arithmetics by projecting [0,1] on [0,16]
+			 * - assume starting point at 0/0 and relative movement from there
+			 * - rounding errors not an issue, as formula yields absolute offset from starting point (absolute coordinates, really, but those are offsets from 0/0)
+			 * - courtesy https://pomax.github.io/bezierinfo/ :
+x(t) = p0x * (1-t)*(1-t)*(1-t) + 3 * p1x * (1-t)*(1-t)*t + 3 * p2x * (1-t)*t*t + p3x * t*t*t
+y(t) = p0y * (1-t)*(1-t)*(1-t) + 3 * p1y * (1-t)*(1-t)*t + 3 * p2y * (1-t)*t*t + p3x * t*t*t
+
+=== expand [0,1] to [0,16] and divide out again
+x(t) = p0x * (16-t)*(16-t)*(16-t) + 3 * p1x * (16-t)*(16-t)*t + 3 * p2x * (16-t)*t*t + p3x * t*t*t / 16*16*16
+y(t) = p0y * (16-t)*(16-t)*(16-t) + 3 * p1y * (16-t)*(16-t)*t + 3 * p2y * (16-t)*t*t + p3y * t*t*t / 16*16*16
+
+=== consider p0 always is 0/0 in relative movement
+x(t) = 3 * p1x * (16-t)*(16-t)*t + 3 * p2x * (16-t)*t*t + p3x * t*t*t / 16*16*16
+y(t) = 3 * p1y * (16-t)*(16-t)*t + 3 * p2y * (16-t)*t*t + p3y * t*t*t / 16*16*16
+			 */
+			
+			//	assuming p0 to be at 0/0, as we're after relative positions anyway
+			int p0x = this.x;
+			int p0y = this.y;
+//			int p1x = dx1;
+//			int p1y = dy1;
+//			int p2x = (dx1 + dx2);
+//			int p2y = (dy1 + dy2);
+//			int p3x = (dx1 + dx2 + dx3);
+//			int p3y = (dy1 + dy2 + dy3);
+			if (this.debug) System.out.println("Curving to " + x1 + "/" + y1 + ", " + x2 + "/" + y2 + ", and " + x3 + "/" + y3);
+			
+//			int lpx = p0x;
+//			int lpy = p0y;
+//			int lpx = 0;
+//			int lpy = 0;
+			for (int t = 1; t <= curveSteps; t++) {
+				int r = (curveSteps - t);
+				int px = (((p0x * r*r*r) + (3 * x1 * r*r*t) + (3 * x2 * r*t*t) + (x3 * t*t*t)) / (curveSteps * curveSteps * curveSteps));
+				int py = (((p0y * r*r*r) + (3 * y1 * r*r*t) + (3 * y2 * r*t*t) + (y3 * t*t*t)) / (curveSteps * curveSteps * curveSteps));
+//				int px = (((3 * p1x * r*r*t) + (3 * p2x * r*t*t) + (p3x * t*t*t)) / (curveSteps * curveSteps * curveSteps));
+//				int py = (((3 * p1y * r*r*t) + (3 * p2y * r*t*t) + (p3y * t*t*t)) / (curveSteps * curveSteps * curveSteps));
+				this.doSegToAbs(px, py, true);
+				if (this.debug) System.out.println(" - step abs " + t + " to " + px + "/" + py);
+//				lpx = px;
+//				lpy = py;
+			}
+			this.segCount++;
+			this.subSegCount++;
+			this.ops.append(" CA" + x1 + "/" + y1 + "," + x2 + "/" + y2 + "," + x3 + "/" + y3);
+		}
+		void closePath() {
+			if (this.subSegCount != 0)
+				this.path.closePath();
+			this.subSegCount = 0;
+			this.ops.append(" O");
+		}
+		void closePath(int dx, int dy, boolean explicit) /* used only for TrueType */ {
+			this.path.quadTo((this.x + dx), (this.y + dy), this.sx, this.sy);
+			this.path.closePath();
+			if (explicit)
+				this.doSegTo(dx, dy, true);
+			this.subSegCount = 0;
+			this.ops.append(" O" + dx + "/" + dy);
+		}
+	}
+	
+	private static class OpGraphics extends OpReceiver {
+		int minX;
+		int minY;
+		int height;
+		BufferedImage img;
+		Graphics2D gr;
+//		Path2D.Float path = new Path2D.Float(Path2D.WIND_NON_ZERO);
+		float scale = 1.0f;
+		OpGraphics(int minX, int minY, int height, float scale, BufferedImage img) {
+			this.minX = minX;
+			this.minY = minY;
+			this.height = height;
+			this.scale = scale;
+			this.setImage(img);
+			this.gr.setColor(Color.WHITE);
+			this.gr.fillRect(0, 0, img.getWidth(), img.getHeight());
+			this.gr.setColor(Color.BLACK);
+		}
+		void setImage(BufferedImage img) {
+			this.img = img;
+			this.gr = this.img.createGraphics();
+		}
+		void lineTo(int dx, int dy) {
+			if (this.subSegCount == 0) {
+				this.sx = this.x;
+				this.sy = this.y;
+			}
+			this.gr.drawLine(
+					Math.round((this.scale * (this.x - this.minX)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (this.y - this.minY))) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.x - this.minX + dx)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (this.y - this.minY + dy))) + glyphOutlineFillSafetyEdge)
+				);
+//			this.path.lineTo((this.x + dx), (this.y + dy));
+			this.x += dx;
+			this.y += dy;
+			this.subSegCount++;
+		}
+		void lineToAbs(int x, int y) {
+			if (this.subSegCount == 0) {
+				this.sx = this.x;
+				this.sy = this.y;
+			}
+			this.gr.drawLine(
+					Math.round((this.scale * (this.x - this.minX)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (this.y - this.minY))) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (x - this.minX)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (y - this.minY))) + glyphOutlineFillSafetyEdge)
+				);
+//			this.path.lineTo((this.x + dx), (this.y + dy));
+			this.x = x;
+			this.y = y;
+			this.subSegCount++;
+		}
+		void curveTo(int dx1, int dy1, int dx2, int dy2) {
+			if (this.subSegCount == 0) {
+				this.sx = this.x;
+				this.sy = this.y;
+			}
+			QuadCurve2D.Float qc = new QuadCurve2D.Float();
+			qc.setCurve(
+					Math.round((this.scale * (this.x - this.minX)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (this.y - this.minY))) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.x - this.minX + dx1)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (this.y - this.minY + dy1))) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.x - this.minX + dx1 + dx2)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (this.y - this.minY + dy1 + dy2))) + glyphOutlineFillSafetyEdge)
+				);
+			this.gr.draw(qc);
+//			this.path.quadTo((this.x + dx1), (this.y + dy1), (this.x + dx1 + dy2), (this.y + dy1 + dy2));
+			this.x += (dx1 + dx2);
+			this.y += (dy1 + dy2);
+			this.subSegCount++;
+		}
+		void curveToAbs(int x1, int y1, int x2, int y2) {
+			if (this.subSegCount == 0) {
+				this.sx = this.x;
+				this.sy = this.y;
+			}
+			QuadCurve2D.Float qc = new QuadCurve2D.Float();
+			qc.setCurve(
+					Math.round((this.scale * (this.x - this.minX)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (this.y - this.minY))) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (x1 - this.minX)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (y1 - this.minY))) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (x2 - this.minX)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (y2 - this.minY))) + glyphOutlineFillSafetyEdge)
+				);
+			this.gr.draw(qc);
+//			this.path.quadTo((this.x + dx1), (this.y + dy1), (this.x + dx1 + dy2), (this.y + dy1 + dy2));
+			this.x = x2;
+			this.y = y2;
+			this.subSegCount++;
+		}
+		void curveTo(int dx1, int dy1, int dx2, int dy2, int dx3, int dy3) {
+			if (this.subSegCount == 0) {
+				this.sx = this.x;
+				this.sy = this.y;
+			}
+			CubicCurve2D.Float cc = new CubicCurve2D.Float();
+			cc.setCurve(
+					Math.round((this.scale * (this.x - this.minX)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (this.y - this.minY))) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.x - this.minX + dx1)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (this.y - this.minY + dy1))) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.x - this.minX + dx1 + dx2)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (this.y - this.minY + dy1 + dy2))) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.x - this.minX + dx1 + dx2 + dx3)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (this.y - this.minY + dy1 + dy2 + dy3))) + glyphOutlineFillSafetyEdge)
+				);
+			this.gr.draw(cc);
+//			this.path.curveTo((this.x + dx1), (this.y + dy1), (this.x + dx1 + dx2), (this.y + dy1 + dy2), (this.x + dx1 + dx2 + dx3), (this.y + dy1 + dy2 + dy3));
+			this.x += (dx1 + dx2 + dx3);
+			this.y += (dy1 + dy2 + dy3);
+			this.subSegCount++;
+		}
+		void curveToAbs(int x1, int y1, int x2, int y2, int x3, int y3) {
+			if (this.subSegCount == 0) {
+				this.sx = this.x;
+				this.sy = this.y;
+			}
+			CubicCurve2D.Float cc = new CubicCurve2D.Float();
+			cc.setCurve(
+					Math.round((this.scale * (this.x - this.minX)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (this.y - this.minY))) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (x1 - this.minX)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (y1 - this.minY))) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (x2 - this.minX)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (y2 - this.minY))) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (x3 - this.minX)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (y3 - this.minY))) + glyphOutlineFillSafetyEdge)
+				);
+			this.gr.draw(cc);
+//			this.path.curveTo((this.x + dx1), (this.y + dy1), (this.x + dx1 + dx2), (this.y + dy1 + dy2), (this.x + dx1 + dx2 + dx3), (this.y + dy1 + dy2 + dy3));
+			this.x = x3;
+			this.y = y3;
+			this.subSegCount++;
+		}
+		void moveTo(int dx, int dy) {
+			if (this.subSegCount != 0)
+				this.closePath();
+			this.subSegCount = 0;
+//			this.path.moveTo((this.x + dx), (this.y + dy));
+			this.x += dx;
+			this.y += dy;
+		}
+		void moveToAbs(int x, int y) {
+			if (this.subSegCount != 0)
+				this.closePath();
+			this.subSegCount = 0;
+//			this.path.moveTo(x, y);
+			this.x = x;
+			this.y = y;
+		}
+		void closePath() {
+			this.gr.drawLine(
+					Math.round((this.scale * (this.x - this.minX)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (this.y - this.minY))) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.sx - this.minX)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (this.sy - this.minY))) + glyphOutlineFillSafetyEdge)
+				);
+//			this.path.closePath();
+			this.subSegCount = 0;
+		}
+		void closePath(int dx, int dy, boolean explicit) {
+			QuadCurve2D.Float qc = new QuadCurve2D.Float();
+			qc.setCurve(
+					Math.round((this.scale * (this.x - this.minX)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (this.y - this.minY))) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.x - this.minX + dx)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (this.y - this.minY + dy))) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.sx - this.minX)) + glyphOutlineFillSafetyEdge),
+					Math.round((this.scale * (this.height - (this.sy - this.minY))) + glyphOutlineFillSafetyEdge)
+				);
+			this.gr.draw(qc);
+//			this.path.quadTo((this.x + dx), (this.y + dy), this.sx, this.sy);
+//			this.path.closePath();
+			if (explicit) {
+				this.x += dx;
+				this.y += dy;
+			}
+			this.subSegCount = 0;
+		}
+	}
+	
 	private static final boolean DEBUG_TYPE1_LOADING = false;
 	
 	static void readFontType1(byte[] data, Map dataParams, Map fd, PdfFont pFont, CharDecoder pCharDecoder, FontDecoderCharset charSet, ProgressMonitor pm) {
@@ -740,8 +1343,8 @@ public class PdfFontDecoder {
 		//	read encoding, and decrypt and parse char strings
 		List encoding = ((List) fontData.get("Encoding"));
 		char[] chars = new char[encoding.size()];
-		Integer[] charCodes = new Integer[encoding.size()];
 		Arrays.fill(chars, ((char) 0));
+		Integer[] charCodes = new Integer[encoding.size()];
 		OpType1[][] charStringOps = new OpType1[encoding.size()][];
 		int nextControlSubstituteChar = 0x1D00; // start of Phonetic Extensions letters 1D00-1D7F (tokenize together with Latin, Greek, and Cyrillic)
 		for (int c = 0; c < encoding.size(); c++) {
@@ -802,7 +1405,6 @@ public class PdfFontDecoder {
 			}
 			
 			//	we have a valid PostFix name, use it (with whatever code the font myght call it by)
-//			else pFont.mapUnicode(new Integer(c), ("" + chars[c]));
 			else if (!pFont.ucMappings.containsKey(charCodes[c]) || (charCodes[c].intValue() != c))
 				pFont.mapUnicode(charCodes[c], ("" + chars[c]), false);
 			
@@ -845,21 +1447,32 @@ public class PdfFontDecoder {
 		//	store char codes for use below
 		Integer[] rawCharCodes = new Integer[encoding.size()];
 		String[] charNames = new String[encoding.size()];
+		Object[] glyphKeys = new Object[encoding.size()];
 		for (int c = 0; c < encoding.size(); c++) {
 			String charName = encoding.get(c).toString();
 			if (".notdef".equals(charName))
 				continue;
 			rawCharCodes[c] = new Integer(c);
 			charNames[c] = charName;
+			glyphKeys[c] = charName;
 		}
 		
 		//	measure characters
 		pm.setInfo("   - measuring characters");
 		int maxDescent = 0;
 		int maxCapHeight = 0;
-		OpTrackerType1[] otrs = new OpTrackerType1[encoding.size()];
+//		OpTrackerType1[] otrs = new OpTrackerType1[encoding.size()];
+		OpTracker[] otrs = new OpTracker[encoding.size()];
 		HashMap renderingSequencesToCharIndices = new HashMap();
 		HashMap charIndicesToSynonyms = new HashMap();
+		BufferedImage allGlyphs = new BufferedImage(1500, 1500, BufferedImage.TYPE_BYTE_BINARY);
+		Graphics2D agGr = allGlyphs.createGraphics();
+		agGr.setColor(Color.WHITE);
+		agGr.fillRect(0, 0, allGlyphs.getWidth(), allGlyphs.getHeight());
+		agGr.setColor(Color.BLACK);
+		agGr.translate(100, 900);
+		agGr.scale(0.3, -0.3); // 300 x 300 for 1000 x 1000 PDF font space (font size 300)
+		agGr.setStroke(new BasicStroke(5));
 		for (int c = 0; c < encoding.size(); c++) {
 			if (chars[c] == 0)
 				continue;
@@ -867,9 +1480,11 @@ public class PdfFontDecoder {
 				continue;
 			
 			CharImage chi = ((CharImage) pCharDecoder.plainCharCodesToImages.get(new Integer(c)));
+//			CharImage chi = ((CharImage) pCharDecoder.glyphKeysToImages.get(glyphKeys[c]));
 			if (chi != null) {
 				pm.setInfo("     - skipping previously rendered char " + c + " with code " + charCodes[c] + " (" + encoding.get(c) + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
 				Float iCharWidth = ((Float) pCharDecoder.plainCharCodesToWidths.get(new Integer(c)));
+//				Float iCharWidth = ((Float) pCharDecoder.glyphKeysToWidths.get(glyphKeys[c]));
 				if ((iCharWidth != null) && (!pFont.ccWidths.containsKey(charCodes[c]) || (charCodes[c].intValue() != c)))
 					pFont.setCharWidth(charCodes[c], iCharWidth.floatValue());
 				continue;
@@ -878,10 +1493,12 @@ public class PdfFontDecoder {
 			//	dry run char string operations to measure extent
 			pm.setInfo("     - measuring char " + c + " with code " + charCodes[c] + " (" + encoding.get(c) + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
 			if (DEBUG_TYPE1_LOADING) System.out.println("Measuring char " + c + " (" + encoding.get(c) + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
+			if (DEBUG_TYPE1_LOADING) System.out.println(" ==> font glyph key maps to " + pFont.getCharCodeByGlyphKey(encoding.get(c)));
 			try {
 				//	render vector glyph
-				otrs[c] = new OpTrackerType1();
-				runFontType1Ops(charStringOps[c], otrs[c], false, false, null, -1, -1, null); // we don't know if multi-path or not so far ...
+//				otrs[c] = new OpTrackerType1();
+				otrs[c] = new OpTracker(DEBUG_TYPE1_RENEDRING);
+				runFontType1Ops(charStringOps[c], otrs[c], false, false, null, -1, -1, null, null); // we don't know if multi-path or not so far ...
 				
 				//	index glyph rendering sequence to catch identical characters
 				String renderingSequence = otrs[c].ops.toString();
@@ -894,6 +1511,7 @@ public class PdfFontDecoder {
 					charIndicesToSynonyms.put(new Integer(c), renderingSequencesToCharIndices.get(renderingSequence));
 //				else if (pFont.usesCharCode(charCodes[c]))
 				else if (pCharDecoder.usesChar(charCodes[c], null))
+//				else if (pCharDecoder.usesGlyph(glyphKeys[c]))
 					renderingSequencesToCharIndices.put(renderingSequence, new Integer(c));
 			}
 			catch (RuntimeException re) {
@@ -913,6 +1531,7 @@ public class PdfFontDecoder {
 				maxDescent = Math.min(maxDescent, otrs[c].minY);
 				maxCapHeight = Math.max(maxCapHeight, otrs[c].maxY);
 			}
+			agGr.draw(otrs[c].path);
 			
 			//	store character width if set
 			if (otrs[c].iWidth > 0) {
@@ -920,12 +1539,82 @@ public class PdfFontDecoder {
 				if (!pFont.ccWidths.containsKey(charCodes[c]) || (charCodes[c].intValue() != c))
 					pFont.setCharWidth(charCodes[c], (otrs[c].iWidth * fmScaleX));
 				pCharDecoder.plainCharCodesToWidths.put(new Integer(c), new Float(otrs[c].iWidth * fmScaleX));
+//				pCharDecoder.glyphKeysToWidths.put(glyphKeys[c], new Float(otrs[c].iWidth * fmScaleX));
 				if (DEBUG_TYPE1_LOADING) System.out.println("   ==> width set to " + (otrs[c].iWidth * fmScaleX));
 			}
 		}
+		agGr.dispose();
 		if (DEBUG_TYPE1_LOADING) System.out.println("Max descent is " + maxDescent + ", max cap height is " + maxCapHeight);
 		
-		//	TODO adjust char positioning to font properties
+		//	check rendered glyph path dimensions
+		int white = Color.WHITE.getRGB();
+		int minGlyphX = Integer.MAX_VALUE;
+		int maxGlyphX = 0;
+		int minGlyphY = Integer.MAX_VALUE;
+		int maxGlyphY = 0;
+		for (int x = 0; x < allGlyphs.getWidth(); x++) {
+			for (int y = 0; y < allGlyphs.getHeight(); y++) {
+				if (allGlyphs.getRGB(x, y) == white)
+					continue;
+				minGlyphX = Math.min(minGlyphX, x);
+				maxGlyphX = Math.max(maxGlyphX, x);
+				minGlyphY = Math.min(minGlyphY, y);
+				maxGlyphY = Math.max(maxGlyphY, y);
+			}
+		}
+		
+		//	scale back to font space, inverting back Y coordinate for comparison with font indicated measurements
+		int fMinGlyphX = (((minGlyphX - 100) * 10) / 3);
+		int fMaxGlyphX = (((maxGlyphX - 100) * 10) / 3);
+		int fMinGlyphY = (((maxGlyphY - 900) * 10) / -3);
+		int fMaxGlyphY = (((minGlyphY - 900) * 10) / -3);
+		if (DEBUG_TYPE1_LOADING) {
+			System.out.println("Glyph extent is " + minGlyphX + "-" + maxGlyphX + " by " + minGlyphY + "-" + maxGlyphY);
+			System.out.println(" ==> " + fMinGlyphX + "-" + fMaxGlyphX + " by " + fMinGlyphY + "-" + fMaxGlyphY);
+		}
+		
+		//	compare measured glyph extents to font indicated ascent and descent
+		int bbTop = ((pFont.bBox == null) ? 0 : pFont.bBox.top);
+		float ascentRatio = (((float) fMaxGlyphY) / Math.max(Math.round(pFont.ascent * 1000), bbTop));
+		int bbBottom = ((pFont.bBox == null) ? 0 : pFont.bBox.bottom);
+		float descentRatio = (((float) fMinGlyphY) / Math.min(Math.round(pFont.descent * 1000), bbBottom));
+		int bbHeight = ((pFont.bBox == null) ? 0 : -pFont.bBox.getHeight());
+		float heightRatio = (((float) (fMaxGlyphY - fMinGlyphY)) / Math.max(Math.round((pFont.ascent - pFont.descent) * 1000), bbHeight));
+		if (DEBUG_TYPE1_LOADING) {
+			System.out.println("Font indicated height is " + Math.round(pFont.descent * 1000) + "-" + Math.round(pFont.ascent * 1000) + ", bounding box is " + pFont.bBox);
+			System.out.println(" ==> height ratio is " + heightRatio + ", ascent ratio is " + ascentRatio + ", descent ratio is " + descentRatio);
+		}
+		
+		//	scale down glyphs if significantly taller than indicated ascent, and adjust descent as well, as font sizes go up for compensation
+		BufferedImage sAllGlyphs = null;
+		if ((1.5 < ascentRatio) && (charSet == VECTORIZED_OCR_DECODING)) {
+			pFont.scaleDownFactor = Math.round(ascentRatio);
+			System.out.println(" ==> scaling down glyphs by factor " + pFont.scaleDownFactor);
+			pFont.descent = Math.max(pFont.descent, (((float) fMinGlyphY) / (pFont.scaleDownFactor * 1000))); // descent is negative number ...
+			System.out.println(" ==> descent adjusted to " + Math.round(pFont.descent * 1000));
+			AffineTransform at = AffineTransform.getScaleInstance((1.0 / pFont.scaleDownFactor), (1.0 / pFont.scaleDownFactor));
+			sAllGlyphs = new BufferedImage(1500, 1500, BufferedImage.TYPE_BYTE_BINARY);
+			Graphics2D sagGr = sAllGlyphs.createGraphics();
+			sagGr.setColor(Color.WHITE);
+			sagGr.fillRect(0, 0, sAllGlyphs.getWidth(), sAllGlyphs.getHeight());
+			sagGr.setColor(Color.BLACK);
+			sagGr.translate(100, 900);
+			sagGr.scale(0.3, -0.3); // 300 x 300 for 1000 x 1000 PDF font space (font size 300)
+			sagGr.setStroke(new BasicStroke(5));
+			for (int c = 0; c < otrs.length; c++) {
+				if (otrs[c] == null)
+					continue;
+				otrs[c].path.transform(at);
+				sagGr.draw(otrs[c].path);
+			}
+			sagGr.dispose();
+		}
+		
+		//	make sure to accommodate ascent and descent (keeps glyphs of dash-only fonts in vertical position, and in proportion)
+//		maxCapHeight = Math.max(maxCapHeight, Math.round(pFont.ascent * 1000));
+//		maxDescent = Math.min(maxDescent, Math.round(pFont.descent * 1000));
+		maxCapHeight = Math.max(maxCapHeight, Math.max(Math.round(pFont.ascent * 1000), bbTop));
+		maxDescent = Math.min(maxDescent, Math.min(Math.min(Math.round(pFont.descent * 1000), bbBottom), Math.round((maxCapHeight * pFont.descent) / pFont.ascent)));
 		
 		//	set up rendering
 		int maxRenderSize = 300;
@@ -935,7 +1624,7 @@ public class PdfFontDecoder {
 		if (DEBUG_TYPE1_LOADING) System.out.println(" ==> scaledown factor is " + scale);
 		
 		//	generate images and match against named char
-		ImageDisplayDialog fidd = ((DEBUG_TYPE1_RENDRING || DEBUG_TYPE1_LOADING) ? new ImageDisplayDialog("Font " + pFont.name) : null);
+		ImageDisplayDialog fidd = ((DEBUG_TYPE1_RENEDRING || DEBUG_TYPE1_LOADING) ? new ImageDisplayDialog("Font " + pFont.name) : null);
 		pm.setInfo("   - decoding characters");
 		CharImage[] charImages = new CharImage[encoding.size()];
 		for (int c = 0; c < encoding.size(); c++) {
@@ -946,15 +1635,18 @@ public class PdfFontDecoder {
 			String chn = encoding.get(c).toString();
 			
 			CharImage chi = ((CharImage) pCharDecoder.plainCharCodesToImages.get(new Integer(c)));
+//			CharImage chi = ((CharImage) pCharDecoder.glyphKeysToImages.get(glyphKeys[c]));
 			if (chi != null) {
 				pm.setInfo("     - reusing previously rendered char " + c + " (" + chn + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
 				charImages[c] = chi;
-				pFont.setCharImage(c, chn, chi.img);
+				pFont.setCharImage(c, chn, chi.img, chi.path);
+//				pFont.setCharImage(glyphKeys[c], chi.img, chi.path);
 				continue;
 			}
 			
 //			if (!DEBUG_TYPE1_RENDRING && !pFont.usesCharCode(new Integer(c)) && (chn != null) && !pFont.usedCharNames.contains(chn)) {
-			if (!DEBUG_TYPE1_RENDRING && !pCharDecoder.usesChar(new Integer(c), chn)) {
+			if (!DEBUG_TYPE1_RENEDRING && !pCharDecoder.usesChar(new Integer(c), chn)) {
+//			if (!DEBUG_TYPE1_RENDRING && !pCharDecoder.usesGlyph(glyphKeys[c])) {
 				pm.setInfo("     - ignoring unused char " + c + " (" + chn + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
 				continue;
 			}
@@ -963,7 +1655,8 @@ public class PdfFontDecoder {
 			
 //			int chw = ((otrs[c].rWidth == 0) ? dWidth : (nWidth + otrs[c].rWidth));
 //			if (DEBUG_TYPE1_LOADING) System.out.println(" - char width is " + chw);
-			if (DEBUG_TYPE1_LOADING) System.out.println(" - stroke count is " + otrs[c].mCount);
+//			if (DEBUG_TYPE1_LOADING) System.out.println(" - stroke count is " + otrs[c].mCount);
+			if (DEBUG_TYPE1_LOADING) System.out.println(" - stroke count is " + otrs[c].segCount);
 			
 			//	check if char rendering possible (and in sane bounds)
 			if ((otrs[c].maxX <= otrs[c].minX) || (otrs[c].maxY <= otrs[c].minY)) {
@@ -979,7 +1672,8 @@ public class PdfFontDecoder {
 			//	render char
 			int mx = 8;
 			int my = ((mx * (maxCapHeight - maxDescent)) / (otrs[c].maxX - otrs[c].minX));
-			OpGraphicsType1 ogr = new OpGraphicsType1(
+//			OpGraphicsType1 ogr = new OpGraphicsType1(
+			OpGraphics ogr = new OpGraphics(
 					otrs[c].minX,
 					maxDescent,
 //					otrs[c].minY,
@@ -990,20 +1684,22 @@ public class PdfFontDecoder {
 							Math.round((scale * (maxCapHeight - maxDescent + my)) + (2 * glyphOutlineFillSafetyEdge)),
 							BufferedImage.TYPE_INT_RGB)
 					);
-			runFontType1Ops(charStringOps[c], ogr, otrs[c].isMultiPath, false, fidd, c, c, chn);
+			runFontType1Ops(charStringOps[c], ogr, otrs[c].isMultiPath, false, fidd, charCodes[c], c, chn, pFont.getUnicode(charCodes[c]));
 			if (DEBUG_TYPE1_LOADING) System.out.println(" - image rendered, size is " + ogr.img.getWidth() + "x" + ogr.img.getHeight() + ", OpGraphics height is " + ogr.height);
-			charImages[c] = new CharImage(ogr.img, Math.round(((float) (maxCapHeight * ogr.img.getHeight())) / (maxCapHeight - maxDescent)));
+			charImages[c] = new CharImage(ogr.img, Math.round(((float) (maxCapHeight * ogr.img.getHeight())) / (maxCapHeight - maxDescent)), otrs[c].path, (otrs[c].maxX - otrs[c].minX));
 			if (DEBUG_TYPE1_LOADING) System.out.println(" - char image wrapped, baseline is " + charImages[c].baseline);
 			
 			//	store char image
-			pFont.setCharImage(charCodes[c].intValue(), chn, ogr.img);
+			pFont.setCharImage(charCodes[c].intValue(), chn, ogr.img, otrs[c].path);
+//			pFont.setCharImage(glyphKeys[c], ogr.img, otrs[c].path);
 			pCharDecoder.plainCharCodesToImages.put(new Integer(c), charImages[c]);
-			String chcUc = pFont.getUnicode(charCodes[c].intValue());
-			char chnUc = ((chn == null) ? ((char) 0) : StringUtils.getCharForName(chn));
-			if ((chcUc == null) && (chnUc != 0))
-				chcUc = ("" + chnUc);
-			if (chcUc != null)
-				pCharDecoder.plainCharCodesToUnicode.put(new Integer(c), chcUc);
+//			pCharDecoder.glyphKeysToImages.put(glyphKeys[c], charImages[c]);
+//			String chcUc = pFont.getUnicode(charCodes[c].intValue());
+//			char chnUc = ((chn == null) ? ((char) 0) : StringUtils.getCharForName(chn));
+//			if ((chcUc == null) && (chnUc != 0))
+//				chcUc = ("" + chnUc);
+//			if (chcUc != null)
+//				pCharDecoder.plainCharCodesToUnicode.put(new Integer(c), chcUc);
 			
 			//	check for char code synonymies
 			Integer ci = new Integer(c);
@@ -1011,13 +1707,47 @@ public class PdfFontDecoder {
 				pFont.setCharCodeSynonym(charCodes[c], charCodes[((Integer) charIndicesToSynonyms.get(ci)).intValue()]);
 		}
 		if ((fidd != null) && (fidd.getImageCount() != 0)) {
+			CountingSet charSizes = pFont.getCharSizes();
+			if (charSizes != null) {
+				System.out.println("   - font used in sizes " + charSizes);
+				int kCharHeight = (maxCapHeight - maxDescent);
+				CountingSet charHeights = new CountingSet(new TreeMap());
+				float charHeightSum = 0;
+				for (Iterator csit = charSizes.iterator(); csit.hasNext();) {
+					Float cs = ((Float) csit.next());
+					float charHeight = ((kCharHeight * cs.floatValue()) / 1000);
+					charHeights.add(new Float(charHeight), charSizes.getCount(cs));
+					charHeightSum += (charHeight * charSizes.getCount(cs));
+				}
+				System.out.println("   - char heights (at 72 DPI) " + charHeights);
+				System.out.println("   - average char height (at 72 DPI) " + (charHeightSum / charSizes.size()));
+			}
+			
+			agGr = allGlyphs.createGraphics();
+			agGr.setColor(Color.BLACK);
+			agGr.drawLine(0, 900, 1000, 900);
+			agGr.drawLine(0, 600, 1000, 600);
+			agGr.drawLine(100, 0, 100, 1500);
+			agGr.dispose();
+			fidd.addImage(allGlyphs, "All Paths");
+			
+			if (sAllGlyphs != null) {
+				Graphics2D sagGr = sAllGlyphs.createGraphics();
+				sagGr.setColor(Color.BLACK);
+				sagGr.drawLine(0, 900, 1000, 900);
+				sagGr.drawLine(0, 600, 1000, 600);
+				sagGr.drawLine(100, 0, 100, 1500);
+				sagGr.dispose();
+				fidd.addImage(sAllGlyphs, "All Paths (scaled)");
+			}
+			
 			fidd.setLocationRelativeTo(null);
 			fidd.setSize(600, 400);
 			fidd.setVisible(true);
 		}
 		
 		//	decode chars
-		decodeChars(pFont, pCharDecoder, chars, charCodes, charNames, charImages, rawCharCodes, -1, maxDescent, charSet, pm, DEBUG_TYPE1_LOADING);
+		decodeChars(pFont, pCharDecoder, chars, charCodes, charNames, glyphKeys, charImages/*, rawCharCodes*/, -1, maxDescent, charSet, pm, DEBUG_TYPE1_LOADING);
 	}
 	
 	private static byte[] decryptType1Data(byte[] encrypted, int r) {
@@ -1756,6 +2486,7 @@ public class PdfFontDecoder {
 		Integer[] charCodes = new Integer[Math.min(csContent.size(), csIndexContent.size())];
 		Integer[] rawCharCodes = new Integer[Math.min(csContent.size(), csIndexContent.size())];
 		String[] charNames = new String[Math.min(csContent.size(), csIndexContent.size())];
+		Object[] glyphKeys = new Object[Math.min(csContent.size(), csIndexContent.size())];
 		if (DEBUG_TYPE1C_LOADING) {
 			System.out.println("Loading character codes and names in font " + pFont.name + " (" + pFont + "):");
 			System.out.println(" - cs content is " + csContent);
@@ -1779,7 +2510,7 @@ public class PdfFontDecoder {
 				Integer chc = ((resolvedCodesOrCidMap == null) ? ((Integer) csContent.get(c)) : ((Integer) resolvedCodesOrCidMap.get(new Integer(c))));
 				if (chc == null)
 					continue;
-				if (DEBUG_TYPE1C_LOADING) System.out.println("   - found CID char code " + chc);
+				if (DEBUG_TYPE1C_LOADING) System.out.println("   - found CID char code " + chc + " in " + ((resolvedCodesOrCidMap == null) ? "index" : "map"));
 //				chars[c] = ((char) chc.intValue());
 				String ucStr = null; // TODO put UC mapping in CID Map instead !!!
 				if (pFont.ucMappings.containsKey(chc)) /* use unicode mapping if available */ {
@@ -1788,12 +2519,13 @@ public class PdfFontDecoder {
 						ucStr = null;
 				}
 				chars[c] = ((ucStr == null) ? ((char) chc.intValue()) : ucStr.charAt(0));
-				if (DEBUG_TYPE1C_LOADING) System.out.println("   - found char " + chars[c]);
+				if (DEBUG_TYPE1C_LOADING) System.out.println("   - found char '" + chars[c] + "' (" + Integer.toString(((int) chars[c]), 16) + ")");
 				charNames[c] = StringUtils.getCharName(chars[c]);
-				if (DEBUG_TYPE1C_LOADING) System.out.println("   - char name is " + charNames[c]);
+				if (DEBUG_TYPE1C_LOADING) System.out.println("   - char name is " + charNames[c] + " (from PostScript mapping)");
 //				charCodes[c] = new Integer((int) chars[c]);
 				charCodes[c] = chc;
 				rawCharCodes[c] = charCodes[c];
+				glyphKeys[c] = chc;
 			}
 			
 			//	Type 1c font mode
@@ -1805,13 +2537,20 @@ public class PdfFontDecoder {
 					continue;
 				if (DEBUG_TYPE1C_LOADING) System.out.println(" - found SID " + sid + " at " + c);
 				
-				if (charNames[c] == null)
+				String chnSource = null;
+				if (charNames[c] == null) {
 					charNames[c] = ((String) sidResolver.get(sid));
-				if ((charNames[c] == null) && (sid.intValue() >= sidResolver.size()) && ((sid.intValue() - sidResolver.size()) < sidIndex.size()))
+					chnSource = "default SID";
+				}
+				if ((charNames[c] == null) && (sid.intValue() >= sidResolver.size()) && ((sid.intValue() - sidResolver.size()) < sidIndex.size())) {
 					charNames[c] = ((String) sidIndex.get(sid.intValue() - sidResolver.size()));
-				if ((charNames[c] == null) && pFont.diffNameMappings.containsKey(new Integer(c)))
+					chnSource = "custom SID";
+				}
+				if ((charNames[c] == null) && pFont.diffNameMappings.containsKey(new Integer(c))) {
 					charNames[c] = ((String) pFont.diffNameMappings.get(new Integer(c)));
-				if (DEBUG_TYPE1C_LOADING) System.out.println("   char name is " + charNames[c]);
+					chnSource = "diff mapping";
+				}
+				if (DEBUG_TYPE1C_LOADING) System.out.println("   char name is " + charNames[c] + " (from " + chnSource + ")");
 				
 				chars[c] = StringUtils.getCharForName(charNames[c]);
 				if ((chars[c] == 0) && (charNames[c] != null)) {
@@ -1820,18 +2559,41 @@ public class PdfFontDecoder {
 					else if (charNames[c].indexOf('_') != -1)
 						chars[c] = StringUtils.getCharForName(charNames[c].replaceAll("_", ""));
 				}
-				if (DEBUG_TYPE1C_LOADING) System.out.println("   char is " + ((int) chars[c]));
+				if (DEBUG_TYPE1C_LOADING) {
+					System.out.println("   char is " + ((int) chars[c]));
+					System.out.println("   embedded char encoding is " + eDict.get(new Integer(c)));
+				}
 				
-				charCodes[c] = ((Integer) unresolvedCodes.get(charNames[c]));
-				if (charCodes[c] == null)
+				//	use external encoding over embedded encoding, overwrites acoording to spec
+				charCodes[c] = null;
+				String charCodeSource = null;
+				if (charCodes[c] == null) {
+					charCodes[c] = ((Integer) unresolvedCodes.get(charNames[c]));
+					if (charCodes[c] != null)
+						charCodeSource = "unresolved codes (non-PostFix named Encoding/Differences)";
+				}
+				if (charCodes[c] == null) {
 					charCodes[c] = ((Integer) resolvedCodesOrCidMap.get(charNames[c]));
+					if (charCodes[c] != null)
+						charCodeSource = "resolved codes (PostFix named Encoding/Differences)";
+				}
+				if (charCodes[c] == null) {
+					charCodes[c] = ((Integer) eDict.get(new Integer(c)));
+					if (charCodes[c] != null)
+						charCodeSource = "embedded encoding";
+				}
 				if (charCodes[c] == null) {
 					charCodes[c] = new Integer((int) StringUtils.getCharForName(charNames[c]));
 					if (charCodes[c].intValue() < 1)
 						continue;
+					charCodeSource = "PostFix char name";
 				}
 				rawCharCodes[c] = sid;
-				if (DEBUG_TYPE1C_LOADING) System.out.println("   char code is " + charCodes[c]);
+				glyphKeys[c] = charNames[c];
+				if (DEBUG_TYPE1C_LOADING) {
+					System.out.println("   char code is " + charCodes[c] + " from " + charCodeSource);
+					System.out.println(" ==> font glyph key maps to " + pFont.getCharCodeByGlyphKey(charNames[c]));
+				}
 			}
 		}
 		
@@ -1839,13 +2601,23 @@ public class PdfFontDecoder {
 		pm.setInfo("   - measuring characters");
 		int maxDescent = 0;
 		int maxCapHeight = 0;
-		OpTrackerType1[] otrs = new OpTrackerType1[Math.min(csIndexContent.size(), csContent.size())];
+//		OpTrackerType1[] otrs = new OpTrackerType1[Math.min(csIndexContent.size(), csContent.size())];
+		OpTracker[] otrs = new OpTracker[Math.min(csIndexContent.size(), csContent.size())];
 		HashMap renderingSequencesToCharIndices = new HashMap();
 		HashMap charIndicesToSynonyms = new HashMap();
+		BufferedImage allGlyphs = new BufferedImage(1500, 1500, BufferedImage.TYPE_BYTE_BINARY);
+		Graphics2D agGr = allGlyphs.createGraphics();
+		agGr.setColor(Color.WHITE);
+		agGr.fillRect(0, 0, allGlyphs.getWidth(), allGlyphs.getHeight());
+		agGr.setColor(Color.BLACK);
+		agGr.translate(100, 900);
+		agGr.scale(0.3, -0.3); // 300 x 300 for 1000 x 1000 PDF font space (font size 300)
+		agGr.setStroke(new BasicStroke(5));
 		for (int c = 0; c < Math.min(csIndexContent.size(), csContent.size()); c++) {
 			if (DEBUG_TYPE1C_LOADING) System.out.println(pFont.name + ", char " + c);
 			OpType1[] cs = ((OpType1[]) csIndexContent.get(c));
-			otrs[c] = new OpTrackerType1();
+//			otrs[c] = new OpTrackerType1();
+			otrs[c] = new OpTracker(DEBUG_TYPE1_RENEDRING && (DEBUG_TYPE1C_TARGET_SID == ((Integer) csContent.get(c)).intValue()));
 			
 			//	CID font mode
 			if (unresolvedCodes == null) {
@@ -1858,6 +2630,7 @@ public class PdfFontDecoder {
 //				String chn = StringUtils.getCharName(ch);
 				String chn = charNames[c];
 				CharImage chi = ((CharImage) pCharDecoder.plainCharCodesToImages.get(charCodes[c]));
+//				CharImage chi = ((CharImage) pCharDecoder.glyphKeysToImages.get(glyphKeys[c]));
 				if (chi != null) {
 					pm.setInfo("     - skipping previously rendered char " + c + " (" + chn + "/'" + ch + "'/'" + StringUtils.getNormalForm(ch) + "'/" + ((int) ch) + ")");
 					continue;
@@ -1880,6 +2653,7 @@ public class PdfFontDecoder {
 //				char ch = StringUtils.getCharForName(chn);
 				char ch = chars[c];
 				CharImage chi = ((CharImage) pCharDecoder.plainCharCodesToImages.get(sid));
+//				CharImage chi = ((CharImage) pCharDecoder.glyphKeysToImages.get(glyphKeys[c]));
 				if (chi != null) {
 					pm.setInfo("     - skipping previously rendered char " + c + " with SID " + sid + " (" + chn + "/'" + ch + "'/'" + StringUtils.getNormalForm(ch) + "'/" + ((int) ch) + ")");
 					continue;
@@ -1889,7 +2663,7 @@ public class PdfFontDecoder {
 			}
 			
 			//	render and measure glyph
-			runFontType1Ops(cs, otrs[c], false, false, null, -1, -1, null); // we don't know if multi-path or not so far ... 
+			runFontType1Ops(cs, otrs[c], false, false, null, -1, -1, null, null); // we don't know if multi-path or not so far ...
 			if (DEBUG_TYPE1C_LOADING) System.out.println("Descent is " + otrs[c].minY + ", height is " + otrs[c].maxY);
 			
 			//	update maximums (if glyph is in sane bounds, the usual being -250 to 750)
@@ -1898,6 +2672,7 @@ public class PdfFontDecoder {
 				maxDescent = Math.min(maxDescent, otrs[c].minY);
 				maxCapHeight = Math.max(maxCapHeight, otrs[c].maxY);
 			}
+			agGr.draw(otrs[c].path);
 			
 			//	index glyph rendering sequence to catch identical characters
 			String renderingSequence = otrs[c].ops.toString();
@@ -1907,9 +2682,81 @@ public class PdfFontDecoder {
 				charIndicesToSynonyms.put(new Integer(c), renderingSequencesToCharIndices.get(renderingSequence));
 //			else if ((charCodes[c] != null) && pFont.usesCharCode(charCodes[c]))
 			else if ((charCodes[c] != null) && pCharDecoder.usesChar(charCodes[c], null))
+//			else if (pCharDecoder.usesGlyph(glyphKeys[c]))
 				renderingSequencesToCharIndices.put(renderingSequence, new Integer(c));
 		}
+		agGr.dispose();
 		if (DEBUG_TYPE1C_LOADING) System.out.println("Max descent is " + maxDescent + ", max cap height is " + maxCapHeight);
+		
+		//	check rendered glyph path dimensions
+		int white = Color.WHITE.getRGB();
+		int minGlyphX = Integer.MAX_VALUE;
+		int maxGlyphX = 0;
+		int minGlyphY = Integer.MAX_VALUE;
+		int maxGlyphY = 0;
+		for (int x = 0; x < allGlyphs.getWidth(); x++) {
+			for (int y = 0; y < allGlyphs.getHeight(); y++) {
+				if (allGlyphs.getRGB(x, y) == white)
+					continue;
+				minGlyphX = Math.min(minGlyphX, x);
+				maxGlyphX = Math.max(maxGlyphX, x);
+				minGlyphY = Math.min(minGlyphY, y);
+				maxGlyphY = Math.max(maxGlyphY, y);
+			}
+		}
+		
+		//	scale back to font space, inverting back Y coordinate for comparison with font indicated measurements
+		int fMinGlyphX = (((minGlyphX - 100) * 10) / 3);
+		int fMaxGlyphX = (((maxGlyphX - 100) * 10) / 3);
+		int fMinGlyphY = (((maxGlyphY - 900) * 10) / -3);
+		int fMaxGlyphY = (((minGlyphY - 900) * 10) / -3);
+		if (DEBUG_TYPE1C_LOADING) {
+			System.out.println("Glyph extent is " + minGlyphX + "-" + maxGlyphX + " by " + minGlyphY + "-" + maxGlyphY);
+			System.out.println(" ==> " + fMinGlyphX + "-" + fMaxGlyphX + " by " + fMinGlyphY + "-" + fMaxGlyphY);
+		}
+		
+		//	compare measured glyph extents to font indicated ascent and descent
+		int bbTop = ((pFont.bBox == null) ? 0 : pFont.bBox.top);
+		float ascentRatio = (((float) fMaxGlyphY) / Math.max(Math.round(pFont.ascent * 1000), bbTop));
+		int bbBottom = ((pFont.bBox == null) ? 0 : pFont.bBox.bottom);
+		float descentRatio = (((float) fMinGlyphY) / Math.min(Math.round(pFont.descent * 1000), bbBottom));
+		int bbHeight = ((pFont.bBox == null) ? 0 : -pFont.bBox.getHeight());
+		float heightRatio = (((float) (fMaxGlyphY - fMinGlyphY)) / Math.max(Math.round((pFont.ascent - pFont.descent) * 1000), bbHeight));
+		if (DEBUG_TYPE1C_LOADING) {
+			System.out.println("Font indicated height is " + Math.round(pFont.descent * 1000) + "-" + Math.round(pFont.ascent * 1000) + ", bounding box is " + pFont.bBox);
+			System.out.println(" ==> height ratio is " + heightRatio + ", ascent ratio is " + ascentRatio + ", descent ratio is " + descentRatio);
+		}
+		
+		//	scale down glyphs if significantly taller than indicated ascent, and adjust descent as well, as font sizes go up for compensation
+		BufferedImage sAllGlyphs = null;
+		if ((1.5 < ascentRatio) && (charSet == VECTORIZED_OCR_DECODING)) {
+			pFont.scaleDownFactor = Math.round(ascentRatio);
+			System.out.println(" ==> scaling down glyphs by factor " + pFont.scaleDownFactor);
+			pFont.descent = Math.max(pFont.descent, (((float) fMinGlyphY) / (pFont.scaleDownFactor * 1000))); // descent is negative number ...
+			System.out.println(" ==> descent adjusted to " + Math.round(pFont.descent * 1000));
+			AffineTransform at = AffineTransform.getScaleInstance((1.0 / pFont.scaleDownFactor), (1.0 / pFont.scaleDownFactor));
+			sAllGlyphs = new BufferedImage(1500, 1500, BufferedImage.TYPE_BYTE_BINARY);
+			Graphics2D sagGr = sAllGlyphs.createGraphics();
+			sagGr.setColor(Color.WHITE);
+			sagGr.fillRect(0, 0, sAllGlyphs.getWidth(), sAllGlyphs.getHeight());
+			sagGr.setColor(Color.BLACK);
+			sagGr.translate(100, 900);
+			sagGr.scale(0.3, -0.3); // 300 x 300 for 1000 x 1000 PDF font space (font size 300)
+			sagGr.setStroke(new BasicStroke(5));
+			for (int c = 0; c < otrs.length; c++) {
+				if (otrs[c] == null)
+					continue;
+				otrs[c].path.transform(at);
+				sagGr.draw(otrs[c].path);
+			}
+			sagGr.dispose();
+		}
+		
+		//	make sure to accommodate ascent and descent (keeps glyphs of dash-only fonts in vertical position, and in proportion)
+//		maxCapHeight = Math.max(maxCapHeight, Math.round(pFont.ascent * 1000));
+//		maxDescent = Math.min(maxDescent, Math.round(pFont.descent * 1000));
+		maxCapHeight = Math.max(maxCapHeight, Math.max(Math.round(pFont.ascent * 1000), bbTop));
+		maxDescent = Math.min(maxDescent, Math.min(Math.min(Math.round(pFont.descent * 1000), bbBottom), Math.round((maxCapHeight * pFont.descent) / pFont.ascent)));
 		
 		//	set up rendering
 		int maxRenderSize = 300;
@@ -1921,7 +2768,7 @@ public class PdfFontDecoder {
 		//	generate images and match against named char
 		pm.setInfo("   - decoding characters");
 		CharImage[] charImages = new CharImage[Math.min(csContent.size(), csIndexContent.size())];
-		ImageDisplayDialog fidd = ((DEBUG_TYPE1_RENDRING || DEBUG_TYPE1C_LOADING) ? new ImageDisplayDialog("Font " + pFont.name) : null);
+		ImageDisplayDialog fidd = ((DEBUG_TYPE1_RENEDRING || DEBUG_TYPE1C_LOADING) ? new ImageDisplayDialog("Font " + pFont.name) : null);
 		for (int c = 0; c < Math.min(csContent.size(), csIndexContent.size()); c++) {
 			Integer sid;
 			
@@ -1929,10 +2776,12 @@ public class PdfFontDecoder {
 			if (unresolvedCodes == null) {
 				sid = new Integer(-1);
 				CharImage chi = ((CharImage) pCharDecoder.plainCharCodesToImages.get(charCodes[c]));
+//				CharImage chi = ((CharImage) pCharDecoder.glyphKeysToImages.get(glyphKeys[c]));
 				if (chi != null) {
 					pm.setInfo("     - reusing previously rendered char " + c + " with code " + charCodes[c] + " (" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
 					charImages[c] = chi;
-					pFont.setCharImage(charCodes[c].intValue(), charNames[c], chi.img);
+					pFont.setCharImage(charCodes[c].intValue(), charNames[c], chi.img, chi.path);
+//					pFont.setCharImage(glyphKeys[c], chi.img, chi.path);
 					continue;
 				}
 			}
@@ -1945,18 +2794,21 @@ public class PdfFontDecoder {
 				if ((0 < DEBUG_TYPE1C_TARGET_SID) && (sid.intValue() != DEBUG_TYPE1C_TARGET_SID))
 					continue;
 //				if (!DEBUG_TYPE1_RENDRING && !pFont.usesCharCode(new Integer(c)) && !pFont.usesCharCode(new Integer((int) chars[c])) && (charNames[c] != null) && !pFont.usedCharNames.contains(charNames[c])) {
-				if (!DEBUG_TYPE1_RENDRING && !pCharDecoder.usesChar(new Integer(c), charNames[c]) && !pCharDecoder.usesChar(new Integer((int) chars[c]), charNames[c])) {
+				if (!DEBUG_TYPE1_RENEDRING && !pCharDecoder.usesChar(new Integer(c), charNames[c]) && !pCharDecoder.usesChar(new Integer((int) chars[c]), charNames[c])) {
+//				if (!DEBUG_TYPE1_RENDRING && !pCharDecoder.usesGlyph(glyphKeys[c])) {
 					pm.setInfo("     - ignoring unused char " + c + " with SID " + sid + " (" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
 					continue;
 				}
 				CharImage chi = ((CharImage) pCharDecoder.plainCharCodesToImages.get(sid));
+//				CharImage chi = ((CharImage) pCharDecoder.glyphKeysToImages.get(glyphKeys[c]));
 				if (chi != null) {
 					pm.setInfo("     - reusing previously rendered char " + c + " with SID " + sid + " (" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
 					charImages[c] = chi;
 					Integer chc = ((Integer) resolvedCodesOrCidMap.get(charNames[c]));
 					if (chc == null)
 						chc = ((Integer) unresolvedCodes.get(charNames[c]));
-					pFont.setCharImage(((chc == null) ? ((int) chars[c]) : chc.intValue()), charNames[c], chi.img);
+					pFont.setCharImage(((chc == null) ? ((int) chars[c]) : chc.intValue()), charNames[c], chi.img, chi.path);
+//					pFont.setCharImage(glyphKeys[c], chi.img, chi.path);
 					continue;
 				}
 				pm.setInfo("     - decoding char " + c + " with SID " + sid + " (" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
@@ -1964,16 +2816,27 @@ public class PdfFontDecoder {
 			}
 			int chw = ((otrs[c].rWidth == 0) ? dWidth : (nWidth + otrs[c].rWidth));
 			if (DEBUG_TYPE1C_LOADING) System.out.println(" - char width is " + chw);
-			if (DEBUG_TYPE1C_LOADING) System.out.println(" - stroke count is " + otrs[c].mCount);
+//			if (DEBUG_TYPE1C_LOADING) System.out.println(" - stroke count is " + otrs[c].mCount);
+			if (DEBUG_TYPE1C_LOADING) System.out.println(" - stroke count is " + otrs[c].segCount);
 			
 			//	check if char rendering possible (and in sane bounds)
 			if ((otrs[c].maxX <= otrs[c].minX) || (otrs[c].maxY <= otrs[c].minY)) {
 				if (DEBUG_TYPE1C_LOADING) System.out.println(" ==> unsensible char dimensions: " + otrs[c].minX + "-" + otrs[c].maxX + "x" + otrs[c].minY + "-" + otrs[c].maxY);
 				continue;
 			}
-			if ((2500 < (otrs[c].maxX - otrs[c].minX)) || (2500 < (otrs[c].maxY - otrs[c].minY))) {
+			if ((2000 < (otrs[c].maxX - otrs[c].minX)) || (2000 < (otrs[c].maxY - otrs[c].minY))) {
 				if (DEBUG_TYPE1C_LOADING) System.out.println(" ==> insane char dimensions: " + otrs[c].minX + "-" + otrs[c].maxX + "x" + otrs[c].minY + "-" + otrs[c].maxY);
-				continue;
+				if (DEBUG_TYPE1C_LOADING) System.out.println(" - actual char dimensions: " + otrs[c].minPaintX + "-" + otrs[c].maxX + "x" + otrs[c].minPaintY + "-" + otrs[c].maxY);
+				CharUsageStats cus = pFont.getCharUsageStats(charCodes[c]);
+				if (cus == null)
+					System.out.println("   - no predecessors or successors");
+				else {
+					System.out.println("   - " + cus.predecessors.elementCount() + " distinct predecessors in " + cus.predecessors.size() + " occurrences");
+					System.out.println("   - " + cus.successors.elementCount() + " distinct successors in " + cus.successors.size() + " occurrences");
+					System.out.println("   - used in sizes " + pFont.getCharUsageSizes(charCodes[c]));
+					System.out.println("   - font used in sizes " + pFont.getCharSizes());
+				}
+//				continue;
 			}
 			
 			//	render char
@@ -1981,7 +2844,8 @@ public class PdfFontDecoder {
 			int mx = 8;
 			int my = ((mx * (maxCapHeight - maxDescent)) / (otrs[c].maxX - otrs[c].minX));
 			if (DEBUG_TYPE1C_LOADING) System.out.println(" - image size is " + Math.round((scale * (otrs[c].maxX - otrs[c].minX + mx)) + (2 * glyphOutlineFillSafetyEdge)) + "x" + Math.round((scale * (maxCapHeight - maxDescent + my)) + (2 * glyphOutlineFillSafetyEdge)));
-			OpGraphicsType1 ogr = new OpGraphicsType1(
+//			OpGraphicsType1 ogr = new OpGraphicsType1(
+			OpGraphics ogr = new OpGraphics(
 					otrs[c].minX,
 					maxDescent,
 					(maxCapHeight - maxDescent + (my / 2)),
@@ -1991,22 +2855,24 @@ public class PdfFontDecoder {
 							Math.round((scale * (maxCapHeight - maxDescent + my)) + (2 * glyphOutlineFillSafetyEdge)),
 							BufferedImage.TYPE_INT_RGB)
 					);
-			runFontType1Ops(cs, ogr, otrs[c].isMultiPath, (0 < DEBUG_TYPE1C_TARGET_SID), fidd, c, sid.intValue(), charNames[c]);
+			runFontType1Ops(cs, ogr, otrs[c].isMultiPath, (0 < DEBUG_TYPE1C_TARGET_SID), fidd, charCodes[c], sid.intValue(), charNames[c], pFont.getUnicode(charCodes[c]));
 			if (DEBUG_TYPE1C_LOADING) System.out.println(" - image rendered, size is " + ogr.img.getWidth() + "x" + ogr.img.getHeight() + ", OpGraphics height is " + ogr.height);
-			charImages[c] = new CharImage(ogr.img, Math.round(((float) (maxCapHeight * ogr.img.getHeight())) / (maxCapHeight - maxDescent)));
+			charImages[c] = new CharImage(ogr.img, Math.round(((float) (maxCapHeight * ogr.img.getHeight())) / (maxCapHeight - maxDescent)), otrs[c].path, (otrs[c].maxX - otrs[c].minX));
 			if (DEBUG_TYPE1C_LOADING) System.out.println(" - char image wrapped, baseline is " + charImages[c].baseline);
 			
 			//	CID font mode
 			if (unresolvedCodes == null) {
 //				pFont.setCharImage(((int) chars[c]), charNames[c], ogr.img);
-				pFont.setCharImage(charCodes[c].intValue(), charNames[c], ogr.img);
+				pFont.setCharImage(charCodes[c].intValue(), charNames[c], ogr.img, otrs[c].path);
+//				pFont.setCharImage(glyphKeys[c], ogr.img, otrs[c].path);
 				pCharDecoder.plainCharCodesToImages.put(charCodes[c], charImages[c]);
-				String chcUc = pFont.getUnicode(charCodes[c].intValue());
-				char chnUc = ((charNames[c] == null) ? ((char) 0) : StringUtils.getCharForName(charNames[c]));
-				if ((chcUc == null) && (chnUc != 0))
-					chcUc = ("" + chnUc);
-				if (chcUc != null)
-					pCharDecoder.plainCharCodesToUnicode.put(charCodes[c], chcUc);
+//				pCharDecoder.glyphKeysToImages.put(glyphKeys[c], charImages[c]);
+//				String chcUc = pFont.getUnicode(charCodes[c].intValue());
+//				char chnUc = ((charNames[c] == null) ? ((char) 0) : StringUtils.getCharForName(charNames[c]));
+//				if ((chcUc == null) && (chnUc != 0))
+//					chcUc = ("" + chnUc);
+//				if (chcUc != null)
+//					pCharDecoder.plainCharCodesToUnicode.put(charCodes[c], chcUc);
 			}
 			
 			//	Type 1c font mode
@@ -2014,14 +2880,16 @@ public class PdfFontDecoder {
 				Integer chc = ((Integer) resolvedCodesOrCidMap.get(charNames[c]));
 				if (chc == null)
 					chc = ((Integer) unresolvedCodes.get(charNames[c]));
-				pFont.setCharImage(((chc == null) ? ((int) chars[c]) : chc.intValue()), charNames[c], ogr.img);
+				pFont.setCharImage(((chc == null) ? ((int) chars[c]) : chc.intValue()), charNames[c], ogr.img, otrs[c].path);
+//				pFont.setCharImage(glyphKeys[c], ogr.img, otrs[c].path);
 				pCharDecoder.plainCharCodesToImages.put(sid, charImages[c]);
-				String chcUc = pFont.getUnicode((chc == null) ? ((int) chars[c]) : chc.intValue());
-				char chnUc = ((charNames[c] == null) ? ((char) 0) : StringUtils.getCharForName(charNames[c]));
-				if ((chcUc == null) && (chnUc != 0))
-					chcUc = ("" + chnUc);
-				if (chcUc != null)
-					pCharDecoder.plainCharCodesToUnicode.put(sid, chcUc);
+//				pCharDecoder.glyphKeysToImages.put(glyphKeys[c], charImages[c]);
+//				String chcUc = pFont.getUnicode((chc == null) ? ((int) chars[c]) : chc.intValue());
+//				char chnUc = ((charNames[c] == null) ? ((char) 0) : StringUtils.getCharForName(charNames[c]));
+//				if ((chcUc == null) && (chnUc != 0))
+//					chcUc = ("" + chnUc);
+//				if (chcUc != null)
+//					pCharDecoder.plainCharCodesToUnicode.put(sid, chcUc);
 //				pFont.setCharImage(((chc == null) ? (c + 31) : chc.intValue()), charNames[c], ogr.img);
 //				pFont.setCharImage(((chc == null) ? (c + ((c < (127-31) ? 31 : (31 + 34)))) : chc.intValue()), charNames[c], ogr.img);
 //				pFont.setCharImage(((chc == null) ? (c + firstCharCode - firstSid) : chc.intValue()), charNames[c], ogr.img);
@@ -2034,6 +2902,40 @@ public class PdfFontDecoder {
 			}
 		}
 		if ((fidd != null) && (fidd.getImageCount() != 0)) {
+			CountingSet charSizes = pFont.getCharSizes();
+			if (charSizes != null) {
+				System.out.println("   - font used in sizes " + charSizes);
+				int kCharHeight = (maxCapHeight - maxDescent);
+				CountingSet charHeights = new CountingSet(new TreeMap());
+				float charHeightSum = 0;
+				for (Iterator csit = charSizes.iterator(); csit.hasNext();) {
+					Float cs = ((Float) csit.next());
+					float charHeight = ((kCharHeight * cs.floatValue()) / 1000);
+					charHeights.add(new Float(charHeight), charSizes.getCount(cs));
+					charHeightSum += (charHeight * charSizes.getCount(cs));
+				}
+				System.out.println("   - char heights (at 72 DPI) " + charHeights);
+				System.out.println("   - average char height (at 72 DPI) " + (charHeightSum / charSizes.size()));
+			}
+			
+			agGr = allGlyphs.createGraphics();
+			agGr.setColor(Color.BLACK);
+			agGr.drawLine(0, 900, 1000, 900);
+			agGr.drawLine(0, 600, 1000, 600);
+			agGr.drawLine(100, 0, 100, 1500);
+			agGr.dispose();
+			fidd.addImage(allGlyphs, "All Paths");
+			
+			if (sAllGlyphs != null) {
+				Graphics2D sagGr = sAllGlyphs.createGraphics();
+				sagGr.setColor(Color.BLACK);
+				sagGr.drawLine(0, 900, 1000, 900);
+				sagGr.drawLine(0, 600, 1000, 600);
+				sagGr.drawLine(100, 0, 100, 1500);
+				sagGr.dispose();
+				fidd.addImage(sAllGlyphs, "All Paths (scaled)");
+			}
+			
 			fidd.setLocationRelativeTo(null);
 			fidd.setSize(600, 400);
 			fidd.setVisible(true);
@@ -2047,174 +2949,16 @@ public class PdfFontDecoder {
 		}
 		
 		//	decode characters
-		decodeChars(pFont, pCharDecoder, chars, charCodes, charNames, charImages, rawCharCodes, dWidth, maxDescent, charSet, pm, DEBUG_TYPE1C_LOADING);
+		decodeChars(pFont, pCharDecoder, chars, charCodes, charNames, glyphKeys, charImages/*, rawCharCodes*/, dWidth, maxDescent, charSet, pm, DEBUG_TYPE1C_LOADING);
 	}
 	
-	private static abstract class OpReceiverType1 {
-//		int iSideBearing = 0;
-//		int iUpBearing = 0;
-		float iWidth = 0;
-		float iHeight = 0;
-		int rWidth = 0;
-		int x = 0;
-		int y = 0;
-		abstract void moveToAbs(int x, int y);
-		abstract void moveTo(int dx, int dy);
-		abstract void lineTo(int dx, int dy);
-		abstract void curveTo(int dx1, int dy1, int dx2, int dy2, int dx3, int dy3);
-		abstract void closePath();
-	}
-	
-	private static class OpTrackerType1 extends OpReceiverType1 {
-//		String id = ("" + Math.random());
-		int minX = 0;
-		int minY = 0;
-		int minPaintX = Integer.MAX_VALUE;
-		int minPaintY = Integer.MAX_VALUE;
-		int maxX = 0;
-		int maxY = 0;
-		int mCount = 0;
-		boolean isMultiPath = false;
-		StringBuffer ops = new StringBuffer("Ops:");
-		void moveToAbs(int x, int y) {
-			this.x = x;
-			this.y = y;
-			this.ops.append(" MA" + x + "/" + y);
-		}
-		void moveTo(int dx, int dy) {
-			if (this.mCount != 0)
-				this.isMultiPath = true;
-			this.x += dx;
-			this.minX = Math.min(this.minX, this.x);
-			this.maxX = Math.max(this.maxX, this.x);
-			this.y += dy;
-			this.minY = Math.min(this.minY, this.y);
-			this.maxY = Math.max(this.maxY, this.y);
-			this.ops.append(" M" + dx + "/" + dy);
-//			System.out.println("Move " + this.id + " to " + dx + "/" + dy + ":");
-//			System.out.println(" " + this.minX + " < X < " + this.maxX);
-//			System.out.println(" " + this.minY + " < Y < " + this.maxY);
-		}
-		void lineTo(int dx, int dy) {
-			this.doLineTo(dx, dy);
-			this.ops.append(" L" + dx + "/" + dy);
-//			System.out.println("Line " + this.id + " to " + dx + "/" + dy + ":");
-//			System.out.println(" " + this.minX + " < X < " + this.maxX);
-//			System.out.println(" " + this.minY + " < Y < " + this.maxY);
-		}
-		void doLineTo(int dx, int dy) {
-			this.minPaintX = Math.min(this.minPaintX, this.x);
-			this.minPaintY = Math.min(this.minPaintY, this.y);
-			this.x += dx;
-			this.minX = Math.min(this.minX, this.x);
-			this.maxX = Math.max(this.maxX, this.x);
-			this.y += dy;
-			this.minY = Math.min(this.minY, this.y);
-			this.maxY = Math.max(this.maxY, this.y);
-			this.minPaintX = Math.min(this.minPaintX, this.x);
-			this.minPaintY = Math.min(this.minPaintY, this.y);
-			this.mCount++;
-//			System.out.println("Line " + this.id + " to " + dx + "/" + dy + ":");
-//			System.out.println(" " + this.minX + " < X < " + this.maxX);
-//			System.out.println(" " + this.minY + " < Y < " + this.maxY);
-		}
-		void curveTo(int dx1, int dy1, int dx2, int dy2, int dx3, int dy3) {
-			this.doLineTo(dx1, dy1);
-			this.doLineTo(dx2, dy2);
-			this.doLineTo(dx3, dy3);
-			this.ops.append(" C" + dx1 + "/" + dy1 + "," + dx2 + "/" + dy2 + "," + dx3 + "/" + dy3);
-		}
-		void closePath() {}
-	}
-	
-	private static class OpGraphicsType1 extends OpReceiverType1 {
-		int minX;
-		int minY;
-		int height;
-		int sx = 0;
-		int sy = 0;
-		int lCount = 0;
-		BufferedImage img;
-		Graphics2D gr;
-		private float scale = 1.0f;
-		OpGraphicsType1(int minX, int minY, int height, float scale, BufferedImage img) {
-			this.minX = minX;
-			this.minY = minY;
-			this.height = height;
-			this.scale = scale;
-			this.setImage(img);
-			this.gr.setColor(Color.WHITE);
-			this.gr.fillRect(0, 0, img.getWidth(), img.getHeight());
-			this.gr.setColor(Color.BLACK);
-		}
-		void setImage(BufferedImage img) {
-			this.img = img;
-			this.gr = this.img.createGraphics();
-		}
-		void lineTo(int dx, int dy) {
-			if (this.lCount == 0) {
-				this.sx = this.x;
-				this.sy = this.y;
-			}
-			this.gr.drawLine(
-					Math.round((this.scale * (this.x - this.minX)) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.height - (this.y - this.minY))) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.x - this.minX + dx)) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.height - (this.y - this.minY + dy))) + glyphOutlineFillSafetyEdge)
-				);
-			this.x += dx;
-			this.y += dy;
-			this.lCount++;
-		}
-		void curveTo(int dx1, int dy1, int dx2, int dy2, int dx3, int dy3) {
-			if (this.lCount == 0) {
-				this.sx = this.x;
-				this.sy = this.y;
-			}
-			CubicCurve2D.Float cc = new CubicCurve2D.Float();
-			cc.setCurve(
-					Math.round((this.scale * (this.x - this.minX)) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.height - (this.y - this.minY))) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.x - this.minX + dx1)) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.height - (this.y - this.minY + dy1))) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.x - this.minX + dx1 + dx2)) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.height - (this.y - this.minY + dy1 + dy2))) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.x - this.minX + dx1 + dx2 + dx3)) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.height - (this.y - this.minY + dy1 + dy2 + dy3))) + glyphOutlineFillSafetyEdge)
-				);
-			this.gr.draw(cc);
-			this.x += (dx1 + dx2 + dx3);
-			this.y += (dy1 + dy2 + dy3);
-			this.lCount++;
-		}
-		void moveToAbs(int x, int y) {
-			this.x = x;
-			this.y = y;
-		}
-		void moveTo(int dx, int dy) {
-			if (this.lCount != 0)
-				this.closePath();
-			this.lCount = 0;
-			this.x += dx;
-			this.y += dy;
-		}
-		void closePath() {
-			this.gr.drawLine(
-					Math.round((this.scale * (this.x - this.minX)) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.height - (this.y - this.minY))) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.sx - this.minX)) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.height - (this.sy - this.minY))) + glyphOutlineFillSafetyEdge)
-				);
-		}
-	}
-	
-	private static final boolean DEBUG_TYPE1_RENDRING = false;
+	private static final boolean DEBUG_TYPE1_RENEDRING = false;
 	private static final int DEBUG_TYPE1C_TARGET_SID = -1;
 	
-	private static void runFontType1Ops(OpType1[] ops, OpReceiverType1 opr, boolean isMultiPath, boolean show, ImageDisplayDialog fidd, int cc, int sid, String cn) {
-		ImageDisplayDialog idd = (("EnterTargetCharNameHere".equals(cn) && (opr instanceof OpGraphicsType1)) ? new ImageDisplayDialog("Rendering " + cc + " (" + cn + ")") : null);
+	private static void runFontType1Ops(OpType1[] ops, OpReceiver opr, boolean isMultiPath, boolean show, ImageDisplayDialog fidd, int cc, int sid, String cn, String cuc) {
+		ImageDisplayDialog idd = (("EnterTargetCharNameHere".equals(cn) && (opr instanceof OpGraphics)) ? new ImageDisplayDialog("Rendering " + cc + " (" + cn + ")") : null);
 		if (idd != null)
-			idd.setSize((((OpGraphicsType1) opr).img.getWidth() + 200), (((OpGraphicsType1) opr).img.getHeight() + 100));
+			idd.setSize((((OpGraphics) opr).img.getWidth() + 200), (((OpGraphics) opr).img.getHeight() + 100));
 		boolean emptyOp = false;
 		
 		for (int o = 0; o < ops.length; o++) {
@@ -2234,11 +2978,11 @@ public class PdfFontDecoder {
  */				
 				//	hstem, vstem, hstemhm, vstemhm, hstem3, or vstem3
 				if ((op == 1) || (op == 3) || (op == 18) || (op == 23) || (op == 1002) || (op == 1001)) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "<hints>", skipped, a, ops[o].args);
 					if ((o == 0) && ((ops[o].args.length % 2) == 1))
 						opr.rWidth += ops[o].args[a++].intValue();
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						System.out.println(" ==> " + opr.x + "/" + opr.y);
 					op = -1;
 				}
@@ -2246,9 +2990,9 @@ public class PdfFontDecoder {
 				//	dotsection |- dotsection (12 0) |-
 				//	brackets an outline section for the dots in letters such as 'i', 'j', and '!'. This is a hint command that indicates that a section of a charstring should be understood as describing such a feature, Chapter 6: CharStrings Dictionary 53 rather than as part of the main outline.
 				else if (op == 1000) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "<hints>", skipped, a, ops[o].args);
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						System.out.println(" ==> " + opr.x + "/" + opr.y);
 					op = -1;
 				}
@@ -2256,12 +3000,12 @@ public class PdfFontDecoder {
 				//	hsbw |- sbx wx hsbw (13) |-
 				//	sets the left sidebearing point at (sbx, 0) and sets the character width vector to (wx, 0) in character space. This command also sets the current point to (sbx, 0), but does not place the point in the character path.
 				else if (op == 13) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "hsbw", skipped, a, ops[o].args);
 					if (ops[o].fixedArgs && ((a+2) <= ops[o].args.length)) {
 						a = (ops[a].args.length - 2);
 						skipped = a;
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - skipped to parameter " + a);
 					}
 					if ((a + 2) <= ops[o].args.length) {
@@ -2270,7 +3014,7 @@ public class PdfFontDecoder {
 						opr.moveToAbs(ops[o].args[a++].intValue(), 0);
 						opr.iWidth = ops[o].args[a++].intValue();
 					}
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						System.out.println(" ==> " + opr.x + "/" + opr.y);
 					op = -1;
 				}
@@ -2278,12 +3022,12 @@ public class PdfFontDecoder {
 				//	sbw |- sbx sby wx wy sbw (12 7) |-
 				//	sets the left sidebearing point to (sbx, sby) and sets the character width vector to (wx, wy) in character space. This command also sets the current point to (sbx, sby), but does not place the point in the character path.
 				else if (op == 1007) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "sbw", skipped, a, ops[o].args);
 					if (ops[o].fixedArgs && ((a+4) <= ops[o].args.length)) {
 						a = (ops[o].args.length - 4);
 						skipped = a;
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - skipped to parameter " + a);
 					}
 					if ((a + 4) <= ops[o].args.length) {
@@ -2294,7 +3038,7 @@ public class PdfFontDecoder {
 						opr.iWidth = ops[o].args[a++].intValue();
 						opr.iHeight = ops[o].args[a++].intValue();
 					}
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						System.out.println(" ==> " + opr.x + "/" + opr.y);
 					op = -1;
 				}
@@ -2302,9 +3046,9 @@ public class PdfFontDecoder {
 				//	TODO seac |- asb adx ady bchar achar seac (12 6) |-
 				//	for standard encoding accented character, makes an accented character from two other characters in its font program. The asb argument is the x component of the left sidebearing of the accent; this value must be the same as the sidebearing value given in the hsbw or sbw command in the accent’s own charstring. The origin of the accent is placed at (adx, ady) relative to the origin of the base character. The bchar argument is the character code of the base character, and the achar argument is the character code of the accent character.
 				else if (op == 1006) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "seac", skipped, a, ops[o].args);
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						System.out.println(" ==> " + opr.x + "/" + opr.y);
 					op = -1;
 				}
@@ -2312,14 +3056,14 @@ public class PdfFontDecoder {
 				//	rmoveto |- dx1 dy1 rmoveto (21) |-
 				//	moves the current point to a position at the relative coordinates (dx1, dy1).
 				else if (op == 21) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "rmoveto", skipped, a, ops[o].args);
 					if (ops[o].args.length < 2)
 						emptyOp = true;
 					if (ops[o].fixedArgs && ((a+2) <= ops[o].args.length)) {
 						a = (ops[o].args.length - 2);
 						skipped = a;
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - skipped to parameter " + a);
 					}
 					else if ((o == 0) && ((a+2) < ops[o].args.length))
@@ -2328,7 +3072,7 @@ public class PdfFontDecoder {
 						a = (ops[o].args.length - 2);
 					if ((a + 2) <= ops[o].args.length)
 						opr.moveTo(ops[o].args[a++].intValue(), ops[o].args[a++].intValue());
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						System.out.println(" ==> " + opr.x + "/" + opr.y);
 					op = -1;
 				}
@@ -2349,21 +3093,21 @@ public class PdfFontDecoder {
 				//	hmoveto |- dx1 hmoveto (22) |-
 				//	moves the current point dx1 units in the horizontal direction. See Note 4.
 				else if (op == 22) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "hmoveto", skipped, a, ops[o].args);
 					if (ops[o].args.length < 1)
 						emptyOp = true;
 					if (ops[o].fixedArgs && ((a+1) <= ops[o].args.length)) {
 						a = (ops[o].args.length - 1);
 						skipped = a;
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - skipped to parameter " + a);
 					}
 					else if ((o == 0) && ((a+1) < ops[o].args.length))
 						opr.rWidth += ops[o].args[a++].intValue(); 
 					if ((a + 1) <= ops[o].args.length)
 						opr.moveTo(ops[o].args[a++].intValue(), 0);
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						System.out.println(" ==> " + opr.x + "/" + opr.y);
 					op = -1;
 				}
@@ -2371,9 +3115,9 @@ public class PdfFontDecoder {
 				//	TODO setcurrentpoint |- x y setcurrentpoint (12 33) |-
 				//	sets the current point in the Type 1 font format BuildChar to (x, y) in absolute character space coordinates without performing a charstring moveto command.
 				else if (op == 1033) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "setcurrentpoint", skipped, a, ops[o].args);
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						System.out.println(" ==> " + opr.x + "/" + opr.y);
 					op = -1;
 				}
@@ -2381,21 +3125,21 @@ public class PdfFontDecoder {
 				//	vmoveto |- dy1 vmoveto (4) |-
 				//	moves the current point dy1 units in the vertical direction. See Note 4.
 				else if (op == 4) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "vmoveto", skipped, a, ops[o].args);
 					if (ops[o].args.length < 1)
 						emptyOp = true;
 					if (ops[o].fixedArgs && ((a+1) <= ops[o].args.length)) {
 						a = (ops[o].args.length - 1);
 						skipped = a;
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - skipped to parameter " + a);
 					}
 					else if ((o == 0) && ((a+1) < ops[o].args.length))
 						opr.rWidth += ops[o].args[a++].intValue(); 
 					if ((a + 1) <= ops[o].args.length)
 						opr.moveTo(0, ops[o].args[a++].intValue());
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						System.out.println(" ==> " + opr.x + "/" + opr.y);
 					op = -1;
 				}
@@ -2403,7 +3147,7 @@ public class PdfFontDecoder {
 				//	rlineto |- {dxa dya}+ rlineto (5) |-
 				//	appends a line from the current point to a position at the relative coordinates dxa, dya. Additional rlineto operations are performed for all subsequent argument pairs. The number of lines is determined from the number of arguments on the stack.
 				else if (op == 5) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "rlineto", skipped, a, ops[o].args);
 					if (((ops[o].args.length - a) % 2) != 0)
 						a++;
@@ -2412,12 +3156,12 @@ public class PdfFontDecoder {
 					if (ops[o].fixedArgs && ((a+2) <= ops[o].args.length)) {
 						a = (ops[o].args.length - 2);
 						skipped = a;
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - skipped to parameter " + a);
 					}
 					if ((a+2) <= ops[o].args.length) {
 						opr.lineTo(ops[o].args[a++].intValue(), ops[o].args[a++].intValue());
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" ==> " + opr.x + "/" + opr.y);
 					}
 					else op = -1;
@@ -2425,7 +3169,7 @@ public class PdfFontDecoder {
 				
 				//	flexabslineto |- treshold axa aya flexabslineto (55) |- (converted from Type1 FLEX absolute end point)
 				else if (op == 55) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "flexabslineto", skipped, a, ops[o].args);
 					if (((ops[o].args.length - a) % 2) != 0)
 						a++;
@@ -2434,16 +3178,16 @@ public class PdfFontDecoder {
 					if (ops[o].fixedArgs && ((a+2) <= ops[o].args.length)) {
 						a = (ops[o].args.length - 2);
 						skipped = a;
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - skipped to parameter " + a);
 					}
 					if ((a+2) <= ops[o].args.length) {
 						int rx = (opr.x - ops[o].args[a++].intValue());
 						int ry = (opr.y - ops[o].args[a++].intValue());
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - result is rlineto(5): " + rx + " " + ry);
 						opr.lineTo(rx, ry);
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" ==> " + opr.x + "/" + opr.y);
 //						opr.lineTo(ops[o].args[a++].intValue(), ops[o].args[a++].intValue());
 					}
@@ -2455,19 +3199,19 @@ public class PdfFontDecoder {
 				//	With an odd number of arguments, subsequent argument pairs are interpreted as alternating values of dy and dx, for which additional lineto operators draw alternating vertical and horizontal lines.
 				//	With an even number of arguments, the arguments are interpreted as alternating horizontal and vertical lines. The number of lines is determined from the number of arguments on the stack.
 				else if (op == 6) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "hlineto", skipped, a, ops[o].args);
 					if (ops[o].args.length < 1)
 						emptyOp = true;
 					if (ops[o].fixedArgs && ((a+1) <= ops[o].args.length)) {
 						a = (ops[o].args.length - 1);
 						skipped = a;
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - skipped to parameter " + a);
 					}
 					if ((a+1) <= ops[o].args.length) {
 						opr.lineTo(ops[o].args[a++].intValue(), 0);
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" ==> " + opr.x + "/" + opr.y);
 						op = 7;
 					}
@@ -2479,19 +3223,19 @@ public class PdfFontDecoder {
 				//	With an odd number of arguments, subsequent argument pairs are interpreted as alternating values of dx and dy, for which additional lineto operators draw alternating horizontal and vertical lines.
 				//	With an even number of arguments, the arguments are interpreted as alternating vertical and horizontal lines. The number of lines is determined from the number of arguments on the stack.
 				else if (op == 7) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "vlineto", skipped, a, ops[o].args);
 					if (ops[o].args.length < 1)
 						emptyOp = true;
 					if (ops[o].fixedArgs && ((a+1) <= ops[o].args.length)) {
 						a = (ops[o].args.length - 1);
 						skipped = a;
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - skipped to parameter " + a);
 					}
 					if ((a+1) <= ops[o].args.length) {
 						opr.lineTo(0, ops[o].args[a++].intValue());
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" ==> " + opr.x + "/" + opr.y);
 						op = 6;
 					}
@@ -2501,20 +3245,20 @@ public class PdfFontDecoder {
 				//	rrcurveto |- {dxa dya dxb dyb dxc dyc}+ rrcurveto (8) |-
 				//	appends a Bézier curve, defined by dxa...dyc, to the current point. For each subsequent set of six arguments, an additional curve is appended to the current point. The number of curve segments is determined from the number of arguments on the number stack and is limited only by the size of the number stack.
 				else if (op == 8) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "rrcurveto", skipped, a, ops[o].args);
 					
 					//	skip superfluous arguments
 					if (ops[o].fixedArgs && ((a+6) <= ops[o].args.length)) {
 						a = (ops[o].args.length - 6);
 						skipped = a;
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - skipped to parameter " + a);
 					}
 					else if (a == skipped) {
 						while ((a < ops[o].args.length) && (((ops[o].args.length - a) % 6) != 0))
 							a++;
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - skipped to parameter " + a);
 					}
 					if (ops[o].args.length < 6)
@@ -2523,7 +3267,7 @@ public class PdfFontDecoder {
 					//	execute op
 					if ((a+6) <= ops[o].args.length) {
 						opr.curveTo(ops[o].args[a++].intValue(), ops[o].args[a++].intValue(), ops[o].args[a++].intValue(), ops[o].args[a++].intValue(), ops[o].args[a++].intValue(), ops[o].args[a++].intValue());
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" ==> " + opr.x + "/" + opr.y);
 					}
 					else op = -1;
@@ -2532,7 +3276,7 @@ public class PdfFontDecoder {
 				//	hhcurveto |- dy1? {dxa dxb dyb dxc}+ hhcurveto (27) |-
 				//	appends one or more Bézier curves, as described by the dxa...dxc set of arguments, to the current point. For each curve, if there are 4 arguments, the curve starts and ends horizontal. The first curve need not start horizontal (the odd argument case). Note the argument order for the odd argument case.
 				else if (op == 27) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "hhcurveto", skipped, a, ops[o].args);
 					
 					//	skip superfluous arguments
@@ -2541,7 +3285,7 @@ public class PdfFontDecoder {
 							a++;
 							skipped++;
 						}
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - skipped to parameter " + a);
 					}
 					if (ops[o].args.length < 4)
@@ -2564,7 +3308,7 @@ public class PdfFontDecoder {
 						dx3 = ops[o].args[a++].intValue();
 						dy3 = 0;
 						opr.curveTo(dx1, dy1, dx2, dy2, dx3, dy3);
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" ==> " + opr.x + "/" + opr.y);
 					}
 					else op = -1;
@@ -2573,14 +3317,14 @@ public class PdfFontDecoder {
 				//	hvcurveto |- dx1 dx2 dy2 dy3 {dya dxb dyb dxc dxd dxe dye dyf}* dxf? hvcurveto (31) |- OR |- {dxa dxb dyb dyc dyd dxe dye dxf}+ dyf? hvcurveto (31) |-
 				//	appends one or more Bézier curves to the current point. The tangent for the first Bézier must be horizontal, and the second must be vertical (except as noted below). If there is a multiple of four arguments, the curve starts horizontal and ends vertical. Note that the curves alternate between start horizontal, end vertical, and start vertical, and end horizontal. The last curve (the odd argument case) need not end horizontal/vertical.
 				else if (op == 31) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "hvcurveto", skipped, a, ops[o].args);
 					
 					//	skip superfluous arguments
 					if (ops[o].fixedArgs && ((a+4) <= ops[o].args.length)) {
 						a = (ops[o].args.length - 4);
 						skipped = a;
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - skipped to parameter " + a);
 					}
 					else if (a == skipped) {
@@ -2588,7 +3332,7 @@ public class PdfFontDecoder {
 							a++;
 							skipped++;
 						}
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - skipped to parameter " + a);
 					}
 					if (ops[o].args.length < 4)
@@ -2616,7 +3360,7 @@ public class PdfFontDecoder {
 								dx3 = 0;
 							}
 							opr.curveTo(dx1, dy1, dx2, dy2, dx3, dy3);
-							if (DEBUG_TYPE1_RENDRING)
+							if (DEBUG_TYPE1_RENEDRING)
 								System.out.println(" ==> " + opr.x + "/" + opr.y);
 						}
 						else if ((a+8) <= ops[o].args.length) {
@@ -2646,7 +3390,7 @@ public class PdfFontDecoder {
 								dx3 = 0;
 							}
 							opr.curveTo(dx1, dy1, dx2, dy2, dx3, dy3);
-							if (DEBUG_TYPE1_RENDRING)
+							if (DEBUG_TYPE1_RENEDRING)
 								System.out.println(" ==> " + opr.x + "/" + opr.y);
 						}
 						else op = -1;
@@ -2677,7 +3421,7 @@ public class PdfFontDecoder {
 								dy3 = ops[o].args[a++].intValue();
 							else dy3 = 0;
 							opr.curveTo(dx1, dy1, dx2, dy2, dx3, dy3);
-							if (DEBUG_TYPE1_RENDRING)
+							if (DEBUG_TYPE1_RENEDRING)
 								System.out.println(" ==> " + opr.x + "/" + opr.y);
 						}
 						else op = -1;
@@ -2687,14 +3431,14 @@ public class PdfFontDecoder {
 				//	rcurveline |- {dxa dya dxb dyb dxc dyc}+ dxd dyd rcurveline (24) |-
 				//	is equivalent to one rrcurveto for each set of six arguments dxa...dyc, followed by exactly one rlineto using the dxd, dyd arguments. The number of curves is determined from the count on the argument stack.
 				else if (op == 24) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "rcurveline", skipped, a, ops[o].args);
 					
 					//	skip superfluous arguments
 					if (a == skipped) {
 						while ((a < ops[o].args.length) && (((ops[o].args.length - a) % 6) != 2))
 							a++;
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - skipped to parameter " + a);
 					}
 					if (ops[o].args.length < 8)
@@ -2703,12 +3447,12 @@ public class PdfFontDecoder {
 					//	execute op
 					while ((a+8) <= ops[o].args.length) {
 						opr.curveTo(ops[o].args[a++].intValue(), ops[o].args[a++].intValue(), ops[o].args[a++].intValue(), ops[o].args[a++].intValue(), ops[o].args[a++].intValue(), ops[o].args[a++].intValue());
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" ==> " + opr.x + "/" + opr.y);
 					}
 					if ((a+2) <= ops[o].args.length) {
 						opr.lineTo(ops[o].args[a++].intValue(), ops[o].args[a++].intValue());
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" ==> " + opr.x + "/" + opr.y);
 					}
 					op = -1;
@@ -2717,14 +3461,14 @@ public class PdfFontDecoder {
 				//	rlinecurve |- {dxa dya}+ dxb dyb dxc dyc dxd dyd rlinecurve (25) |-
 				//	is equivalent to one rlineto for each pair of arguments beyond the six arguments dxb...dyd needed for the one rrcurveto command. The number of lines is determined from the count of items on the argument stack.
 				else if (op == 25) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "rlinecurve", skipped, a, ops[o].args);
 					
 					//	skip superfluous arguments
 					if (a == skipped) {
 						while ((a < ops[o].args.length) && (((ops[o].args.length - a) % 2) != 0))
 							a++;
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - skipped to parameter " + a);
 					}
 					if (ops[o].args.length < 8)
@@ -2733,12 +3477,12 @@ public class PdfFontDecoder {
 					//	execute op
 					while ((a+8) <= ops[o].args.length) {
 						opr.lineTo(ops[o].args[a++].intValue(), ops[o].args[a++].intValue());
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" ==> " + opr.x + "/" + opr.y);
 					}
 					if ((a+6) <= ops[o].args.length) {
 						opr.curveTo(ops[o].args[a++].intValue(), ops[o].args[a++].intValue(), ops[o].args[a++].intValue(), ops[o].args[a++].intValue(), ops[o].args[a++].intValue(), ops[o].args[a++].intValue());
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" ==> " + opr.x + "/" + opr.y);
 					}
 					op = -1;
@@ -2747,14 +3491,14 @@ public class PdfFontDecoder {
 				//	vhcurveto |- dy1 dx2 dy2 dx3 {dxa dxb dyb dyc dyd dxe dye dxf}* dyf? vhcurveto (30) |- OR |- {dya dxb dyb dxc dxd dxe dye dyf}+ dxf? vhcurveto (30) |-
 				//	appends one or more Bézier curves to the current point, where the first tangent is vertical and the second tangent is horizontal. This command is the complement of hvcurveto; see the description of hvcurveto for more information.
 				else if (op == 30) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "vhcurveto", skipped, a, ops[o].args);
 					
 					//	skip superfluous arguments
 					if (ops[o].fixedArgs && ((a+4) <= ops[o].args.length)) {
 						a = (ops[o].args.length - 4);
 						skipped = a;
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - skipped to parameter " + a);
 					}
 					else if (a == skipped) {
@@ -2762,7 +3506,7 @@ public class PdfFontDecoder {
 							a++;
 							skipped++;
 						}
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - skipped to parameter " + a);
 					}
 					if (ops[o].args.length < 4)
@@ -2786,7 +3530,7 @@ public class PdfFontDecoder {
 								dy3 = ops[o].args[a++].intValue();
 							else dy3 = 0;
 							opr.curveTo(dx1, dy1, dx2, dy2, dx3, dy3);
-							if (DEBUG_TYPE1_RENDRING)
+							if (DEBUG_TYPE1_RENEDRING)
 								System.out.println(" ==> " + opr.x + "/" + opr.y);
 						}
 						else if ((a+8) <= ops[o].args.length) {
@@ -2812,7 +3556,7 @@ public class PdfFontDecoder {
 								dy3 = ops[o].args[a++].intValue();
 							else dy3 = 0;
 							opr.curveTo(dx1, dy1, dx2, dy2, dx3, dy3);
-							if (DEBUG_TYPE1_RENDRING)
+							if (DEBUG_TYPE1_RENEDRING)
 								System.out.println(" ==> " + opr.x + "/" + opr.y);
 						}
 						else op = -1;
@@ -2847,7 +3591,7 @@ public class PdfFontDecoder {
 								dx3 = 0;
 							}
 							opr.curveTo(dx1, dy1, dx2, dy2, dx3, dy3);
-							if (DEBUG_TYPE1_RENDRING)
+							if (DEBUG_TYPE1_RENEDRING)
 								System.out.println(" ==> " + opr.x + "/" + opr.y);
 						}
 						else op = -1;
@@ -2857,7 +3601,7 @@ public class PdfFontDecoder {
 				//	vvcurveto |- dx1? {dya dxb dyb dyc}+ vvcurveto (26) |-
 				//	appends one or more curves to the current point. If the argument count is a multiple of four, the curve starts and ends vertical. If the argument count is odd, the first curve does not begin with a vertical tangent.
 				else if (op == 26) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "vvcurveto", skipped, a, ops[o].args);
 					
 					//	skip superfluous arguments
@@ -2866,7 +3610,7 @@ public class PdfFontDecoder {
 							a++;
 							skipped++;
 						}
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" - skipped to parameter " + a);
 					}
 					if (ops[o].args.length < 4)
@@ -2889,7 +3633,7 @@ public class PdfFontDecoder {
 						dx3 = 0;
 						dy3 = ops[o].args[a++].intValue();
 						opr.curveTo(dx1, dy1, dx2, dy2, dx3, dy3);
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" ==> " + opr.x + "/" + opr.y);
 					}
 					else op = -1;
@@ -2899,7 +3643,7 @@ public class PdfFontDecoder {
 				//causes two Bézier curves, as described by the arguments (as shown in Figure 2 below), to be rendered as a straight line when the flex depth is less than fd /100 device pixels, and as curved lines when the flex depth is greater than or equal to fd/100 device pixels. The flex depth for a horizontal curve, as shown in Figure 2, is the distance from the join point to the line connecting the start and end points on the curve. If the curve is not exactly horizontal or vertical, it must be determined whether the curve is more horizontal or vertical by the method described in the flex1 description, below, and as illustrated in Figure 3.
 				//Note 5 In cases where some of the points have the same x or y coordinate as other points in the curves, arguments may be omitted by using one of the following forms of the flex operator, hflex, hflex1, or flex1.
 				else if (op == 1035) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "flex", skipped, a, ops[o].args);
 					
 					if (ops[o].args.length < 13)
@@ -2927,7 +3671,7 @@ public class PdfFontDecoder {
 						dx3 = ops[o].args[a++].intValue();
 						dy3 = ops[o].args[a++].intValue();
 						opr.curveTo(dx1, dy1, dx2, dy2, dx3, dy3);
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" ==> " + opr.x + "/" + opr.y);
 					}
 					else op = -1;
@@ -2939,7 +3683,7 @@ public class PdfFontDecoder {
 				//b) the joining point and the neighbor control points have the same y value.
 				//c) the flex depth is 50.
 				else if (op == 1034) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "hflex", skipped, a, ops[o].args);
 					
 					if (ops[o].args.length < 7)
@@ -2967,7 +3711,7 @@ public class PdfFontDecoder {
 						dx3 = ops[o].args[a++].intValue();
 						dy3 = 0;
 						opr.curveTo(dx1, dy1, dx2, dy2, dx3, dy3);
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" ==> " + opr.x + "/" + opr.y);
 					}
 					else op = -1;
@@ -2978,7 +3722,7 @@ public class PdfFontDecoder {
 				//a) the starting and ending points have the same y value,
 				//b) the joining point and the neighbor control points have the same y value.
 				else if (op == 1036) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "hflex1", skipped, a, ops[o].args);
 					
 					if (ops[o].args.length < 9)
@@ -3006,7 +3750,7 @@ public class PdfFontDecoder {
 						dx3 = ops[o].args[a++].intValue();
 						dy3 = 0;
 						opr.curveTo(dx1, dy1, dx2, dy2, dx3, dy3);
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" ==> " + opr.x + "/" + opr.y);
 					}
 					else op = -1;
@@ -3019,7 +3763,7 @@ public class PdfFontDecoder {
 				//a) the starting and ending points have the same x or y value,
 				//b) the flex depth is 50.
 				else if (op == 1037) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "flex1", skipped, a, ops[o].args);
 					
 					if (ops[o].args.length < 11)
@@ -3057,7 +3801,7 @@ public class PdfFontDecoder {
 							dy3 = ops[o].args[a++].intValue();
 						}
 						opr.curveTo(dx1, dy1, dx2, dy2, dx3, dy3);
-						if (DEBUG_TYPE1_RENDRING)
+						if (DEBUG_TYPE1_RENEDRING)
 							System.out.println(" ==> " + opr.x + "/" + opr.y);
 					}
 					else op = -1;
@@ -3066,34 +3810,34 @@ public class PdfFontDecoder {
 				//	endchar – endchar (14) |–
 				//	finishes a charstring outline definition, and must be the last operator in a character’s outline.
 				else if (op == 14) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "endchar", skipped, a, ops[o].args);
 					if ((o == 0) && (ops[o].args.length > 0))
 						opr.rWidth += ops[o].args[a++].intValue(); 
 					opr.closePath();
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						System.out.println(" ==> " + opr.x + "/" + opr.y);
 					op = -1;
 				}
 				
 				//	hintmask
 				else if (op == 19) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "hintmask", skipped, a, ops[o].args);
 					if ((o == 0) && (ops[o].args.length > 1))
 						opr.rWidth += ops[o].args[a++].intValue();
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						System.out.println(" ==> " + opr.x + "/" + opr.y);
 					op = -1;
 				}
 				
 				//	cntrmask
 				else if (op == 20) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "cntrmask", skipped, a, ops[o].args);
 					if ((o == 0) && (ops[o].args.length > 1))
 						opr.rWidth += ops[o].args[a++].intValue();
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						System.out.println(" ==> " + opr.x + "/" + opr.y);
 					op = -1;
 				}
@@ -3101,10 +3845,10 @@ public class PdfFontDecoder {
 				//	closepath |- closepath (9) |-
 				//	closepath closes a subpath. Adobe strongly recommends that all character subpaths end with a closepath command, otherwise when an outline is stroked (by setting PaintType equal to 2) you may get unexpected behavior where lines join. Note that, unlike the closepath command in the PostScript language, this command does not reposition the current point. Any subsequent rmoveto must be relative to the current point in force before the Type 1 font format closepath command was given.
 				else if (op == 9) {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, "closepath", skipped, a, ops[o].args);
 					opr.closePath();
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						System.out.println(" ==> " + opr.x + "/" + opr.y);
 					op = -1;
 				}
@@ -3113,21 +3857,25 @@ public class PdfFontDecoder {
 				//Note 7 A character that does not have a path (e.g. a space character) may consist of an endchar operator preceded only by a width value. Although the width must be specified in the font, it may be specified as the defaultWidthX in the CFF data, in which case it should not be specified in the charstring. Also, it may appear in the charstring as the difference from nominalWidthX. Thus the smallest legal charstring consists of a single endchar operator.
 				//Note 8 endchar also has a deprecated function; see Appendix C, “Comaptibility and Deprecated Operators.”
 				else {
-					if (DEBUG_TYPE1_RENDRING)
+					if (DEBUG_TYPE1_RENEDRING)
 						printOp(op, null, skipped, a, ops[o].args);
 					op = -1;
 				}
 			}
 			
-			if (DEBUG_TYPE1_RENDRING && (opr instanceof OpGraphicsType1))
-				System.out.println(" ==> dot at (" + ((OpGraphicsType1) opr).x + "/" + ((OpGraphicsType1) opr).y + ")");
+//			if (DEBUG_TYPE1_RENDRING && (opr instanceof OpGraphicsType1))
+			if (DEBUG_TYPE1_RENEDRING && (opr instanceof OpGraphics))
+				System.out.println(" ==> dot at (" + opr.x + "/" + opr.y + ")");
 			
-			if (DEBUG_TYPE1_RENDRING && (show || (idd != null) /*|| emptyOp*/ || (idd != null)) && (opr instanceof OpGraphicsType1)) {
-				BufferedImage dImg = new BufferedImage(((OpGraphicsType1) opr).img.getWidth(), ((OpGraphicsType1) opr).img.getHeight(), BufferedImage.TYPE_INT_RGB);
+//			if (DEBUG_TYPE1_RENDRING && (show || (idd != null) /*|| emptyOp*/ || (idd != null)) && (opr instanceof OpGraphicsType1)) {
+			if (DEBUG_TYPE1_RENEDRING && (show || (idd != null) /*|| emptyOp*/ || (idd != null)) && (opr instanceof OpGraphics)) {
+//				BufferedImage dImg = new BufferedImage(((OpGraphicsType1) opr).img.getWidth(), ((OpGraphicsType1) opr).img.getHeight(), BufferedImage.TYPE_INT_RGB);
+				BufferedImage dImg = new BufferedImage(((OpGraphics) opr).img.getWidth(), ((OpGraphics) opr).img.getHeight(), BufferedImage.TYPE_INT_RGB);
 				Graphics g = dImg.getGraphics();
-				g.drawImage(((OpGraphicsType1) opr).img, 0, 0, dImg.getWidth(), dImg.getHeight(), null);
+//				g.drawImage(((OpGraphicsType1) opr).img, 0, 0, dImg.getWidth(), dImg.getHeight(), null);
+				g.drawImage(((OpGraphics) opr).img, 0, 0, dImg.getWidth(), dImg.getHeight(), null);
 				g.setColor(Color.RED);
-				g.fillRect(((OpGraphicsType1) opr).x-2, ((OpGraphicsType1) opr).y-2, 5, 5);
+				g.fillRect(opr.x-2, opr.y-2, 5, 5);
 				if (idd == null) {
 					idd = new ImageDisplayDialog("Rendering Progress");
 					idd.setSize((dImg.getWidth() + 200), (dImg.getHeight() + 100));
@@ -3139,25 +3887,27 @@ public class PdfFontDecoder {
 		}
 		
 		//	only tracking, we're done here
-		if (opr instanceof OpTrackerType1)
+		if (opr instanceof OpTracker)
 			return;
 		
 		//	fill outline
-		fillGlyphOutline(((OpGraphicsType1) opr).img, ((OpGraphicsType1) opr).scale, show);
+		fillGlyphOutline(((OpGraphics) opr).img, ((OpGraphics) opr).scale, show);
 		
 		//	scale down image
 		int maxHeight = 100;
-		((OpGraphicsType1) opr).setImage(scaleImage(((OpGraphicsType1) opr).img, maxHeight));
+		((OpGraphics) opr).setImage(scaleImage(((OpGraphics) opr).img, maxHeight));
 		
 		//	display result for rendering tests
-		if (DEBUG_TYPE1_RENDRING && (show/* || emptyOp*/ || (idd != null))) {
+		if (DEBUG_TYPE1_RENEDRING && (show/* || emptyOp*/ || (idd != null))) {
 			if (idd != null) {
-				idd.addImage(((OpGraphicsType1) opr).img, "Result");
+//				idd.addImage(((OpGraphicsType1) opr).img, "Result");
+				idd.addImage(((OpGraphics) opr).img, "Result");
 				idd.setLocationRelativeTo(null);
 				idd.setVisible(true);
 			}
 			if (fidd != null) {
-				fidd.addImage(((OpGraphicsType1) opr).img, ("" + sid));
+//				fidd.addImage(((OpGraphicsType1) opr).img, ("" + sid));
+				fidd.addImage(((OpGraphics) opr).img, ("" + sid));
 				if (idd == null) {
 					fidd.setLocationRelativeTo(null);
 					fidd.setVisible(true);
@@ -3165,7 +3915,7 @@ public class PdfFontDecoder {
 			}
 		}
 		else if (fidd != null)
-			fidd.addImage(((OpGraphicsType1) opr).img, (cc + ": " + sid + " (" + cn + ")"));
+			fidd.addImage(((OpGraphics) opr).img, (cc + ": " + sid + " (" + cn + ", '" + cuc + "')"));
 	}
 	
 	private static final void printOp(int op, String opName, int skipped, int a, Number[] args) {
@@ -4076,7 +4826,7 @@ public class PdfFontDecoder {
 			this.name = name;
 			this.args = args;
 			this.fixedArgs = fixedArgs;
-			if (DEBUG_TYPE1C_LOADING || DEBUG_TYPE1_LOADING)
+			if (DEBUG_TYPE1_RENEDRING)
 				System.out.println(indent + "OpType1-" + op + ": '" + name + "' " + Arrays.toString(args));
 		}
 	}
@@ -4303,10 +5053,10 @@ FontName12 38//SID–, FD FontName
 		if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" - reading 'head' table of " + headBytes.length + " bytes");
 		int hVersion = readUnsigned(headBytes, headByteOffset, (headByteOffset+4));
 		headByteOffset += 4;
-		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("   - version is " + (((double) hVersion) / 65536));
+		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("   - version is " + (((double) hVersion) / 0x00010000));
 		int hFontVersion = readUnsigned(headBytes, headByteOffset, (headByteOffset+4));
 		headByteOffset += 4;
-		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("   - font version is " + (((double) hFontVersion) / 65536));
+		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("   - font version is " + (((double) hFontVersion) / 0x00010000));
 		int hCheckSumAdjustment = readUnsigned(headBytes, headByteOffset, (headByteOffset+4));
 		headByteOffset += 4;
 		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("   - check sum adjustment is " + hCheckSumAdjustment);
@@ -4366,6 +5116,38 @@ FontName12 38//SID–, FD FontName
 		int hGlyphDataFormat = readUnsigned(headBytes, headByteOffset, (headByteOffset+2));
 		headByteOffset += 2;
 		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("   - glyph data format is " + hGlyphDataFormat);
+//		
+//		//	TODO_once_required try and read 'post' table as well (contains PostScript char names, which might help decoding to Unicode)
+//		byte[] postBytes = ((byte[]) tables.get("post"));
+//		if (postBytes != null) {
+//			if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" - reading 'post' table of " + postBytes.length + " bytes");
+//			int postByteOffset = 0;
+//			int pVersion = readUnsigned(postBytes, postByteOffset, (postByteOffset+4));
+//			postByteOffset += 4;
+//			if (DEBUG_TRUE_TYPE_LOADING) System.out.println("   - version is " + Integer.toString(pVersion, 16).toUpperCase());
+//			int iAngle = readUnsigned(postBytes, postByteOffset, (postByteOffset+4));
+//			postByteOffset += 4;
+//			if (DEBUG_TRUE_TYPE_LOADING) System.out.println("   - italics angle is " + (((double) iAngle) / 0x00010000));
+//			int uPos = readUnsigned(postBytes, postByteOffset, (postByteOffset+2));
+//			postByteOffset += 2;
+//			if (DEBUG_TRUE_TYPE_LOADING) System.out.println("   - underline position is " + uPos);
+//			int uThick = readUnsigned(postBytes, postByteOffset, (postByteOffset+2));
+//			postByteOffset += 2;
+//			if (DEBUG_TRUE_TYPE_LOADING) System.out.println("   - underline thickness is " + uThick);
+//			int fPitch = readUnsigned(postBytes, postByteOffset, (postByteOffset+4));
+//			postByteOffset += 4;
+//			if (DEBUG_TRUE_TYPE_LOADING) System.out.println("   - fixed pitch is " + fPitch);
+//			int minMem42 = readUnsigned(postBytes, postByteOffset, (postByteOffset+4));
+//			postByteOffset += 4;
+//			int maxMem42 = readUnsigned(postBytes, postByteOffset, (postByteOffset+4));
+//			postByteOffset += 4;
+//			if (DEBUG_TRUE_TYPE_LOADING) System.out.println("   - mode 42 memory is " + minMem42 + "-" + maxMem42);
+//			int minMem1 = readUnsigned(postBytes, postByteOffset, (postByteOffset+4));
+//			postByteOffset += 4;
+//			int maxMem1 = readUnsigned(postBytes, postByteOffset, (postByteOffset+4));
+//			postByteOffset += 4;
+//			if (DEBUG_TRUE_TYPE_LOADING) System.out.println("   - mode 1 memory is " + minMem1 + "-" + maxMem1);
+//		}
 		
 		//	map glyph IDs to CIDs
 		HashMap cidsByGlyphIndex;
@@ -4375,7 +5157,15 @@ FontName12 38//SID–, FD FontName
 			cidsByGlyphIndex = new HashMap() {
 				public Object get(Object key) {
 					Object value = ((glyphIdsToCids == null) ? null : glyphIdsToCids.get(key));
-					return ((value == null) ? key : value);
+//					return ((value == null) ? key : value);
+					if (value == null) {
+						if (DEBUG_TRUE_TYPE_LOADING) System.out.println("Mapped glyph index " + key + " to itself as CID");
+						return key;
+					}
+					else {
+						if (DEBUG_TRUE_TYPE_LOADING) System.out.println("Mapped glyph index " + key + " to CID " + value);
+						return value;
+					}
 				}
 			};
 		}
@@ -4386,6 +5176,7 @@ FontName12 38//SID–, FD FontName
 				private HashSet values = new HashSet(); // need this for fast reverse lookup, to prevent same CID mapped to twice
 				public Object put(Object key, Object value) {
 					this.values.add(value);
+					if (DEBUG_TRUE_TYPE_LOADING) System.out.println("Mapping glyph index " + key + " to CID " + value);
 					return super.put(key, value);
 				}
 				public void clear() {
@@ -4499,6 +5290,7 @@ FontName12 38//SID–, FD FontName
 						Integer cid = new Integer(c);
 //						if (!pFont.usesCharCode(cid)) {
 						if (!pCharDecoder.usesChar(cid, null)) {
+//						if (!pCharDecoder.usesGlyph(cid)) {
 							if (DEBUG_TRUE_TYPE_LOADING) System.out.println("       - unused CID " + c + " not mapped to " + stGlyphIndex);
 							continue;
 						}
@@ -4576,8 +5368,8 @@ FontName12 38//SID–, FD FontName
 								if (DEBUG_TRUE_TYPE_LOADING) System.out.println("           ==> non-char ignoring");
 								continue;
 							}
-//							if (!pFont.usesCharCode(cid)) {
 							if (!pCharDecoder.usesChar(cid, null)) {
+//							if (!pCharDecoder.usesGlyph(cid)) {
 								if (DEBUG_TRUE_TYPE_LOADING) System.out.println("           ==> not used, skipped");
 								continue;
 							}
@@ -4755,25 +5547,44 @@ FontName12 38//SID–, FD FontName
 		if (glyphData.isEmpty())
 			return;
 		
+		//	tray up glyph keys
+		Object[] glyphKeys = new Object[glyphData.size()];
+		for (int c = 0; c < glyphData.size(); c++) {
+			GlyphDataTrueType glyph = ((GlyphDataTrueType) glyphData.get(c));
+			glyphKeys[c] = new Integer(glyph.cid);
+		}
+		
 		//	measure characters
 		pm.setInfo("   - measuring characters");
 		int maxDescent = 0;
 		int maxCapHeight = 0;
-		OpTrackerTrueType[] otrs = new OpTrackerTrueType[glyphData.size()];
+//		OpTrackerTrueType[] otrs = new OpTrackerTrueType[glyphData.size()];
+		OpTracker[] otrs = new OpTracker[glyphData.size()];
 		HashMap renderingSequencesToCharIndices = new HashMap();
 		HashMap charIndicesToSynonyms = new HashMap();
+		BufferedImage allGlyphs = new BufferedImage(1500, 1500, BufferedImage.TYPE_BYTE_BINARY);
+		Graphics2D agGr = allGlyphs.createGraphics();
+		agGr.setColor(Color.WHITE);
+		agGr.fillRect(0, 0, allGlyphs.getWidth(), allGlyphs.getHeight());
+		agGr.setColor(Color.BLACK);
+		agGr.translate(100, 900);
+		agGr.scale(0.3, -0.3); // 300 x 300 for 1000 x 1000 PDF font space (font size 300)
+		agGr.setStroke(new BasicStroke(5));
 		for (int c = 0; c < glyphData.size(); c++) {
 			GlyphDataTrueType glyph = ((GlyphDataTrueType) glyphData.get(c));
 			
 			CharImage chi = ((CharImage) pCharDecoder.plainCharCodesToImages.get(new Integer(glyph.gid)));
+//			CharImage chi = ((CharImage) pCharDecoder.glyphKeysToImages.get(glyphKeys[c]));
 			if (chi != null) {
 				pm.setInfo("     - skipping previously rendered char " + c + " with CID " + glyph.cid + " (" + pFont.getUnicode(glyph.cid) + ")");
 				continue;
 			}
 			
 			//	render glyph
-			otrs[c] = new OpTrackerTrueType();
+//			otrs[c] = new OpTrackerTrueType();
+			otrs[c] = new OpTracker(DEBUG_TRUE_TYPE_RENDERING && (DEBUG_TRUE_TYPE_TARGET_CID == glyph.cid));
 			pm.setInfo("     - measuring char " + c + " with CID " + glyph.cid + " (" + pFont.getUnicode(glyph.cid) + ")");
+			if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" ==> font glyph key maps to " + pFont.getCharCodeByGlyphKey(new Integer(glyph.cid)));
 			if (glyph instanceof SimpleGlyphDataTrueType)
 				runFontTrueTypeOps(((SimpleGlyphDataTrueType) glyph), false, otrs[c], false);
 			else runFontTrueTypeOps(((CompoundGlyphDataTrueType) glyph), glyphsByIndex, otrs[c], false);
@@ -4784,6 +5595,7 @@ FontName12 38//SID–, FD FontName
 			}
 			maxDescent = Math.min(maxDescent, otrs[c].minY);
 			maxCapHeight = Math.max(maxCapHeight, otrs[c].maxY);
+			agGr.draw(otrs[c].path);
 			
 			//	index glyph rendering sequence to catch identical characters
 			String renderingSequence = otrs[c].ops.toString();
@@ -4793,9 +5605,81 @@ FontName12 38//SID–, FD FontName
 				charIndicesToSynonyms.put(new Integer(c), renderingSequencesToCharIndices.get(renderingSequence));
 //			else if (pFont.usesCharCode(new Integer(c)))
 			else if (pCharDecoder.usesChar(new Integer(c), null))
+//			else if (pCharDecoder.usesGlyph(glyphKeys[c]))
 				renderingSequencesToCharIndices.put(renderingSequence, new Integer(c));
 		}
+		agGr.dispose();
 		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("Max descent is " + maxDescent + ", max cap height is " + maxCapHeight);
+		
+		//	check rendered glyph path dimensions
+		int white = Color.WHITE.getRGB(); // TODO make this a constant !!!
+		int minGlyphX = Integer.MAX_VALUE;
+		int maxGlyphX = 0;
+		int minGlyphY = Integer.MAX_VALUE;
+		int maxGlyphY = 0;
+		for (int x = 0; x < allGlyphs.getWidth(); x++) {
+			for (int y = 0; y < allGlyphs.getHeight(); y++) {
+				if (allGlyphs.getRGB(x, y) == white)
+					continue;
+				minGlyphX = Math.min(minGlyphX, x);
+				maxGlyphX = Math.max(maxGlyphX, x);
+				minGlyphY = Math.min(minGlyphY, y);
+				maxGlyphY = Math.max(maxGlyphY, y);
+			}
+		}
+		
+		//	scale back to font space, inverting back Y coordinate for comparison with font indicated measurements
+		int fMinGlyphX = (((minGlyphX - 100) * 10) / 3);
+		int fMaxGlyphX = (((maxGlyphX - 100) * 10) / 3);
+		int fMinGlyphY = (((maxGlyphY - 900) * 10) / -3);
+		int fMaxGlyphY = (((minGlyphY - 900) * 10) / -3);
+		if (DEBUG_TRUE_TYPE_LOADING) {
+			System.out.println("Glyph extent is " + minGlyphX + "-" + maxGlyphX + " by " + minGlyphY + "-" + maxGlyphY);
+			System.out.println(" ==> " + fMinGlyphX + "-" + fMaxGlyphX + " by " + fMinGlyphY + "-" + fMaxGlyphY);
+		}
+		
+		//	compare measured glyph extents to font indicated ascent and descent
+		int bbTop = ((pFont.bBox == null) ? 0 : pFont.bBox.top);
+		float ascentRatio = (((float) fMaxGlyphY) / Math.max(Math.round(pFont.ascent * 1000), bbTop));
+		int bbBottom = ((pFont.bBox == null) ? 0 : pFont.bBox.bottom);
+		float descentRatio = (((float) fMinGlyphY) / Math.min(Math.round(pFont.descent * 1000), bbBottom));
+		int bbHeight = ((pFont.bBox == null) ? 0 : -pFont.bBox.getHeight());
+		float heightRatio = (((float) (fMaxGlyphY - fMinGlyphY)) / Math.max(Math.round((pFont.ascent - pFont.descent) * 1000), bbHeight));
+		if (DEBUG_TRUE_TYPE_LOADING) {
+			System.out.println("Font indicated height is " + Math.round(pFont.descent * 1000) + "-" + Math.round(pFont.ascent * 1000) + ", bounding box is " + pFont.bBox);
+			System.out.println(" ==> height ratio is " + heightRatio + ", ascent ratio is " + ascentRatio + ", descent ratio is " + descentRatio);
+		}
+		
+		//	scale down glyphs if significantly taller than indicated ascent, and adjust descent as well, as font sizes go up for compensation
+		BufferedImage sAllGlyphs = null;
+		if ((1.5 < ascentRatio) && (charSet == VECTORIZED_OCR_DECODING)) {
+			pFont.scaleDownFactor = Math.round(ascentRatio);
+			System.out.println(" ==> scaling down glyphs by factor " + pFont.scaleDownFactor);
+			pFont.descent = Math.max(pFont.descent, (((float) fMinGlyphY) / (pFont.scaleDownFactor * 1000))); // descent is negative number ...
+			System.out.println(" ==> descent adjusted to " + Math.round(pFont.descent * 1000));
+			AffineTransform at = AffineTransform.getScaleInstance((1.0 / pFont.scaleDownFactor), (1.0 / pFont.scaleDownFactor));
+			sAllGlyphs = new BufferedImage(1500, 1500, BufferedImage.TYPE_BYTE_BINARY);
+			Graphics2D sagGr = sAllGlyphs.createGraphics();
+			sagGr.setColor(Color.WHITE);
+			sagGr.fillRect(0, 0, sAllGlyphs.getWidth(), sAllGlyphs.getHeight());
+			sagGr.setColor(Color.BLACK);
+			sagGr.translate(100, 900);
+			sagGr.scale(0.3, -0.3); // 300 x 300 for 1000 x 1000 PDF font space (font size 300)
+			sagGr.setStroke(new BasicStroke(5));
+			for (int c = 0; c < otrs.length; c++) {
+				if (otrs[c] == null)
+					continue;
+				otrs[c].path.transform(at);
+				sagGr.draw(otrs[c].path);
+			}
+			sagGr.dispose();
+		}
+		
+		//	make sure to accommodate ascent and descent (keeps glyphs of dash-only fonts in vertical position, and in proportion)
+//		maxCapHeight = Math.max(maxCapHeight, Math.round(pFont.ascent * 1000));
+//		maxDescent = Math.min(maxDescent, Math.round(pFont.descent * 1000));
+		maxCapHeight = Math.max(maxCapHeight, Math.max(Math.round(pFont.ascent * 1000), bbTop));
+		maxDescent = Math.min(maxDescent, Math.min(Math.min(Math.round(pFont.descent * 1000), bbBottom), Math.round((maxCapHeight * pFont.descent) / pFont.ascent)));
 		
 		//	set up rendering
 		int maxRenderSize = 300;
@@ -4827,16 +5711,19 @@ FontName12 38//SID–, FD FontName
 			}
 			
 			CharImage chi = ((CharImage) pCharDecoder.plainCharCodesToImages.get(new Integer(glyph.gid)));
+//			CharImage chi = ((CharImage) pCharDecoder.glyphKeysToImages.get(glyphKeys[c]));
 			if (chi != null) {
 				pm.setInfo("     - reusing previously rendered char " + c + " with CID " + glyph.cid + " (" + ucCh + ", " + chn + ")");
 				charImages[c] = chi;
-				pFont.setCharImage(glyph.cid, ((chn == null) ? ("ch-" + glyph.cid) : chn), chi.img);
+				pFont.setCharImage(glyph.cid, ((chn == null) ? ("ch-" + glyph.cid) : chn), chi.img, chi.path);
+//				pFont.setCharImage(glyphKeys[c], chi.img, chi.path);
 				continue;
 			}
 			
 //			if (!DEBUG_TRUE_TYPE_RENDERING && !pFont.usedChars.contains(new Integer(glyph.cid))) {
 //			if (!DEBUG_TRUE_TYPE_RENDERING && !pFont.usesCharCode(new Integer(glyph.cid))) {
 			if (!DEBUG_TRUE_TYPE_RENDERING && !pCharDecoder.usesChar(new Integer(glyph.cid), null)) {
+//			if (!DEBUG_TRUE_TYPE_RENDERING && !pCharDecoder.usesGlyph(glyphKeys[c])) {
 				pm.setInfo("     - ignoring unused char " + c + " with CID " + glyph.cid + " (" + ucCh + ", " + chn + ")");
 				continue;
 			}
@@ -4848,7 +5735,8 @@ FontName12 38//SID–, FD FontName
 //			int chw = ((otrs[c].rWidth == Integer.MIN_VALUE) ? dWidth : (nWidth + otrs[c].rWidth));
 //			int chw = ((otrs[c].rWidth == 0) ? dWidth : (nWidth + otrs[c].rWidth));
 //			if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" - char width is " + chw);
-			if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" - stroke count is " + otrs[c].mCount);
+//			if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" - stroke count is " + otrs[c].mCount);
+			if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" - stroke count is " + otrs[c].segCount);
 //			if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" - " + otrs[c].id + ": " + otrs[c].minX + " < X < " + otrs[c].maxX);
 			
 			//	check if char rendering possible
@@ -4860,7 +5748,8 @@ FontName12 38//SID–, FD FontName
 			//	render char
 			int mx = 8;
 			int my = ((mx * (maxCapHeight - maxDescent)) / (otrs[c].maxX - otrs[c].minX));
-			OpGraphicsTrueType ogr = new OpGraphicsTrueType(
+//			OpGraphicsTrueType ogr = new OpGraphicsTrueType(
+			OpGraphics ogr = new OpGraphics(
 					otrs[c].minX,
 					maxDescent,
 					(maxCapHeight - maxDescent + (my / 2)),
@@ -4874,7 +5763,7 @@ FontName12 38//SID–, FD FontName
 				runFontTrueTypeOps(((SimpleGlyphDataTrueType) glyph), false, ogr, (glyph.cid == DEBUG_TRUE_TYPE_TARGET_CID));
 			else runFontTrueTypeOps(((CompoundGlyphDataTrueType) glyph), glyphsByIndex, ogr, (glyph.cid == DEBUG_TRUE_TYPE_TARGET_CID));
 			if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" - image rendered, size is " + ogr.img.getWidth() + "x" + ogr.img.getHeight() + ", OpGraphics height is " + ogr.height);
-			charImages[c] = new CharImage(ogr.img, Math.round(((float) (maxCapHeight * ogr.img.getHeight())) / (maxCapHeight - maxDescent)));
+			charImages[c] = new CharImage(ogr.img, Math.round(((float) (maxCapHeight * ogr.img.getHeight())) / (maxCapHeight - maxDescent)), otrs[c].path, (otrs[c].maxX - otrs[c].minX));
 			if (DEBUG_TRUE_TYPE_LOADING) System.out.println(" - char image wrapped, baseline is " + charImages[c].baseline);
 			if (fidd != null)
 				fidd.addImage(ogr.img, (glyph.cid + " (" + glyph.gid + "): " + ucCh + " (" + chn + ")"));
@@ -4889,16 +5778,57 @@ FontName12 38//SID–, FD FontName
 //			pFont.setCharImage(glyph.cid, chn, ogr.img);
 			
 			//	store char image (substitute name if none exists)
-			pFont.setCharImage(glyph.cid, ((chn == null) ? ("ch-" + glyph.cid) : chn), ogr.img);
+			pFont.setCharImage(glyph.cid, ((chn == null) ? ("ch-" + glyph.cid) : chn), ogr.img, otrs[c].path);
+//			pFont.setCharImage(glyphKeys[c], ogr.img, otrs[c].path);
 			pCharDecoder.plainCharCodesToImages.put(new Integer(glyph.gid), charImages[c]);
-			String cidUc = pFont.getUnicode(glyph.cid);
-			char chnUc = ((chn == null) ? ((char) 0) : StringUtils.getCharForName(chn));
-			if ((cidUc == null) && (chnUc != 0))
-				cidUc = ("" + chnUc);
-			if (cidUc != null)
-				pCharDecoder.plainCharCodesToUnicode.put(new Integer(glyph.gid), cidUc);
+//			pCharDecoder.glyphKeysToImages.put(new Integer(glyph.cid), charImages[c]);
+//			String cidUc = pFont.getUnicode(glyph.cid);
+//			char chnUc = ((chn == null) ? ((char) 0) : StringUtils.getCharForName(chn));
+//			if ((cidUc == null) && (chnUc != 0))
+//				cidUc = ("" + chnUc);
+//			if (cidUc != null)
+//				pCharDecoder.plainCharCodesToUnicode.put(new Integer(glyph.gid), cidUc);
 		}
+//		if ((fidd != null) && (fidd.getImageCount() != 0)) {
+//			fidd.setLocationRelativeTo(null);
+//			fidd.setSize(600, 400);
+//			fidd.setVisible(true);
+//		}
 		if ((fidd != null) && (fidd.getImageCount() != 0)) {
+			CountingSet charSizes = pFont.getCharSizes();
+			if (charSizes != null) {
+				System.out.println("   - font used in sizes " + charSizes);
+				int kCharHeight = (maxCapHeight - maxDescent);
+				CountingSet charHeights = new CountingSet(new TreeMap());
+				float charHeightSum = 0;
+				for (Iterator csit = charSizes.iterator(); csit.hasNext();) {
+					Float cs = ((Float) csit.next());
+					float charHeight = ((kCharHeight * cs.floatValue()) / 1000);
+					charHeights.add(new Float(charHeight), charSizes.getCount(cs));
+					charHeightSum += (charHeight * charSizes.getCount(cs));
+				}
+				System.out.println("   - char heights (at 72 DPI) " + charHeights);
+				System.out.println("   - average char height (at 72 DPI) " + (charHeightSum / charSizes.size()));
+			}
+			
+			agGr = allGlyphs.createGraphics();
+			agGr.setColor(Color.BLACK);
+			agGr.drawLine(0, 900, 1000, 900);
+			agGr.drawLine(0, 600, 1000, 600);
+			agGr.drawLine(100, 0, 100, 1500);
+			agGr.dispose();
+			fidd.addImage(allGlyphs, "All Paths");
+			
+			if (sAllGlyphs != null) {
+				Graphics2D sagGr = sAllGlyphs.createGraphics();
+				sagGr.setColor(Color.BLACK);
+				sagGr.drawLine(0, 900, 1000, 900);
+				sagGr.drawLine(0, 600, 1000, 600);
+				sagGr.drawLine(100, 0, 100, 1500);
+				sagGr.dispose();
+				fidd.addImage(sAllGlyphs, "All Paths (scaled)");
+			}
+			
 			fidd.setLocationRelativeTo(null);
 			fidd.setSize(600, 400);
 			fidd.setVisible(true);
@@ -4918,41 +5848,42 @@ FontName12 38//SID–, FD FontName
 				charNames[c] = StringUtils.getCharName(chars[c]);
 			}
 			else charNames[c] = null;
+			glyphKeys[c] = new Integer(glyph.cid);
 			
 			//	check for char code synonymies
 			Integer ci = new Integer(c);
 			if (charIndicesToSynonyms.containsKey(ci))
 				pFont.setCharCodeSynonym(charCodes[c], charCodes[((Integer) charIndicesToSynonyms.get(ci)).intValue()]);
 		}
-		decodeChars(pFont, pCharDecoder, chars, charCodes, charNames, charImages, rawCharCodes, -1, maxDescent, charSet, pm, DEBUG_TRUE_TYPE_LOADING);
+		decodeChars(pFont, pCharDecoder, chars, charCodes, charNames, glyphKeys, charImages/*, rawCharCodes*/, -1, maxDescent, charSet, pm, DEBUG_TRUE_TYPE_LOADING);
 	}
 	
 	private static GlyphDataTrueType readGlyphTrueType(int start, int end, byte[] glyfBytes, int cid, int glyphIndex) {
 		int glyfByteOffset = start;
 		int numberOfContours = readUnsigned(glyfBytes, glyfByteOffset, (glyfByteOffset+2));
 		glyfByteOffset += 2;
-		if (numberOfContours > 32768)
-			numberOfContours -= 65536;
+		if (numberOfContours > 0x00008000)
+			numberOfContours -= 0x00010000;
 		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("     - number of contours is " + numberOfContours);
 		int hMinX = readUnsigned(glyfBytes, glyfByteOffset, (glyfByteOffset+2));
 		glyfByteOffset += 2;
-		if (hMinX > 32768)
-			hMinX -= 65536;
+		if (hMinX > 0x00008000)
+			hMinX -= 0x00010000;
 		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("     - min X is " + hMinX);
 		int hMinY = readUnsigned(glyfBytes, glyfByteOffset, (glyfByteOffset+2));
 		glyfByteOffset += 2;
-		if (hMinY > 32768)
-			hMinY -= 65536;
+		if (hMinY > 0x00008000)
+			hMinY -= 0x00010000;
 		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("     - min Y is " + hMinY);
 		int hMaxX = readUnsigned(glyfBytes, glyfByteOffset, (glyfByteOffset+2));
 		glyfByteOffset += 2;
-		if (hMaxX > 32768)
-			hMaxX -= 65536;
+		if (hMaxX > 0x00008000)
+			hMaxX -= 0x00010000;
 		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("     - max X is " + hMaxX);
 		int hMaxY = readUnsigned(glyfBytes, glyfByteOffset, (glyfByteOffset+2));
 		glyfByteOffset += 2;
-		if (hMaxY > 32768)
-			hMaxY -= 65536;
+		if (hMaxY > 0x00008000)
+			hMaxY -= 0x00010000;
 		if (DEBUG_TRUE_TYPE_LOADING) System.out.println("     - max Y is " + hMaxY);
 		if (numberOfContours < 0)
 			return readCompoundGlyphTrueType(glyfByteOffset, end, glyfBytes, cid, glyphIndex, -numberOfContours);
@@ -5143,7 +6074,7 @@ FontName12 38//SID–, FD FontName
 	private static final boolean DEBUG_TRUE_TYPE_RENDERING = false;
 	private static final int DEBUG_TRUE_TYPE_TARGET_CID = -1;
 	
-	private static void runFontTrueTypeOps(CompoundGlyphDataTrueType cGlyph, HashMap glyphsByCid, OpReceiverTrueType opr, boolean show) {
+	private static void runFontTrueTypeOps(CompoundGlyphDataTrueType cGlyph, HashMap glyphsByCid, OpReceiver opr, boolean show) {
 		ImageDisplayDialog idd = null;
 		
 		//	render components
@@ -5186,10 +6117,13 @@ FontName12 38//SID–, FD FontName
 			
 			//	TODO reset transform if options are present
 			
-			if ((opr instanceof OpGraphicsTrueType) && show) {
-				BufferedImage dImg = new BufferedImage(((OpGraphicsTrueType) opr).img.getWidth(), ((OpGraphicsTrueType) opr).img.getHeight(), BufferedImage.TYPE_INT_RGB);
+//			if ((opr instanceof OpGraphicsTrueType) && show) {
+			if ((opr instanceof OpGraphics) && show) {
+//				BufferedImage dImg = new BufferedImage(((OpGraphicsTrueType) opr).img.getWidth(), ((OpGraphicsTrueType) opr).img.getHeight(), BufferedImage.TYPE_INT_RGB);
+				BufferedImage dImg = new BufferedImage(((OpGraphics) opr).img.getWidth(), ((OpGraphics) opr).img.getHeight(), BufferedImage.TYPE_INT_RGB);
 				Graphics g = dImg.getGraphics();
-				g.drawImage(((OpGraphicsTrueType) opr).img, 0, 0, dImg.getWidth(), dImg.getHeight(), null);
+//				g.drawImage(((OpGraphicsTrueType) opr).img, 0, 0, dImg.getWidth(), dImg.getHeight(), null);
+				g.drawImage(((OpGraphics) opr).img, 0, 0, dImg.getWidth(), dImg.getHeight(), null);
 				g.setColor(Color.RED);
 				if (idd == null) {
 					idd = new ImageDisplayDialog("Rendering Progress");
@@ -5202,23 +6136,24 @@ FontName12 38//SID–, FD FontName
 		}
 		
 		//	only tracking, we're done here
-		if (opr instanceof OpTrackerTrueType)
+		if (opr instanceof OpTracker)
 			return;
 		
 		//	fill outline
-		fillGlyphOutline(((OpGraphicsTrueType) opr).img, ((OpGraphicsTrueType) opr).scale, show);
+		fillGlyphOutline(((OpGraphics) opr).img, ((OpGraphics) opr).scale, show);
 		
 		//	scale down image
 		int maxHeight = 100;
-		((OpGraphicsTrueType) opr).setImage(scaleImage(((OpGraphicsTrueType) opr).img, maxHeight));
+		((OpGraphics) opr).setImage(scaleImage(((OpGraphics) opr).img, maxHeight));
 	}
 	
-	private static void runFontTrueTypeOps(SimpleGlyphDataTrueType sGlyph, boolean isComponent, OpReceiverTrueType opr, boolean show) {
+	private static void runFontTrueTypeOps(SimpleGlyphDataTrueType sGlyph, boolean isComponent, OpReceiver opr, boolean show) {
 		ImageDisplayDialog idd = null;
 		
 		//	run points
 		int pointIndex = 0;
 		String op;
+		String opShow;
 		for (int c = 0; c < sGlyph.contourEnds.length; c++) {
 			boolean lastWasInterpolated = false;
 			boolean lastWasContourStart = true;
@@ -5249,17 +6184,20 @@ FontName12 38//SID–, FD FontName
 					if (sGlyph.contourEnds[c] == (pointIndex-1)) {
 						opr.closePath(dx1, dy1, true);
 						op = "closePath0";
+						opShow = (op + "(" + dx1 + "/" + dy1 + ")");
 						if (!show)
 							break;
 					}
 					else if ((sGlyph.pointFlags[pointIndex] & 1) == 0) {
 						opr.curveTo(dx1, dy1, (sGlyph.pointXs[pointIndex] / 2), (sGlyph.pointYs[pointIndex] / 2));
 						op = "curveTo0";
+						opShow = (op + "(" + dx1 + "/" + dy1 + "," + (sGlyph.pointXs[pointIndex] / 2) + "/" + (sGlyph.pointYs[pointIndex] / 2) + ")");
 						lastWasInterpolated = true;
 					}
 					else {
 						opr.curveTo(dx1, dy1, sGlyph.pointXs[pointIndex], sGlyph.pointYs[pointIndex]);
 						op = "curveTo1";
+						opShow = (op + "(" + dx1 + "/" + dy1 + "," + sGlyph.pointXs[pointIndex] + "/" + sGlyph.pointYs[pointIndex] + ")");
 						pointIndex += 1;
 						lastWasInterpolated = false;
 					}
@@ -5268,12 +6206,14 @@ FontName12 38//SID–, FD FontName
 					if (((sGlyph.pointFlags[pointIndex-1] & 1) == 0) && lastWasContourStart) {
 						opr.moveTo(sGlyph.pointXs[pointIndex], sGlyph.pointYs[pointIndex]);
 						op = "moveTo";
+						opShow = (op + "(" + sGlyph.pointXs[pointIndex] + "/" + sGlyph.pointYs[pointIndex] + ")");
 						pointIndex += 1;
 						lastWasInterpolated = false;
 					}
 					else {
 						opr.lineTo((sGlyph.pointXs[pointIndex] / (lastWasInterpolated ? 2 : 1)), (sGlyph.pointYs[pointIndex] / (lastWasInterpolated ? 2 : 1)));
 						op = "lineTo";
+						opShow = (op + "(" + (sGlyph.pointXs[pointIndex] / (lastWasInterpolated ? 2 : 1)) + "/" + (sGlyph.pointYs[pointIndex] / (lastWasInterpolated ? 2 : 1)) + ")");
 						pointIndex += 1;
 						lastWasInterpolated = false;
 					}				}
@@ -5285,13 +6225,14 @@ FontName12 38//SID–, FD FontName
 					}
 					else opr.closePath();
 					op = "closePath1";
+					opShow = op;
 					if (!show)
 						break;
 				}
 				
-				//	TODO show step by step
+				//	show step by step
 				if (show) {
-					BufferedImage img = ((OpGraphicsTrueType) opr).img;
+					BufferedImage img = ((OpGraphics) opr).img;
 					BufferedImage dImg = new BufferedImage(img.getWidth(), img.getHeight(), BufferedImage.TYPE_INT_RGB);
 					Graphics g = dImg.getGraphics();
 					g.drawImage(img, 0, 0, dImg.getWidth(), dImg.getHeight(), null);
@@ -5300,7 +6241,7 @@ FontName12 38//SID–, FD FontName
 						idd = new ImageDisplayDialog("Rendering Progress");
 						idd.setSize((dImg.getWidth() + 200), (dImg.getHeight() + 100));
 					}
-					idd.addImage(dImg, ("Drawing (" + op + ")"));
+					idd.addImage(dImg, ("Drawing (" + opShow + ")"));
 					idd.setLocationRelativeTo(null);
 					idd.setVisible(true);
 				}
@@ -5317,15 +6258,15 @@ FontName12 38//SID–, FD FontName
 		}
 		
 		//	only tracking, we're done here
-		if ((opr instanceof OpTrackerTrueType) || isComponent)
+		if ((opr instanceof OpTracker) || isComponent)
 			return;
 		
 		//	fill outline
-		fillGlyphOutline(((OpGraphicsTrueType) opr).img, ((OpGraphicsTrueType) opr).scale, show);
+		fillGlyphOutline(((OpGraphics) opr).img, ((OpGraphics) opr).scale, show);
 		
 		//	scale down image
 		int maxHeight = 100;
-		((OpGraphicsTrueType) opr).setImage(scaleImage(((OpGraphicsTrueType) opr).img, maxHeight));
+		((OpGraphics) opr).setImage(scaleImage(((OpGraphics) opr).img, maxHeight));
 	}
 	
 	private static class GlyphDataTrueType {
@@ -5374,255 +6315,737 @@ FontName12 38//SID–, FD FontName
 		}
 	}
 	
-	private static abstract class OpReceiverTrueType {
-		int rWidth = 0;
-		int x = 0;
-		int y = 0;
-		abstract void moveTo(int dx, int dy);
-		abstract void moveToAbs(int x, int y);
-		abstract void lineTo(int dx, int dy);
-		abstract void curveTo(int dx1, int dy1, int dx2, int dy2);
-		abstract void closePath();
-		abstract void closePath(int dx, int dy, boolean explicit);
+	private static final boolean DEBUG_TYPE3_LOADING = false;
+	private static final boolean DEBUG_TYPE3_RENDERING = false;
+	private static final String DEBUG_TYPE3_TARGET_NAME = null;
+	
+	static void readFontType3(PdfFont pFont, CharDecoder pCharDecoder, HashMap diffEncodings, HashMap diffEncodingNames, Map charProcs, float fmScaleX, float fmScaleY, FontDecoderCharset charSet, Library library, Map objects, ProgressMonitor pm) {
+		pm.setInfo(" - decoding characters from char programs");
+		if (DEBUG_TYPE3_LOADING) System.out.println("Got char procs: " + charProcs);
+		
+		HashMap cache = ((diffEncodingNames.size() < 10) ? null : new HashMap());
+		if (DEBUG_TYPE3_LOADING) {
+			System.out.println("Differences are: " + diffEncodings);
+			System.out.println("Difference names are: " + diffEncodingNames);
+		}
+		
+		//	set up char codes and names in array (names map to glyphs, not codes)
+		Integer[] charCodes = new Integer[diffEncodingNames.size()];
+		int cci = 0;
+		for (Iterator eit = diffEncodingNames.keySet().iterator(); eit.hasNext();)
+			charCodes[cci++] = ((Integer) eit.next());
+		Arrays.sort(charCodes);
+		String[] charNames = new String[charCodes.length];
+		Object[] glyphKeys = new Object[charCodes.length];
+		GlyphDataType3[] glyphData = new GlyphDataType3[charCodes.length];
+		HashMap charNamesToGlyphData = new HashMap();
+		for (int c = 0; c < charCodes.length; c++) {
+			String charName = diffEncodingNames.get(charCodes[c]).toString();
+			charNames[c] = charName;
+			glyphKeys[c] = charName;
+			Object charProcObj = PdfParser.dereference(charProcs.get(charName), objects);
+			if (charProcObj instanceof PStream) {
+				pm.setInfo("   - decoding char " + charName);
+				if (DEBUG_TYPE3_LOADING) System.out.println("  Got char proc for '" + charName + "': " + ((PStream) charProcObj).params);
+				glyphData[c] = ((GlyphDataType3) charNamesToGlyphData.get(charNames[c]));
+				if (glyphData[c] == null) try {
+					glyphData[c] = getGlyphDataType3(pFont, ((PStream) charProcObj), objects);
+					if (glyphData[c] != null)
+						charNamesToGlyphData.put(charNames[c], glyphData[c]);
+				}
+				catch(IOException ioe) {
+					System.out.println("Error loading font '" + pFont.name + "': " + ioe.getMessage());
+					ioe.printStackTrace(System.out);
+				}
+			}
+			else if (DEBUG_TYPE3_LOADING) System.out.println(" --> strange char proc for '" + charName + "': " + charProcObj);
+		}
+		
+		//	measure characters
+		pm.setInfo("   - measuring characters");
+		int maxDescent = 0;
+		int maxCapHeight = 0;
+		OpTracker[] otrs = new OpTracker[charCodes.length];
+		BufferedImage allGlyphs = new BufferedImage(1500, 1500, BufferedImage.TYPE_BYTE_BINARY);
+		Graphics2D agGr = allGlyphs.createGraphics();
+		agGr.setColor(Color.WHITE);
+		agGr.fillRect(0, 0, allGlyphs.getWidth(), allGlyphs.getHeight());
+		agGr.setColor(Color.BLACK);
+		agGr.translate(100, 900);
+		agGr.scale((0.3 * fmScaleX), (-0.3 * fmScaleY)); // 300 x 300 for 1000 x 1000 PDF font space (font size 300)
+		agGr.setStroke(new BasicStroke(5 * Math.max(Math.abs(1 / fmScaleX), Math.abs(1 / fmScaleY))));
+		HashMap charNamesToOpTrackers = new HashMap();
+		for (int c = 0; c < charCodes.length; c++) {
+			CharImage chi = ((CharImage) pCharDecoder.plainCharCodesToImages.get(charNames[c]));
+			if (chi != null) {
+				pm.setInfo("     - skipping previously rendered char " + c + " with name " + charNames[c] + " (" + pFont.getUnicode(charCodes[c].intValue()) + ")");
+				continue;
+			}
+			if (glyphData[c] == null) {
+				pm.setInfo("     - procedure unavailable for char " + c + " with name " + charNames[c] + " (" + pFont.getUnicode(charCodes[c].intValue()) + ")");
+				continue;
+			}
+			otrs[c] = ((OpTracker) charNamesToOpTrackers.get(charNames[c]));
+			if (otrs[c] != null) {
+				pm.setInfo("     - skipping previously measured char " + c + " with name " + charNames[c] + " (" + pFont.getUnicode(charCodes[c].intValue()) + ")");
+				continue;
+			}
+			
+			//	render glyph
+			otrs[c] = new OpTracker(charNames[c].equals(DEBUG_TYPE3_TARGET_NAME));
+			charNamesToOpTrackers.put(charNames[c], otrs[c]);
+			pm.setInfo("     - measuring char " + c + " with name " + charNames[c] + " (" + pFont.getUnicode(charCodes[c].intValue()) + ")");
+//			if (DEBUG_TYPE3_LOADING) System.out.println(" ==> font glyph key maps to " + pFont.getCharCodeByGlyphKey(new Integer(glyph.cid)));
+			int minX = Math.round(glyphData[c].lowerLeftX * fmScaleX);
+			int maxX = Math.round(glyphData[c].upperRightX * fmScaleX);
+			int minY = Math.round(glyphData[c].upperRightY * -fmScaleY); // bounding box corners come in PDF coordinates, with Y increasing upwards
+			int maxY = Math.round(glyphData[c].lowerLeftY * -fmScaleY); // bounding box corners come in PDF coordinates, with Y increasing upwards
+			if (glyphData[c].imageData == null)
+				glyphData[c].writePathTo(otrs[c], fmScaleX, fmScaleY, charNames[c].equals(DEBUG_TYPE3_TARGET_NAME));
+			else glyphData[c].drawImageTo(otrs[c], fmScaleX, fmScaleY, charNames[c].equals(DEBUG_TYPE3_TARGET_NAME), null, null);
+			if (DEBUG_TYPE3_LOADING) {
+				System.out.println("     --> " + minX + " < X < " + maxX);
+				System.out.println("     --> " + minY + " < Y < " + maxY);
+				System.out.println("     --> path is " + otrs[c].ops);
+			}
+			maxDescent = Math.min(maxDescent, minY);
+			maxCapHeight = Math.max(maxCapHeight, maxY);
+			if (glyphData[c].imageData == null)
+				glyphData[c].drawPath(agGr, false);
+			else glyphData[c].drawImage(agGr);
+		}
+		agGr.dispose();
+		if (DEBUG_TYPE3_LOADING) System.out.println("Max descent is " + maxDescent + ", max cap height is " + maxCapHeight);
+		
+		//	check rendered glyph path dimensions
+		//	TODO check if this is even sensible here !!!
+		int white = Color.WHITE.getRGB(); // TODO make this a constant !!!
+		int minGlyphX = Integer.MAX_VALUE;
+		int maxGlyphX = 0;
+		int minGlyphY = Integer.MAX_VALUE;
+		int maxGlyphY = 0;
+		for (int x = 0; x < allGlyphs.getWidth(); x++) {
+			for (int y = 0; y < allGlyphs.getHeight(); y++) {
+				if (allGlyphs.getRGB(x, y) == white)
+					continue;
+				minGlyphX = Math.min(minGlyphX, x);
+				maxGlyphX = Math.max(maxGlyphX, x);
+				minGlyphY = Math.min(minGlyphY, y);
+				maxGlyphY = Math.max(maxGlyphY, y);
+			}
+		}
+		
+		//	scale back to font space, inverting back Y coordinate for comparison with font indicated measurements
+		int fMinGlyphX = (((minGlyphX - 100) * 10) / 3);
+		int fMaxGlyphX = (((maxGlyphX - 100) * 10) / 3);
+		int fMinGlyphY = (((maxGlyphY - 900) * 10) / -3);
+		int fMaxGlyphY = (((minGlyphY - 900) * 10) / -3);
+		if (DEBUG_TYPE3_LOADING) {
+			System.out.println("Glyph extent is " + minGlyphX + "-" + maxGlyphX + " by " + minGlyphY + "-" + maxGlyphY);
+			System.out.println(" ==> " + fMinGlyphX + "-" + fMaxGlyphX + " by " + fMinGlyphY + "-" + fMaxGlyphY);
+		}
+		
+		//	compare measured glyph extents to font indicated ascent and descent
+		int bbTop = ((pFont.bBox == null) ? 0 : pFont.bBox.top);
+		float ascentRatio = (((float) fMaxGlyphY) / Math.max(Math.round(pFont.ascent * 1000), bbTop));
+		int bbBottom = ((pFont.bBox == null) ? 0 : pFont.bBox.bottom);
+		float descentRatio = (((float) fMinGlyphY) / Math.min(Math.round(pFont.descent * 1000), bbBottom));
+		int bbHeight = ((pFont.bBox == null) ? 0 : -pFont.bBox.getHeight());
+		float heightRatio = (((float) (fMaxGlyphY - fMinGlyphY)) / Math.max(Math.round((pFont.ascent - pFont.descent) * 1000), bbHeight));
+		if (DEBUG_TYPE3_LOADING) {
+			System.out.println("Font indicated height is " + Math.round(pFont.descent * 1000) + "-" + Math.round(pFont.ascent * 1000) + ", bounding box is " + pFont.bBox);
+			System.out.println(" ==> height ratio is " + heightRatio + ", ascent ratio is " + ascentRatio + ", descent ratio is " + descentRatio);
+		}
+		
+		//	scale down glyphs if significantly taller than indicated ascent, and adjust descent as well, as font sizes go up for compensation
+		BufferedImage sAllGlyphs = null;
+		if ((1.5 < ascentRatio) && (charSet == VECTORIZED_OCR_DECODING)) {
+			pFont.scaleDownFactor = Math.round(ascentRatio);
+			System.out.println(" ==> scaling down glyphs by factor " + pFont.scaleDownFactor);
+			pFont.descent = Math.max(pFont.descent, (((float) fMinGlyphY) / (pFont.scaleDownFactor * 1000))); // descent is negative number ...
+			System.out.println(" ==> descent adjusted to " + Math.round(pFont.descent * 1000));
+			AffineTransform at = AffineTransform.getScaleInstance((1.0 / pFont.scaleDownFactor), (1.0 / pFont.scaleDownFactor));
+			sAllGlyphs = new BufferedImage(1500, 1500, BufferedImage.TYPE_BYTE_BINARY);
+			//	TODO implement this for command rendered paths as well !!!
+			Graphics2D sagGr = sAllGlyphs.createGraphics();
+			sagGr.setColor(Color.WHITE);
+			sagGr.fillRect(0, 0, sAllGlyphs.getWidth(), sAllGlyphs.getHeight());
+			sagGr.setColor(Color.BLACK);
+			sagGr.translate(100, 900);
+			agGr.scale((0.3 * fmScaleX), (-0.3 * fmScaleY)); // 300 x 300 for 1000 x 1000 PDF font space (font size 300)
+			sagGr.setStroke(new BasicStroke(5));
+			for (int c = 0; c < otrs.length; c++) {
+				if (otrs[c] == null)
+					continue;
+				otrs[c].path.transform(at);
+				sagGr.draw(otrs[c].path);
+			}
+			sagGr.dispose();
+		}
+		
+		//	make sure to accommodate ascent and descent (keeps glyphs of dash-only fonts in vertical position, and in proportion)
+//		maxCapHeight = Math.max(maxCapHeight, Math.round(pFont.ascent * 1000));
+//		maxDescent = Math.min(maxDescent, Math.round(pFont.descent * 1000));
+		maxCapHeight = Math.max(maxCapHeight, Math.max(Math.round(pFont.ascent * 1000), bbTop));
+		maxDescent = Math.min(maxDescent, Math.min(Math.min(Math.round(pFont.descent * 1000), bbBottom), Math.round((maxCapHeight * pFont.descent) / pFont.ascent)));
+		
+		//	set up rendering
+		int maxRenderSize = 300;
+		float scale = 1.0f;
+		if ((maxCapHeight - maxDescent) > maxRenderSize)
+			scale = (((float) maxRenderSize) / (maxCapHeight - maxDescent));
+		if (DEBUG_TYPE3_LOADING) System.out.println(" ==> scaledown factor is " + scale);
+		
+		//	tray up chars
+		char[] chars = new char[charCodes.length];
+		Arrays.fill(chars, ((char) 0));
+		
+		//	generate images and match against named char
+		pm.setInfo("   - decoding characters");
+		CharImage[] charImages = new CharImage[charCodes.length];
+		ImageDisplayDialog fidd = ((DEBUG_TYPE3_LOADING) ? new ImageDisplayDialog("Font " + pFont.name) : null);
+		for (int c = 0; c < charCodes.length; c++) {
+			String ucCh = pFont.getUnicode(charCodes[c].intValue());
+			if ((ucCh != null) && (ucCh.length() > 0))
+				chars[c] = ucCh.charAt(0);
+			
+			CharImage chi = ((CharImage) pCharDecoder.plainCharCodesToImages.get(charNames[c]));
+			if (chi != null) {
+				pm.setInfo("     - reusing previously rendered char " + c + " with name " + charNames[c] + " (" + ucCh + ")");
+				charImages[c] = chi;
+				pFont.setCharImage(charCodes[c].intValue(), charNames[c], chi.img, chi.path);
+				continue;
+			}
+			if (!DEBUG_TYPE3_LOADING && !pCharDecoder.usesChar(charCodes[c], charNames[c])) {
+				pm.setInfo("     - ignoring unused char " + c + " with name " + charNames[c] + " (" + ucCh + ")");
+				continue;
+			}
+			pm.setInfo("     - decoding char " + c + " with name " + charNames[c] + " (" + ucCh + ")");
+			if (DEBUG_TYPE3_LOADING) System.out.println("Decoding char " + c + ", name is " + charNames[c] + " (" + ucCh + ")");
+			if (DEBUG_TYPE3_LOADING) System.out.println(" - stroke count is " + otrs[c].segCount);
+			
+			//	check if char rendering possible
+			if ((otrs[c].maxX <= otrs[c].minX) || (otrs[c].maxY <= otrs[c].minY)) {
+				if (DEBUG_TYPE3_LOADING) System.out.println(" ==> unsensible char dimensions: " + otrs[c].minX + "-" + otrs[c].maxX + "x" + otrs[c].minY + "-" + otrs[c].maxY);
+				continue;
+			}
+			
+			//	render char
+			int mx = 8;
+			int my = ((mx * (maxCapHeight - maxDescent)) / (otrs[c].maxX - otrs[c].minX));
+			OpGraphics ogr = new OpGraphics(
+					otrs[c].minX,
+					maxDescent,
+					(maxCapHeight - maxDescent + (my / 2)),
+					scale,
+					new BufferedImage(
+							Math.round((scale * (otrs[c].maxX - otrs[c].minX + mx)) + (2 * glyphOutlineFillSafetyEdge)),
+							Math.round((scale * (maxCapHeight - maxDescent + my)) + (2 * glyphOutlineFillSafetyEdge)),
+							BufferedImage.TYPE_INT_RGB)
+					);
+			if (glyphData[c].imageData == null)
+				glyphData[c].writePathTo(ogr, fmScaleX, fmScaleY, charNames[c].equals(DEBUG_TYPE3_TARGET_NAME));
+			else glyphData[c].drawImageTo(ogr, fmScaleX, fmScaleY, charNames[c].equals(DEBUG_TYPE3_TARGET_NAME), library, objects);
+			if (DEBUG_TYPE3_LOADING) System.out.println(" - image rendered, size is " + ogr.img.getWidth() + "x" + ogr.img.getHeight() + ", OpGraphics height is " + ogr.height);
+			charImages[c] = new CharImage(ogr.img, Math.round(((float) (maxCapHeight * ogr.img.getHeight())) / (maxCapHeight - maxDescent)), otrs[c].path, (otrs[c].maxX - otrs[c].minX));
+			if (DEBUG_TYPE3_LOADING) System.out.println(" - char image wrapped, baseline is " + charImages[c].baseline);
+			if (fidd != null)
+				fidd.addImage(ogr.img, (charCodes[c] + " : " + ucCh + " (" + charNames[c] + ")"));
+			
+			//	store char image
+			if (glyphData[c].imageData == null)
+				pFont.setCharImage(charCodes[c], charNames[c], ogr.img, otrs[c].path);
+			else pFont.setCharImage(charCodes[c], charNames[c], ogr.img, null);
+			pCharDecoder.plainCharCodesToImages.put(charNames[c], charImages[c]);
+		}
+		if ((fidd != null) && (fidd.getImageCount() != 0)) {
+			CountingSet charSizes = pFont.getCharSizes();
+			if (charSizes != null) {
+				System.out.println("   - font used in sizes " + charSizes);
+				int kCharHeight = (maxCapHeight - maxDescent);
+				CountingSet charHeights = new CountingSet(new TreeMap());
+				float charHeightSum = 0;
+				for (Iterator csit = charSizes.iterator(); csit.hasNext();) {
+					Float cs = ((Float) csit.next());
+					float charHeight = ((kCharHeight * cs.floatValue()) / 1000);
+					charHeights.add(new Float(charHeight), charSizes.getCount(cs));
+					charHeightSum += (charHeight * charSizes.getCount(cs));
+				}
+				System.out.println("   - char heights (at 72 DPI) " + charHeights);
+				System.out.println("   - average char height (at 72 DPI) " + (charHeightSum / charSizes.size()));
+			}
+			
+			agGr = allGlyphs.createGraphics();
+			agGr.setColor(Color.BLACK);
+			agGr.drawLine(0, 900, 1000, 900);
+			agGr.drawLine(0, 600, 1000, 600);
+			agGr.drawLine(100, 0, 100, 1500);
+			agGr.dispose();
+			fidd.addImage(allGlyphs, "All Paths");
+			
+			if (sAllGlyphs != null) {
+				Graphics2D sagGr = sAllGlyphs.createGraphics();
+				sagGr.setColor(Color.BLACK);
+				sagGr.drawLine(0, 900, 1000, 900);
+				sagGr.drawLine(0, 600, 1000, 600);
+				sagGr.drawLine(100, 0, 100, 1500);
+				sagGr.dispose();
+				fidd.addImage(sAllGlyphs, "All Paths (scaled)");
+			}
+			
+			fidd.setLocationRelativeTo(null);
+			fidd.setSize(600, 400);
+			fidd.setVisible(true);
+		}
+		
+		//	decode rendered chars
+		decodeChars(pFont, pCharDecoder, chars, charCodes, charNames, glyphKeys, charImages/*, rawCharCodes*/, -1, maxDescent, charSet, pm, DEBUG_TYPE3_LOADING);
 	}
 	
-	private static class OpTrackerTrueType extends OpReceiverTrueType {
-//		String id = ("" + Math.random());
-		int minX = 0;
-		int minY = 0;
-		int minPaintX = Integer.MAX_VALUE;
-		int minPaintY = Integer.MAX_VALUE;
-		int maxX = 0;
-		int maxY = 0;
-		int mCount = 0;
-		boolean isMultiPath = false;
-		StringBuffer ops = new StringBuffer("Ops:");
-		void moveTo(int dx, int dy) {
-			if (this.mCount != 0)
-				this.isMultiPath = true;
-			this.x += dx;
-			this.minX = Math.min(this.minX, this.x);
-			this.maxX = Math.max(this.maxX, this.x);
-			this.y += dy;
-			this.minY = Math.min(this.minY, this.y);
-			this.maxY = Math.max(this.maxY, this.y);
-			this.ops.append(" M" + dx + "/" + dy);
-//			System.out.println("Move to " + dx + "/" + dy + ":");
-//			System.out.println(" " + this.minX + " < X < " + this.maxX);
-//			System.out.println(" " + this.minY + " < Y < " + this.maxY);
+	private static class GlyphDataType3 {
+		final byte[] imageData;
+		final GlyphRenderingCommandType3[] renderData;
+		final int width;
+		final int height;
+		final int lowerLeftX;
+		final int lowerLeftY;
+		final int upperRightX;
+		final int upperRightY;
+		GlyphDataType3(GlyphRenderingCommandType3[] renderData, int width, int height) {
+			this(null, renderData, width, height);
 		}
-		void moveToAbs(int x, int y) {
-			if (this.mCount != 0)
-				this.isMultiPath = true;
-			this.x = x;
-			this.minX = Math.min(this.minX, this.x);
-			this.maxX = Math.max(this.maxX, this.x);
-			this.y = y;
-			this.minY = Math.min(this.minY, this.y);
-			this.maxY = Math.max(this.maxY, this.y);
-			this.ops.append(" MA" + x + "/" + y);
-//			System.out.println("Move abs to " + x + "/" + y + ":");
-//			System.out.println(" " + this.minX + " < X < " + this.maxX);
-//			System.out.println(" " + this.minY + " < Y < " + this.maxY);
+		GlyphDataType3(byte[] imageData, int width, int height) {
+			this(imageData, null, width, height);
 		}
-		void lineTo(int dx, int dy) {
-			this.minPaintX = Math.min(this.minPaintX, this.x);
-			this.minPaintY = Math.min(this.minPaintY, this.y);
-			this.x += dx;
-			this.minX = Math.min(this.minX, this.x);
-			this.maxX = Math.max(this.maxX, this.x);
-			this.y += dy;
-			this.minY = Math.min(this.minY, this.y);
-			this.maxY = Math.max(this.maxY, this.y);
-			this.minPaintX = Math.min(this.minPaintX, this.x);
-			this.minPaintY = Math.min(this.minPaintY, this.y);
-			this.mCount++;
-			this.ops.append(" L" + dx + "/" + dy);
-//			System.out.println("Line to " + dx + "/" + dy + ":");
-//			System.out.println(" " + this.minX + " < X < " + this.maxX);
-//			System.out.println(" " + this.minY + " < Y < " + this.maxY);
-		}
-		void curveTo(int dx1, int dy1, int dx2, int dy2) {
-			/* simply line to control point if lying inside rectagle spanned
-			 * open by current position and target point, which is basically
-			 * the case if both deltas have the same direction (signum) in both
-			 * dimensions */
-			if ((((dx1 <= 0) && (dx2 <= 0)) || ((dx1 >= 0) && (dx2 >= 0))) && (((dy1 <= 0) && (dy2 <= 0)) || ((dy1 >= 0) && (dy2 >= 0)))) {
-				this.lineTo(dx1, dy1);
-				this.lineTo(dx2, dy2);
-			}
-			/* otherwise, compute vertex of parabola and use that, as including
-			 * control point proper in size estimation incurs catastrophic size
-			 * over-estimation on tight turns close to 180° whose control point
-			 * is either way up or way down (formula see below) */
-			else {
-//				float p0x = 0;
-//				float p0y = 0;
-//				float p1x = dx1;
-//				float p1y = dy1;
-				float p2x = (dx1 + dx2);
-				float p2y = (dy1 + dy2);
-				
-//				float p3x = /*p0x + */p2x;
-//				float p3y = /*p0y + */p2y;
-				
-				float tnom = (((/*p0x*/ -/*p1x*/dx1) * (/*p3x*/p2x - (2*/*p1x*/dx1))) + ((/*p0y*/ -/*p1y*/dy1) * (/*p3y*/p2y - (2*/*p1y*/dy1))));
-				float tdenom = (((/*p3x*/p2x * /*p3x*/p2x) - (4 * /*p1x*/dx1 * (/*p3x*/p2x - /*p1x*/dx1))) + ((/*p3y*/p2y * /*p3y*/p2y) - (4 * /*p1y*/dy1 * (/*p3y*/p2y - /*p1y*/dy1))));
-				float t = tnom / tdenom;
-				int vx = Math.round((/*p0x * */(1-t) * (1-t)) + (/*p1x*/dx1 * t * (1-t)) + (p2x * t * t));
-				int vy = Math.round((/*p0y * */(1-t) * (1-t)) + (/*p1y*/dy1 * t * (1-t)) + (p2y * t * t));
-				
-				dx2 = dx2 + (dx1 - vx);
-				dy2 = dy2 + (dy1 - vy);
-				dx1 = vx;
-				dy1 = vy;
-				this.lineTo(dx1, dy1);
-				this.lineTo(dx2, dy2);
-			}
-			this.ops.append(" C" + dx1 + "/" + dy1 + "," + dx2 + "/" + dy2);
-		}
-		void closePath() {}
-		void closePath(int dx, int dy, boolean explicit) {
-			if (explicit)
-				this.lineTo(dx, dy);
-		}
-	}
-	
-	/*
-Formula for Bezier vertex taken from:
-http://math.stackexchange.com/questions/217522/how-do-you-find-the-vertex-of-a-b%C3%A9zier-quadratic-curve
-
-P3 = P0 + P2
-t = ((P0-P1)*(P3-2P1)) / (P3*P3-4P1*(P3-P1))
-P(t) = P0(1-t)^2 + P1t(1-t) + P2t^2
-
-Fixing P1 to (0,0) because we're interested in relative offsets, not absolute positions.
-
-p0x = 0;
-p0y = 0;
-p1x = dx1;
-p1y = dy1;
-p2x = (dx1 + dx2);
-p2y = (dy1 + dy2);
-
-p3x = p0x + p2x;
-p3y = p0y + p2y;
-
-tnom = ((p0x - p1x) * (p3x - (2*p1x))) + ((p0y - p1y) * (p3y - (2*p1y)))
-tdenom = ((p3x * p3x) - (4 * p1x * (p3x - p1x))) + ((p3y * p3y) - (4 * p1y * (p3y - p1y)))
-t = tnom / tdenom
-vx = (p0x * (1-t) * (1-t)) + (p1x * t * (1-t)) + (p2x * t * t);
-vy = (p0y * (1-t) * (1-t)) + (p1y * t * (1-t)) + (p2y * t * t);
-
-dx2 = dx2 + (dx1 - vx);
-dy2 = dy2 + (dy1 - vy);
-dx1 = vx;
-dy1 = vy;
-	 */
-	
-	private static class OpGraphicsTrueType extends OpReceiverTrueType {
-		int minX;
-		int minY;
-		int height;
-		int sx = 0;
-		int sy = 0;
-		int lCount = 0;
-		BufferedImage img;
-		Graphics2D gr;
-		private float scale = 1.0f;
-		OpGraphicsTrueType(int minX, int minY, int height, float scale, BufferedImage img) {
-			this.minX = minX;
-			this.minY = minY;
+		private GlyphDataType3(byte[] imageData, GlyphRenderingCommandType3[] renderData, int width, int height) {
+			this.imageData = imageData;
+			this.renderData = renderData;
+			this.width = width;
 			this.height = height;
-			this.scale = scale;
-			this.setImage(img);
-			this.gr.setColor(Color.WHITE);
-			this.gr.fillRect(0, 0, img.getWidth(), img.getHeight());
-			this.gr.setColor(Color.BLACK);
+			this.lowerLeftX = 0;
+			this.lowerLeftY = 0;
+			this.upperRightX = this.width;
+			this.upperRightY = this.height;
 		}
-		void setImage(BufferedImage img) {
-			this.img = img;
-			this.gr = this.img.createGraphics();
+		GlyphDataType3(GlyphRenderingCommandType3[] renderData, int width, int height, int lowerLeftX, int lowerLeftY, int upperRightX, int upperRightY) {
+			this(null, renderData, width, height, lowerLeftX, lowerLeftY, upperRightX, upperRightY);
 		}
-		void lineTo(int dx, int dy) {
-			if (this.lCount == 0) {
-				this.sx = this.x;
-				this.sy = this.y;
+		GlyphDataType3(byte[] imageData, int width, int height, int lowerLeftX, int lowerLeftY, int upperRightX, int upperRightY) {
+			this(imageData, null, width, height, lowerLeftX, lowerLeftY, upperRightX, upperRightY);
+		}
+		private GlyphDataType3(byte[] imageData, GlyphRenderingCommandType3[] renderData, int width, int height, int lowerLeftX, int lowerLeftY, int upperRightX, int upperRightY) {
+			this.imageData = imageData;
+			this.renderData = renderData;
+			this.width = width;
+			this.height = height;
+			this.lowerLeftX = lowerLeftX;
+			this.lowerLeftY = lowerLeftY;
+			this.upperRightX = upperRightX;
+			this.upperRightY = upperRightY;
+		}
+		void drawPath(Graphics2D gr, boolean fill) {
+			Path2D path = new Path2D.Float();
+			for (int c = 0; c < this.renderData.length; c++) {
+				if ("m".equals(this.renderData[c].command))
+					path.moveTo(this.renderData[c].params[0], this.renderData[c].params[1]);
+				else if ("l".equals(this.renderData[c].command))
+					path.lineTo(this.renderData[c].params[0], this.renderData[c].params[1]);
+				else if ("c".equals(this.renderData[c].command))
+					path.curveTo(this.renderData[c].params[0], this.renderData[c].params[1], this.renderData[c].params[2], this.renderData[c].params[3], this.renderData[c].params[4], this.renderData[c].params[5]);
+				else if ("v".equals(this.renderData[c].command)) {
+					Point2D xy1 = path.getCurrentPoint();
+					path.curveTo(xy1.getX(), xy1.getY(), this.renderData[c].params[0], this.renderData[c].params[1], this.renderData[c].params[2], this.renderData[c].params[3]);
+				}
+				else if ("y".equals(this.renderData[c].command))
+					path.curveTo(this.renderData[c].params[0], this.renderData[c].params[1], this.renderData[c].params[2], this.renderData[c].params[3], this.renderData[c].params[2], this.renderData[c].params[3]);
+				else if ("re".equals(this.renderData[c].command))
+					path.append(new Rectangle2D.Float(this.renderData[c].params[0], this.renderData[c].params[1], this.renderData[c].params[2], this.renderData[c].params[3]), false);
+				else if ("h".equals(this.renderData[c].command))
+					path.closePath();
+				else if ("f".equals(this.renderData[c].command)) {
+					if (fill)
+						gr.fill(path);
+					else gr.draw(path);
+				}
 			}
-			this.gr.drawLine(
-					Math.round((this.scale * (this.x - this.minX)) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.height - (this.y - this.minY))) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.x - this.minX + dx)) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.height - (this.y - this.minY + dy))) + glyphOutlineFillSafetyEdge)
-				);
-			this.x += dx;
-			this.y += dy;
-			this.lCount++;
 		}
-		void curveTo(int dx1, int dy1, int dx2, int dy2) {
-			if (this.lCount == 0) {
-				this.sx = this.x;
-				this.sy = this.y;
+		void drawImage(Graphics2D gr) {
+			gr.drawRect(
+					this.lowerLeftX,
+					this.lowerLeftY,
+					(this.upperRightX - this.lowerLeftX),
+					(this.upperRightY - this.lowerLeftY)
+				);
+		}
+		void writePathTo(OpReceiver or, float scaleX, float scaleY, boolean show) {
+			ImageDisplayDialog idd = null;
+			for (int c = 0; c < this.renderData.length; c++) {
+				int[] params = new int[this.renderData[c].params.length];
+				for (int p = 0; p < params.length; p++) {
+					if ((p & 0x00000001) == 0)
+						params[p] = Math.round(this.renderData[c].params[p] * scaleX);
+					else params[p] = Math.round(this.renderData[c].params[p] * scaleY);
+				}
+				if (DEBUG_TYPE3_RENDERING)
+					System.out.println("     - " + this.renderData[c].command + " " + Arrays.toString(params));
+				if ("m".equals(this.renderData[c].command))
+					or.moveToAbs(params[0], params[1]);
+				else if ("l".equals(this.renderData[c].command))
+					or.lineToAbs(params[0], params[1]);
+				else if ("c".equals(this.renderData[c].command))
+					or.curveToAbs(params[0], params[1], params[2], params[3], params[4], params[5]);
+				else if ("v".equals(this.renderData[c].command))
+					or.curveToAbs(or.x, or.y, params[0], params[1], params[2], params[3]);
+				else if ("y".equals(this.renderData[c].command))
+					or.curveToAbs(params[0], params[1], params[2], params[3], params[2], params[3]);
+				else if ("re".equals(this.renderData[c].command)) {
+					or.moveToAbs(params[0], params[1]);
+					or.lineToAbs((params[0] + params[2]), params[1]);
+					or.lineToAbs((params[0] + params[2]), (params[1] + params[3]));
+					or.lineToAbs(params[0], (params[1] + params[3]));
+					or.closePath();
+				}
+				else if ("h".equals(this.renderData[c].command)) {
+					or.closePath();
+				}
+				else if ("f".equals(this.renderData[c].command)) {
+					if (or instanceof OpGraphics)
+						fillGlyphOutline(((OpGraphics) or).img, ((OpGraphics) or).scale, show);
+					//	TODO better simply let Java2D fill path, rendering might not be as clean (e.g. with intersecting areas)
+//					else gr.draw(path);
+				}
+				
+				//	show step by step
+				if (show && (or instanceof OpGraphics)) {
+					BufferedImage img = ((OpGraphics) or).img;
+					BufferedImage dImg = new BufferedImage(img.getWidth(), img.getHeight(), BufferedImage.TYPE_INT_RGB);
+					Graphics g = dImg.getGraphics();
+					g.drawImage(img, 0, 0, dImg.getWidth(), dImg.getHeight(), null);
+					g.setColor(Color.RED);
+					if (idd == null) {
+						idd = new ImageDisplayDialog("Rendering Progress");
+						idd.setSize((dImg.getWidth() + 200), (dImg.getHeight() + 100));
+					}
+					idd.addImage(dImg, ("Drawing (" + this.renderData[c].command + " " + Arrays.toString(params) + ")"));
+					idd.setLocationRelativeTo(null);
+					idd.setVisible(true);
+				}
 			}
-			QuadCurve2D.Float qc = new QuadCurve2D.Float();
-			qc.setCurve(
-					Math.round((this.scale * (this.x - this.minX)) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.height - (this.y - this.minY))) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.x - this.minX + dx1)) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.height - (this.y - this.minY + dy1))) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.x - this.minX + dx1 + dx2)) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.height - (this.y - this.minY + dy1 + dy2))) + glyphOutlineFillSafetyEdge)
-				);
-			this.gr.draw(qc);
-			this.x += (dx1 + dx2);
-			this.y += (dy1 + dy2);
-			this.lCount++;
-		}
-		void moveTo(int dx, int dy) {
-			this.lCount = 0;
-			this.x += dx;
-			this.y += dy;
-		}
-		void moveToAbs(int x, int y) {
-			this.lCount = 0;
-			this.x = x;
-			this.y = y;
-		}
-		void closePath() {
-			this.gr.drawLine(
-					Math.round((this.scale * (this.x - this.minX)) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.height - (this.y - this.minY))) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.sx - this.minX)) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.height - (this.sy - this.minY))) + glyphOutlineFillSafetyEdge)
-				);
-		}
-		void closePath(int dx, int dy, boolean explicit) {
-			QuadCurve2D.Float qc = new QuadCurve2D.Float();
-			qc.setCurve(
-					Math.round((this.scale * (this.x - this.minX)) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.height - (this.y - this.minY))) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.x - this.minX + dx)) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.height - (this.y - this.minY + dy))) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.sx - this.minX)) + glyphOutlineFillSafetyEdge),
-					Math.round((this.scale * (this.height - (this.sy - this.minY))) + glyphOutlineFillSafetyEdge)
-				);
-			this.gr.draw(qc);
-			if (explicit) {
-				this.x += dx;
-				this.y += dy;
+			
+			if (idd != null) {
+				idd.setLocationRelativeTo(null);
+				idd.setVisible(true);
 			}
+		}
+		void drawImageTo(OpReceiver or, float scaleX, float scaleY, boolean show, Library library, Map objects) {
+			if (or instanceof OpTracker) {
+				Map ips = this.getImageParams();
+				if (ips == null)
+					return;
+				int llx = Math.round(this.lowerLeftX * scaleX);
+				int lly = Math.round(this.lowerLeftY * scaleY);
+				int urx = Math.round(this.upperRightX * scaleX);
+				int ury = Math.round(this.upperRightY * scaleY);
+				or.moveToAbs(llx, lly);
+				or.lineToAbs(llx, ury);
+				or.lineToAbs(urx, ury);
+				or.lineToAbs(urx, lly);
+				or.closePath();
+			}
+			else if (or instanceof OpGraphics) {
+				BufferedImage ibi = this.getImage(library, objects);
+				if (ibi == null)
+					return;
+				int llx = (Math.round(this.lowerLeftX * scaleX * ((OpGraphics) or).scale) + glyphOutlineFillSafetyEdge);
+				int lly = (Math.round(this.lowerLeftY * scaleY * ((OpGraphics) or).scale) + glyphOutlineFillSafetyEdge);
+				int urx = (Math.round(this.upperRightX * scaleX * ((OpGraphics) or).scale) + glyphOutlineFillSafetyEdge);
+				int ury = (Math.round(this.upperRightY * scaleY * ((OpGraphics) or).scale) + glyphOutlineFillSafetyEdge);
+				Graphics2D gr = ((OpGraphics) or).gr;
+				AffineTransform at = gr.getTransform();
+				gr.scale(1, -1); // need to render in Java direction, not PDF direction ...
+				gr.translate(0, (ury - lly)); // ... but still stay on baseline
+				gr.drawImage(ibi, llx, lly, (urx - llx), (ury - lly), null);
+				gr.setTransform(at);
+			}
+		}
+		private Map imageParams = null;
+		private byte[] imageBytes = null;
+		private BufferedImage image = null; // decoded on demand
+		private BufferedImage getImage(Library library, Map objects) {
+			if (this.imageData == null)
+				return null;
+			if (this.image == null) try {
+				this.getImageParams();
+				
+				//	check if we're decoding an image mask
+				Object isImageMaskObj = this.imageParams.get("ImageMask");
+				boolean isImageMask = ((isImageMaskObj != null) && Boolean.parseBoolean(isImageMaskObj.toString()));
+				
+				//	get decoding filter (need it below)
+				Object filterObj = PdfParser.getObject(this.imageParams, "Filter", objects);
+//				if (filterObj instanceof List) {
+//					List filters = ((List) filterObj);
+//					for (int f = 0; f < filters.size(); f++) {
+//						if ((f+1) == filters.size())
+//							filterObj = filters.get(f);
+//						else if (filters.get(f) != null)
+//							data = this.decodeImageData(data, params, filters.get(f).toString(), pdfPage.getLibrary(), objects);
+//					}
+//				}
+				if (filterObj instanceof Reference)
+					filterObj = objects.get(((Reference) filterObj).getObjectNumber() + " " + ((Reference) filterObj).getGenerationNumber());
+				String filter = ((filterObj == null) ? null : filterObj.toString());
+				if (DEBUG_TYPE3_LOADING)
+					System.out.println("Glyph bitmap decode filter is " + filter);
+				
+				//	get primary color space
+				Object colorSpaceObj = PdfParser.getObject(this.imageParams, "ColorSpace", objects);
+				if (DEBUG_TYPE3_LOADING)
+					System.out.println("Glyph bitmap color space is " + colorSpaceObj);
+				
+				//	decode image
+//				this.image = PdfUtils.decodeOther(this.imageBytes, this.imageParams, filter, colorSpaceObj, library, resources, objects, false, false, isImageMask, false);
+				this.image = PdfUtils.decodeBitmap(this.imageBytes, this.imageParams, filter, colorSpaceObj, library, objects, false, isImageMask, false);
+				if (DEBUG_TYPE3_LOADING)
+					System.out.println("Glyph bitmap image is " + this.image);
+			}
+			catch (IOException ioe) {
+				System.out.println("Error decoding glyph bitmap image: " + ioe.getMessage());
+				ioe.printStackTrace(System.out);
+			}
+			return this.image;
+		}
+		private Map getImageParams() {
+			if (this.imageData == null)
+				return null;
+			if (this.imageParams == null) try {
+				PdfByteInputStream iImageData = new PdfByteInputStream(this.imageData);
+				this.imageParams = PdfParser.cropInlineImageParams(iImageData);
+				if (DEBUG_TYPE3_LOADING)
+					System.out.println("Glyph bitmap params are " + this.imageParams);
+				ByteArrayOutputStream imageBytes = new ByteArrayOutputStream();
+				byte[] buffer = new byte[1024];
+				for (int r; (r = iImageData.read(buffer, 0, buffer.length)) != -1;)
+					imageBytes.write(buffer, 0, r);
+				this.imageBytes = imageBytes.toByteArray();
+				if (DEBUG_TYPE3_LOADING)
+					System.out.println("Glyph bitmap data is " + Arrays.toString(this.imageBytes));
+			}
+			catch (IOException ioe) {
+				System.out.println("Error parsing inline image data: " + ioe.getMessage());
+				ioe.printStackTrace(System.out);
+			}
+			return this.imageParams;
+		}
+	}
+	
+	private static class GlyphRenderingCommandType3 {
+		final String command;
+		final int[] params;
+		GlyphRenderingCommandType3(String command, int[] params) {
+			this.command = command;
+			this.params = params;
+		}
+	}
+	
+	private static GlyphDataType3 getGlyphDataType3(PdfFont pFont, PStream charProc, Map objects) throws IOException {
+		//	TODO_ideally: PdfParser.getPageContent(entries, content, rotate, resources, objects, tokenizer, fontCharSet, wordsAreOcr, pm);
+		byte[] charProcBytes;
+		try {
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PdfParser.decode(charProc.params.get("Filter"), charProc.bytes, charProc.params, baos, objects);
+			charProcBytes = baos.toByteArray();
+		}
+		catch (IOException ioe) {
+			System.out.println("Could not decode char prog:");
+			ioe.printStackTrace(System.out);
+			return null;
+		}
+		if (DEBUG_TYPE3_LOADING) {
+			System.out.write(charProcBytes);
+			System.out.println();
+		}
+		PdfByteInputStream pis = new PdfByteInputStream(charProcBytes);
+		LinkedList stack = new LinkedList();
+		PInlineImage charImageData = null;
+		ArrayList charRenderData = new ArrayList();
+		int imgMinY = -1;
+		int imgMaxY = -1;
+		int width = -1;
+		int height = -1;
+		int lowerLeftX = -1;
+		int lowerLeftY = -1;
+		int upperRightX = -1;
+		int upperRightY = -1;
+		for (Object obj; (obj = PdfParser.cropNext(pis, true, false)) != null;) {
+			if (obj instanceof PInlineImage) {
+				if (DEBUG_TYPE3_LOADING) System.out.println("Inline Image: " + ((PInlineImage) obj).tag + " [" + ((PInlineImage) obj).data.length + "]");
+				charImageData = ((PInlineImage) obj);
+				break;
+			}
+			else if (obj instanceof PTag) {
+				if (DEBUG_TYPE3_LOADING) System.out.println("Content tag: " + ((PTag) obj).tag + " on " + stack);
+				PTag tag = ((PTag) obj);
+				if ("d1".equals(tag.tag)) {
+					if (DEBUG_TYPE3_LOADING) System.out.println("Char image dimensions (d1): " + stack);
+					if (stack.size() >= 6) {
+						upperRightY = ((Number) stack.removeLast()).intValue();
+						upperRightX = ((Number) stack.removeLast()).intValue();
+						lowerLeftY = ((Number) stack.removeLast()).intValue();
+						lowerLeftX = ((Number) stack.removeLast()).intValue();
+						height = ((Number) stack.removeLast()).intValue();
+						width = ((Number) stack.removeLast()).intValue();
+					}
+				}
+				else if ("d0".equals(tag.tag)) {
+					if (DEBUG_TYPE3_LOADING) System.out.println("Char image dimensions (d0): " + stack);
+					if (stack.size() >= 2) {
+						height = ((Number) stack.removeLast()).intValue();
+						width = ((Number) stack.removeLast()).intValue();
+					}
+				}
+				else if ("cm".equals(tag.tag)) {
+					if (DEBUG_TYPE3_LOADING) System.out.println("Glyph transformation matrix: " + stack);
+					if (stack.size() >= 6) {
+						float[][] gtm = new float[3][3];
+						gtm[2][2] = 1;
+						gtm[1][2] = ((Number) stack.removeLast()).floatValue();
+						gtm[0][2] = ((Number) stack.removeLast()).floatValue();
+						gtm[2][1] = 0;
+						gtm[1][1] = ((Number) stack.removeLast()).floatValue();
+						gtm[0][1] = ((Number) stack.removeLast()).floatValue();
+						gtm[2][0] = 0;
+						gtm[1][0] = ((Number) stack.removeLast()).floatValue();
+						gtm[0][0] = ((Number) stack.removeLast()).floatValue();
+						float[] translate = PdfParser.transform(0, 0, 1, gtm, PRotate.identity, "");
+						if (DEBUG_TYPE3_LOADING) System.out.println(" - glyph rendering origin " + Arrays.toString(translate));
+						float[] scaleRotate1 = PdfParser.transform(1, 0, 0, gtm, PRotate.identity, "");
+						if (DEBUG_TYPE3_LOADING) System.out.println(" - glyph rotation and scaling 1 " + Arrays.toString(scaleRotate1));
+						float[] scaleRotate2 = PdfParser.transform(0, 1, 0, gtm, PRotate.identity, "");
+						if (DEBUG_TYPE3_LOADING) System.out.println(" - glyph rotation and scaling 2 " + Arrays.toString(scaleRotate2));
+						//	if image is upside-down (scaleRotate2[1] < 0), invert min and max Y
+						if (scaleRotate2[1] < 0) {
+							int minY = Math.min(-imgMinY, -imgMaxY);
+							int maxY = Math.max(-imgMinY, -imgMaxY);
+							imgMinY = minY;
+							imgMaxY = maxY;
+						}
+					}
+				}
+				else if ("m".equals(tag.tag)) {
+					if (stack.size() >= 2) {
+						int[] params = new int[2];
+						for (int p = params.length; p != 0; p--)
+							params[p-1] = ((Number) stack.removeLast()).intValue();
+						charRenderData.add(new GlyphRenderingCommandType3(tag.tag, params));
+					}
+					else if (DEBUG_TYPE3_LOADING) System.out.println(" ==> stack too small, need 2 parameters");
+				}
+				else if ("l".equals(tag.tag)) {
+					if (stack.size() >= 2) {
+						int[] params = new int[2];
+						for (int p = params.length; p != 0; p--)
+							params[p-1] = ((Number) stack.removeLast()).intValue();
+						charRenderData.add(new GlyphRenderingCommandType3(tag.tag, params));
+					}
+					else if (DEBUG_TYPE3_LOADING) System.out.println(" ==> stack too small, need 2 parameters");
+				}
+				else if ("c".equals(tag.tag)) {
+					if (stack.size() >= 6) {
+						int[] params = new int[6];
+						for (int p = params.length; p != 0; p--)
+							params[p-1] = ((Number) stack.removeLast()).intValue();
+						charRenderData.add(new GlyphRenderingCommandType3(tag.tag, params));
+					}
+					else if (DEBUG_TYPE3_LOADING) System.out.println(" ==> stack too small, need 6 parameters");
+				}
+				else if ("v".equals(tag.tag)) {
+					if (stack.size() >= 4) {
+						int[] params = new int[4];
+						for (int p = params.length; p != 2; p--)
+							params[p-1] = ((Number) stack.removeLast()).intValue();
+						charRenderData.add(new GlyphRenderingCommandType3(tag.tag, params));
+					}
+					else if (DEBUG_TYPE3_LOADING) System.out.println(" ==> stack too small, need 4 parameters");
+				}
+				else if ("y".equals(tag.tag)) {
+					if (stack.size() >= 4) {
+						int[] params = new int[4];
+						for (int p = params.length; p != 2; p--)
+							params[p-1] = ((Number) stack.removeLast()).intValue();
+						charRenderData.add(new GlyphRenderingCommandType3(tag.tag, params));
+					}
+					else if (DEBUG_TYPE3_LOADING) System.out.println(" ==> stack too small, need 4 parameters");
+				}
+				else if ("re".equals(tag.tag)) {
+					if (stack.size() >= 4) {
+						int[] params = new int[4];
+						for (int p = params.length; p != 2; p--)
+							params[p-1] = ((Number) stack.removeLast()).intValue();
+						charRenderData.add(new GlyphRenderingCommandType3(tag.tag, params));
+					}
+					else if (DEBUG_TYPE3_LOADING) System.out.println(" ==> stack too small, need 4 parameters");
+				}
+				else if ("h".equals(tag.tag))
+					charRenderData.add(new GlyphRenderingCommandType3(tag.tag, new int[0]));
+				else if ("f".equals(tag.tag))
+					charRenderData.add(new GlyphRenderingCommandType3(tag.tag, new int[0]));
+				else if (DEBUG_TYPE3_LOADING) System.out.println(" ==> ignored");
+			}
+			else {
+				if (DEBUG_TYPE3_LOADING) {
+					System.out.println(obj.getClass().getName() + ": " + obj.toString());
+					if (obj instanceof PString) {
+						PString str = ((PString) obj);
+						System.out.println(" --> HEX 2: " + str.isHex2 + ", HEX 4: " + str.isHex4);
+						System.out.println(" --> " + Arrays.toString(str.bytes));
+						if (str.isHex2) {
+							System.out.print(" -->");
+							for (int b = 0; (b + 1) < str.bytes.length; b += 2)
+								System.out.print(" " + ((char) str.bytes[b]) + ((char) str.bytes[b+1]));
+							System.out.println();
+						}
+						else if (str.isHex4) {
+							System.out.print(" -->");
+							for (int b = 0; (b + 3) < str.bytes.length; b += 4)
+								System.out.print(" " + ((char) str.bytes[b]) + ((char) str.bytes[b+1]) + ((char) str.bytes[b+2]) + ((char) str.bytes[b+3]));
+							System.out.println();
+						}
+					}
+				}
+				stack.addLast(obj);
+			}
+		}
+		
+		if ((width == -1) || (height == -1))
+			return null;
+		else if (charImageData == null) {
+			if ((lowerLeftX == -1) && (lowerLeftY == -1) && (upperRightX == -1) && (upperRightY == -1))
+				return new GlyphDataType3(((GlyphRenderingCommandType3[]) charRenderData.toArray(new GlyphRenderingCommandType3[charRenderData.size()])), width, height);
+			else return new GlyphDataType3(((GlyphRenderingCommandType3[]) charRenderData.toArray(new GlyphRenderingCommandType3[charRenderData.size()])), width, height, lowerLeftX, lowerLeftY, upperRightX, upperRightY);
+		}
+		else {
+			if ((lowerLeftX == -1) && (lowerLeftY == -1) && (upperRightX == -1) && (upperRightY == -1))
+				return new GlyphDataType3(charImageData.data, width, height);
+			else return new GlyphDataType3(charImageData.data, width, height, lowerLeftX, lowerLeftY, upperRightX, upperRightY);
 		}
 	}
 	
 	private static final boolean DEBUG_SHOW_VERIFICATION_CHAR_MATCHES = false;
 	private static final boolean DEBUG_SHOW_SMALL_CAPS_CHAR_MATCHES = false;
 	
-	private static void decodeChars(PdfFont pFont, CharDecoder pCharDecoder, char[] chars, Integer[] charCodes, String[] charNames, CharImage[] charImages, Integer[] rawCharCodes, int dWidth, float maxDescent, FontDecoderCharset charSet, ProgressMonitor pm, boolean debug) {
+	private static void decodeChars(PdfFont pFont, CharDecoder pCharDecoder, char[] chars, Integer[] charCodes, String[] charNames, Object[] glyphKeys, CharImage[] charImages/*, Integer[] rawCharCodes*/, int dWidth, float maxDescent, FontDecoderCharset charSet, ProgressMonitor pm, boolean debug) {
+		
+		//	do nothing with fonts representing vectorized OCR (e.g. DjVu)
+		if (charSet == VECTORIZED_OCR_DECODING)
+			return;
+		
+		//	generate comparison fonts
 		Font serifFont = getSerifFont();
 		Font[] serifFonts = new Font[4];
 		Font sansFont = getSansSerifFont();
 		Font[] sansFonts = new Font[4];
-		Font monoFont = getMonospaceSerifFont();
+		Font monoFont = getMonospaceFont();
 		Font[] monoFonts = new Font[4];
 		for (int s = Font.PLAIN; s <= (Font.BOLD | Font.ITALIC); s++) {
 			serifFonts[s] = serifFont.deriveFont(s);
@@ -5633,7 +7056,10 @@ dy1 = vy;
 		/* If some character Unicode maps to a character sequence that is NOT
 		 * a PostScript name (e.g. non-Unicode custom ligature 'Th'), null out
 		 * char image to leave as is (we won't be able to render the apropriate
-		 * comparison char anyway ...) */
+		 * comparison char anyway ...)
+		 * Also, null out duplicate char images (identical glyhs, caught above)
+		 * in rendering routines */
+		HashSet charImageSet = new HashSet();
 		for (int c = 0; c < chars.length; c++) {
 			if (charImages[c] == null)
 				continue;
@@ -5642,6 +7068,13 @@ dy1 = vy;
 			if (pFont.charCodeSynonyms.containsKey(charCodes[c])) {
 				pm.setInfo("     - Exempting char " + c + " (" + charCodes[c] + "/" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ") from decoding for synonymy");
 				if (debug) System.out.println("Exempting char " + c + " (" + charCodes[c] + "/" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ") from decoding for synonymy");
+				charImages[c] = null; // that prevents all further analysis (no data loss, though, as image is stored in font before we ever get here)
+			}
+			
+			//	check if char image is synonym
+			if (!charImageSet.add(charImages[c])) {
+				pm.setInfo("     - Exempting char " + c + " (" + charCodes[c] + "/" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ") from decoding for image synonymy");
+				if (debug) System.out.println("Exempting char " + c + " (" + charCodes[c] + "/" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ") from decoding for image synonymy");
 				charImages[c] = null; // that prevents all further analysis (no data loss, though, as image is stored in font before we ever get here)
 			}
 			
@@ -5848,6 +7281,11 @@ dy1 = vy;
 							}
 							else if (oMatchResult.serifStyleCims[s] != null)
 								originalBetter++;
+//							
+//							if ((oMatchResult.serifStyleCims[s] != null) && (ucMatchResult.serifStyleCims[s] != null) && "f".equals(ucStr)) {
+//								PdfCharDecoder.displayCharMatch(oMatchResult.serifStyleCims[s], "Original");
+//								PdfCharDecoder.displayCharMatch(ucMatchResult.serifStyleCims[s], "UC");
+//							}
 							
 							if ((oMatchResult.sansStyleCims[s] != null) && (ucMatchResult.sansStyleCims[s] != null)) {
 								if (oMatchResult.sansStyleCims[s].sim < ucMatchResult.sansStyleCims[s].sim) {
@@ -6009,7 +7447,7 @@ dy1 = vy;
 				}
 				
 				//	what do we have?
-				if (debug) System.out.println(" --> best similarity is " + bestSims[c] + " / " + bestSimsNs[c] + " for " + bestCims[c].match.ch);
+				if (debug) System.out.println(" --> best similarity is " + bestSims[c] + " / " + bestSimsNs[c] + " for " + ((bestCims[c] == null) ? "null" : ("" + bestCims[c].match.ch)));
 			}
 			
 			//	failed to render char at all, little we can do
@@ -6085,8 +7523,7 @@ dy1 = vy;
 		if (debug) System.out.println(" - average similarity is " + sim + " (" + charCount + ") all / " + simNs + " (" + charCountNs + ") non-skewed");
 		
 		//	mark chars for revisiting if similarity way below font average (more than twice as far from 1 than average), but only with OCR enabled
-		
-		if ((charSet != NO_DECODING) && (charSet != RENDER_ONLY)) {
+		if ((charSet != NO_DECODING) && (charSet != VECTORIZED_OCR_DECODING) && (charSet != RENDER_ONLY)) {
 			double minAcceptSim = (sim + sim - 1);
 			if (debug) System.out.println(" - minimum acceptance similarity is " + minAcceptSim);
 			for (int c = 0; c < chars.length; c++) {
@@ -6151,7 +7588,7 @@ dy1 = vy;
 		
 		
 		//	check if font has implicit spaces
-		checkImplicitSpaces(pFont, charImages, chars, charCodes, charNames, debug);
+		checkImplicitSpaces(pFont, charImages, chars, charCodes, charNames, glyphKeys, debug);
 		
 		
 		//	do we have a match?
@@ -6255,7 +7692,7 @@ dy1 = vy;
 				}
 				
 				//	simply correct letters whose glyphs are not scaled versions of one another
-				if ("cfijopsuvwxyzCFIJOPSUVWXYZ".indexOf(chars[c]) == -1) // this is the letters for which distibguishing case is hard
+				if ("cfijopsuvwxyzCFIJOPSUVWXYZ".indexOf(chars[c]) == -1) // this is the letters for which distinguishing case is hard
 					lowerCaseOK = false;
 				
 				//	fall back to ascender and descender shifts if scaling and vertical shift not available
@@ -6357,7 +7794,9 @@ dy1 = vy;
 				if (lowerCaseOK) {
 					smallCapsCharsRefused.add(new Integer(c));
 					pFont.mapUnicode(chc, ("" + Character.toLowerCase(chars[c])), false);
-					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toLowerCase(chars[c])), charImages[c].img);
+//					pFont.mapUnicode(glyphKeys[c], ("" + Character.toLowerCase(chars[c])));
+					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toLowerCase(chars[c])), charImages[c].img, charImages[c].path);
+//					pFont.setCharImage(glyphKeys[c], charImages[c].img, charImages[c].path);
 					if (debug) System.out.println("   ==> looks OK in lower case");
 					if (DEBUG_SHOW_SMALL_CAPS_CHAR_MATCHES) PdfCharDecoder.displayCharMatch(bestCims[c], "Small-caps match refused");
 				}
@@ -6366,7 +7805,9 @@ dy1 = vy;
 				else {
 					smallCapsCharsAccepted.add(new Integer(c));
 					pFont.mapUnicode(chc, ("" + Character.toUpperCase(chars[c])), false);
-					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toUpperCase(chars[c])), charImages[c].img);
+//					pFont.mapUnicode(glyphKeys[c], ("" + Character.toUpperCase(chars[c])));
+					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toUpperCase(chars[c])), charImages[c].img, charImages[c].path);
+//					pFont.setCharImage(glyphKeys[c], charImages[c].img, charImages[c].path);
 					if (debug) System.out.println("   ==> small-caps corrected " + chc + " to " + Character.toUpperCase(chars[c]));
 					if (DEBUG_SHOW_SMALL_CAPS_CHAR_MATCHES) PdfCharDecoder.displayCharMatch(bestCims[c], "Small-caps match accepted");
 				}
@@ -6451,7 +7892,9 @@ dy1 = vy;
 				if (lowerCaseOK) {
 					smallCapsCharsRefused.add(new Integer(c));
 					pFont.mapUnicode(chc, ("" + Character.toLowerCase(chars[c])), false);
-					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toLowerCase(chars[c])), charImages[c].img);
+//					pFont.mapUnicode(glyphKeys[c], ("" + Character.toLowerCase(chars[c])));
+					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toLowerCase(chars[c])), charImages[c].img, charImages[c].path);
+//					pFont.setCharImage(glyphKeys[c], charImages[c].img, charImages[c].path);
 					if (debug) System.out.println("   ==> looks OK in lower case");
 					if (DEBUG_SHOW_SMALL_CAPS_CHAR_MATCHES) PdfCharDecoder.displayCharMatch(bestCims[c], "Small-caps match refused");
 				}
@@ -6460,7 +7903,9 @@ dy1 = vy;
 				else {
 					smallCapsCharsAccepted.add(new Integer(c));
 					pFont.mapUnicode(chc, ("" + Character.toUpperCase(chars[c])), false);
-					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toUpperCase(chars[c])), charImages[c].img);
+//					pFont.mapUnicode(glyphKeys[c], ("" + Character.toUpperCase(chars[c])));
+					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toUpperCase(chars[c])), charImages[c].img, charImages[c].path);
+//					pFont.setCharImage(glyphKeys[c], charImages[c].img, charImages[c].path);
 					if (debug) System.out.println("   ==> small-caps corrected " + chc + " to " + Character.toUpperCase(chars[c]));
 					if (DEBUG_SHOW_SMALL_CAPS_CHAR_MATCHES) PdfCharDecoder.displayCharMatch(bestCims[c], "Small-caps match accepted");
 				}
@@ -6556,7 +8001,9 @@ dy1 = vy;
 				if (lowerCaseOK) {
 					smallCapsCharsRefused.add(new Integer(c));
 					pFont.mapUnicode(chc, ("" + Character.toLowerCase(chars[c])), false);
-					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toLowerCase(chars[c])), charImages[c].img);
+//					pFont.mapUnicode(glyphKeys[c], ("" + Character.toLowerCase(chars[c])));
+					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toLowerCase(chars[c])), charImages[c].img, charImages[c].path);
+//					pFont.setCharImage(glyphKeys[c], charImages[c].img, charImages[c].path);
 					if (debug) System.out.println("   ==> looks OK in lower case");
 					if (DEBUG_SHOW_SMALL_CAPS_CHAR_MATCHES) PdfCharDecoder.displayCharMatch(bestCims[c], "Small-caps match refused");
 				}
@@ -6565,7 +8012,9 @@ dy1 = vy;
 				else {
 					smallCapsCharsAccepted.add(new Integer(c));
 					pFont.mapUnicode(chc, ("" + Character.toUpperCase(chars[c])), false);
-					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toUpperCase(chars[c])), charImages[c].img);
+//					pFont.mapUnicode(glyphKeys[c], ("" + Character.toUpperCase(chars[c])));
+					pFont.setCharImage(chc.intValue(), StringUtils.getCharName(Character.toUpperCase(chars[c])), charImages[c].img, charImages[c].path);
+//					pFont.setCharImage(glyphKeys[c], charImages[c].img, charImages[c].path);
 					if (debug) System.out.println("   ==> small-caps corrected " + chc + " to " + Character.toUpperCase(chars[c]));
 					if (DEBUG_SHOW_SMALL_CAPS_CHAR_MATCHES) PdfCharDecoder.displayCharMatch(bestCims[c], "Small-caps match accepted");
 				}
@@ -6598,7 +8047,7 @@ dy1 = vy;
 		
 		//	use OCR to decode glyphs that are lacking mapped characters as well as those whose mapped characters do not match sufficiently well
 		if (FORCE_OCR_DECODING || ((charSet != NO_DECODING) && (charSet != RENDER_ONLY) && (unresolvedCharCount != 0)))
-			ocrDecodeChars(pFont, chars, charImages, bestCims, badBestCims, charSet, maxDescent, charCodes, charNames, serifFonts, sansFonts, monoFonts, pm, debug);
+			ocrDecodeChars(pFont, chars, charImages, bestCims, badBestCims, charSet, maxDescent, charCodes, charNames, glyphKeys, serifFonts, sansFonts, monoFonts, pm, debug);
 		
 		//	count out font style only now
 		pm.setInfo("   - detecting font style");
@@ -6658,7 +8107,7 @@ dy1 = vy;
 		else return (ch == Character.toUpperCase(ucMapping.charAt(0)));
 	}
 	
-	private static void checkImplicitSpaces(PdfFont pFont, CharImage[] charImages, char[] chars, Integer[] charCodes, String[] charNames, boolean debug) {
+	private static void checkImplicitSpaces(PdfFont pFont, CharImage[] charImages, char[] chars, Integer[] charCodes, String[] charNames, Object[] glyphKeys, boolean debug) {
 		
 		//	check average word length (will be well below 2 for implicit space fonts)
 		float avgFontWordLength = pFont.getAverageWordLength();
@@ -6689,7 +8138,8 @@ dy1 = vy;
 			Integer chc = charCodes[c];
 			
 			//	get nominal width and compare to actual width
-			float nCharWidth = pFont.getCharWidth(new Character((char) chc.intValue()));
+//			float nCharWidth = pFont.getCharWidth(new Character((char) chc.intValue()));
+			float nCharWidth = pFont.getCharWidth((char) chc.intValue());
 			float nCharWidthRel = ((charImages[c].box.getWidth() * 1000) / nCharWidth);
 //			if (debug) System.out.println(" - nominal width of char " + c + " (SID " + sid + ", " + chn + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ") is " + nCharWidth);
 			if (debug) System.out.println(" - nominal width of char " + c + " (" + chn + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ") is " + nCharWidth);
@@ -6697,6 +8147,8 @@ dy1 = vy;
 			float cCharWidth = ((nCharWidth * nCharWidthRel) / charHeightRel);
 			float ncCharWidthRel = (nCharWidth / cCharWidth);
 			if (debug) System.out.println(" --> computed width is " + cCharWidth + ", relation is " + ncCharWidthRel);
+			if (nCharWidth == 0)
+				continue;
 			ncCharWidthRelSum += ncCharWidthRel;
 			ncCharWidthRelCount++;
 		}
@@ -6724,17 +8176,18 @@ dy1 = vy;
 			//	get basic data
 			Integer chc = charCodes[c];
 			
-			//	store actual width
+			//	store actual width TODO measure these things on rendered glyph paths instead !!!
 			float nCharWidth = pFont.getCharWidth(new Character((char) chc.intValue()));
 			float nCharWidthRel = ((charImages[c].box.getWidth() * 1000) / nCharWidth);
 			float cCharWidth = ((nCharWidth * nCharWidthRel) / charHeightRel);
 			pFont.setMeasuredCharWidth(chc, cCharWidth);
+//			pFont.setMeasuredCharWidth(glyphKeys[c], cCharWidth);
 		}
 	}
 	
 	private static final boolean FORCE_OCR_DECODING = false;
 	
-	private static void ocrDecodeChars(PdfFont pFont, char[] chars, CharImage[] charImages, CharImageMatch[] bestCims, CharImageMatch[] badBestCims, FontDecoderCharset charSet, float maxDescent, Integer[] charCodes, String[] charNames, Font[] serifFonts, Font[] sansFonts, Font[] monoFonts, ProgressMonitor pm, boolean debug) {
+	private static void ocrDecodeChars(PdfFont pFont, char[] chars, CharImage[] charImages, CharImageMatch[] bestCims, CharImageMatch[] badBestCims, FontDecoderCharset charSet, float maxDescent, Integer[] charCodes, String[] charNames, Object[] glyphKeys, Font[] serifFonts, Font[] sansFonts, Font[] monoFonts, ProgressMonitor pm, boolean debug) {
 //		if (!"PBBHDA+AdvOTd5f4e5b7.B".equals(pFont.name))
 //			return;
 //		if (!"PAPBPP+AdvOT7668bbdf".equals(pFont.name))
@@ -6835,6 +8288,7 @@ dy1 = vy;
 				topCims[c][0] = badBestCims[c];
 				isOcrDecoded[c] = false;
 			}
+			else isOcrDecoded[c] = true; // TODO could be we need to (re-)assess this only after elimination process below
 		}
 		
 		//	handle unambiguous matches
@@ -7877,7 +9331,7 @@ dy1 = vy;
 			}
 			if (bestCim != null) {
 				bestCims[c] = bestCim.cim;
-				pm.setInfo("       ==> similarity matched to '" + bestCims[c].match.ch + "'");
+				pm.setInfo("       ==> similarity matched to '" + bestCims[c].match.ch + "' (" + ((int) bestCims[c].match.ch) + "/0x" + Integer.toString(((int) bestCims[c].match.ch), 16).toUpperCase() + ")");
 				if (debug) System.out.println(" ==> got most similar match " + bestCims[c].match.ch);
 			}
 			else {
@@ -7905,8 +9359,14 @@ dy1 = vy;
 			pm.setInfo("     - Decoding char " + c + " (" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
 			if (debug) System.out.println("Decoding char " + c + " (" + charNames[c] + "/'" + chars[c] + "'/'" + StringUtils.getNormalForm(chars[c]) + "'/" + ((int) chars[c]) + ")");
 			
+			//	is our best (remaining) match beter than earlier verification match?
+			if ((badBestCims[c] != null) && (bestCims[c].sim < badBestCims[c].sim)) {
+				pm.setInfo("       ==> char reverted to verification match '" + badBestCims[c].match.ch + "' (" + StringUtils.getCharName(badBestCims[c].match.ch) + ", '" + StringUtils.getNormalForm(badBestCims[c].match.ch) + "') at " + badBestCims[c].sim + ", cache hit rate at " + cacheHitRate[0]);
+				if (debug) System.out.println(" ==> char reverted to verification match '" + badBestCims[c].match.ch + "' at similarity " + badBestCims[c].sim + " over assigned OCR match '" + bestCims[c].match.ch + "' at similarity " + topCims[c][0].sim);
+			}
+			
 			//	do we have a reliable match?
-			if (bestCims[c].sim > 0.8) {
+			else if (bestCims[c].sim > 0.8) {
 				pm.setInfo("       ==> char decoded (1) to '" + bestCims[c].match.ch + "' (" + StringUtils.getCharName(bestCims[c].match.ch) + ", '" + StringUtils.getNormalForm(bestCims[c].match.ch) + "') at " + bestCims[c].sim + ", cache hit rate at " + cacheHitRate[0]);
 				if (debug) System.out.println(" ==> char decoded (1) to '" + bestCims[c].match.ch + "' (" + StringUtils.getCharName(bestCims[c].match.ch) + ", '" + StringUtils.getNormalForm(bestCims[c].match.ch) + "') at " + bestCims[c].sim + ", cache hit rate at " + cacheHitRate[0]);
 				
@@ -8494,17 +9954,17 @@ dy1 = vy;
 		sidResolver.put(new Integer(390), "Semibold");
 	}
 	
-	private static final int readUnsigned(byte[] bytes, int s, int e) {
-		int ui = convertUnsigned(bytes[s++]);
-		for (; s < e;) {
+	private static final int readUnsigned(byte[] bytes, int start, int end) {
+		end = Math.min(end, bytes.length); // there _might_ be cases where this matters ...
+		int ui = convertUnsigned(bytes[start++]);
+		while (start < end) {
 			ui <<= 8;
-			ui += convertUnsigned(bytes[s++]);
+			ui += convertUnsigned(bytes[start++]);
 		}
 		return ui;
 	}
-	
 	private static final int convertUnsigned(byte b) {
-		return ((b < 0) ? (((int) b) + 256) : b);
+		return (((int) b) & 0x000000FF);
 	}
 	
 //	private static CharImageMatch getCharForImage(CharImage charImage, Font[] serifFonts, Font[] sansFonts, HashMap cache, boolean debug) {
@@ -9330,7 +10790,7 @@ dy1 = vy;
 		return Font.decode(fontName);
 	}
 	
-	static Font getMonospaceSerifFont() {
+	static Font getMonospaceFont() {
 		String osName = System.getProperty("os.name");
 		String fontName = (USE_FREE_FONTS ? "FreeMono" : "Monospaced");
 //		if (osName.matches("Win.*"))

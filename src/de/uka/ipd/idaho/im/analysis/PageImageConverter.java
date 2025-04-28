@@ -1083,7 +1083,8 @@ Times New Roman at 400 DPI (417%):
 				//	add baseline
 				int baseline = words[w].getBaseline();
 				if (0 < baseline)
-					word.setAttribute(BASELINE_ATTRIBUTE, ("" + (baseline * (imageDpi / analysisDpi))));
+//					word.setAttribute(BASELINE_ATTRIBUTE, ("" + (baseline * (imageDpi / analysisDpi))));
+					word.setBaseline(baseline * (imageDpi / analysisDpi));
 				
 				//	set layout attributes
 				if (words[w].isBold())
